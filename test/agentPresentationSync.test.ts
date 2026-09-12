@@ -88,6 +88,25 @@ class FakeAgent {
     }
   }
 
+  /** Wait until the native editor has completed its own room handshake. */
+  async waitForPeer(
+    welcome: ServerWelcomeMessage,
+    name: string,
+    timeoutMs = 20_000,
+  ): Promise<void> {
+    const isNativeEditor = (peer: ServerWelcomeMessage['peers'][number]) =>
+      peer.name === name && peer.agent !== true;
+    if (welcome.peers.some(isNativeEditor)) return;
+
+    const deadline = Date.now() + timeoutMs;
+    for (;;) {
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) throw new Error('timed out waiting for the native editor peer');
+      const joined = await this.nextOfKind('presence', remaining);
+      if (isNativeEditor(joined.state)) return;
+    }
+  }
+
   close(): void {
     this.socket.close();
   }
@@ -164,7 +183,7 @@ describe.skipIf(!runnable)('embedded Agent presentation synchronization', () => 
       `window.api.getDeck().then((session) => session?.deck?.slides?.[0]?.id === 'slide-1')`,
     ), 'editor did not open the regression deck');
 
-    const connection = await editor.evaluate<{ wsUrl: string }>(`window.api.startAgentSession({
+    const connection = await editor.evaluate<{ wsUrl: string; name: string }>(`window.api.startAgentSession({
       agent: true,
       activeSlideId: 'slide-1',
       selectedSlideIds: ['slide-1'],
@@ -172,6 +191,14 @@ describe.skipIf(!runnable)('embedded Agent presentation synchronization', () => 
     })`);
     const connected = await FakeAgent.connect(connection.wsUrl);
     fakeAgent = connected.agent;
+
+    // startAgentSession returns once the server is listening, then the
+    // renderer joins that server as an ordinary peer through an IPC state
+    // notification. A fast fake Agent can receive its own welcome first; a
+    // transaction sent in that gap is a broadcast the editor cannot replay.
+    // Observe the host in the welcome snapshot or its later presence frame
+    // before sending the regression edit.
+    await fakeAgent.waitForPeer(connected.welcome, connection.name);
 
     const marker = 'FAKE AGENT PRESENTS THIS';
     const txnId = 'fake-agent-presentation-edit';
