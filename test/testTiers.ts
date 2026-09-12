@@ -28,7 +28,15 @@ const BROWSER_MARKERS = [
   /support\/osInput\.js/,
   /support\/exhaustiveTextFormatting\.js/,
   /from 'electron-vite'/,
-  /require\(['"]electron['"]\)/,
+  /\(['"]electron['"]\)/,
+];
+
+/** Suites that reach Electron through an imported compiler/server boundary. */
+const BROWSER_BY_NATURE = [
+  'test/agentCli.test.ts',
+  'test/collabServer.test.ts',
+  'test/htmlAuthoring.test.ts',
+  'test/scratchpadRenderingBrowser.test.ts',
 ];
 
 /** Real clipboard traffic: writes through the browser, or a cut/copy/paste chord. */
@@ -51,6 +59,17 @@ const SERIAL_BY_NATURE = [
   // processes. Under a fully parallel unit run those events can be starved
   // long enough for the file bridge to miss its response deadline.
   'test/localAgentBridge.test.ts',
+  // Real ffmpeg, Python importer, media-probe, and network pipelines. Their
+  // assertions are functional, not performance budgets; run them alone so a
+  // busy parallel worker pool cannot turn startup latency into a false red.
+  'test/exportDeckCompression.test.ts',
+  'test/ffmpeg.test.ts',
+  'test/keynoteImport.test.ts',
+  'test/mediaImportFormats.test.ts',
+  'test/mp4FastStart.test.ts',
+  'test/posterCache.test.ts',
+  'test/pptxImport.test.ts',
+  'test/webImageImport.test.ts',
 ];
 
 function source(file: string): string {
@@ -62,12 +81,15 @@ const ALL_TEST_FILES = readdirSync(TEST_DIR)
   .sort();
 
 /** Every suite that launches Electron, long and serial ones included. */
-export const BROWSER_TEST_FILES: string[] = ALL_TEST_FILES
-  .filter((name) => {
-    const text = source(name);
-    return BROWSER_MARKERS.some((marker) => marker.test(text));
-  })
-  .map((name) => `test/${name}`);
+export const BROWSER_TEST_FILES: string[] = [...new Set([
+  ...BROWSER_BY_NATURE,
+  ...ALL_TEST_FILES
+    .filter((name) => {
+      const text = source(name);
+      return BROWSER_MARKERS.some((marker) => marker.test(text));
+    })
+    .map((name) => `test/${name}`),
+])].sort();
 
 export const SERIAL_TEST_FILES: string[] = [...new Set([
   ...SERIAL_BY_NATURE,
