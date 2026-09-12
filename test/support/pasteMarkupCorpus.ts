@@ -347,7 +347,45 @@ export async function pasteFromClipboard(cdp: Cdp, payload: ClipboardPayload): P
     }
   })()`);
   if (written !== 'ok') throw new Error(`could not write the clipboard: ${written}`);
+  // `navigator.clipboard.write` resolving is not the same as the system
+  // clipboard being ready to serve what it was handed. On X11 ownership of
+  // the selection changes asynchronously, so a paste chord sent immediately
+  // after can still deliver the *previous* payload — which reads as "pasted
+  // text never appeared" against the case that just wrote. Wait for the
+  // clipboard to read back what we put there before pressing paste.
+  await clipboardHolds(cdp, payload.text);
   await cdp.chord('v', 'KeyV', 86, PASTE_MOD, ['paste']);
+}
+
+/**
+ * Block until the clipboard reports the text just written, or give up quietly.
+ *
+ * Reading the clipboard needs a permission this session may not have; a
+ * refusal is not a reason to fail a paste test, so an unreadable clipboard
+ * falls back to a short settle instead. The barrier only ever costs time on
+ * platforms that need it.
+ */
+async function clipboardHolds(cdp: Cdp, text: string): Promise<void> {
+  const wanted = settleText(text);
+  try {
+    await eventually(
+      () => cdp.evaluate<string>(
+        `navigator.clipboard.readText().then((value) => value, (error) => 'clipboard-read-failed: ' + error)`,
+      ),
+      'the clipboard never reported the payload that was just written to it',
+      (value) => value.startsWith('clipboard-read-failed:') || settleText(value) === wanted,
+      5_000,
+    );
+  } catch {
+    // Never seen the payload; fall through to the settle below rather than
+    // failing here, so the paste itself reports what actually landed.
+  }
+  await wait(50);
+}
+
+/** Compare clipboard text the way a round trip may reformat it. */
+function settleText(value: string): string {
+  return value.replace(/\r\n/g, '\n').trim();
 }
 
 /**
