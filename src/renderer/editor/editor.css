@@ -3053,6 +3053,55 @@ button.morph-object-hit.selected-source:hover:not(:disabled) {
   font-weight: 600;
 }
 
+.agent-chat-connect {
+  flex: none;
+  padding: 10px 12px 12px;
+  border-bottom: 1px solid var(--line);
+  color: var(--text);
+  font-size: 12px;
+}
+
+.agent-chat-connect[hidden] { display: none; }
+.agent-chat-connect p { margin: 0 0 8px; }
+.agent-chat-connect-detail { color: var(--muted); font-size: 11px; margin-bottom: 0 !important; }
+
+.agent-chat-connect-row {
+  display: flex;
+  align-items: stretch;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.agent-chat-connect-row code {
+  flex: 1;
+  min-width: 0;
+  padding: 7px 9px;
+  overflow-x: auto;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--bg);
+  color: var(--text);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
+  line-height: 1.45;
+  white-space: nowrap;
+  user-select: all;
+}
+
+.agent-chat-connect-copy { flex: none; align-self: center; }
+
+.agent-chat-connect-alt {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--line);
+  color: var(--muted);
+  font-size: 11px;
+}
+
 .agent-chat-messages {
   display: flex;
   overflow-y: auto;

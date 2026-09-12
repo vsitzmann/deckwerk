@@ -323,6 +323,65 @@ describe('agent chat panel', () => {
     expect(setFastMode).toHaveBeenCalledWith({ enabled: false });
   });
 
+  it('shows how to connect a local agent, then its name and activity once one attaches', async () => {
+    let listener: (state: AgentChatState) => void = () => undefined;
+    const waiting = () => ready({
+      connection: 'unavailable', auth: 'unknown', accountLabel: null, models: [],
+      selectedModel: null, selectedReasoningEffort: null, fastMode: false, chatId: null,
+    });
+    const api: AgentChatApi = {
+      getAgentChatState: async () => waiting(),
+      sendAgentChatMessage: async () => waiting(),
+      loginAgentChat: async () => waiting(),
+      switchAgentChatAccount: async () => waiting(),
+      setAgentChatModel: async () => waiting(),
+      setAgentChatReasoningEffort: async () => waiting(),
+      setAgentChatFastMode: async () => waiting(),
+      interruptAgentChat: async () => waiting(),
+      resetAgentChat: async () => waiting(),
+      onAgentChatState: (fn) => { listener = fn; return () => undefined; },
+    };
+    const command = "slide-agent connect 'http://deck.example:5800/?deck=talk&agent=participant-abc12345'";
+    const panel = new AgentChatPanel({
+      api,
+      currentDeckPath: () => '/tmp/talk',
+      title: 'Agent',
+      localAgent: { connectCommand: command },
+    });
+    panel.show();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // Nothing to type into: the conversation happens in the agent's terminal.
+    const composer = panel.element.querySelector<HTMLElement>('.agent-chat-composer')!;
+    expect(composer.hidden).toBe(true);
+    const connect = panel.element.querySelector<HTMLElement>('.agent-chat-connect')!;
+    expect(connect.hidden).toBe(false);
+    expect(connect.querySelector('code')!.textContent).toBe(command);
+    expect(panel.element.querySelector('.agent-chat-status')!.textContent).toBe('Waiting for your agent…');
+    expect(panel.element.querySelector<HTMLElement>('.agent-chat-status')!.dataset.state).toBe('idle');
+
+    listener(ready({
+      accountLabel: "Vincent's agent", models: [], selectedModel: null, chatId: 'local-agent:participant-abc12345',
+      messages: [
+        { id: 'm1', role: 'system', text: "Vincent's agent connected and mirrored the deck." },
+        { id: 'm2', role: 'assistant', text: 'saved edit/work.html: 1 replaced' },
+      ],
+    }));
+    expect(connect.hidden).toBe(true);
+    expect(panel.element.querySelector('.agent-chat-status')!.textContent).toBe('Connected');
+    const account = panel.element.querySelector<HTMLElement>('.agent-chat-account')!;
+    expect(account.hidden).toBe(false);
+    expect(account.textContent).toContain("Vincent's agent is connected to this deck");
+    expect(account.querySelector('.agent-chat-switch-account')).toBeNull();
+    const bodies = [...panel.element.querySelectorAll('.agent-chat-message-body')].map((node) => node.textContent);
+    expect(bodies).toEqual([
+      "Vincent's agent connected and mirrored the deck.",
+      'saved edit/work.html: 1 replaced',
+    ]);
+    expect(panel.element.querySelector<HTMLElement>('.agent-chat-model')!.hidden).toBe(true);
+  });
+
   it('automatically opens the newest HTML draft as an agent scratchpad', () => {
     let listener: (state: AgentChatState) => void = () => undefined;
     const api: AgentChatApi = {

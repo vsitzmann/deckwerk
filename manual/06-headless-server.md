@@ -93,6 +93,56 @@ saving open presentations before it exits.
 Stopping the process disconnects collaborators, but it does not delete their
 work or remove any presentations.
 
+## Bringing your own agent
+
+Every participant can work on a hosted presentation with the agent CLI they
+already use on their own computer — Claude Code, Codex, or anything else that
+runs in a terminal. Nothing runs on the server on your behalf, and each person
+uses their own account.
+
+1. Open the presentation in the browser and click **Agent…** in the toolbar.
+   The panel shows one command, for example:
+
+   ```bash
+   curl -fsSL http://deck-server:5800/deckwerk-connect.mjs -o deckwerk-connect.mjs && node deckwerk-connect.mjs 'http://deck-server:5800/?deck=weekly-meeting&agent=participant-…'
+   ```
+
+2. Run it in a terminal on your machine. It needs only Node 22 or newer: the
+   first half downloads the server's own bridge, the second runs it. The
+   bridge mirrors the presentation folder to your computer, under
+   `~/.deckwerk/mirrors/` unless you pass `--dir`, and starts your agent inside
+   it — `claude` or `codex`, whichever is on your PATH, or the command you give
+   with `--agent`. `--no-agent` runs only the bridge so you can start something
+   else in that folder yourself.
+
+3. Work with the agent in that terminal exactly as you would with the desktop
+   editor open on the folder. It sees `deck.json`, `theme.css`, `notes.md`,
+   `assets/` and the `AGENTS.md` brief, and a `./deck` command in the folder
+   that takes the same commands as `slide-agent` (context, inspect, new,
+   apply, validate, render, comments, asset import). Saving a file in `edit/`
+   updates the shared presentation for everyone within a second or two; the
+   server does the compiling, so nothing else runs on your machine. Every
+   change anyone makes in the browser arrives in the mirrored folder as it
+   happens, and `./deck context` reports the slides you have selected in your
+   browser. Edits are attributed to your agent in History, comments are the
+   task list, and the panel in your browser shows what the agent did and
+   opens the scratchpad previews of what it authored.
+
+If you would rather not run anything at all, the panel's **Copy a brief**
+button gives you a prompt to paste into any agent: it points the agent at the
+server's HTTP API, which is self-describing, and tags its work with your
+participant id so the panel and scratchpad still follow it. The agent then
+works from API responses rather than files, which is a thinner view of the
+deck than the mirror gives.
+
+Exit the agent, or press **Ctrl+C**, to disconnect. The mirrored folder stays
+on your machine; running the same command again reuses it. Start the server
+with `--no-local-agents` to turn the feature off.
+
+With `--access`, a bridge is admitted under the same tailnet identity as the
+browser it was started from, and nobody else can attach an agent to your
+participant id.
+
 ## Optional shared agent
 
 The headless server has an experimental shared-agent mode:
@@ -108,7 +158,9 @@ from `http://127.0.0.1:5800` on the server machine. Replace `5800` if you chose
 a different port.
 
 Without `--shared-agent`, the collaborative editor works normally and no shared
-agent account is exposed.
+agent account is exposed; the **Agent…** button then connects each person's
+own local agent as described above. The two modes do not combine: a shared
+agent replaces the local-agent panel.
 
 ## Laptop-hosted sessions
 

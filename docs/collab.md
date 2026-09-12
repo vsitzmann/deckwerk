@@ -166,6 +166,55 @@ With the flag on:
 Without the flag, behavior is byte-for-byte the pre-access server — the
 desktop app's Collaborate/Agent flows never pass it.
 
+### Local agents (`slide-agent connect`)
+
+The standalone server's default agent story is *bring your own*: the toolbar's
+**Agent…** button opens the same chat panel, but instead of a composer it shows
+a command that downloads the server's own bridge (`/deckwerk-connect.mjs`,
+built by `vite.bridge.config.ts` into `dist/collab`, source
+`src/cli/agentConnect.ts` + `connectMain.ts`) and runs it with Node 22+ against
+`'<origin>/?deck=<id>&agent=<participant>'`. Nothing is installed. That bridge:
+
+- mirrors the deck folder into `~/.deckwerk/mirrors/<host>/<deck>` (or
+  `--dir`): everything the server lists under `GET /api/agent-mirror/files`
+  (assets, fonts, …) plus `deck.json`, the theme and `notes.md` from the live
+  session, an `AGENTS.md` brief rewritten for the mirror, a `CLAUDE.md` that
+  imports it, and a generated `./deck` command (`src/cli/deckHelper.mjs`) that
+  takes `slide-agent`'s verbs and answers them over the HTTP API
+  (`/api/agent-mirror/export.html`, `new.html`, `validate`, plus the existing
+  comments, context, render and upload routes);
+- joins the room as a WebSocket peer whose hello carries
+  `agentFor: <participant>`; the browser's own hello carries `participant`, so
+  the bridge reads that person's selection from presence and publishes it both
+  in the `slide-agent` context sidecar and in `.deckwerk-selection.json` for
+  `./deck` (`inspect --selected` works either way);
+- stands in for the desktop editor behind the file-based CLI bridge: inbox
+  transactions are validated strictly, sent as this peer's `txn`, and answered
+  once the server echoes them; `edit/*.html` saves go to
+  `POST /api/agent-mirror/sync-html`, where the server compiles them and
+  applies `htmlSyncOperations` (replace, add, delete, reorder — the desktop
+  watcher's semantics, no 422 gate) as a transaction attributed to the bridge
+  peer, registers the draft for the scratchpad, and returns `changes` and the
+  ids the bridge stamps back into the file; `./deck apply` routes through the
+  same watcher via a request file so a save and an explicit apply never
+  compile twice; `theme.css`, `notes.md` and new files in `assets/` travel up
+  (`PUT /api/agent-mirror/file`);
+- reports what it does with `agentEvent` frames, which the server's
+  `LocalAgentRegistry` (`src/server/localAgents.ts`) turns into the panel's
+  activity log through the existing `/api/shared-agent/*` state stream;
+- starts the agent CLI in the mirror (`claude`, `codex`, `--agent <cmd>`, or
+  `--no-agent`) and disconnects when it exits.
+
+The panel also offers **Copy a brief**: a prompt for an agent that drives the
+HTTP API directly with `agentSession=<participant>` on each call. The registry
+marks such a participant connected on the first tagged request (`touchHttp`)
+and logs applies and comments, so the panel and scratchpad follow it too.
+`slide-agent connect` from a checkout runs the same bridge.
+
+`--no-local-agents` disables it; `--shared-agent` replaces it. With `--access`
+the bridge must be admitted under the same tailnet login as the browser that
+announced the participant id.
+
 ### Shared-agent test mode
 
 For demos, the headless server can run one Codex App Server identity that every

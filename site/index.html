@@ -39,7 +39,7 @@
         <a class="btn primary" href="#install">Install DeckWerk</a>
         <a class="btn ghost" href="/manual/">Read the manual</a>
       </div>
-      <p class="footnote"><sup>1</sup> <i>Deck</i> as in slide deck, and <i>Werk</i>, the German word for a work, a creation, or a craft.</p>
+      <p class="footnote"><sup>1</sup> <i>Deck</i> as in slide deck, and <i>Werk</i> as in the German word that means &ldquo;a work (of art, literature, etc)&rdquo;, a factory, or a structure.</p>
     </div>
     <div class="shot">
       <div class="frame"><img src="/assets/editor.png" width="3200" height="2000" alt="The DeckWerk editor: slide rail on the left, a warm-paper title slide in the middle, and the Props inspector with layout and Morph controls on the right." fetchpriority="high"></div>
@@ -99,23 +99,30 @@
         <p class="lede">DeckWerk is in alpha and under active development. It already authors and delivers real talks, but interfaces and the file format may still change.</p>
       </div>
       <div class="grid">
+        <!-- Not on Flathub yet; re-enable this card once the Flathub submission lands.
         <div class="pkg">
           <h3>Linux</h3>
           <p>From Flathub, on any distribution with Flatpak.</p>
           <pre class="cmd"><span class="p">$ </span>flatpak install flathub org.deckwerk.DeckWerk</pre>
           <p class="alt">Prefer no Flatpak? An <code>.AppImage</code> and a <code>.deb</code> are attached to every <a href="https://github.com/vsitzmann/deckwerk/releases">release</a>.</p>
         </div>
+        -->
+        <div class="pkg">
+          <h3>Linux</h3>
+          <p>An <code>.AppImage</code> and a <code>.deb</code> are attached to every <a href="https://github.com/vsitzmann/deckwerk/releases">release</a>.</p>
+          <p class="alt">A Flathub package is planned but not published yet.</p>
+        </div>
         <div class="pkg">
           <h3>macOS</h3>
-          <p>Signed and notarized, via Homebrew. Apple silicon and Intel.</p>
-          <pre class="cmd"><span class="p">$ </span>brew install --cask vsitzmann/tap/deckwerk</pre>
-          <p class="alt">Or download the <code>.dmg</code> from the <a href="https://github.com/vsitzmann/deckwerk/releases/latest">latest release</a>.</p>
+          <p>Via Homebrew. Apple silicon and Intel.</p>
+          <pre class="cmd"><span class="p">$ </span>brew install --cask --no-quarantine vsitzmann/tap/deckwerk</pre>
+          <p class="alt">The build is <strong>not yet signed or notarized</strong>, so macOS will refuse to open it unless you pass <code>--no-quarantine</code> (or clear the flag afterwards with <code>xattr -dr com.apple.quarantine /Applications/DeckWerk.app</code>). Or download the <code>.dmg</code> from the <a href="https://github.com/vsitzmann/deckwerk/releases/latest">latest release</a>.</p>
         </div>
         <div class="pkg">
           <h3>Windows</h3>
-          <p>A signed installer, from the latest release.</p>
+          <p>An installer, from the latest release.</p>
           <p><a class="btn ghost" href="https://github.com/vsitzmann/deckwerk/releases/latest">Download for Windows</a></p>
-          <p class="alt">Windows 10 and 11, x64.</p>
+          <p class="alt">Windows 10 and 11, x64. Unsigned, so SmartScreen will warn: choose <em>More info → Run anyway</em>.</p>
         </div>
       </div>
       <div class="pkg source">

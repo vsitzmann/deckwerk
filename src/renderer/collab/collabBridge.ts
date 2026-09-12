@@ -83,6 +83,7 @@ export class CollabBridge {
   private reconnectDelay = 500;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private closed = false;
+  private participant: string | undefined;
 
   constructor(
     private readonly url: string,
@@ -99,13 +100,27 @@ export class CollabBridge {
     this.name = name;
   }
 
+  /**
+   * Announce this browser's agent-participant id in the hello, so a local
+   * agent bridge started from the Agent panel is paired with this person's
+   * selection. Set before connect().
+   */
+  setParticipant(participant: string | undefined): void {
+    this.participant = participant;
+  }
+
   connect(): void {
     this.closed = false;
     const socket = new WebSocket(this.url);
     this.socket = socket;
     socket.addEventListener('open', () => {
       this.reconnectDelay = 500;
-      this.send({ kind: 'hello', version: COLLAB_PROTOCOL_VERSION, name: this.name });
+      this.send({
+        kind: 'hello',
+        version: COLLAB_PROTOCOL_VERSION,
+        name: this.name,
+        ...(this.participant ? { participant: this.participant } : {}),
+      });
     });
     socket.addEventListener('message', (event) => {
       try {

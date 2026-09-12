@@ -470,15 +470,41 @@ canvas.onTextEditModeChange = (elementId) => {
  * over plain http on the LAN, so fall back to the legacy execCommand path.
  */
 /**
- * The one line a person runs to bring their own agent into this deck. The
- * page's own origin is the address that reaches the server from their
- * machine — the tailnet name they opened, not a loopback the server prints.
+ * The one line a person runs to bring their own agent into this deck: fetch
+ * the server's own bridge and run it with Node. The page's origin is the
+ * address that reaches the server from their machine — the tailnet name they
+ * opened, not a loopback the server prints.
  */
 function localAgentConnectCommand(deck: string, participantId: string): string {
+  return `curl -fsSL ${location.origin}/deckwerk-connect.mjs -o deckwerk-connect.mjs `
+    + `&& node deckwerk-connect.mjs '${localAgentSessionUrl(deck, participantId)}'`;
+}
+
+function localAgentSessionUrl(deck: string, participantId: string): string {
   const session = new URL(location.origin);
   session.searchParams.set('deck', deck);
   session.searchParams.set('agent', participantId);
-  return `slide-agent connect '${session.href}'`;
+  return session.href;
+}
+
+/** A prompt for an agent that will work the HTTP API directly, no bridge. */
+function localAgentBrief(deck: string, participantId: string): string {
+  const origin = location.origin;
+  const query = `deck=${encodeURIComponent(deck)}&agentSession=${encodeURIComponent(participantId)}`;
+  return `# Live presentation editing session
+
+Session URL: ${localAgentSessionUrl(deck, participantId)}
+API origin: ${origin}
+Deck ID: ${deck}
+
+You are editing a DeckWerk presentation that people are working on live. Everything
+happens over its HTTP API; start by reading the complete guide:
+
+    curl -s '${origin}/api/brief?${query}'
+
+Append \`${query}\` to every /api request: that is how your work is attributed
+to me and how your previews open in my browser. Read /api/comments before authoring —
+comments are the task list — and check the playerUrl a successful apply returns.`;
 }
 
 async function copyText(text: string): Promise<void> {
@@ -800,6 +826,7 @@ void fetchServerConfig().then((config) => {
       ...(local ? {
         localAgent: {
           connectCommand: localAgentConnectCommand(deckId!, sharedAgentBrowserApi.participantId),
+          brief: localAgentBrief(deckId!, sharedAgentBrowserApi.participantId),
         },
       } : {}),
     });

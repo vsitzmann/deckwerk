@@ -31,6 +31,18 @@ export interface AgentChatPanelOptions {
   canManageAccount?: boolean;
   /** Lets the editor expose a deck-level reopen control outside the chat. */
   onScratchpadState?: (state: { available: boolean; visible: boolean }) => void;
+  /**
+   * The participant's own agent on their own machine (headless server). The
+   * panel then shows how to connect it instead of a composer: the chat
+   * happens in that agent's terminal, and this surface carries its activity,
+   * its scratchpad previews and whether it is attached.
+   */
+  localAgent?: {
+    /** The command to run on their machine, participant id included. */
+    connectCommand: string;
+    /** A prompt for an agent that will drive the HTTP API directly instead. */
+    brief?: string;
+  };
 }
 
 /** A persistent, non-modal chat surface anchored beneath the editor toolbar. */
@@ -64,6 +76,7 @@ export class AgentChatPanel {
   private readonly stop: HTMLButtonElement;
   private readonly reset: HTMLButtonElement;
   private readonly conversationSelect: HTMLSelectElement;
+  private readonly connect: HTMLElement | null;
   private state: AgentChatState | null = null;
 
   constructor(options: AgentChatPanelOptions) {
@@ -106,6 +119,9 @@ export class AgentChatPanel {
     this.account = document.createElement('div');
     this.account.className = 'agent-chat-account';
     this.account.hidden = true;
+    this.connect = options.localAgent
+      ? connectCard(options.localAgent.connectCommand, options.localAgent.brief)
+      : null;
     this.signIn = smallButton('Sign in with ChatGPT', () => void this.login());
     this.signIn.classList.add('agent-chat-sign-in');
     this.switchAccount = smallButton('Switch account', () => void this.changeAccount());
@@ -234,8 +250,16 @@ export class AgentChatPanel {
     composeRow.append(hint, composerActions);
     composer.append(this.input, composeRow);
 
+    if (options.localAgent) {
+      // No server-side conversation to compose into, switch between or reset.
+      composer.hidden = true;
+      this.reset.hidden = true;
+      this.conversationSelect.hidden = true;
+      this.empty.textContent = 'What your agent does in this deck shows up here.';
+    }
     panel.append(
       header,
+      ...(this.connect ? [this.connect] : []),
       this.account,
       this.modelRow,
       this.scratchpadBar,
@@ -442,19 +466,26 @@ export class AgentChatPanel {
     const currentDeck = this.options.currentDeckPath();
     if (currentDeck && state.deckPath !== currentDeck) return;
     this.state = state;
-    this.status.textContent = statusText(state);
-    this.status.dataset.state = state.connection === 'unavailable'
-      ? 'error'
-      : state.busy ? 'busy' : state.auth === 'signedIn' ? 'ready' : 'idle';
+    this.status.textContent = this.options.localAgent ? localStatusText(state) : statusText(state);
+    this.status.dataset.state = this.options.localAgent
+      ? (state.connection === 'ready' ? (state.busy ? 'busy' : 'ready') : 'idle')
+      : state.connection === 'unavailable'
+        ? 'error'
+        : state.busy ? 'busy' : state.auth === 'signedIn' ? 'ready' : 'idle';
+    if (this.connect) this.connect.hidden = state.connection === 'ready';
 
     this.account.hidden = state.connection !== 'ready';
     if (state.auth === 'signedIn' && state.accountLabel) {
       this.account.hidden = false;
       this.account.replaceChildren();
       const label = document.createElement('span');
-      label.textContent = state.accountLabel;
+      label.textContent = this.options.localAgent
+        ? `${state.accountLabel} is connected to this deck`
+        : state.accountLabel;
       this.account.append(label);
-      if (this.options.canManageAccount !== false) this.account.append(this.switchAccount);
+      if (this.options.canManageAccount !== false && !this.options.localAgent) {
+        this.account.append(this.switchAccount);
+      }
     } else if (state.auth === 'signedOut') {
       if (this.options.canManageAccount !== false) {
         this.account.replaceChildren(this.signIn);
@@ -676,6 +707,85 @@ function statusText(state: AgentChatState): string {
   if (state.auth === 'signedOut') return 'Sign in required';
   if (state.busy) return state.activity ?? 'Working…';
   return 'Ready';
+}
+
+function localStatusText(state: AgentChatState): string {
+  if (state.connection !== 'ready') return 'Waiting for your agent…';
+  if (state.busy) return state.activity ?? 'Working…';
+  return 'Connected';
+}
+
+/** How to attach a local agent: the command, a copy button, and what it does. */
+function connectCard(command: string, brief?: string): HTMLElement {
+  const card = document.createElement('div');
+  card.className = 'agent-chat-connect';
+  const lead = document.createElement('p');
+  lead.textContent = 'Run this in a terminal on your computer to bring your own agent into this deck:';
+  const row = document.createElement('div');
+  row.className = 'agent-chat-connect-row';
+  const code = document.createElement('code');
+  code.textContent = command;
+  code.title = command;
+  const copy = smallButton('Copy', () => {
+    void copyToClipboard(command).then(
+      () => {
+        copy.textContent = 'Copied';
+        setTimeout(() => { copy.textContent = 'Copy'; }, 1500);
+      },
+      () => {
+        copy.textContent = 'Select and copy';
+        const range = document.createRange();
+        range.selectNodeContents(code);
+        const selection = window.getSelection();
+        selection?.removeAllRanges();
+        selection?.addRange(range);
+      },
+    );
+  });
+  copy.classList.add('agent-chat-connect-copy');
+  copy.setAttribute('aria-label', 'Copy the connect command');
+  row.append(code, copy);
+  const detail = document.createElement('p');
+  detail.className = 'agent-chat-connect-detail';
+  detail.textContent = 'Needs only Node 22+. It mirrors the deck into a folder on your machine, keeps it in sync '
+    + 'both ways, and starts your agent there — the same as opening the deck folder with it. '
+    + 'Talk to the agent in that terminal; leave comments on slides for tasks.';
+  card.append(lead, row, detail);
+  if (brief) {
+    const alt = document.createElement('div');
+    alt.className = 'agent-chat-connect-alt';
+    const altText = document.createElement('span');
+    altText.textContent = 'Can\u2019t run anything? Give your agent the HTTP API instead:';
+    const copyBrief = smallButton('Copy a brief', () => {
+      void copyToClipboard(brief).then(
+        () => {
+          copyBrief.textContent = 'Copied';
+          setTimeout(() => { copyBrief.textContent = 'Copy a brief'; }, 1500);
+        },
+        () => { copyBrief.textContent = 'Copy failed'; },
+      );
+    });
+    copyBrief.setAttribute('aria-label', 'Copy a brief for an agent that uses the HTTP API');
+    alt.append(altText, copyBrief);
+    card.append(alt);
+  }
+  return card;
+}
+
+async function copyToClipboard(text: string): Promise<void> {
+  if (navigator.clipboard) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+  const scratch = document.createElement('textarea');
+  scratch.value = text;
+  scratch.style.position = 'fixed';
+  scratch.style.opacity = '0';
+  document.body.append(scratch);
+  scratch.select();
+  const ok = document.execCommand('copy');
+  scratch.remove();
+  if (!ok) throw new Error('copy failed');
 }
 
 function cssEscape(value: string): string {

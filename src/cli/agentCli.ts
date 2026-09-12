@@ -51,6 +51,7 @@ import { exportDeck } from '../main/exportDeck.js';
 import { spawn } from 'node:child_process';
 import { htmlEditTransaction } from '../main/htmlAuthoring.js';
 import { renderSlidesToPng } from './renderSlides.js';
+import { runConnectCommand } from './agentConnect.js';
 
 /**
  * `slide-agent` — the filesystem-first agent interface.
@@ -97,6 +98,15 @@ The loop — edit HTML, the editor syncs it back:
   # then edit edit/<file>.html and save it; with the editor open the deck
   # follows within ~200ms. With it closed, apply the same file explicitly:
   apply     [deck] --html <file> [--after <slideId>] [--label <text>]
+
+Working on a deck someone hosts on a collaboration server:
+
+  connect   <sessionUrl> [--dir <folder>] [--agent <command>|--no-agent]
+            [--name <text>]               mirror the hosted deck into a folder
+                                          on this machine, keep it in sync both
+                                          ways, and start your agent there. The
+                                          Agent panel in the browser prints the
+                                          exact command, participant id included.
 
 Everything else:
 
@@ -189,6 +199,8 @@ export async function runAgentCli(argv: string[], io: CliIo): Promise<number> {
         return await commentsCommand(rest, io);
       case 'transaction':
         return await transactionCommand(rest, io);
+      case 'connect':
+        return await connectCommand(rest, io);
       case 'help':
       case '--help':
       case undefined:
@@ -209,6 +221,28 @@ export async function runAgentCli(argv: string[], io: CliIo): Promise<number> {
 }
 
 /* --- commands --- */
+
+/**
+ * Join a hosted session with your own agent: mirror the deck root here, run
+ * the file bridge the CLI talks to, and start the agent inside the mirror.
+ */
+async function connectCommand(argv: string[], io: CliIo): Promise<number> {
+  const { flags, options, positional } = parseFlags(argv, ['dir', 'agent', 'name']);
+  ensureKnownFlags('connect', flags, ['no-agent']);
+  ensurePositionals('connect', positional, 1);
+  const url = positional[0];
+  if (!url) throw new UsageError('connect needs the session URL the Agent panel printed');
+  if (flags.has('no-agent') && options.has('agent')) {
+    throw new UsageError('--agent and --no-agent contradict each other');
+  }
+  return runConnectCommand({
+    url,
+    dir: options.get('dir'),
+    name: options.get('name'),
+    agent: flags.has('no-agent') ? false : options.get('agent'),
+    io,
+  });
+}
 
 async function contextCommand(argv: string[], io: CliIo): Promise<number> {
   const { flags, positional } = parseFlags(argv);

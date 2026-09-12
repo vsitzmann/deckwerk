@@ -2,6 +2,8 @@
 
 **DeckWerk is an opinionated cross-platform what-you-see-is-what-you-get slide editor by Vincent Sitzmann.**
 
+*Deck* as in slide deck, and *Werk* as in the German word that means "a work (of art, literature, etc)", a factory, or a structure.
+
 Website and manual: **[deckwerk.org](https://deckwerk.org)**
 
 I designed DeckWerk to bring the ability to create and present polished talks to Linux. It is optimized for presentations centered on video and image content, with animation, tables, plotting, templating, and similar features reduced to the minimum.
@@ -35,7 +37,7 @@ DeckWerk auto-transcodes videos and images into compatible formats.
 
 ### Native agent integration
 
-DeckWerk is designed so that AI agents can create and edit presentations directly (currently only Codex support).
+DeckWerk is designed so that AI agents can create and edit presentations directly. The desktop app embeds Codex; on a shared server, every collaborator connects the agent CLI they already use on their own machine with one command from the browser's Agent panel, which mirrors the deck folder locally and keeps it in sync. Only Node is needed.
 
 Agents author slides using the web-layout and front-end skills at which they already excel. They can work within an existing deck’s visual language, reuse its assets and typography, and make changes. When agents author HTML slides that aren't compatible with DeckWerk's editor, they don't break; they simply will not be as editable for the human.
 
@@ -59,24 +61,26 @@ DeckWerk is particularly suited to:
 
 ## Installing
 
+Builds are not yet code-signed, so both macOS and Windows will warn about them.
+A Flathub package is planned but not published yet.
+
 **macOS** — via [Homebrew](https://brew.sh):
 
 ```bash
-brew install --cask vsitzmann/tap/deckwerk
+brew install --cask --no-quarantine vsitzmann/tap/deckwerk
 ```
 
-**Linux** — via [Flathub](https://flathub.org):
-
-```bash
-flatpak install flathub org.deckwerk.DeckWerk
-```
-
-An `.AppImage` and a `.deb` are also attached to every
-[release](https://github.com/vsitzmann/deckwerk/releases) for people who would
-rather not use Flatpak.
+`--no-quarantine` is required while the app is unsigned; without it Gatekeeper
+refuses to open it. If you already installed without the flag, clear it with
+`xattr -dr com.apple.quarantine /Applications/DeckWerk.app`.
 
 **Windows** — download the installer from the
 [latest release](https://github.com/vsitzmann/deckwerk/releases/latest).
+SmartScreen will warn about the unsigned installer: choose *More info → Run
+anyway*.
+
+**Linux** — an `.AppImage` and a `.deb` are attached to every
+[release](https://github.com/vsitzmann/deckwerk/releases).
 
 **Any platform** — build it yourself. Three commands, no cross-compilation
 tricks, and it works on distributions the packages above do not cover:

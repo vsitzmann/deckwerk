@@ -40,7 +40,7 @@
     "export": "npm run build:export >/dev/null && vite-node --config vitest.config.ts scripts/export-deck.mts --",
     "agent": "vite-node --config vitest.config.ts scripts/slide-agent.mts --",
     "collab": "vite-node --config vitest.config.ts scripts/collab-server.mts --",
-    "build:collab": "vite build --config vite.collab.config.ts",
+    "build:collab": "vite build --config vite.collab.config.ts && vite build --config vite.bridge.config.ts",
     "build:reference": "vite-node --config vitest.config.ts scripts/build-agent-reference.mts",
     "eval:agent": "npm run build:collab && vite-node --config vitest.config.ts scripts/eval-agent.mts",
     "eval:agent:serve": "npm run build:collab && vite-node --config vitest.config.ts scripts/serve-agent-benchmark.mts",
@@ -75,7 +75,6 @@
     "typescript": "^5.6.2",
     "vite": "^5.4.8",
     "vite-node": "^2.1.1",
-    "vitest": "^2.1.1",
-    "marked": "^15.0.12"
+    "vitest": "^2.1.1"
   }
 }
