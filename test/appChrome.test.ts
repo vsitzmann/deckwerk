@@ -36,4 +36,12 @@ describe('shared application chrome', () => {
     expect(view).toContain('class="speaker-next-button primary"');
     expect(view).toContain('class="speaker-end danger"');
   });
+
+  it('reserves the macOS traffic-light gutter only in the inset desktop window', () => {
+    const css = source('src/renderer/editor/editor.css');
+    const shell = source('src/renderer/editor/main.ts');
+    expect(css).toContain('body.mac-titlebar #toolbar { padding-left: 84px; }');
+    expect(shell).toContain("document.body.classList.add('mac-titlebar')");
+    expect(css.match(/padding-left:\s*84px/g)).toHaveLength(1);
+  });
 });

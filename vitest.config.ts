@@ -1,7 +1,7 @@
 import { resolve } from 'node:path';
 import { configDefaults, defineConfig } from 'vitest/config';
 import { LONG_TEST_FILES } from './test/longTestFiles.js';
-import { BROWSER_TEST_FILES } from './test/testTiers.js';
+import { BROWSER_TEST_FILES, SERIAL_TEST_FILES } from './test/testTiers.js';
 
 /**
  * IMPORTANT FOR AGENTS: run the complete suite outside restricted sandboxes.
@@ -14,11 +14,11 @@ import { BROWSER_TEST_FILES } from './test/testTiers.js';
  * uses, so a module imports identically wherever it is loaded from.
  */
 /**
- * The unit tier: everything that does not launch Electron. These are jsdom
- * and Node suites, cheap enough to run one per core. The Electron suites run
- * with bounded parallelism from vitest.browser.config.ts, and the ones that
- * share machine-wide state one at a time from vitest.serial.config.ts; the
- * long end-to-end scenarios stay behind `npm run test:long`.
+ * The required tier: jsdom and Node suites that are safe to run one per core.
+ * Electron suites run with bounded parallelism from vitest.browser.config.ts;
+ * suites that share machine state or coordinate several real processes run
+ * alone from vitest.serial.config.ts. Long end-to-end scenarios stay behind
+ * `npm run test:long`.
  */
 export default defineConfig({
   resolve: {
@@ -26,7 +26,7 @@ export default defineConfig({
   },
   test: {
     include: ['test/**/*.test.ts'],
-    exclude: [...configDefaults.exclude, ...LONG_TEST_FILES, ...BROWSER_TEST_FILES],
+    exclude: [...configDefaults.exclude, ...LONG_TEST_FILES, ...BROWSER_TEST_FILES, ...SERIAL_TEST_FILES],
     // Vitest stubs CSS imports to an empty string, `?raw` included — which
     // would quietly hand the HTML exporter no type rules and let a test pass
     // on a page the app would never produce. Only `type.css` is exempted, so

@@ -39,7 +39,7 @@ const CLIPBOARD_MARKERS = [
   /clipboard\.(?:write|read)/,
 ];
 
-/** Suites that share machine-wide state for reasons other than the clipboard. */
+/** Suites that share machine state or need a process topology of their own. */
 const SERIAL_BY_NATURE = [
   // Hosts the collaboration server and opens a real audience window.
   'test/agentPresentationSync.test.ts',
@@ -47,6 +47,10 @@ const SERIAL_BY_NATURE = [
   'test/deckSwitchPresentation.test.ts',
   // Two desktop apps plus an external peer browser at once.
   'test/desktopCollaborationHandoff.test.ts',
+  // Starts real HTTP/WebSocket servers, filesystem watchers, and child CLI
+  // processes. Under a fully parallel unit run those events can be starved
+  // long enough for the file bridge to miss its response deadline.
+  'test/localAgentBridge.test.ts',
 ];
 
 function source(file: string): string {

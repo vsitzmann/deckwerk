@@ -72,6 +72,10 @@ const el = <T extends HTMLElement>(id: string): T => {
   return node as T;
 };
 
+// macOS hides the title bar into the toolbar (titleBarStyle: hiddenInset), so
+// the toolbar's left end has to clear the traffic lights. No other window does.
+if (navigator.userAgent.includes('Macintosh')) document.body.classList.add('mac-titlebar');
+
 const store = new EditorStore(emptyDeck());
 // Rail and Morph thumbnails take their poster frames from the main process, so
 // this window never opens a video pipeline for a preview (see posterCache.ts).

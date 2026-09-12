@@ -10,4 +10,8 @@ describe('serialized integration manifest', () => {
       expect(existsSync(resolve(process.cwd(), file)), file).toBe(true);
     }
   });
+
+  it('runs the process-heavy local agent bridge away from the parallel unit tier', () => {
+    expect(SERIAL_TEST_FILES).toContain('test/localAgentBridge.test.ts');
+  });
 });

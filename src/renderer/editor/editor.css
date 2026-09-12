@@ -46,10 +46,14 @@ html, body {
   padding: 0 12px;
   border-bottom: 1px solid var(--line);
   background: var(--panel);
-  /* Clears the macOS traffic lights under titleBarStyle: hiddenInset. */
-  padding-left: 84px;
   -webkit-app-region: drag;
 }
+
+/* Only the macOS app's hiddenInset title bar overlays the toolbar's left end,
+   so only it needs the traffic lights cleared. Every other window—and the
+   browser client, which has no title bar at all—starts its first control at
+   the toolbar's own padding. */
+body.mac-titlebar #toolbar { padding-left: 84px; }
 
 .bar-divider {
   width: 1px;
