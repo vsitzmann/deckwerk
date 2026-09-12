@@ -249,7 +249,20 @@ describe.skipIf(!electronBinary)('presenting with several presentations open (we
     // of its own so that alpha and bravo can be checked for staying put.
     const spare = await openTab('bravo', 'Spare Author');
     await spare.evaluate(`void (window.prompt = () => 'delta')`);
-    await spare.clickByText('#toolbar button', 'New', 'New');
+    const compactFile = await spare.evaluate<boolean>(`(() => {
+      const control = document.querySelector('.toolbar-compact-file-action');
+      return Boolean(control && getComputedStyle(control).display !== 'none');
+    })()`);
+    if (compactFile) {
+      await spare.clickByText('.toolbar-compact-file-action > button', 'File', 'File');
+      await spare.clickByText(
+        '.toolbar-compact-file-action .shape-menu-item',
+        'New',
+        'File → New',
+      );
+    } else {
+      await spare.clickByText('.toolbar-expanded-file-actions > button', 'New', 'New');
+    }
 
     const listed = await eventually(
       async () => {
