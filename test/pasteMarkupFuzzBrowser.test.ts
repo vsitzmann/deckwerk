@@ -359,10 +359,19 @@ async function resetFixture(cdp: Cdp, target: PasteCase['target']): Promise<void
     // The previous operation may have left focus in the inspector, where
     // Escape means something else; click back into the text first.
     await cdp.click(PASTE_CONTENT, 'the text box before leaving editing');
-    await cdp.key('Escape', 27);
-    await eventually(async () => cdp.evaluate<boolean>(
-      `document.querySelector('${PASTE_CONTENT}')?.isContentEditable !== true`,
-    ), 'Escape did not leave text editing');
+    // Keep asking rather than pressing once and waiting it out. The click that
+    // just restored focus can itself re-enter editing, and on a loaded machine
+    // the first Escape can arrive before the box is focused at all — in which
+    // case no amount of waiting ends a session nobody told to end.
+    let leftEditing = false;
+    for (let attempt = 0; attempt < 20 && !leftEditing; attempt += 1) {
+      await cdp.key('Escape', 27);
+      await wait(150);
+      leftEditing = await cdp.evaluate<boolean>(
+        `document.querySelector('${PASTE_CONTENT}')?.isContentEditable !== true`,
+      );
+    }
+    if (!leftEditing) throw new Error('Escape did not leave text editing');
   }
   await cdp.evaluate(`(() => {
     const store = window.store;
