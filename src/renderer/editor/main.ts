@@ -60,6 +60,7 @@ import { setRenderInvariantChecks } from './renderInvariants.js';
 import { setSelectionInvariantChecks } from './selectionInvariants.js';
 import { SpeakerNotesDrawer } from './speakerNotesDrawer.js';
 import { applySpeakerNotes } from '@shared/speakerNotes.js';
+import { installResponsiveToolbar } from './responsiveToolbar.js';
 
 /**
  * Editor shell: wires the panels to one store, owns the toolbar, the keyboard
@@ -375,26 +376,53 @@ function buildToolbar(): void {
   left.className = 'bar-group';
   deckNameLabel = document.createElement('span');
   deckNameLabel.className = 'bar-deck-name';
+  const fileActions = document.createElement('span');
+  fileActions.className = 'toolbar-expanded-file-actions';
+  const importEntries = [
+    { label: 'Keynote…', action: () => void importKeynotePresentation() },
+    { label: 'PowerPoint…', action: () => void importPowerPointPresentation() },
+  ];
+  const saveEntries = [
+    { label: 'Deck…', action: () => void saveAsPresentation() },
+    {
+      label: 'Lossy export',
+      options: [
+        { label: 'PDF…', action: () => void exportPdf() },
+        { label: 'Web…', action: () => void exportWeb() },
+      ],
+    },
+  ];
+  fileActions.append(
+    barButton('New', newPresentation),
+    barButton('Open', openPresentation),
+    createToolbarPicker('Import…', importEntries),
+    createToolbarPicker('Save As…', saveEntries, { deckOnly: true }),
+  );
+  const compactFile = createToolbarPicker('File', [
+    {
+      label: 'Presentation',
+      options: [
+        { label: 'New', action: newPresentation },
+        { label: 'Open…', action: openPresentation },
+      ],
+    },
+    { label: 'Import', options: importEntries },
+    {
+      label: 'Save and export',
+      options: [
+        { label: 'Save As…', action: () => void saveAsPresentation() },
+        { label: 'Export PDF…', action: () => void exportPdf() },
+        { label: 'Export Web…', action: () => void exportWeb() },
+      ],
+    },
+  ], { deckOnly: true });
+  compactFile.classList.add('toolbar-compact-file-action');
   left.append(
     createDeckWerkButton(),
     deckNameLabel,
     barDivider(),
-    barButton('New', newPresentation),
-    barButton('Open', openPresentation),
-    createToolbarPicker('Import…', [
-      { label: 'Keynote…', action: () => void importKeynotePresentation() },
-      { label: 'PowerPoint…', action: () => void importPowerPointPresentation() },
-    ]),
-    createToolbarPicker('Save As…', [
-      { label: 'Deck…', action: () => void saveAsPresentation() },
-      {
-        label: 'Lossy export',
-        options: [
-          { label: 'PDF…', action: () => void exportPdf() },
-          { label: 'Web…', action: () => void exportWeb() },
-        ],
-      },
-    ], { deckOnly: true }),
+    fileActions,
+    compactFile,
   );
 
   const mid = document.createElement('div');
@@ -409,9 +437,20 @@ function buildToolbar(): void {
   right.className = 'bar-group bar-right deck-only';
   collaborateButton = barButton('Collaborate', () => void startSharing());
   collaborateButton.id = 'collaborate-trigger';
-  right.append(
+  const secondaryActions = document.createElement('span');
+  secondaryActions.className = 'toolbar-expanded-secondary-actions';
+  secondaryActions.append(
     barButton('Agent…', () => void toggleAgentChat()),
     collaborateButton,
+  );
+  const compactSecondary = createToolbarPicker('More', [
+    { label: 'Agent…', action: () => void toggleAgentChat() },
+    { label: 'Collaboration…', action: () => void startSharing() },
+  ]);
+  compactSecondary.classList.add('toolbar-compact-secondary-action');
+  right.append(
+    secondaryActions,
+    compactSecondary,
     createToolbarSplitButton(
       'Present',
       () => void startPresentation(),
@@ -422,6 +461,7 @@ function buildToolbar(): void {
 
   bar.append(left, mid, right);
   syncDeckNameLabel();
+  installResponsiveToolbar(bar);
 }
 
 async function startPresentation(speakerView = false): Promise<void> {

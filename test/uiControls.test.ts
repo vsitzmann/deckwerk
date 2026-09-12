@@ -9,6 +9,7 @@ import {
 } from '../src/renderer/editor/exportPicker.js';
 import { showPdfExportDialog } from '../src/renderer/editor/pdfExportDialog.js';
 import { createDeckWerkButton } from '../src/renderer/editor/aboutDialog.js';
+import { refreshResponsiveToolbar } from '../src/renderer/editor/responsiveToolbar.js';
 
 describe('shared editor controls', () => {
   beforeEach(() => {
@@ -18,6 +19,7 @@ describe('shared editor controls', () => {
       document: dom.window.document,
       Node: dom.window.Node,
       HTMLElement: dom.window.HTMLElement,
+      getComputedStyle: dom.window.getComputedStyle.bind(dom.window),
     });
   });
   afterEach(() => closePopover());
@@ -117,12 +119,76 @@ describe('shared editor controls', () => {
     expect(styles).toMatch(/\.shape-menu\.toolbar-split-popover\s*\{[\s\S]*?right:\s*-12px;[\s\S]*?left:\s*auto;/);
   });
 
-  it('moves centered insert controls into the toolbar flow at narrow widths', () => {
+  it('progressively compacts the toolbar before controls can overlap', () => {
     const styles = readFileSync(join(process.cwd(), 'src/renderer/editor/editor.css'), 'utf8');
-    const responsiveToolbar = styles.match(/@media \(max-width: 1100px\) \{[\s\S]*?\.bar-center \{[\s\S]*?\n  \}\n\}/)?.[0];
-    expect(responsiveToolbar).toContain('flex-wrap: wrap');
-    expect(responsiveToolbar).toContain('position: static');
-    expect(responsiveToolbar).toContain('transform: none');
+    expect(styles).toContain('#toolbar.toolbar-hide-deck-name .bar-deck-name');
+    expect(styles).toContain('#toolbar.toolbar-compact-file .toolbar-expanded-file-actions');
+    expect(styles).toContain('#toolbar.toolbar-compact-secondary .toolbar-expanded-secondary-actions');
+    expect(styles).toMatch(/#toolbar\.toolbar-compact-file \.bar-center\s*\{[\s\S]*?position:\s*static;[\s\S]*?transform:\s*none;/);
+    expect(styles).not.toContain('@media (max-width: 1100px) {\n  #app { grid-template-rows: auto');
+
+    const responsive = readFileSync(
+      join(process.cwd(), 'src/renderer/editor/responsiveToolbar.ts'),
+      'utf8',
+    );
+    expect(responsive).toContain('centeredGroupsFit(toolbar)');
+    expect(responsive).toContain("toolbar.classList.add('toolbar-hide-deck-name')");
+    expect(responsive).toContain("toolbar.classList.add('toolbar-compact-file')");
+    expect(responsive).toContain("toolbar.classList.add('toolbar-compact-secondary')");
+    expect(responsive).toContain('new ResizeObserver(schedule)');
+
+    for (const file of ['src/renderer/editor/main.ts', 'src/renderer/collab/main.ts']) {
+      const source = readFileSync(join(process.cwd(), file), 'utf8');
+      expect(source).toContain("createToolbarPicker('File'");
+      expect(source).toContain("createToolbarPicker('More'");
+      expect(source).toContain('installResponsiveToolbar(bar)');
+    }
+  });
+
+  it('chooses toolbar compactness from measured group widths', () => {
+    const toolbar = document.createElement('header');
+    const left = document.createElement('div');
+    const center = document.createElement('div');
+    const right = document.createElement('div');
+    left.className = 'bar-group';
+    center.className = 'bar-group bar-center';
+    right.className = 'bar-group bar-right';
+    toolbar.append(left, center, right);
+    document.body.appendChild(toolbar);
+    Object.defineProperty(toolbar, 'clientWidth', { configurable: true, value: 700 });
+    let deckControlsVisible = true;
+
+    const rect = (x: number, width: number): DOMRect => ({
+      x,
+      y: 0,
+      width,
+      height: 44,
+      top: 0,
+      right: x + width,
+      bottom: 44,
+      left: x,
+      toJSON: () => ({}),
+    });
+    left.getBoundingClientRect = () => toolbar.classList.contains('toolbar-compact-file')
+      ? rect(0, 120)
+      : rect(0, toolbar.classList.contains('toolbar-hide-deck-name') ? 430 : 450);
+    center.getBoundingClientRect = () => deckControlsVisible ? rect(400, 220) : rect(0, 0);
+    right.getBoundingClientRect = () => deckControlsVisible
+      ? rect(660, toolbar.classList.contains('toolbar-compact-secondary') ? 100 : 240)
+      : rect(0, 0);
+
+    refreshResponsiveToolbar(toolbar);
+    expect(toolbar.classList.contains('toolbar-hide-deck-name')).toBe(true);
+    expect(toolbar.classList.contains('toolbar-compact-file')).toBe(true);
+    expect(toolbar.classList.contains('toolbar-compact-secondary')).toBe(false);
+
+    Object.defineProperty(toolbar, 'clientWidth', { configurable: true, value: 500 });
+    refreshResponsiveToolbar(toolbar);
+    expect(toolbar.classList.contains('toolbar-compact-secondary')).toBe(true);
+
+    deckControlsVisible = false;
+    refreshResponsiveToolbar(toolbar);
+    expect(toolbar.classList.contains('toolbar-compact-file')).toBe(false);
   });
 
   it('consolidates deck saves and exports under Save As', () => {

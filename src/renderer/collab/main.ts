@@ -9,7 +9,11 @@ import { SpeakerNotesDrawer } from '../editor/speakerNotesDrawer.js';
 import { createDeckWerkButton } from '../editor/aboutDialog.js';
 import { installAgentApi, setAgentName } from './agentApi.js';
 import { CssEditor } from '../editor/cssEditor.js';
-import { createToolbarPicker, createToolbarSplitButton } from '../editor/exportPicker.js';
+import {
+  createToolbarPicker,
+  createToolbarSplitButton,
+  type ToolbarPickerEntry,
+} from '../editor/exportPicker.js';
 import { showPdfExportDialog } from '../editor/pdfExportDialog.js';
 import { HistoryPanel } from '../editor/historyPanel.js';
 import {
@@ -50,6 +54,7 @@ import { trackPreviewFrameRecovery } from '../player/previewFrameRecovery.js';
 import { trackVideoLoading } from '../player/videoLoadingProgress.js';
 import { DelayedOperationProgress } from '../editor/operationProgress.js';
 import { DesignWorkspace } from '../editor/designWorkspace.js';
+import { installResponsiveToolbar } from '../editor/responsiveToolbar.js';
 
 /**
  * Browser collaboration shell: the same canvas, rail, inspector, theme
@@ -615,49 +620,81 @@ function buildToolbar(): void {
   deckName.className = 'bar-deck-name';
   deckName.textContent = deckId;
   left.append(createDeckWerkButton(), deckName, divider());
+  const fileActions = document.createElement('span');
+  fileActions.className = 'toolbar-expanded-file-actions';
+  const compactFileEntries: ToolbarPickerEntry[] = [];
   // In a hosted session the server pins one deck; switching, creating or
   // importing presentations is the host's business, not a joiner's.
   if (!serverConfig.hosted) {
-    left.append(
+    const createDeck = (): void => {
+      void createDeckOnServer().catch((error) =>
+        setStatusMessage(`Create failed: ${error instanceof Error ? error.message : error}`));
+    };
+    const openDeck = (): void => showDeckPicker({
+      dismissable: true,
+      onStatus: setStatusMessage,
+      access: serverConfig.access ?? null,
+    });
+    const importEntries = [
+      { label: 'Keynote…', action: () => importKeynoteToServer(setStatusMessage) },
+      { label: 'PowerPoint…', action: () => importPowerPointToServer(setStatusMessage) },
+    ];
+    fileActions.append(
       barButton('New', () => {
-        void createDeckOnServer().catch((error) =>
-          setStatusMessage(`Create failed: ${error instanceof Error ? error.message : error}`));
+        createDeck();
       }),
-      barButton('Open', () => showDeckPicker({
-        dismissable: true,
-        onStatus: setStatusMessage,
-        access: serverConfig.access ?? null,
-      })),
-      createToolbarPicker('Import…', [
-        { label: 'Keynote…', action: () => importKeynoteToServer(setStatusMessage) },
-        { label: 'PowerPoint…', action: () => importPowerPointToServer(setStatusMessage) },
-      ]),
+      barButton('Open', openDeck),
+      createToolbarPicker('Import…', importEntries),
+    );
+    compactFileEntries.push(
+      {
+        label: 'Presentation',
+        options: [
+          { label: 'New', action: createDeck },
+          { label: 'Open…', action: openDeck },
+        ],
+      },
+      { label: 'Import', options: importEntries },
     );
   }
   // In collaboration the deck archive comes straight off the server (which
   // flushes the live session before streaming it), while PDF is produced in a
   // print tab: the headless server has no Chromium of its own, so the
   // browser's own "Save as PDF" stands in for the desktop app's printToPDF.
-  left.append(
-    createToolbarPicker('Save As…', [
+  const downloadDeck = (): void => {
+    const link = document.createElement('a');
+    link.href = `/api/download?deck=${encodeURIComponent(deckId!)}`;
+    link.download = `${deckId}.zip`;
+    link.click();
+  };
+  const saveEntries: ToolbarPickerEntry[] = [
+    {
+      label: 'Deck archive (.zip)…',
+      action: downloadDeck,
+    },
+    {
+      label: 'Lossy export',
+      options: [
+        { label: 'PDF…', action: () => void exportPdf() },
+        { label: 'Web…', action: () => void exportWeb() },
+      ],
+    },
+  ];
+  fileActions.append(createToolbarPicker('Save As…', saveEntries, { deckOnly: true }));
+  compactFileEntries.push({
+    label: 'Save and export',
+    options: [
       {
         label: 'Deck archive (.zip)…',
-        action: () => {
-          const link = document.createElement('a');
-          link.href = `/api/download?deck=${encodeURIComponent(deckId!)}`;
-          link.download = `${deckId}.zip`;
-          link.click();
-        },
+        action: downloadDeck,
       },
-      {
-        label: 'Lossy export',
-        options: [
-          { label: 'PDF…', action: () => void exportPdf() },
-          { label: 'Web…', action: () => void exportWeb() },
-        ],
-      },
-    ], { deckOnly: true }),
-  );
+      { label: 'Export PDF…', action: () => void exportPdf() },
+      { label: 'Export Web…', action: () => void exportWeb() },
+    ],
+  });
+  const compactFile = createToolbarPicker('File', compactFileEntries, { deckOnly: true });
+  compactFile.classList.add('toolbar-compact-file-action');
+  left.append(fileActions, compactFile);
 
   const mid = document.createElement('div');
   mid.className = 'bar-group bar-center';
@@ -669,53 +706,79 @@ function buildToolbar(): void {
 
   const right = document.createElement('div');
   right.className = 'bar-group bar-right';
+  const secondaryActions = document.createElement('span');
+  secondaryActions.className = 'toolbar-expanded-secondary-actions';
+  const compactSecondaryEntries: ToolbarPickerEntry[] = [];
   // Access-controlled server: the sharing dialog handles both cases — owners
   // and the admin get controls, everyone else a read-only summary.
   if (serverConfig.access) {
-    right.append(barButton('Share…', () => showShareDialog(deckId!, setStatusMessage)));
+    const share = (): void => showShareDialog(deckId!, setStatusMessage);
+    secondaryActions.append(barButton('Share…', share));
+    compactSecondaryEntries.push({ label: 'Share…', action: share });
   }
   if (serverConfig.sharedAgent?.enabled) {
+    const toggleSharedAgent = (): void => sharedAgentPanel?.toggle();
+    const agentLabel = serverConfig.sharedAgent.personal || serverConfig.sharedAgent.mode === 'local'
+      ? 'Agent…'
+      : 'Shared Agent';
     const agent = barButton(
-      serverConfig.sharedAgent.personal || serverConfig.sharedAgent.mode === 'local'
-        ? 'Agent…'
-        : 'Shared Agent',
-      () => sharedAgentPanel?.toggle(),
+      agentLabel,
+      toggleSharedAgent,
     );
     agent.id = 'agent-chat-trigger';
-    right.append(agent);
+    secondaryActions.append(agent);
+    compactSecondaryEntries.push({ label: agentLabel, action: toggleSharedAgent });
   }
   if (serverConfig.hosted) {
-    right.append(
-      barButton('Copy Invite Link', () => {
-        const base = serverConfig.urls.find((u) => !u.includes('127.0.0.1')) ?? serverConfig.urls[0];
-        if (!base) {
-          setStatusMessage('No invite link available');
-          return;
-        }
-        const link = `${base}?deck=${encodeURIComponent(deckId!)}`;
-        void copyText(link).then(
-          () => setStatusMessage('Invite link copied'),
-          () => setStatusMessage(`Could not copy — invite: ${link}`),
-        );
-      }),
-    );
+    const copyInviteLink = (): void => {
+      const base = serverConfig.urls.find((u) => !u.includes('127.0.0.1')) ?? serverConfig.urls[0];
+      if (!base) {
+        setStatusMessage('No invite link available');
+        return;
+      }
+      const link = `${base}?deck=${encodeURIComponent(deckId!)}`;
+      void copyText(link).then(
+        () => setStatusMessage('Invite link copied'),
+        () => setStatusMessage(`Could not copy — invite: ${link}`),
+      );
+    };
+    secondaryActions.append(barButton('Copy Invite Link', copyInviteLink));
+    compactSecondaryEntries.push({ label: 'Copy Invite Link', action: copyInviteLink });
   }
   // In a hosted session the desktop app's own window is the only loopback
   // client, so hosted + loopback identifies the host. The server enforces the
   // same rule on /api/end; this only decides whether to show the button.
   const isHost = serverConfig.hosted
     && (location.hostname === '127.0.0.1' || location.hostname === 'localhost');
+  let compactSecondary: HTMLElement | null = null;
   if (isHost) {
-    const endCollaboration = barButton('End collaboration', () => {
-      openEndCollaborationPopover(endCollaboration, () => {
+    const requestEndCollaboration = (anchor: HTMLButtonElement): void => {
+      openEndCollaborationPopover(anchor, () => {
         void fetch('/api/end', { method: 'POST' }).catch((error) =>
           setStatusMessage(`Could not end the session: ${error instanceof Error ? error.message : error}`));
       });
-    }, 'danger');
+    };
+    const endCollaboration = barButton(
+      'End collaboration',
+      () => requestEndCollaboration(endCollaboration),
+      'danger',
+    );
     endCollaboration.id = 'end-collaboration-trigger';
-    right.append(endCollaboration);
+    secondaryActions.append(endCollaboration);
+    compactSecondaryEntries.push({
+      label: 'End collaboration',
+      action: () => requestEndCollaboration(
+        compactSecondary?.querySelector<HTMLButtonElement>('.shape-menu-trigger') ?? endCollaboration,
+      ),
+    });
+  }
+  if (compactSecondaryEntries.length > 0) {
+    compactSecondary = createToolbarPicker('More', compactSecondaryEntries);
+    compactSecondary.classList.add('toolbar-compact-secondary-action');
   }
   right.append(
+    secondaryActions,
+    ...(compactSecondary ? [compactSecondary] : []),
     createToolbarSplitButton(
       'Present',
       () => startPresentation(),
@@ -725,6 +788,7 @@ function buildToolbar(): void {
   );
 
   bar.append(left, mid, right);
+  installResponsiveToolbar(bar);
 }
 
 const PANELS = [

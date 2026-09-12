@@ -75,9 +75,41 @@ body.mac-titlebar #toolbar { padding-left: 84px; }
 .bar-deck-name[hidden] { display: none; }
 .bar-group {
   display: flex;
+  align-items: center;
   gap: 6px;
   -webkit-app-region: no-drag;
 }
+
+.toolbar-expanded-file-actions,
+.toolbar-expanded-secondary-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.toolbar-compact-file-action,
+.toolbar-compact-secondary-action { display: none; }
+
+#toolbar.toolbar-hide-deck-name .bar-deck-name { display: none; }
+
+#toolbar.toolbar-compact-file {
+  display: grid;
+  grid-template-columns: max-content minmax(max-content, 1fr) max-content;
+  gap: 8px;
+}
+#toolbar.toolbar-compact-file .toolbar-expanded-file-actions { display: none; }
+#toolbar.toolbar-compact-file .toolbar-compact-file-action { display: inline-block; }
+#toolbar.toolbar-compact-file .bar-center {
+  position: static;
+  justify-self: center;
+  transform: none;
+}
+#toolbar.toolbar-compact-file .bar-right {
+  justify-self: end;
+  margin-left: 0;
+}
+#toolbar.toolbar-compact-secondary .toolbar-expanded-secondary-actions { display: none; }
+#toolbar.toolbar-compact-secondary .toolbar-compact-secondary-action { display: inline-block; }
 
 .bar-right { margin-left: auto; }
 
@@ -3489,33 +3521,6 @@ select.panel-action-select {
 /* .bar-center's transform makes a stacking context; lift it so the open
    shape menu paints above the canvas. */
 .bar-center { z-index: 20; }
-
-/* Once the side groups approach the centered insert controls, put every
-   toolbar group back into the flex flow. This lets whole groups—and, at very
-   narrow widths, their buttons—wrap instead of painting over one another. */
-@media (max-width: 1100px) {
-  #app { grid-template-rows: auto minmax(0, 1fr) 24px; }
-
-  #toolbar {
-    min-height: 44px;
-    flex-wrap: wrap;
-    align-content: center;
-    row-gap: 6px;
-    padding-top: 5px;
-    padding-bottom: 5px;
-  }
-
-  #toolbar > .bar-group {
-    max-width: 100%;
-    flex-wrap: wrap;
-  }
-
-  .bar-center {
-    position: static;
-    transform: none;
-    margin-left: auto;
-  }
-}
 
 /* --- comments --- */
 
