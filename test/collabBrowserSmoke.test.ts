@@ -114,7 +114,7 @@ describe.skipIf(!electronBinary)('standalone collaboration browser', () => {
     }))()`), 'browser editor did not finish connecting', (value) => value.connected);
     expect(opened.title).toBe('Browser collaboration smoke');
     expect(opened.controls).toEqual(expect.arrayContaining(['Text', 'Table', 'Present', 'Save As…']));
-    expect(opened.panels).toEqual(['Props', 'Theme', 'Build', 'History']);
+    expect(opened.panels).toEqual(['Props', 'Design', 'Build', 'History']);
 
     const peerProfileDir = join(workDir, 'peer-electron-profile');
     await mkdir(peerProfileDir, { recursive: true });

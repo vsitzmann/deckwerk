@@ -275,8 +275,8 @@ describe.skipIf(!electronBinary)('mode flags and focus lifecycle', () => {
   }, async () => {
     await session.reset();
 
-    // Open the Theme tab and its inline theme editor.
-    await session.cdp.clickByText('#side-tabs button', 'Theme', 'Theme tab');
+    // Open the Design tab and its inline theme editor.
+    await session.cdp.clickByText('#side-tabs button', 'Design', 'Design tab');
     await wait(150);
     await session.cdp.clickByText('button', 'Edit theme…', 'Edit theme button');
     await wait(150);
