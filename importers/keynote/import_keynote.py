@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import argparse
 import functools
+import hashlib
 import html
 import json
 import math
@@ -433,6 +434,85 @@ def path_to_svg(path_msg: Any) -> str:
     return " ".join(parts)
 
 
+def editable_path_to_svg(source: Any) -> tuple[str, tuple[float, float, float, float]]:
+    """Convert Keynote's node/control-point path representation to SVG.
+
+    Freeform shapes created with Keynote's pen tool are not serialized as the
+    simpler ``TSP.Path`` used by preset shapes. They carry subpaths whose nodes
+    each own an incoming and outgoing cubic control point. Starbursts, hand-
+    drawn outlines, and edited preset shapes therefore disappeared entirely
+    even though both their paint and geometry were understood.
+    """
+    parts: list[str] = []
+    xs: list[float] = []
+    ys: list[float] = []
+
+    def point(value: Any) -> tuple[float, float]:
+        xy = (float(value.x), float(value.y))
+        xs.append(xy[0])
+        ys.append(xy[1])
+        return xy
+
+    def segment(previous: Any, current: Any) -> str:
+        start = point(previous.nodePoint)
+        end = point(current.nodePoint)
+        out_control = point(previous.outControlPoint)
+        in_control = point(current.inControlPoint)
+        if _points_near(out_control, start) and _points_near(in_control, end):
+            return f"L {end[0]:.2f} {end[1]:.2f}"
+        return (
+            f"C {out_control[0]:.2f} {out_control[1]:.2f} "
+            f"{in_control[0]:.2f} {in_control[1]:.2f} "
+            f"{end[0]:.2f} {end[1]:.2f}"
+        )
+
+    for subpath in source.subpaths:
+        nodes = list(subpath.nodes)
+        if not nodes:
+            continue
+        first = point(nodes[0].nodePoint)
+        parts.append(f"M {first[0]:.2f} {first[1]:.2f}")
+        for previous, current in zip(nodes, nodes[1:]):
+            parts.append(segment(previous, current))
+        if bool(getattr(subpath, "closed", False)):
+            parts.append(segment(nodes[-1], nodes[0]))
+            parts.append("Z")
+
+    if not xs:
+        return "", (0.0, 0.0, 0.0, 0.0)
+    return " ".join(parts), (min(xs), min(ys), max(xs), max(ys))
+
+
+def flip_svg_path(
+    path_data: str,
+    bounds: tuple[float, float, float, float],
+    horizontal: bool,
+    vertical: bool,
+) -> str:
+    """Reflect an absolute SVG path inside its own bounds."""
+    if not horizontal and not vertical:
+        return path_data
+    min_x, min_y, max_x, max_y = bounds
+    out: list[str] = []
+    axis = 0
+    for token in path_data.split(" "):
+        if not token:
+            continue
+        try:
+            value = float(token)
+        except ValueError:
+            out.append(token)
+            axis = 0
+            continue
+        if axis == 0 and horizontal:
+            value = min_x + max_x - value
+        elif axis == 1 and vertical:
+            value = min_y + max_y - value
+        out.append(f"{value:.2f}")
+        axis ^= 1
+    return " ".join(out)
+
+
 def is_axis_aligned_rectangle(path_msg: Any) -> bool:
     """Whether a closed Keynote path is exactly an axis-aligned rectangle.
 
@@ -514,6 +594,21 @@ def is_axis_aligned_rectangle(path_msg: Any) -> bool:
     return True
 
 
+def is_circle_path(path_msg: Any, width: float, height: float) -> bool:
+    """Whether a mask is Keynote's four-cubic circular path."""
+    if width <= 0 or height <= 0 or abs(width - height) > max(width, height) * 0.02:
+        return False
+    kinds = [int(element.type) for element in path_msg.elements]
+    # Keynote appends a redundant move back to the first point after closing.
+    if kinds == [1, 4, 4, 4, 4, 5, 1]:
+        first = path_msg.elements[0].points[0]
+        last = path_msg.elements[-1].points[0]
+        return _points_near(
+            (float(first.x), float(first.y)), (float(last.x), float(last.y))
+        )
+    return kinds == [1, 4, 4, 4, 4, 5]
+
+
 def _points_near(
     first: tuple[float, float], second: tuple[float, float], tolerance: float = 1e-4
 ) -> bool:
@@ -568,6 +663,8 @@ class ShapeStyle:
     stroke: str | None = None
     stroke_width: float = 1.0
     fill: str | None = None
+    opacity: float = 1.0
+    shadow: str | None = None
     arrow_start: bool = False
     arrow_end: bool = False
     # How far up the style chain the stroke came from. 0 means the object's own
@@ -593,6 +690,8 @@ def resolve_shape_style(objects: dict[int, Any], style_id: int | None) -> ShapeS
     # borderless text box imports with the theme's outline drawn around it.
     stroke_resolved = False
     fill_resolved = False
+    opacity_resolved = False
+    shadow_resolved = False
     head_resolved = False
     tail_resolved = False
 
@@ -635,6 +734,12 @@ def resolve_shape_style(objects: dict[int, Any], style_id: int | None) -> ShapeS
             # fills would need a paint model we do not have yet.
             if fill.HasField("color"):
                 out.fill = color_to_hex(fill.color)
+        if not opacity_resolved and _has(props, "opacity") and props.HasField("opacity"):
+            opacity_resolved = True
+            out.opacity = _unit_interval(props.opacity)
+        if not shadow_resolved and _has(props, "shadow") and props.HasField("shadow"):
+            shadow_resolved = True
+            out.shadow = shadow_to_css(props.shadow)
         # A line end is only an arrowhead when it actually draws something.
         # Keynote themes define both ends as empty placeholders, so testing
         # mere presence puts an arrowhead on both ends of every line.
@@ -652,6 +757,93 @@ def resolve_shape_style(objects: dict[int, Any], style_id: int | None) -> ShapeS
             current_id = None
 
     return out
+
+
+@dataclass
+class MediaStyle:
+    opacity: float = 1.0
+    shadow: str | None = None
+
+
+def resolve_media_style(objects: dict[int, Any], style_id: int | None) -> MediaStyle:
+    """Resolve the media paint Keynote keeps in an inherited style.
+
+    Opacity is not stored on ``ImageArchive`` itself. A per-image variation
+    points at the standard media style and changes only ``media_properties``;
+    ignoring that leaf made deliberately ghosted reference images fully
+    opaque. Shadows use the same inheritance model.
+    """
+    out = MediaStyle()
+    seen: set[int] = set()
+    current_id = style_id
+    opacity_resolved = False
+    shadow_resolved = False
+
+    for _ in range(8):
+        if current_id is None or current_id not in objects or current_id in seen:
+            break
+        seen.add(current_id)
+        style = objects[current_id]
+        props = getattr(style, "media_properties", None)
+        if props is None:
+            props = getattr(getattr(style, "super", None), "media_properties", None)
+        if props is not None:
+            if (
+                not opacity_resolved
+                and _has(props, "opacity")
+                and props.HasField("opacity")
+            ):
+                opacity_resolved = True
+                out.opacity = _unit_interval(props.opacity)
+            if (
+                not shadow_resolved
+                and _has(props, "shadow")
+                and props.HasField("shadow")
+            ):
+                shadow_resolved = True
+                out.shadow = shadow_to_css(props.shadow)
+
+        parent = find_in_super_chain(style, "parent")
+        current_id = (
+            int(parent.identifier)
+            if parent is not None and parent.identifier
+            else None
+        )
+    return out
+
+
+def _unit_interval(value: Any) -> float:
+    try:
+        return min(1.0, max(0.0, float(value)))
+    except (TypeError, ValueError):
+        return 1.0
+
+
+def shadow_to_css(shadow: Any) -> str | None:
+    """Keynote drop shadow -> CSS box-shadow, or None when disabled."""
+    try:
+        if not bool(shadow.is_enabled) or not shadow.HasField("color"):
+            return None
+        colour = shadow.color
+        alpha = _unit_interval(getattr(colour, "a", 1.0)) * _unit_interval(
+            getattr(shadow, "opacity", 1.0)
+        )
+        if alpha <= 0.001:
+            return None
+        r = int(round(_unit_interval(colour.r) * 255))
+        g = int(round(_unit_interval(colour.g) * 255))
+        b = int(round(_unit_interval(colour.b) * 255))
+        angle = math.radians(float(getattr(shadow, "angle", 90.0)))
+        offset = float(getattr(shadow, "offset", 0.0))
+        dx = math.cos(angle) * offset
+        dy = math.sin(angle) * offset
+        blur = max(0.0, float(getattr(shadow, "radius", 0.0)))
+        return (
+            f"{dx:.2f}px {dy:.2f}px {blur:.2f}px "
+            f"rgba({r}, {g}, {b}, {alpha:.3f})"
+        )
+    except (AttributeError, TypeError, ValueError):
+        return None
 
 
 # TSWP paragraph alignment enum.
@@ -902,6 +1094,10 @@ def _char_run_css(
         name = str(chars.font_name)
         if name and name != base.font_name:
             css["font-family"] = _font_family_css(name)
+            weight = _font_weight_css(name)
+            base_weight = _font_weight_css(base.font_name or "")
+            if not chars.HasField("bold") and weight is not None and weight != base_weight:
+                css["font-weight"] = weight
     if chars.HasField("font_size"):
         size = float(chars.font_size)
         if size > 0 and size != base.font_size:
@@ -1001,10 +1197,37 @@ def _font_family_css(font_name: str) -> str:
         "TimesNewRomanPS-ItalicMT": "Times New Roman",
         "TimesNewRomanPS-BoldItalicMT": "Times New Roman",
     }.get(font_name)
+    if friendly is None and font_name.startswith("HelveticaNeue-"):
+        friendly = "Helvetica Neue"
+    if friendly is None and font_name.startswith("Helvetica-"):
+        friendly = "Helvetica"
+    if friendly is None and font_name.startswith("Avenir-"):
+        friendly = "Avenir"
     if friendly:
         generic = "serif" if friendly == "Times New Roman" else "sans-serif"
         return f'"{escaped}", "{friendly}", {generic}'
     return f'"{escaped}", sans-serif'
+
+
+def _font_weight_css(font_name: str) -> str | None:
+    """Infer CSS weight from the style suffix of a PostScript font name."""
+    compact = re.sub(r"[^a-z]", "", font_name.lower())
+    for token, weight in (
+        ("ultrathin", "100"),
+        ("thin", "100"),
+        ("ultralight", "200"),
+        ("extralight", "200"),
+        ("light", "300"),
+        ("semibold", "600"),
+        ("demibold", "600"),
+        ("bold", "700"),
+        ("heavy", "800"),
+        ("black", "900"),
+        ("medium", "500"),
+    ):
+        if token in compact:
+            return weight
+    return None
 
 
 @dataclass
@@ -1019,6 +1242,7 @@ class Importer:
     dry_run: bool = False
     progress: Progress = field(default_factory=SilentProgress)
     _asset_cache: dict[int, str | None] = field(default_factory=dict)
+    _instant_alpha_cache: dict[tuple[str, str], str | None] = field(default_factory=dict)
     _counter: int = 0
 
     def next_id(self, prefix: str) -> str:
@@ -1266,6 +1490,86 @@ class Importer:
         self.report.converted_images += 1
         return f"assets/{dest.name}"
 
+    def _apply_instant_alpha(self, src: str, image: Any) -> str | None:
+        """Bake Keynote's non-destructive background-removal path into alpha.
+
+        The source PNG/JPEG remains opaque in the package. Keynote stores the
+        retained silhouette separately as ``instantAlphaPath`` in coordinates
+        of ``naturalSize``. Browsers know nothing about that path, so the only
+        portable representation is a derived PNG whose alpha channel is the
+        rendered silhouette.
+        """
+        if not _has(image, "instantAlphaPath") or not image.HasField("instantAlphaPath"):
+            return src
+
+        path = image.instantAlphaPath
+        digest = hashlib.sha1(path.SerializeToString()).hexdigest()[:10]
+        cache_key = (src, digest)
+        if cache_key in self._instant_alpha_cache:
+            return self._instant_alpha_cache[cache_key]
+
+        source_name = Path(src).stem
+        derived = f"assets/{source_name}-background-removed-{digest}.png"
+        self._instant_alpha_cache[cache_key] = derived
+        self.report.converted_images += 1
+        if self.dry_run:
+            return derived
+
+        try:
+            from PIL import Image, ImageChops
+            import pymupdf as fitz
+        except ImportError as exc:
+            self.report.warnings.append(
+                f"Could not apply Keynote background removal to {Path(src).name}: {exc}"
+            )
+            self._instant_alpha_cache[cache_key] = src
+            return src
+
+        source_path = self.out_dir / src
+        destination = self.out_dir / derived
+        if destination.exists():
+            return derived
+
+        try:
+            with Image.open(source_path) as opened:
+                bitmap = opened.convert("RGBA")
+
+            natural = getattr(image, "naturalSize", None)
+            natural_w = float(getattr(natural, "width", 0.0) or bitmap.width)
+            natural_h = float(getattr(natural, "height", 0.0) or bitmap.height)
+            path_data = path_to_svg(path)
+            if not path_data or natural_w <= 0 or natural_h <= 0:
+                self._instant_alpha_cache[cache_key] = src
+                return src
+
+            svg = (
+                '<svg xmlns="http://www.w3.org/2000/svg" '
+                f'width="{bitmap.width}" height="{bitmap.height}" '
+                f'viewBox="0 0 {natural_w} {natural_h}" '
+                'preserveAspectRatio="none">'
+                f'<path d="{html.escape(path_data, quote=True)}" fill="white" '
+                'fill-rule="evenodd"/></svg>'
+            ).encode("utf8")
+            with fitz.open(stream=svg, filetype="svg") as document:
+                pixmap = document[0].get_pixmap(alpha=True)
+            rendered = Image.frombytes(
+                "RGBA", (pixmap.width, pixmap.height), pixmap.samples
+            )
+            mask = rendered.getchannel("A")
+            if mask.size != bitmap.size:
+                mask = mask.resize(bitmap.size, Image.Resampling.LANCZOS)
+            original_alpha = bitmap.getchannel("A")
+            bitmap.putalpha(ImageChops.multiply(original_alpha, mask))
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            bitmap.save(destination, "PNG")
+        except Exception as exc:
+            self.report.warnings.append(
+                f"Could not apply Keynote background removal to {Path(src).name}: {exc}"
+            )
+            self._instant_alpha_cache[cache_key] = src
+            return src
+        return derived
+
     # --- drawables ----------------------------------------------------------
 
     def convert_drawable(
@@ -1383,6 +1687,7 @@ class Importer:
             element.update(
                 {"src": src, "fit": "fill", "alt": "", "sourceBox": None}
             )
+            self._apply_media_style(element, obj)
             return element
 
         start = float(getattr(obj, "startTime", 0.0) or 0.0)
@@ -1408,6 +1713,7 @@ class Importer:
                 "poster": None,
             }
         )
+        self._apply_media_style(element, obj)
         return element
 
     def _convert_image_el(
@@ -1425,6 +1731,7 @@ class Importer:
         if src is None:
             self.report.unsupported["ImageArchive (no data)"] += 1
             return self._placeholder(box, z, "ImageArchive", "image data missing")
+        src = self._apply_instant_alpha(src, obj) or src
 
         description = ""
         try:
@@ -1439,6 +1746,7 @@ class Importer:
         # the element box puts a giant, wrongly-placed picture on the slide.
         # The visible box is the mask; the image is then offset inside it.
         mask_geometry = self._mask_geometry(obj)
+        mask_shape = self._mask_shape(obj, mask_geometry)
         source_box = None
         if mask_geometry is not None:
             visible = {
@@ -1469,7 +1777,22 @@ class Importer:
                 "sourceBox": source_box,
             }
         )
+        if mask_shape:
+            element["maskShape"] = mask_shape
+        self._apply_media_style(element, obj)
         return element
+
+    def _apply_media_style(self, element: dict[str, Any], obj: Any) -> None:
+        style_ref = find_in_super_chain(obj, "style")
+        style_id = (
+            int(style_ref.identifier)
+            if style_ref is not None and style_ref.identifier
+            else None
+        )
+        style = resolve_media_style(self.objects, style_id)
+        element["opacity"] = style.opacity
+        if style.shadow:
+            element["style"]["box-shadow"] = style.shadow
 
     def _mask_geometry(self, obj: Any) -> Any | None:
         """Geometry of an image's mask, if it is cropped."""
@@ -1483,6 +1806,26 @@ class Importer:
             return None
         return geometry
 
+    def _mask_shape(self, obj: Any, geometry: Any | None) -> str | None:
+        """Map a circular Keynote image mask onto the editor's native crop."""
+        if geometry is None:
+            return None
+        mask_id = _ref(obj, "mask")
+        mask = self.objects.get(mask_id) if mask_id is not None else None
+        pathsource = find_in_super_chain(mask, "pathsource") if mask is not None else None
+        if pathsource is None:
+            return None
+        for field_name in ("bezier_path_source", "scalar_path_source"):
+            if not _has(pathsource, field_name) or not pathsource.HasField(field_name):
+                continue
+            source = getattr(pathsource, field_name)
+            base = source.super if _has(source, "super") else source
+            if _has(base, "path") and is_circle_path(
+                base.path, float(geometry.size.width), float(geometry.size.height)
+            ):
+                return "circle"
+        return None
+
     def _convert_shape(
         self, obj: Any, box: dict[str, float], z: int
     ) -> list[dict[str, Any]]:
@@ -1490,6 +1833,13 @@ class Importer:
         out: list[dict[str, Any]] = []
 
         text = extract_text(self.objects, obj)
+        style_ref = find_in_super_chain(obj, "style")
+        shape_paint = resolve_shape_style(
+            self.objects,
+            int(style_ref.identifier)
+            if style_ref is not None and style_ref.identifier
+            else None,
+        )
 
         # An empty text box keeps its place with placeholder text, the way
         # Keynote shows one. Dropping it would lose a deliberate slot in the
@@ -1510,9 +1860,13 @@ class Importer:
                 style.horizontal_padding,
             )
             element = self._base(box, z, "text")
+            element["opacity"] = shape_paint.opacity
             inline = {"font-size": f"{font_size:.0f}px"}
             if style.font_name:
                 inline["font-family"] = _font_family_css(style.font_name)
+                weight = _font_weight_css(style.font_name)
+                if weight:
+                    inline["font-weight"] = weight
             element.update(
                 {
                     "html": PLACEHOLDER_TEXT,
@@ -1557,8 +1911,10 @@ class Importer:
                 inline["font-family"] = _font_family_css(style.font_name)
             if style.bold:
                 inline["font-weight"] = "700"
-            elif style.font_name and "light" in style.font_name.lower():
-                inline["font-weight"] = "300"
+            elif style.font_name:
+                weight = _font_weight_css(style.font_name)
+                if weight:
+                    inline["font-weight"] = weight
             if style.gradient:
                 inline.update(
                     {
@@ -1572,6 +1928,7 @@ class Importer:
                 inline["color"] = style.color
 
             element = self._base(box, z, "text")
+            element["opacity"] = shape_paint.opacity
             element.update(
                 {
                     "html": styled_text_to_html(self.objects, obj, style)
@@ -1704,9 +2061,15 @@ class Importer:
         # rotation in the editor, so oversized handles are not a concern here.
         if abs(rot) > 0.5:
             return out
-        return self._clamp_text_box(out)
+        return self._clamp_text_box(out, align=align, valign=valign)
 
-    def _clamp_text_box(self, box: dict[str, float]) -> dict[str, float]:
+    def _clamp_text_box(
+        self,
+        box: dict[str, float],
+        *,
+        align: str = "left",
+        valign: str = "top",
+    ) -> dict[str, float]:
         """Keep imported text geometry inside the editable slide canvas.
 
         Keynote permits a text container to extend beyond the slide while its
@@ -1717,12 +2080,45 @@ class Importer:
         """
         out = dict(box)
         canvas_w, canvas_h = self.canvas
-        right = min(canvas_w, max(0.0, out["x"] + out["w"]))
-        bottom = min(canvas_h, max(0.0, out["y"] + out["h"]))
-        out["x"] = min(canvas_w - 1.0, max(0.0, out["x"]))
-        out["y"] = min(canvas_h - 1.0, max(0.0, out["y"]))
-        out["w"] = max(1.0, right - out["x"])
-        out["h"] = max(1.0, bottom - out["y"])
+        original_x = out["x"]
+        original_y = out["y"]
+        original_w = out["w"]
+        original_h = out["h"]
+        left = min(canvas_w, max(0.0, original_x))
+        top = min(canvas_h, max(0.0, original_y))
+        right = min(canvas_w, max(0.0, original_x + original_w))
+        bottom = min(canvas_h, max(0.0, original_y + original_h))
+        out["w"] = max(1.0, right - left)
+        out["h"] = max(1.0, bottom - top)
+
+        # Cropping a centred or trailing-aligned frame changes its content
+        # anchor unless the shortened box is repositioned. Keynote slide 109
+        # uses a middle-aligned caption whose frame extends below the canvas;
+        # retaining its vertical centre is what keeps the baseline in place.
+        if align == "center":
+            anchor_x = min(canvas_w - 0.5, max(0.5, original_x + original_w / 2))
+            out["w"] = min(original_w, max(1.0, 2 * min(anchor_x, canvas_w - anchor_x)))
+            out["x"] = anchor_x - out["w"] / 2
+        elif align == "right":
+            anchor_x = min(canvas_w, max(1.0, original_x + original_w))
+            out["w"] = min(original_w, anchor_x)
+            out["x"] = anchor_x - out["w"]
+        else:
+            out["x"] = left
+
+        if valign == "middle":
+            anchor_y = min(canvas_h - 0.5, max(0.5, original_y + original_h / 2))
+            out["h"] = min(original_h, max(1.0, 2 * min(anchor_y, canvas_h - anchor_y)))
+            out["y"] = anchor_y - out["h"] / 2
+        elif valign == "bottom":
+            anchor_y = min(canvas_h, max(1.0, original_y + original_h))
+            out["h"] = min(original_h, anchor_y)
+            out["y"] = anchor_y - out["h"]
+        else:
+            out["y"] = top
+
+        out["x"] = min(canvas_w - out["w"], max(0.0, out["x"]))
+        out["y"] = min(canvas_h - out["h"], max(0.0, out["y"]))
         return out
 
     def _text_natural_size(self, obj: Any) -> tuple[float, float] | None:
@@ -1809,6 +2205,7 @@ class Importer:
                         "arrowEnd": False,
                     }
                 )
+                self._apply_shape_paint(element, style)
                 return element
 
         path_data = ""
@@ -1825,6 +2222,9 @@ class Importer:
             if not _has(pathsource, field_name) or not pathsource.HasField(field_name):
                 continue
             source = getattr(pathsource, field_name)
+            if field_name == "editable_bezier_path_source":
+                path_data, bounds = editable_path_to_svg(source)
+                break
             # Some path sources wrap the real one in `super`.
             base = source.super if _has(source, "super") else source
             if not _has(base, "path"):
@@ -1840,6 +2240,20 @@ class Importer:
             return None
 
         min_x, min_y, max_x, max_y = bounds
+        horizontal_flip = bool(getattr(pathsource, "horizontalFlip", False))
+        vertical_flip = bool(getattr(pathsource, "verticalFlip", False))
+        path_data = flip_svg_path(
+            path_data, bounds, horizontal_flip, vertical_flip
+        )
+
+        def flipped(point: tuple[float, float]) -> tuple[float, float]:
+            x, y = point
+            if horizontal_flip:
+                x = min_x + max_x - x
+            if vertical_flip:
+                y = min_y + max_y - y
+            return x, y
+
         path_w = max(max_x - min_x, 1.0)
         path_h = max(max_y - min_y, 1.0)
 
@@ -1850,6 +2264,8 @@ class Importer:
             endpoints = _path_endpoints(path_msg)
             if endpoints is not None:
                 start, end = endpoints
+                start = flipped(start)
+                end = flipped(end)
                 sx = box["w"] / path_w
                 sy = box["h"] / path_h
                 start_abs = (
@@ -1864,6 +2280,7 @@ class Importer:
                 curve = _connection_curve(path_msg)
                 if curve is not None:
                     _, control, _ = curve
+                    control = flipped(control)
                     control_abs = (
                         box["x"] + (control[0] - min_x) * sx,
                         box["y"] + (control[1] - min_y) * sy,
@@ -1895,6 +2312,7 @@ class Importer:
                     "arrowEnd": False,
                 }
             )
+            self._apply_shape_paint(element, style)
             return element
 
         # The viewBox is the path's own extent, never Keynote's `naturalSize`,
@@ -1944,6 +2362,7 @@ class Importer:
                     "arrowEnd": style.arrow_end,
                 }
             )
+            self._apply_shape_paint(element, style)
             return element
 
         element = self._base(box, z, "shape")
@@ -1960,7 +2379,15 @@ class Importer:
                 "arrowEnd": style.arrow_end,
             }
         )
+        self._apply_shape_paint(element, style)
         return element
+
+    def _apply_shape_paint(
+        self, element: dict[str, Any], style: ShapeStyle
+    ) -> None:
+        element["opacity"] = style.opacity
+        if style.shadow:
+            element["style"]["box-shadow"] = style.shadow
 
     def _native_line(
         self,
@@ -2003,6 +2430,7 @@ class Importer:
                 ),
             }
         )
+        self._apply_shape_paint(element, style)
         return element
 
     def _placeholder(
@@ -2086,6 +2514,7 @@ class Importer:
         self, slide_obj: Any, index: int, skipped: bool = False
     ) -> dict[str, Any]:
         elements: list[dict[str, Any]] = []
+        drawable_elements: dict[int, list[str]] = {}
         drawable_ids = [int(r.identifier) for r in slide_obj.owned_drawables]
 
         # `drawables_z_order` is authoritative when present; otherwise document
@@ -2128,6 +2557,7 @@ class Importer:
 
         for z, drawable_id in enumerate(drawable_ids):
             converted = self.convert_drawable(drawable_id, z)
+            drawable_elements[drawable_id] = [element["id"] for element in converted]
             role = (
                 "title"
                 if drawable_id == title_id
@@ -2152,6 +2582,7 @@ class Importer:
             pass
 
         notes = self._slide_notes(slide_obj)
+        timeline = self._convert_builds(slide_obj, drawable_elements)
 
         slide: dict[str, Any] = {
             "id": f"slide-{index + 1}",
@@ -2159,15 +2590,75 @@ class Importer:
             "background": background,
             "notes": notes,
             "elements": elements,
-            # Builds are not imported: Keynote's build graph does not map onto
-            # our step model without guessing, and a wrong build is worse than
-            # none. Everything lands visible; re-author reveals in the editor.
-            "timeline": [],
+            # Keynote effects do not have one-for-one browser equivalents, but
+            # their visibility semantics do: Build In starts hidden and
+            # appears; Build Out starts visible and disappears. Keeping that
+            # order prevents every phase of a diagram from piling up at once.
+            "timeline": timeline,
         }
         if skipped:
             # Keynote's "Skip Slide": kept in the deck, stepped over on stage.
             slide["skipped"] = True
         return slide
+
+    def _convert_builds(
+        self, slide_obj: Any, drawable_elements: dict[int, list[str]]
+    ) -> list[dict[str, Any]]:
+        """Import Build In/Out ordering as appear/disappear timeline actions."""
+        chunks = list(getattr(slide_obj, "buildChunks", []))
+        ordered: list[tuple[Any, bool, float]] = []
+        if chunks:
+            for chunk_ref in chunks:
+                chunk = self.objects.get(int(chunk_ref.identifier))
+                build_id = _ref(chunk, "build") if chunk is not None else None
+                build = self.objects.get(build_id) if build_id is not None else None
+                if build is None:
+                    continue
+                automatic = bool(getattr(chunk, "automatic", False))
+                delay = max(0.0, float(getattr(chunk, "delay", 0.0) or 0.0))
+                ordered.append((build, automatic, delay))
+        else:
+            for build_ref in getattr(slide_obj, "builds", []):
+                build = self.objects.get(int(build_ref.identifier))
+                if build is not None:
+                    ordered.append((build, False, 0.0))
+
+        timeline: list[dict[str, Any]] = []
+        for build, automatic, delay in ordered:
+            drawable_id = _ref(build, "drawable")
+            targets = drawable_elements.get(drawable_id or -1, [])
+            if not targets:
+                continue
+            try:
+                animation_type = str(build.attributes.animationAttributes.animation_type)
+            except AttributeError:
+                continue
+            action = (
+                "appear"
+                if animation_type == "In"
+                else "disappear" if animation_type == "Out" else None
+            )
+            if action is None:
+                continue
+
+            for target_index, target in enumerate(targets):
+                trigger = (
+                    "withPrev"
+                    if target_index > 0
+                    else "afterPrev" if automatic else "click"
+                )
+                timeline.append(
+                    {
+                        "id": self.next_id("build"),
+                        "trigger": {
+                            "on": trigger,
+                            "ref": None,
+                            "delay": round(delay * 1000),
+                        },
+                        "action": {"type": action, "target": target, "value": None},
+                    }
+                )
+        return timeline
 
     def _slide_notes(self, slide_obj: Any) -> str:
         note_id = _ref(slide_obj, "note")

@@ -11,6 +11,7 @@ import { writeHtmlScope } from '../src/main/htmlAuthoring.js';
 import { applySlideLayout } from '../src/renderer/editor/slideLayouts.js';
 import { EditorStore } from '../src/renderer/editor/store.js';
 import { suggestMorphPairs, unchangedMorphPairs } from '../src/shared/morph.js';
+import { initiallyHidden } from '../src/shared/timeline.js';
 
 /**
  * Import regression tests.
@@ -241,6 +242,7 @@ describe.skipIf(!ready)('keynote importer', () => {
 
   const bitterLessonDeck = join(LOCAL_FIXTURES, '2606_bitter_lesson.key');
   const icmlWorkshopDeck = join(LOCAL_FIXTURES, '2607_ICML_workshop.key');
+  const geometricFieldsDeck = join(process.cwd(), 'example-keynote-decks', 'geometric-fields.key');
 
   it.skipIf(!existsSync(icmlWorkshopDeck))(
     'falls back to embedded thumbnails when linked Keynote images are absent',
@@ -270,6 +272,141 @@ describe.skipIf(!ready)('keynote importer', () => {
     bitterLessonCache = parseDeck(JSON.parse(stdout));
     return bitterLessonCache;
   }
+
+  let geometricFieldsCache: ReturnType<typeof parseDeck> | null = null;
+  function importGeometricFields() {
+    if (geometricFieldsCache) return geometricFieldsCache;
+    const stdout = execFileSync(PYTHON, ['-c', [
+      'import json',
+      'from pathlib import Path',
+      'from importers.keynote.import_keynote import import_key',
+      `d,_=import_key(Path(${JSON.stringify(geometricFieldsDeck)}),Path('/dev/null'),False)`,
+      'print(json.dumps(d))',
+    ].join(';')], { encoding: 'utf8', cwd: process.cwd(), maxBuffer: 64 * 1024 * 1024 });
+    geometricFieldsCache = parseDeck(JSON.parse(stdout));
+    return geometricFieldsCache;
+  }
+
+  it.skipIf(!existsSync(geometricFieldsDeck))(
+    'preserves Geometric Fields opacity, shadows, edited paths, builds, and font weights',
+    () => {
+      const deck = importGeometricFields();
+
+      const faded = deck.slides[16].elements.find((element) =>
+        element.type === 'image' && element.src.endsWith('pasted-image-7910.png')
+        && element.opacity < 1);
+      expect(faded?.opacity).toBeCloseTo(0.209947, 5);
+
+      const removedBackgrounds = deck.slides[20].elements.filter((element) =>
+        element.type === 'image' && element.src.includes('background-removed'));
+      expect(removedBackgrounds).toHaveLength(3);
+      expect(new Set(removedBackgrounds.map((element) =>
+        element.type === 'image' ? element.src : '')).size).toBe(2);
+
+      const roundedCards = deck.slides[30].elements.filter((element) =>
+        element.type === 'shape' && element.shape === 'rect' && element.radius > 0);
+      expect(roundedCards).toHaveLength(3);
+      expect(roundedCards.every((element) => element.style['box-shadow']?.includes('rgba(')))
+        .toBe(true);
+
+      const builtTriangle = deck.slides[37];
+      const hidden = initiallyHidden(builtTriangle);
+      const visibleImageSources = builtTriangle.elements
+        .filter((element) => element.type === 'image' && !hidden.has(element.id))
+        .map((element) => element.type === 'image' ? element.src : '');
+      expect(visibleImageSources).toContain('assets/triangle-boundary-8459.webp');
+      expect(visibleImageSources).not.toContain('assets/triangle_split_0-8477.png');
+      expect(builtTriangle.timeline.some((entry) => entry.action.type === 'disappear')).toBe(true);
+
+      const starbursts = deck.slides[44].elements.filter((element) =>
+        element.type === 'shape' && element.shape === 'path');
+      expect(starbursts).toHaveLength(2);
+      expect(starbursts.every((element) =>
+        element.type === 'shape' && (element.path?.split(' L ').length ?? 0) > 10))
+        .toBe(true);
+
+      const typography = deck.slides[47].elements.filter((element) => element.type === 'text');
+      expect(typography.find((element) =>
+        element.type === 'text' && element.html.includes('Assign spatially'))?.style)
+        .toMatchObject({ 'font-weight': '100' });
+      expect(typography.find((element) =>
+        element.type === 'text' && element.html.includes('SATISFIES'))?.style)
+        .toMatchObject({ 'font-weight': '500' });
+      const translucent = deck.slides[47].elements.find((element) =>
+        element.type === 'shape' && element.opacity < 1);
+      expect(translucent?.opacity).toBeCloseTo(0.747029, 5);
+
+      const flippedVertex = deck.slides[26].elements.find((element) =>
+        element.type === 'shape' && element.shape === 'path'
+        && Math.abs(element.x - 1132.53) < 0.01);
+      expect(flippedVertex?.type).toBe('shape');
+      if (flippedVertex?.type !== 'shape') throw new Error('missing flipped vertex path');
+      expect(flippedVertex.path).toMatch(/^M 12\.52 12\.52 C 15\.23 9\.81/);
+
+      const acknowledgements = deck.slides[108];
+      const portraits = acknowledgements.elements.filter((element) =>
+        element.type === 'image' && /pasted-image-111(20|32)\.png$/.test(element.src));
+      expect(portraits).toHaveLength(2);
+      expect(portraits.every((element) =>
+        element.type === 'image' && element.maskShape === 'circle')).toBe(true);
+      const croppedPortrait = portraits.find((element) =>
+        element.type === 'image' && element.src.endsWith('pasted-image-11132.png'));
+      expect(croppedPortrait?.type).toBe('image');
+      if (croppedPortrait?.type !== 'image') throw new Error('missing cropped portrait');
+      expect(croppedPortrait.sourceBox?.x).toBeLessThan(-50);
+      const collaborators = acknowledgements.elements.find((element) =>
+        element.type === 'text' && element.html.includes('Kasra Mazaheri'));
+      expect(collaborators?.type).toBe('text');
+      if (collaborators?.type !== 'text') throw new Error('missing collaborators text');
+      expect(collaborators.y).toBeCloseTo(1001.53, 1);
+      expect(collaborators.y + collaborators.h).toBeCloseTo(deck.canvas.h, 5);
+    },
+    60_000,
+  );
+
+  it('reflects native Keynote paths across horizontal and vertical flip axes', () => {
+    const stdout = execFileSync(PYTHON, ['-c', [
+      'import json',
+      'from importers.keynote.import_keynote import flip_svg_path',
+      "path='M 1 2 L 7 8 C 2 3 4 5 6 7'",
+      "print(json.dumps({'horizontal':flip_svg_path(path,(1,2,7,8),True,False),'vertical':flip_svg_path(path,(1,2,7,8),False,True)}))",
+    ].join(';')], { encoding: 'utf8', cwd: process.cwd() });
+    expect(JSON.parse(stdout)).toEqual({
+      horizontal: 'M 7.00 2.00 L 1.00 8.00 C 6.00 3.00 4.00 5.00 2.00 7.00',
+      vertical: 'M 1.00 8.00 L 7.00 2.00 C 2.00 7.00 4.00 5.00 6.00 3.00',
+    });
+  });
+
+  it.skipIf(!existsSync(geometricFieldsDeck))(
+    'bakes Keynote Instant Alpha paths into transparent PNG pixels',
+    () => {
+      const stdout = execFileSync(PYTHON, ['-c', [
+        'import json, tempfile',
+        'from pathlib import Path',
+        'from PIL import Image',
+        'import importers.keynote.import_keynote as k',
+        `pkg=k.Package(Path(${JSON.stringify(geometricFieldsDeck)}))`,
+        'report=k.Report(); objects=k.load_objects(pkg,report); datas=k.data_file_table(objects)',
+        "image=next(o for o in objects.values() if k.type_name(o)=='ImageArchive' and datas.get(k._ref(o,'data'))=='pasted-image-7944.png')",
+        'with tempfile.TemporaryDirectory() as tmp:',
+        ' imp=k.Importer(objects,datas,pkg,Path(tmp),report,canvas=(1920,1080))',
+        ' el=imp._convert_image_el(image,imp._box(k.find_geometry(image),(0,0)),0)',
+        " with Image.open(Path(tmp)/el['src']) as bitmap:",
+        "  alpha=bitmap.getchannel('A')",
+        "  result={'src':el['src'],'mode':bitmap.mode,'extrema':alpha.getextrema(),'corner':alpha.getpixel((0,0))}",
+        'pkg.close()',
+        'print(json.dumps(result))',
+      ].join('\n')], { encoding: 'utf8', cwd: process.cwd(), maxBuffer: 64 * 1024 * 1024 });
+      const result = JSON.parse(stdout) as {
+        src: string; mode: string; extrema: [number, number]; corner: number;
+      };
+      expect(result.src).toMatch(/background-removed-[a-f0-9]+\.png$/);
+      expect(result.mode).toBe('RGBA');
+      expect(result.extrema).toEqual([0, 255]);
+      expect(result.corner).toBe(0);
+    },
+    60_000,
+  );
 
   it.skipIf(!existsSync(bitterLessonDeck))(
     'recognizes the unchanged image across Bitter Lesson slides 18 and 19',
