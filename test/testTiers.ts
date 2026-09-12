@@ -49,6 +49,12 @@ const CLIPBOARD_MARKERS = [
 
 /** Suites that share machine state or need a process topology of their own. */
 const SERIAL_BY_NATURE = [
+  // CDP's IME path reaches Chromium's real InputMethodController. When two
+  // Electron apps drive it concurrently under Xvfb, Linux can terminate one
+  // synthetic preedit before its next update and leave the old candidate in
+  // the document. The same uninterrupted composition is stable on its own,
+  // which is the topology the test is meant to exercise.
+  'test/imeCompositionBugs.test.ts',
   // Hosts the collaboration server and opens a real audience window.
   'test/agentPresentationSync.test.ts',
   // Scripted native dialogs and several presentation windows per app.

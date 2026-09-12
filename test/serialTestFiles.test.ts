@@ -15,6 +15,10 @@ describe('serialized integration manifest', () => {
     expect(SERIAL_TEST_FILES).toContain('test/localAgentBridge.test.ts');
   });
 
+  it('runs the real Chromium IME path without a competing Electron app', () => {
+    expect(SERIAL_TEST_FILES).toContain('test/imeCompositionBugs.test.ts');
+  });
+
   it('serializes real media and importer processes outside the required tier', () => {
     expect(SERIAL_TEST_FILES).toEqual(expect.arrayContaining([
       'test/exportDeckCompression.test.ts',
