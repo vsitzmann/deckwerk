@@ -22,6 +22,13 @@ DeckWerk is intended for research talks, lectures, demos, and other presentation
 brew install --cask vsitzmann/tap/deckwerk
 ```
 
+The app is not yet signed with an Apple Developer ID, so macOS will refuse to
+open it at first. Clear the quarantine flag once after installing:
+
+```bash
+xattr -dr com.apple.quarantine /Applications/DeckWerk.app
+```
+
 **Linux (x64)** — download the `.AppImage`, `.deb`, or `.tar.gz` from the
 [latest release](https://github.com/vsitzmann/deckwerk/releases/latest). On
 Debian and Ubuntu:

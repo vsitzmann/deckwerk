@@ -216,7 +216,7 @@
             "color": "#191918"
           },
           "type": "text",
-          "html": "<span style=\"American Typewriter&quot; , &quot; SF Mono&quot; , &quot; JetBrains Mono&quot; , ui-monospace, Menlo, monospace\">Videos: Drag-and-drop, crop, trim.</span>",
+          "html": "Videos: Drag-and-drop, crop, trim.",
           "autoFit": true,
           "align": "left",
           "valign": "middle",

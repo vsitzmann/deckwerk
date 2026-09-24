@@ -101,6 +101,8 @@
         <h3>macOS</h3>
         <p>Via <a href="https://brew.sh">Homebrew</a>, Apple Silicon and Intel.</p>
         <pre class="cmd"><span class="p">$ </span>brew install --cask vsitzmann/tap/deckwerk</pre>
+        <p class="alt">The app is not yet signed, so macOS blocks it at first. Clear the quarantine flag once:</p>
+        <pre class="cmd"><span class="p">$ </span>xattr -dr com.apple.quarantine /Applications/DeckWerk.app</pre>
       </div>
       <div class="pkg">
         <h3>Linux and Windows</h3>
