@@ -114,6 +114,8 @@ h1, h2, h3 { font-family: var(--serif); font-weight: 700; letter-spacing: -0.02e
   box-shadow: 0 -1px 0 rgba(255,255,255,0.05) inset, 0 40px 80px -30px rgba(25,25,24,0.45);
 }
 .shot img { width: 100%; height: auto; }
+.shot .video { aspect-ratio: 16 / 9; }
+.shot .video iframe { display: block; width: 100%; height: 100%; border: 0; }
 
 /* ---- dark band ------------------------------------------------------ */
 .band {

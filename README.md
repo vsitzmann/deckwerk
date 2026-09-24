@@ -10,6 +10,43 @@ I designed DeckWerk to bring the ability to create and present polished talks to
 
 DeckWerk is intended for research talks, lectures, demos, and other presentations in which the visual material is the substance.
 
+[![DeckWerk demo video](https://img.youtube.com/vi/qBjTRFZvtbA/maxresdefault.jpg)](https://www.youtube.com/watch?v=qBjTRFZvtbA)
+
+*Watch the [demo on YouTube](https://www.youtube.com/watch?v=qBjTRFZvtbA).*
+
+## Installing
+
+**macOS** — via [Homebrew](https://brew.sh):
+
+```bash
+brew install --cask vsitzmann/tap/deckwerk
+```
+
+**Linux (x64)** — download the `.AppImage`, `.deb`, or `.tar.gz` from the
+[latest release](https://github.com/vsitzmann/deckwerk/releases/latest). On
+Debian and Ubuntu:
+
+```bash
+sudo apt install ./deckwerk_*_amd64.deb
+```
+
+**Windows** — download the `setup.exe` from the
+[latest release](https://github.com/vsitzmann/deckwerk/releases/latest).
+
+**From source** — you will need [Node.js](https://nodejs.org/) 22 or newer,
+Python 3.10 or newer, and Git:
+
+```bash
+git clone https://github.com/vsitzmann/deckwerk.git
+cd deckwerk
+npm ci
+npm run dist
+```
+
+The platform-specific installer lands in `release/`. See
+[docs/BUILDING.md](docs/BUILDING.md) for platform-specific details and for
+running DeckWerk directly without packaging it first.
+
 ## Why DeckWerk?
 
 Most presentation software doesn't run on Linux. Web solutions such as Google Slides have minimal video support.
@@ -58,25 +95,6 @@ DeckWerk is particularly suited to:
 - Lectures built around visual examples
 - Talks containing many images, clips, diagrams, and animations
 - Presentations collaboratively edited by people and AI agents
-
-## Installing
-
-DeckWerk is currently installed by building it from source. You will need
-[Node.js](https://nodejs.org/) 22 or newer, Python 3.10 or newer, and Git:
-
-```bash
-git clone https://github.com/vsitzmann/deckwerk.git
-cd deckwerk
-npm ci
-npm run dist
-```
-
-The platform-specific installer lands in `release/`: a `.dmg` on macOS, an
-`.exe` on Windows, and an `.AppImage`, `.deb`, and `.tar.gz` on Linux. Open the
-generated installer to install DeckWerk normally.
-
-See [docs/BUILDING.md](docs/BUILDING.md) for platform-specific details and for
-running DeckWerk directly without packaging it first.
 
 ## File format
 

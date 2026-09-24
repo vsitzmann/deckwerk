@@ -41,7 +41,7 @@
       <p class="footnote"><sup>1</sup> <i>Deck</i> as in slide deck, and <i>Werk</i> as in the German word that means &ldquo;a work (of art, literature, etc)&rdquo;, a factory, or a structure.</p>
     </div>
     <div class="shot">
-      <div class="frame"><img src="/assets/editor.png" width="3200" height="2000" alt="The DeckWerk editor: slide rail on the left, a warm-paper title slide in the middle, and the Props inspector with layout and Morph controls on the right." fetchpriority="high"></div>
+      <div class="frame video"><iframe src="https://www.youtube-nocookie.com/embed/qBjTRFZvtbA?rel=0" title="DeckWerk demo" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" referrerpolicy="strict-origin-when-cross-origin" allowfullscreen></iframe></div>
     </div>
   </section>
 
@@ -94,14 +94,18 @@
     <div class="wrap">
       <div class="section-head">
         <p class="eyebrow">Install</p>
-        <h2>One command, everywhere.</h2>
+        <h2>Linux, macOS and Windows.</h2>
         <p class="lede">DeckWerk is in alpha and under active development. It already authors and delivers real talks, but interfaces and the file format may still change.</p>
       </div>
       <div class="pkg">
-        <h3>Every platform</h3>
-        <p>One command, from npm. Linux, macOS and Windows, from the same package.</p>
-        <pre class="cmd"><span class="p">$ </span>npm install -g deckwerk</pre>
-        <p class="alt">Needs <a href="https://nodejs.org/">Node.js</a>. Then run <code>deckwerk</code>.</p>
+        <h3>macOS</h3>
+        <p>Via <a href="https://brew.sh">Homebrew</a>, Apple Silicon and Intel.</p>
+        <pre class="cmd"><span class="p">$ </span>brew install --cask vsitzmann/tap/deckwerk</pre>
+      </div>
+      <div class="pkg">
+        <h3>Linux and Windows</h3>
+        <p>Download from the <a href="https://github.com/vsitzmann/deckwerk/releases/latest">latest release</a>: an <code>.AppImage</code>, <code>.deb</code> or <code>.tar.gz</code> for x64 Linux, or the Windows <code>setup.exe</code>. On Debian and Ubuntu:</p>
+        <pre class="cmd"><span class="p">$ </span>sudo apt install ./deckwerk_*_amd64.deb</pre>
       </div>
       <div class="pkg source">
         <h3>Or build it yourself</h3>
