@@ -72,6 +72,41 @@ To make the service available only on the server machine:
 npm run collab -- /path/to/shared-decks --host 127.0.0.1
 ```
 
+![The presentation picker](../docs/images/collab-picker.png)
+
+## Local network or tailnet only
+
+`--host` decides which network interfaces the server listens on, and so who
+can reach it.
+
+**Open on the local network.** The default (`--host 0.0.0.0`) listens on every
+interface. Anyone on the same LAN can open `http://<server-ip>:5800`, and if
+the machine is also on a tailnet, so can everyone on the tailnet.
+
+**Tailnet only.** Bind to the machine's Tailscale address, and the server is
+invisible to the local network:
+
+```bash
+npm run collab -- /path/to/shared-decks --host "$(tailscale ip -4)"
+```
+
+Collaborators open `http://<machine-name>:5800` (MagicDNS) or
+`http://100.x.y.z:5800`.
+
+**Tailnet only, with HTTPS and access control.** Bind to loopback and let
+`tailscale serve` publish the server to the tailnet. Adding `--access` makes
+each person's tailnet login their identity, so presentations can be private,
+shared with named people, or view-only:
+
+```bash
+npm run collab -- /path/to/shared-decks --host 127.0.0.1 --access you@example.com
+tailscale serve --bg --https=443 http://127.0.0.1:5800
+```
+
+Collaborators open `https://<machine-name>.<tailnet>.ts.net`. Never expose this
+setup through `tailscale funnel`; see [docs/collab.md](../docs/collab.md) for
+the details of the access model.
+
 ## What happens during a session
 
 The server holds the authoritative version of each open presentation. It orders

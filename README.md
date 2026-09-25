@@ -93,6 +93,62 @@ Participants see one another’s selections, cursors, and edits in real time.
 
 This mode is intentionally designed for trusted networks. It is not a public document-sharing service and should not be exposed directly to the open internet.
 
+## Headless collaboration server
+
+Run on a lab machine or team server, DeckWerk works much like Google Slides: a
+feature-complete, collaborative deck editor in the browser, with no accounts
+and nothing to install for collaborators. Point it at a folder of
+presentations; everyone who opens the address gets a file picker, then the
+full editor, with live cursors, selections and edits from everyone else.
+
+![The presentation picker](docs/images/collab-picker.png)
+
+![Editing a deck in the browser](docs/images/collab-editor.png)
+
+From a source checkout (see [Installing](#installing)):
+
+```bash
+npm ci
+npm run collab -- /path/to/shared-decks
+```
+
+The server listens on port `5800` and prints every address it can be reached
+at. Choose who can reach it with `--host`:
+
+| Reachable from | Command |
+| --- | --- |
+| The local network (and the tailnet, if the machine is on one) | `npm run collab -- /path/to/shared-decks` |
+| The tailnet only | `npm run collab -- /path/to/shared-decks --host "$(tailscale ip -4)"` |
+| The tailnet only, over HTTPS with per-person access control | `npm run collab -- /path/to/shared-decks --host 127.0.0.1 --access you@example.com`<br>plus `tailscale serve --bg --https=443 http://127.0.0.1:5800` |
+| This machine only | `npm run collab -- /path/to/shared-decks --host 127.0.0.1` |
+
+Each subfolder of `/path/to/shared-decks` that holds a DeckWerk presentation
+shows up in the picker; ordinary folders nest them. The server cannot read or
+write outside that folder. From the browser, people can open, create, rename,
+move and import presentations, present them, and download a copy. Use
+`--port 5900` to pick another port.
+
+The server holds the authoritative copy of each open presentation and saves
+every change straight back into its folder, so images and videos stay ordinary
+files on disk. Don't open the same presentation in the desktop app while the
+server is running. Press **Ctrl+C** to stop it; open presentations are saved
+before it exits.
+
+**Tailnet only.** Binding to the machine's Tailscale address hides the server
+from the local network. Collaborators open `http://<machine-name>:5800`.
+Binding to loopback and publishing through `tailscale serve` adds HTTPS, and
+with `--access` each person's tailnet login becomes their identity, so a
+presentation can be private, shared with named people, or view-only. There are
+no passwords: tailnet membership is the authentication. Never expose this setup
+through `tailscale funnel`.
+
+**Agents.** Every collaborator can bring their own agent, such as Claude Code or
+Codex. **Agent…** in the browser toolbar gives a one-line command that needs
+only Node 22. It mirrors the live presentation into a folder on their machine
+and starts their agent there. The agent's edits reach everyone within a second
+or two and show up under its name in History. Nothing runs on the server on
+anyone's behalf. `--no-local-agents` turns this off.
+
 ## What DeckWerk is good at
 
 DeckWerk is particularly suited to:
