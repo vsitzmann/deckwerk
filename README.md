@@ -93,6 +93,39 @@ Participants see one another’s selections, cursors, and edits in real time.
 
 This mode is intentionally designed for trusted networks. It is not a public document-sharing service and should not be exposed directly to the open internet.
 
+## Headless collaboration server
+
+Run on a lab machine or team server, DeckWerk works much like Google Slides: a
+feature-complete, collaborative deck editor in the browser, with no accounts
+and nothing to install for collaborators. Point it at a folder of
+presentations; everyone who opens the address gets a file picker, then the
+full editor, with live cursors, selections and edits from everyone else.
+
+![The presentation picker](docs/images/collab-picker.png)
+
+![Editing a deck in the browser](docs/images/collab-editor.png)
+
+From a source checkout (see [Installing](#installing)):
+
+```bash
+npm ci
+npm run collab -- /path/to/shared-decks
+```
+
+The server listens on port `5800` and prints every address it can be reached
+at. Choose who can reach it with `--host`:
+
+| Reachable from | Command |
+| --- | --- |
+| The local network (and the tailnet, if the machine is on one) | `npm run collab -- /path/to/shared-decks` |
+| The tailnet only | `npm run collab -- /path/to/shared-decks --host "$(tailscale ip -4)"` |
+| The tailnet only, over HTTPS with per-person access control | `npm run collab -- /path/to/shared-decks --host 127.0.0.1 --access you@example.com`<br>plus `tailscale serve --bg --https=443 http://127.0.0.1:5800` |
+| This machine only | `npm run collab -- /path/to/shared-decks --host 127.0.0.1` |
+
+See [Running a headless collaboration server](manual/06-headless-server.md)
+for the full guide, including bringing your own agent, and
+[docs/collab.md](docs/collab.md) for the protocol and access-control details.
+
 ## What DeckWerk is good at
 
 DeckWerk is particularly suited to:
