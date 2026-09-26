@@ -925,6 +925,34 @@ export async function eventually<T>(
   throw new Error(`${message}: ${detail}`);
 }
 
+/**
+ * What the canvas thought was going on when a text box would not enter
+ * editing. "did not enter editing: false" was a nightly's entire report, with
+ * nothing to tell a lost click from a box the canvas refused to open.
+ */
+export async function textEditingState(cdp: Cdp, selector: string): Promise<string> {
+  return cdp.evaluate<string>(`(() => {
+    const nodes = [...document.querySelectorAll(${JSON.stringify(selector)})];
+    const describe = (node) => node
+      ? node.tagName.toLowerCase() + (node.id ? '#' + node.id : '')
+        + (typeof node.className === 'string' && node.className ? '.' + node.className.trim().split(/\\s+/).join('.') : '')
+      : null;
+    const rect = nodes[0]?.getBoundingClientRect();
+    const hit = rect ? document.elementFromPoint(rect.left + 8, rect.top + rect.height / 2) : null;
+    return JSON.stringify({
+      matches: nodes.length,
+      editable: nodes.map((node) => node.isContentEditable),
+      editingId: window.canvas?.editingId ?? '(no window.canvas)',
+      selection: window.store ? [...window.store.get().selection] : '(no window.store)',
+      activeElement: describe(document.activeElement),
+      hitInsideBox: nodes[0] ? nodes[0].contains(hit) : false,
+      hit: describe(hit),
+      overlays: [...document.querySelectorAll('#ctx-menu, .color-picker-popover, dialog[open], .modal')]
+        .filter((node) => node.getClientRects().length > 0).map(describe),
+    });
+  })()`).catch((error) => `(state unreadable: ${error instanceof Error ? error.message : String(error)})`);
+}
+
 export function collectProcessOutput(child: ChildProcess): () => string {
   let stdout = '';
   let stderr = '';

@@ -185,7 +185,12 @@ describe.skipIf(!electronBinary)('pasted markup survives being edited', () => {
       try {
         await runPasteCase(editor, server.port, testCase);
       } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
+        // Fixture-level failures (entering editing, resetting the box) name no
+        // case: ten of them were a whole nightly's report, with nothing to
+        // replay. Every message says which case it came from.
+        const where = `${testCase.payload.name} → ${testCase.target}`;
+        const raw = error instanceof Error ? error.message : String(error);
+        const message = raw.startsWith(where) ? raw : `${where}: ${raw}`;
         failures.push(message);
         console.error(`[paste-fuzz] failing case ${failures.length}: ${message}`);
         if (failures.length >= MAX_REPORTED_FAILURES) break;

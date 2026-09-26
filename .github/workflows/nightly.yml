@@ -14,6 +14,13 @@ on:
   schedule:
     - cron: '30 6 * * *'
   workflow_dispatch:
+    inputs:
+      seed:
+        # The rotated seed is the run's date, so a red night could not be
+        # re-run once the day had passed: the next dispatch walked new paths.
+        description: 'Fuzz seed to replay, e.g. 20260925 (default: today, UTC)'
+        required: false
+        default: ''
 
 env:
   # Bare Xvfb has no compositor; suites that read pixels via CDP
@@ -68,8 +75,11 @@ jobs:
           sudo chown root:root node_modules/electron/dist/chrome-sandbox
           sudo chmod 4755 node_modules/electron/dist/chrome-sandbox
       - name: Rotate fuzz seeds by date
+        env:
+          SEED_INPUT: ${{ inputs.seed }}
         run: |
-          SEED=$(date -u +%Y%m%d)
+          SEED="${SEED_INPUT:-$(date -u +%Y%m%d)}"
+          case "$SEED" in *[!0-9]*|'') echo "::error::seed must be digits: $SEED"; exit 1;; esac
           echo "FUZZ_SEED=$SEED" >> "$GITHUB_ENV"
           echo "LIST_FUZZ_SEED=$SEED" >> "$GITHUB_ENV"
           echo "Rotated fuzz seed: $SEED"

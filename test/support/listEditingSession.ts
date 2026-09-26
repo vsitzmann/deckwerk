@@ -11,6 +11,7 @@ import {
   findTarget,
   launchBrowser,
   stopBrowser,
+  textEditingState,
   wait,
   type RunningBrowser,
 } from './browserSession.js';
@@ -310,9 +311,14 @@ function buildSession(cdp: Cdp, port: number, deckId: string): ListEditingSessio
         `((document.querySelector('${CONTENT}')?.textContent ?? '').trim().length > 0)`);
       if (hasGlyphs) await cdp.doubleClickText(CONTENT, 'text box');
       else await cdp.doubleClick(CONTENT, 'text box with no text');
-      await eventually(async () => cdp.evaluate<boolean>(
-        `document.querySelector('${CONTENT}')?.isContentEditable === true`,
-      ), 'the text box did not enter editing');
+      try {
+        await eventually(async () => cdp.evaluate<boolean>(
+          `document.querySelector('${CONTENT}')?.isContentEditable === true`,
+        ), 'the text box did not enter editing');
+      } catch (error) {
+        throw new Error(`${error instanceof Error ? error.message : String(error)}\n`
+          + `canvas state: ${await textEditingState(cdp, CONTENT)}`);
+      }
     },
     async caretAt(offset) {
       await cdp.clickTextAtOffset(CONTENT, offset, `text offset ${offset}`);

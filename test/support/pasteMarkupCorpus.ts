@@ -1,5 +1,5 @@
 import { expect } from 'vitest';
-import { Cdp, eventually, wait } from './browserSession.js';
+import { Cdp, eventually, textEditingState, wait } from './browserSession.js';
 
 /**
  * Clipboard payloads authors really paste into a slide, and the machinery to
@@ -559,9 +559,14 @@ export async function contentText(cdp: Cdp, selector: string): Promise<string> {
 
 export async function enterEditing(cdp: Cdp, selector: string): Promise<void> {
   await cdp.doubleClickText(selector, 'text box');
-  await eventually(async () => cdp.evaluate<boolean>(
-    `document.querySelector(${JSON.stringify(selector)})?.isContentEditable === true`,
-  ), 'the text box did not enter editing');
+  try {
+    await eventually(async () => cdp.evaluate<boolean>(
+      `document.querySelector(${JSON.stringify(selector)})?.isContentEditable === true`,
+    ), 'the text box did not enter editing');
+  } catch (error) {
+    throw new Error(`${error instanceof Error ? error.message : String(error)}\n`
+      + `canvas state: ${await textEditingState(cdp, selector)}`);
+  }
 }
 
 /* ------------------------------------------------------------------------ *
