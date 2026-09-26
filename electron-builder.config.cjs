@@ -49,6 +49,9 @@ module.exports = {
   // or stale, so this path is never allowed to be absent.
   extraResources: [{ from: 'build/importers', to: 'importers' }],
   beforePack: 'scripts/assert-importer-fresh.cjs',
+  // Without a Developer ID the mac app is ad-hoc signed here instead, so it
+  // still verifies and runs; see the script for why skipping signing broke it.
+  afterPack: 'scripts/adhoc-sign-mac.cjs',
 
   // These ship real executables and .node binaries; they cannot be read from
   // inside an asar archive. src/main/ffmpeg.ts rewrites the path accordingly.
