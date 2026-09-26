@@ -16,7 +16,7 @@ import {
 } from '../src/shared/collab.js';
 import { emptyDeck } from '../src/shared/deck.js';
 // The production-input harness: real pointer and key events, not `.click()`.
-import { Cdp } from './support/browserSession.js';
+import { Cdp, eventually } from './support/browserSession.js';
 import { isEditorTarget, launchDesktopApp, materializeDesktopApp } from './support/desktopApp.js';
 
 /**
@@ -179,8 +179,16 @@ describe.skipIf(!runnable)('embedded Agent presentation synchronization', () => 
       appLog,
     );
     editor = await Cdp.connect(editorTarget.webSocketDebuggerUrl!);
+    // The main process has the deck as soon as it launches, but the editor
+    // window adopts it asynchronously (edit history first, then store.load).
+    // Starting the session before that lands let the late store.load replace
+    // the Agent's edit with the on-disk deck — or the session-state IPC arrived
+    // before the renderer was listening and the editor never joined at all.
+    // No user can start a session from a window that has not opened its deck;
+    // the status bar names the deck only once the store holds it.
     await eventually(async () => editor!.evaluate<boolean>(
-      `window.api.getDeck().then((session) => session?.deck?.slides?.[0]?.id === 'slide-1')`,
+      `window.api.getDeck().then((session) => session?.deck?.slides?.[0]?.id === 'slide-1'
+        && document.getElementById('status')?.textContent?.startsWith('deck  ·  slide 1/1') === true)`,
     ), 'editor did not open the regression deck');
 
     const connection = await editor.evaluate<{ wsUrl: string; name: string }>(`window.api.startAgentSession({
@@ -315,30 +323,6 @@ async function findTarget(
   }
   throw new Error(`timed out waiting for Electron target\n${appLog()}`);
 }
-
-async function eventually<T>(
-  read: () => Promise<T>,
-  message: string,
-  accept: (value: T) => boolean = Boolean,
-  timeoutMs = 10_000,
-): Promise<T> {
-  const deadline = Date.now() + timeoutMs;
-  let last: T | undefined;
-  let lastError: unknown;
-  while (Date.now() < deadline) {
-    try {
-      last = await read();
-      if (accept(last)) return last;
-    } catch (error) {
-      lastError = error;
-    }
-    await wait(100);
-  }
-  const detail = lastError instanceof Error ? lastError.message : JSON.stringify(last);
-  throw new Error(`${message}: ${detail}`);
-}
-
-
 
 function wait(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
