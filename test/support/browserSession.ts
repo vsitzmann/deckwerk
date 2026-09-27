@@ -942,7 +942,7 @@ export async function textEditingState(cdp: Cdp, selector: string): Promise<stri
     return JSON.stringify({
       matches: nodes.length,
       editable: nodes.map((node) => node.isContentEditable),
-      editingId: window.canvas?.editingId ?? '(no window.canvas)',
+      editingId: window.canvas ? window.canvas.editingId : '(no window.canvas)',
       selection: window.store ? [...window.store.get().selection] : '(no window.store)',
       activeElement: describe(document.activeElement),
       hitInsideBox: nodes[0] ? nodes[0].contains(hit) : false,
