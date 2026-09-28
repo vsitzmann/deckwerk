@@ -119,6 +119,15 @@ describe('resolveState', () => {
     expect(resolveState(slide, 0).playing.has('v')).toBe(true);
     expect(resolveState(slide, 1).playing.has('v')).toBe(false);
   });
+
+  it('removeClass takes away a class the element was authored with', () => {
+    const slide = slideWith([
+      { id: 't1', trigger: { on: 'click' }, action: { type: 'removeClass', target: 'a', value: 'frost' } },
+    ]);
+    slide.elements[0].class = ['glass', 'frost'];
+    expect([...resolveState(slide, 0).classes.get('a')!]).toEqual(['glass', 'frost']);
+    expect([...resolveState(slide, 1).classes.get('a')!]).toEqual(['glass']);
+  });
 });
 
 describe('deck navigation', () => {

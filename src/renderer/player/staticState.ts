@@ -27,8 +27,7 @@ export function applyStaticSlideState(
     node.className = [
       'element',
       `element-${element.type}`,
-      ...element.class,
-      ...(state.classes.get(element.id) ?? []),
+      ...(state.classes.get(element.id) ?? element.class),
     ].join(' ');
   }
 }
