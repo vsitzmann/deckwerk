@@ -417,6 +417,11 @@ describe('slide-agent connect', { timeout: 120_000 }, () => {
     expect(guide).toContain('./deck render');
     expect(guide).toContain('./deck apply');
     expect(guide).not.toMatch(/slide-agent (context|inspect|comments|render|apply)/);
+    // ./deck syncs only edit/ and has no --html-body: the desktop recipe would be refused.
+    expect(guide).not.toContain('drafts/');
+    expect(guide).not.toContain('--html-body');
+    expect(guide).toContain('./deck new > edit/slide.html');
+    expect(guide).toContain('./deck apply . --html edit/slide.html --after 8');
 
     await until(async () => JSON.parse(await deck('context')).selectedSlideIds.includes('s2'), 'the selection to reach ./deck');
     const context = JSON.parse(await deck('context')) as { slideCount: number; live: boolean };
