@@ -2,6 +2,7 @@ import '../player/player.css';
 import './print.css';
 import { buildPrintPages, printPageRule } from './pages.js';
 import { waitForPdfDocument } from './readiness.js';
+import { rewriteCssAssetUrls } from '../player/render.js';
 
 const params = new URLSearchParams(location.search);
 const mode = params.get('mode') === 'initial' || params.get('mode') === 'every'
@@ -15,7 +16,7 @@ void (async () => {
   const session = await window.api.getDeck();
   if (!session) throw new Error('No deck is open');
   const theme = document.createElement('style');
-  theme.textContent = await window.api.loadTheme();
+  theme.textContent = rewriteCssAssetUrls(await window.api.loadTheme(), window.api.assetUrl);
   document.head.appendChild(theme);
 
   const { deck } = session;

@@ -870,9 +870,19 @@ function resolveHtmlAssetRefs(root: HTMLElement, resolveSrc: (src: string) => st
   }
 }
 
-function rewriteCssAssetUrls(css: string, resolveSrc: (src: string) => string): string {
+/**
+ * Point a stylesheet's relative `url()`s at the deck's own files.
+ *
+ * A stylesheet pasted into a `<style>` resolves `url(assets/…)` against the
+ * page, which is the app's bundle, not the deck folder. Slide CSS and the
+ * deck's theme.css both need this: the theme is where a deck declares the
+ * webfonts it carries in `assets/fonts/`.
+ */
+export function rewriteCssAssetUrls(css: string, resolveSrc: (src: string) => string): string {
   return css.replace(/url\(\s*(["']?)([^"')]+)\1\s*\)/gi, (match, _quote: string, src: string) => {
-    if (/^(?:data:|blob:|https?:|\/)/i.test(src)) return match;
+    // Anything with a scheme (data:, blob:, https:, deck:), a rooted path or
+    // a fragment (an SVG filter's #id) already says where it lives.
+    if (/^(?:[a-z][a-z0-9+.-]*:|\/|#)/i.test(src.trim())) return match;
     return `url("${resolveSrc(src)}")`;
   });
 }

@@ -1,6 +1,7 @@
 import { css } from '@codemirror/lang-css';
 import { oneDark } from '@codemirror/theme-one-dark';
 import { EditorView, basicSetup } from 'codemirror';
+import { rewriteCssAssetUrls } from '../player/render.js';
 
 /**
  * The theme.css editor.
@@ -19,6 +20,8 @@ export class CssEditor {
     host: HTMLElement,
     private readonly persist: (css: string) => Promise<void> | void =
       (css) => window.api.saveTheme(css),
+    /** Where the stylesheet's relative url()s point: the deck's files. */
+    private readonly resolveSrc: (src: string) => string = (src) => window.api.assetUrl(src),
   ) {
     // The live stylesheet the canvas and preview both read.
     this.styleTag = document.createElement('style');
@@ -34,7 +37,7 @@ export class CssEditor {
         EditorView.updateListener.of((update) => {
           if (!update.docChanged) return;
           const text = update.state.doc.toString();
-          this.styleTag.textContent = text;
+          this.styleTag.textContent = rewriteCssAssetUrls(text, this.resolveSrc);
           this.onChange?.();
           this.scheduleSave(text);
         }),
@@ -47,7 +50,7 @@ export class CssEditor {
     this.view.dispatch({
       changes: { from: 0, to: this.view.state.doc.length, insert: text },
     });
-    this.styleTag.textContent = text;
+    this.styleTag.textContent = rewriteCssAssetUrls(text, this.resolveSrc);
     this.onChange?.();
     if (this.saveTimer) {
       clearTimeout(this.saveTimer);

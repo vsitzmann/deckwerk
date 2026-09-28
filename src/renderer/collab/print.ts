@@ -5,6 +5,7 @@ import type { Deck } from '@shared/deck.js';
 import type { PdfBuildMode } from '@shared/ipc.js';
 import { buildPrintPages, printPageRule } from '../print/pages.js';
 import { waitForPdfDocument } from '../print/readiness.js';
+import { rewriteCssAssetUrls } from '../player/render.js';
 
 /**
  * The collab client's PDF export.
@@ -73,7 +74,7 @@ void (async () => {
   document.title = `${deck.title} — PDF`;
 
   const theme = document.createElement('style');
-  theme.textContent = themeCss;
+  theme.textContent = rewriteCssAssetUrls(themeCss, assetUrl);
   document.head.appendChild(theme);
 
   const pageRule = document.createElement('style');

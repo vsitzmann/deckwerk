@@ -3,7 +3,7 @@ import type { PresentationCommand, PresentationState } from '@shared/ipc.js';
 import { resolveState } from '@shared/timeline.js';
 import { revealImagesWhenDecoded } from '../player/imageDecode.js';
 import { freezePreviewVideos, releasePreviewVideos } from '../player/previewPoster.js';
-import { applyStageScale, renderSlide } from '../player/render.js';
+import { applyStageScale, renderSlide, rewriteCssAssetUrls } from '../player/render.js';
 import { applyStaticSlideState } from '../player/staticState.js';
 import { formatElapsed, formatWallClock, presentationLabel } from './model.js';
 
@@ -176,7 +176,7 @@ export function createSpeakerView(options: SpeakerViewOptions): SpeakerView {
         theme = document.createElement('style');
         document.head.appendChild(theme);
       }
-      theme.textContent = css;
+      theme.textContent = rewriteCssAssetUrls(css, resolveSrc);
     },
     setState(next) {
       state = next;

@@ -10,6 +10,7 @@ import { bindPresentKeys } from '../player/keys.js';
 import { Player } from '../player/player.js';
 import { eventOnInteractiveWeb, slideLinkFromEvent } from '../player/links.js';
 import { selectionPreventsAdvance } from '../player/presentationPointer.js';
+import { rewriteCssAssetUrls } from '../player/render.js';
 
 /**
  * The fullscreen presentation window. Thin by design: it renders the deck with
@@ -34,7 +35,7 @@ async function applyTheme(): Promise<void> {
     themeLink = document.createElement('style');
     document.head.appendChild(themeLink);
   }
-  themeLink.textContent = css;
+  themeLink.textContent = rewriteCssAssetUrls(css, (src) => window.api.assetUrl(src));
 }
 
 function start(nextSession: DeckSession): void {
