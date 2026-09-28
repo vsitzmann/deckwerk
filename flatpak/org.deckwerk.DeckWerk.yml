@@ -63,8 +63,8 @@ modules:
       # Regenerated per release by scripts/render-flatpak-manifest.mjs;
       # flatpak-builder verifies the sha256 before unpacking.
       - type: archive
-        url: https://github.com/vsitzmann/deckwerk/releases/download/v0.1.0/deckwerk-0.1.0-linux-x64.tar.gz
-        sha256: 0ed1a4e311c89226e4e6fd0970ae378e6a94b451b377e42b5abe6cba8c3bd4a6
+        url: https://github.com/vsitzmann/deckwerk/releases/download/v0.2.2/deckwerk-0.2.2-linux-x64.tar.gz
+        sha256: 65498defc53a1557d00930e69ee982c7cb4896adba357ddd0eeef5a6ddb6868d
         strip-components: 1
         dest: app
       - type: file
