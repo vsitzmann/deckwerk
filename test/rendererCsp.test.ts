@@ -36,4 +36,15 @@ describe('renderer window Content Security Policies', () => {
     const governing = /font-src([^;]*)/i.exec(policy)?.[1] ?? /default-src([^;]*)/i.exec(policy)?.[1] ?? '';
     expect(governing, `${name}: ${policy}`).toMatch(/(^|\s)data:(\s|$)/);
   });
+
+  // A deck carries a licensed webfont as assets/fonts/*.woff2 declared by
+  // @font-face in its theme.css (docs/agent-themes.md), served through deck:.
+  // deck: does not bypass CSP, so without it the theme's own face is refused.
+  it.each(windows)('%s lets a deck\'s own fonts load', (name) => {
+    const html = readFileSync(join(root, name, 'index.html'), 'utf8');
+    const policy = /http-equiv="Content-Security-Policy"[\s\S]*?content="([^"]*)"/i.exec(html)?.[1];
+    if (!policy) return;
+    const governing = /font-src([^;]*)/i.exec(policy)?.[1] ?? /default-src([^;]*)/i.exec(policy)?.[1] ?? '';
+    expect(governing, `${name}: ${policy}`).toMatch(/(^|\s)deck:(\s|$)/);
+  });
 });
