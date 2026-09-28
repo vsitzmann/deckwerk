@@ -5,6 +5,7 @@ import { fitAutoTextElement } from './autoFit.js';
 import { KATEX_AUTO_RENDER_JS, KATEX_CSS, KATEX_JS } from './katexInline.js';
 import { shapeSvg } from './shapeSvg.js';
 import { applyTableColumnWidths } from './paragraphs.js';
+import { layoutMaster, syncSlideWithLayoutMaster, type FixedLayout } from './layoutMasters.js';
 import {
   cssMediaBorder,
   cssMediaRadius,
@@ -71,6 +72,10 @@ export interface MeasuredSlide {
   background: { color: string | null; image: string | null };
   morphFromPrevious: boolean;
   morphDuration?: number;
+  /** `data-layout` on the section: one of the deck's fixed layouts. */
+  layout?: string;
+  /** With `layout`: the section set its own background inline. */
+  ownBackground?: boolean;
   nodes: MeasuredNode[];
   /**
    * Inline style the browser silently refused: a segment with no colon, or a
@@ -665,11 +670,32 @@ export function slidesFromMeasured(deck: Deck, measured: MeasuredSlide[]): Slide
     for (const element of existing.elements) used.delete(element.id);
   }
 
-  return measured.map((slide, index) => slideFromMeasured(slide, {
-    slideId: slide.id ?? nextSlideId(used, index),
-    usedIds: used,
-  }));
+  return measured.map((slide, index) => {
+    const built = slideFromMeasured(slide, {
+      slideId: slide.id ?? nextSlideId(used, index),
+      usedIds: used,
+    });
+    const layout = slide.layout;
+    if (layout === undefined) return built;
+    if (!FIXED_LAYOUTS.includes(layout as FixedLayout)) {
+      throw new HtmlAuthoringError(`Unknown data-layout "${layout}" on a slide. Use ${FIXED_LAYOUTS.join(', ')}.`);
+    }
+    // A page that names a layout gets the editor's layout behaviour: its
+    // title and body boxes (data-layout-slot, or a role class on an exported
+    // page) become the master's placeholders, placed by the master and styled
+    // by the deck's theme rather than by what the page's browser computed.
+    syncSlideWithLayoutMaster(built, layout as FixedLayout, layoutMaster(deck, layout as FixedLayout), {
+      replaceStyle: true,
+      forceBackground: !slide.ownBackground,
+    });
+    return built;
+  });
 }
+
+const FIXED_LAYOUTS: FixedLayout[] = ['freeform', 'standard', 'title'];
+
+/** A page the author must fix, as opposed to a compiler that failed. */
+export class HtmlAuthoringError extends Error {}
 
 function nextSlideId(used: Set<string>, index: number): string {
   let candidate = `slide-${used.size + index + 1}`;
@@ -912,6 +938,14 @@ export function elementFromNode(
     valign: valignFrom(node.dataset.valign),
     ...(contentStyle ? { contentStyle } : {}),
     ...(node.dataset.autofit !== undefined ? { autoFit: node.dataset.autofit !== 'false' } : {}),
+    ...(node.dataset.layoutSlot === 'title' || node.dataset.layoutSlot === 'body'
+      ? {
+        layoutPlaceholder: node.dataset.layoutSlot,
+        class: base.class.includes(`role-${node.dataset.layoutSlot}`)
+          ? base.class
+          : [...base.class, `role-${node.dataset.layoutSlot}`],
+      }
+      : {}),
     ...(node.dataset.table === 'true' && tableWidths.length > 0 ? {
       table: {
         columnWidths: tableWidths,
@@ -982,6 +1016,7 @@ export function slideToHtml(slide: Slide, canvas: { w: number; h: number }): str
   return `<section class="slide" data-slide-id="${escape(slide.id)}"`
     + ` data-canvas="${canvas.w}x${canvas.h}"`
     + (slide.name ? ` data-name="${escape(slide.name)}"` : '')
+    + (slide.layout ? ` data-layout="${slide.layout}"` : '')
     + (slide.morphFromPrevious ? ' data-morph-from-previous="true"' : '')
     + (slide.morphDuration !== undefined ? ` data-morph-duration="${slide.morphDuration}"` : '')
     + `${background}>\n${body}\n</section>\n`;
@@ -1007,6 +1042,8 @@ function elementToHtml(element: SlideElement, build?: TimelineEntry): string {
     element.lineageId !== undefined
       ? `data-lineage-id="${escape(element.lineageId ?? '')}"` : '',
     build ? `data-build="${build.trigger.on}${build.trigger.delay ? `+${build.trigger.delay}` : ''}"` : '',
+    element.type === 'text' && element.layoutPlaceholder
+      ? `data-layout-slot="${element.layoutPlaceholder}"` : '',
   ].filter(Boolean).join(' ');
 
   switch (element.type) {

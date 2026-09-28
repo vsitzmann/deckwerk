@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { Deck } from '@shared/deck.js';
 import { exportDeck } from '../main/exportDeck.js';
+import { headlessElectronArgs } from './electronDisplay.js';
 
 /**
  * Compare the authoring file against the Player, in pixels.
@@ -70,7 +71,7 @@ function compareScript(): string {
 function runElectron(script: string, jobPath: string): Promise<string> {
   const electron = createRequire(import.meta.url)('electron') as unknown as string;
   return new Promise((resolvePromise, reject) => {
-    const child = spawn(electron, [script, jobPath], {
+    const child = spawn(electron, [script, jobPath, ...headlessElectronArgs()], {
       stdio: ['ignore', 'pipe', 'pipe'],
       env: { ...process.env, ELECTRON_DISABLE_SECURITY_WARNINGS: '1' },
     });

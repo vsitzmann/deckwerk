@@ -1035,7 +1035,8 @@ export function mirrorAgentGuide(target: SessionTarget): string {
 The command here is \`./deck\`, in this folder — run it as \`./deck <command>\`.
 It takes the same commands and flags as \`slide-agent\` and talks to the
 collaboration server this folder mirrors; \`./deck help\` lists them. Nothing
-needs installing. \`theme.css\` is a plain file: edit it directly.
+needs installing. \`theme.css\` is a plain file too, but prefer
+\`./deck theme\`, which installs a built-in theme the way the editor does.
 `;
   // Rename the CLI throughout the brief, then drop in the hint, which is the
   // one place that has to name `slide-agent` as something different.
