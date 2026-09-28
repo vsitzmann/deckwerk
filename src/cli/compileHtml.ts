@@ -16,6 +16,7 @@ import {
 import { PLAYER_TYPE_CSS } from '@shared/playerTypeCss.js';
 import { slidesFromMeasured, slidesToHtml, type MeasuredSlide } from '@shared/htmlSlides.js';
 import { loadTheme } from '../main/deckStore.js';
+import { headlessElectronArgs } from './electronDisplay.js';
 
 /**
  * Compile authored HTML into deck slides with the editor closed.
@@ -353,7 +354,7 @@ function runElectron(script: string, jobPath: string): Promise<string> {
   const electron = createRequire(import.meta.url)('electron') as unknown as string;
   if (!existsSync(electron)) throw new Error(`Electron is not installed at ${electron}`);
   return new Promise((resolvePromise, reject) => {
-    const child = spawn(electron, [script, jobPath], {
+    const child = spawn(electron, [script, jobPath, ...headlessElectronArgs()], {
       stdio: ['ignore', 'pipe', 'pipe'],
       env: { ...process.env, ELECTRON_DISABLE_SECURITY_WARNINGS: '1' },
     });

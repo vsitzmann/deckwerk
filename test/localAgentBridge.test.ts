@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -135,6 +135,18 @@ describe('slide-agent connect', { timeout: 120_000 }, () => {
     peer.send({ kind: 'hello', version: COLLAB_PROTOCOL_VERSION, ...hello });
     return { peer, welcome: await peer.nextOfKind('welcome') };
   };
+
+  // The collaboration server runs headless (systemd, ssh). Run the whole
+  // suite without a display so the Electron helpers behind sync, render and
+  // web check are exercised the way a hosted session runs them.
+  const display = { DISPLAY: process.env.DISPLAY, WAYLAND_DISPLAY: process.env.WAYLAND_DISPLAY };
+  beforeAll(() => {
+    delete process.env.DISPLAY;
+    delete process.env.WAYLAND_DISPLAY;
+  });
+  afterAll(() => {
+    for (const [key, value] of Object.entries(display)) if (value !== undefined) process.env[key] = value;
+  });
 
   beforeEach(async () => {
     bridge = null;
@@ -399,6 +411,89 @@ describe('slide-agent connect', { timeout: 120_000 }, () => {
     // HTTP transport alone is not an agent connection. Only the filesystem
     // bridge's WebSocket attachment lights the participant's panel.
     expect((await state()).connection).toBe('unavailable');
+  });
+
+  it('compiles a page onto the deck\'s fixed layouts and exports them back', async () => {
+    const q = `deck=${DECK_ID}&agentSession=${PARTICIPANT}`;
+    const bridgeHeaders = { 'x-deckwerk-bridge': '1' };
+    const sync = (html: string) => fetch(`${base()}/api/agent-mirror/sync-html?${q}`, {
+      method: 'POST', headers: { ...bridgeHeaders, 'content-type': 'text/html' }, body: html,
+    });
+    const page = (section: string) => `<!doctype html><html><head><base href="../"><link rel="stylesheet" href="theme.css"></head><body>${section}</body></html>`;
+    const inserted = await (await sync(page(
+      '<section class="slide" data-layout="standard">'
+      + '<h1 data-layout-slot="title" style="font-size:20px">Laid out</h1>'
+      + '<ul data-layout-slot="body"><li>First point</li></ul>'
+      + '</section>'
+      + '<section class="slide" data-layout="title"><h1 data-layout-slot="title">Opening</h1></section>',
+    ))).json() as { applied: boolean; changes: { inserted: string[] } };
+    expect(inserted.applied).toBe(true);
+    expect(inserted.changes.inserted).toHaveLength(2);
+    const deck = await serverDeck();
+    const [standard, title] = inserted.changes.inserted.map((id) => deck.slides.find((slide) => slide.id === id)!);
+    expect(standard.layout).toBe('standard');
+    // The theme paints the background: nothing the page computed is kept.
+    expect(standard.background).toEqual({ color: null, image: null });
+    expect(standard.layoutBackgroundInherited).toBe(true);
+    expect(title.layout).toBe('title');
+    // The master places the placeholders, whatever the page did.
+    const heading = standard.elements.find((element) => element.type === 'text' && element.html.includes('Laid out'))!;
+    expect(heading).toMatchObject({ layoutPlaceholder: 'title', x: 120, y: 58, w: 1680, h: 142 });
+    // ...and the theme styles them: nothing the page's browser computed is baked in.
+    expect(heading.class).toContain('role-title');
+    expect(Object.keys(heading.style).filter((key) => /font/i.test(key))).toEqual([]);
+    const body = standard.elements.find((element) => element.type === 'text' && element.html.includes('First point'))!;
+    expect(body).toMatchObject({ layoutPlaceholder: 'body', x: 120, y: 252 });
+    expect(body.class).toContain('role-body');
+    expect(title.elements.find((element) => element.type === 'text')).toMatchObject({ layoutPlaceholder: 'title', x: 180, y: 350 });
+
+    // Export carries the layout, and re-syncing it untouched changes nothing.
+    const exported = await (await fetch(`${base()}/api/agent-mirror/export.html?${q}&slide=${inserted.changes.inserted.join(',')}`, { headers: bridgeHeaders })).text();
+    expect(exported).toContain('data-layout="standard"');
+    expect(exported).toContain('data-layout-slot="body"');
+    const again = await (await sync(exported)).json() as { applied: boolean };
+    expect(again.applied).toBe(false);
+
+    // A section that paints its own background keeps it.
+    const painted = await (await sync(page(
+      '<section class="slide" data-layout="standard" style="background:#123456"><h1 data-layout-slot="title">Dark</h1></section>',
+    ))).json() as { changes: { inserted: string[] } };
+    const dark = (await serverDeck()).slides.find((slide) => slide.id === painted.changes.inserted[0])!;
+    expect(dark.background.color).toBe('#123456');
+  });
+
+  it('refuses a layout the deck does not have', async () => {
+    const response = await fetch(`${base()}/api/agent-mirror/sync-html?deck=${DECK_ID}&agentSession=${PARTICIPANT}`, {
+      method: 'POST', headers: { 'x-deckwerk-bridge': '1', 'content-type': 'text/html' },
+      body: '<!doctype html><html><body><section class="slide" data-layout="two-column"><h1>x</h1></section></body></html>',
+    });
+    expect(response.status).toBe(400);
+    expect((await response.json() as { error: string }).error).toMatch(/Unknown data-layout "two-column"/);
+    expect((await serverDeck()).slides).toHaveLength(2);
+  });
+
+  it('lists and applies the built-in themes through ./deck theme', async () => {
+    bridge = connectAgentBridge({ url: sessionUrl(), dir: mirrorDir, name: 'Helper agent', io: io() });
+    await bridge.ready;
+    const deck = async (...args: string[]) => JSON.parse((await run(process.execPath, [join(mirrorDir, 'deck'), ...args], { cwd: mirrorDir })).stdout);
+    const listed = await deck('theme', 'list') as { themes: Array<{ id: string; name: string; source: string }> };
+    expect(listed.themes).toContainEqual(expect.objectContaining({ id: 'basic', name: 'Research', source: 'built-in' }));
+    // Named the way people say it.
+    const shown = await deck('theme', 'show', '--id', 'Research') as { theme: { id: string }; css: string };
+    expect(shown.theme.id).toBe('basic');
+
+    const applied = await deck('theme', 'apply', '--id', 'basic') as { applied: boolean; scope: string; slides: number };
+    expect(applied).toMatchObject({ applied: true, scope: 'deck', slides: 2 });
+    const after = await serverDeck();
+    expect(after.themeSelection?.preset ?? after.themePreset).toBe('basic');
+    // The stylesheet is installed on the server and reaches the mirror, with
+    // the hand-written CSS around the generated block kept.
+    await until(async () => (await readFile(join(mirrorDir, 'theme.css'), 'utf8')).includes('Charter'), 'the theme to reach the mirror');
+    const mirrored = await readFile(join(mirrorDir, 'theme.css'), 'utf8');
+    expect(mirrored).toContain('/* test theme */');
+    expect(mirrored).toContain('.role-title');
+
+    await expect(deck('theme', 'apply', '--id', 'no-such-theme')).rejects.toThrow(/No theme "no-such-theme"/);
   });
 
   it('lets the generated ./deck command drive the session from the mirror', async () => {

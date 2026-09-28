@@ -22,7 +22,10 @@ A theme sets the fonts, sizes and colours for text roles. Give text the class
 deck's theme; don't hard-code fonts or colours the theme already supplies.
 `slide-agent theme list .` prints every theme's title and body typefaces and
 its background, text, muted and accent colours (`chosen` is the deck's
-current one). To switch: `slide-agent theme apply . --id <id> --scope deck`.
+current one). To switch: `slide-agent theme apply . --id research --scope deck`.
+Layouts: `data-layout="standard"` (title + body) or `"title"` on a `<section>`,
+with `data-layout-slot="title"`/`"body"` on its boxes; the layout places them
+and the theme styles them, so leave their position and type to DeckWerk.
 
 ## 2. Write your slide as a normal web page
 

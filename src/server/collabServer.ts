@@ -31,6 +31,7 @@ import {
   renderHtmlDraftPng,
 } from '../cli/compileHtml.js';
 import {
+  HtmlAuthoringError,
   htmlChangeLabel,
   htmlSlideScope,
   htmlSyncHistoryLabel,
@@ -48,6 +49,7 @@ import { deckOutline } from '../shared/deckDigest.js';
 import type { AgentPanelState } from '../shared/ipc.js';
 import type { LocalAgentRegistry } from './localAgents.js';
 import { planHtmlReplacement } from './htmlReplacement.js';
+import { MirrorThemeRequestSchema, mirrorThemeAction, type MirrorThemeRequest } from './mirrorTheme.js';
 import { htmlDraftWorkflow, type HtmlDraftWorkflow } from './htmlDraftWorkflow.js';
 import { injectWebBridgeRuntime } from '../shared/webBridge.js';
 import { checkWebPage } from '../cli/renderSlides.js';
@@ -707,7 +709,13 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
     const htmlPath = join(temp, 'slides.html');
     try {
       await writeFile(htmlPath, sanitized.html, 'utf8');
-      const compiled = await compileHtmlToSlides({ deckDir: room.session.dir, deck: room.session.deck, htmlPath });
+      let compiled: Awaited<ReturnType<typeof compileHtmlToSlides>>;
+      try {
+        compiled = await compileHtmlToSlides({ deckDir: room.session.dir, deck: room.session.deck, htmlPath });
+      } catch (error) {
+        if (error instanceof HtmlAuthoringError) return { error: error.message };
+        throw error;
+      }
       const compiledAt = Date.now();
       if (compiled.slides.length === 0) return { error: 'no slides found' };
       const all = compiled.slides.flatMap((slide) => slide.elements);
@@ -1723,6 +1731,58 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
       respondJson(response, 200, {
         valid: errors.length === 0, errors, overflows, importGaps, revision: deckRevision(deck),
         ...(scope ? { scope: [...wanted] } : {}),
+      });
+      return;
+    }
+
+    // `./deck theme …` for a mirror: the gallery, and choosing or applying a
+    // built-in theme, against the room's deck and stylesheet (mirrorTheme.ts).
+    if (path === '/api/agent-mirror/theme' && request.method === 'POST') {
+      if (!localAgents) return respondJson(response, 404, { error: 'local agents are not enabled' });
+      if (!deckParam) return respondJson(response, 400, { error: 'missing deck' });
+      let parsed: MirrorThemeRequest;
+      try {
+        parsed = MirrorThemeRequestSchema.parse(JSON.parse((await readBody(request)).toString('utf8') || '{}'));
+      } catch (error) {
+        return respondJson(response, 400, { error: `bad theme request: ${String(error instanceof Error ? error.message : error)}` });
+      }
+      const room = await getRoom(deckParam);
+      const deck = room.session.deck;
+      if (parsed.slideIds?.length) {
+        const chosen = slidesByRef(deck, parsed.slideIds.join(','));
+        if ('error' in chosen) return respondJson(response, 404, { error: chosen.error });
+        parsed = { ...parsed, slideIds: chosen.slides.map((slide) => slide.id) };
+      }
+      const result = mirrorThemeAction(deck, room.session.themeCss, parsed);
+      if ('error' in result) return respondJson(response, result.status, { error: result.error });
+      let revision = deckRevision(deck);
+      if (result.operations.length > 0) {
+        const label = result.label ?? 'Theme';
+        try {
+          applyAgentTransaction(deck, { version: 1, expectedRevision: revision, label, operations: result.operations });
+        } catch (error) {
+          return respondJson(response, 400, { error: String(error instanceof Error ? error.message : error) });
+        }
+        const applied = room.session.applyOps(result.operations);
+        revision = deckRevision(applied.deck);
+        const bridge = agentSessionParam ? localAgents.linked(room.session.dir, agentSessionParam) : null;
+        broadcast(room, {
+          kind: 'txn', seq: applied.seq, txnId: `agent-theme-${randomUUID()}`,
+          byClientId: bridge && bridge.clientId !== 'http' ? bridge.clientId : 'agent-http',
+          label, ops: result.operations,
+          agentChatId: agentChatId(deckParam, agentSessionParam) ?? undefined,
+        });
+      }
+      if (result.css !== null && result.css !== room.session.themeCss) {
+        room.session.saveThemeCss(result.css);
+        broadcast(room, { kind: 'theme', css: result.css, byClientId: '' });
+      }
+      respondJson(response, 200, {
+        status: 'applied',
+        applied: result.operations.length > 0 || result.css !== null,
+        revision,
+        ...(result.css !== null ? { stylesheet: deck.theme } : {}),
+        ...result.body,
       });
       return;
     }

@@ -1623,6 +1623,12 @@ export function measureSlides(doc: Document): MeasuredSlide[] {
       notes: root.dataset.notes ?? '',
       background: { color: background, image: image ? image[1] : null },
       morphFromPrevious: root.dataset.morphFromPrevious === 'true',
+      ...(root.dataset.layout !== undefined ? {
+        layout: root.dataset.layout,
+        // Whether the section paints its own background, rather than wearing
+        // the deck's: only then does a layout slide keep it.
+        ownBackground: Boolean(root.style.background || root.style.backgroundColor || root.style.backgroundImage),
+      } : {}),
       ...(root.dataset.morphDuration !== undefined
         ? { morphDuration: Number(root.dataset.morphDuration) }
         : {}),

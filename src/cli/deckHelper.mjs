@@ -60,7 +60,11 @@ Everything else:
                                           stage a checked page plus poster under
                                           assets/web/ and print its web-element markup
   preview                                 the URL where people see this deck live
-  theme     …                             theme.css is a file here: edit it directly
+  theme list                              the built-in themes (Research, …) and the deck's own
+  theme show  [--id <id>]                 one theme's fonts, palette and CSS
+  theme choose --id <id>                  the theme new slides are born wearing
+  theme apply  --id <id> [--slide …]      restyle every slide (or the named ones) in a theme
+                                          theme.css is also a plain file here you may edit
 
 Anywhere a slide is named, --slide takes its id or its 1-based number.
 `;
@@ -374,9 +378,24 @@ async function main(argv) {
       });
       return EXIT_OK;
     }
-    case 'theme':
-      fail('theme.css is a file in this folder: read it and edit it directly, the bridge syncs it and the editor hot-reloads it.', EXIT_USAGE);
-      return EXIT_USAGE;
+    case 'theme': {
+      const [verb, ...themeArgs] = rest;
+      if (!['list', 'show', 'choose', 'apply'].includes(verb)) {
+        fail('usage: ./deck theme list | show [--id <id>] | choose --id <id> | apply --id <id> [--slide <id|number>]', EXIT_USAGE);
+      }
+      const { options } = parseArgs(themeArgs.filter((arg) => arg !== '.'), ['id', 'slide']);
+      if ((verb === 'choose' || verb === 'apply') && !options.has('id')) fail(`theme ${verb} needs --id <themeId>`, EXIT_USAGE);
+      const slideIds = options.has('slide') ? options.get('slide').split(',') : undefined;
+      const body = await api('/api/agent-mirror/theme', {}, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          action: verb, id: options.get('id'),
+          ...(verb === 'apply' ? { scope: slideIds ? 'slides' : 'deck', slideIds } : {}),
+        }),
+      });
+      out(body);
+      return EXIT_OK;
+    }
     case 'help':
     case '--help':
     case undefined:
