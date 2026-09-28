@@ -56,6 +56,7 @@ describe('filesystem agent panel', () => {
     const panel = new AgentPanel({
       api: transport, currentDeckPath: () => 'talk', connectCommand: 'slide-agent connect session',
     });
+    transport.publish(state({ connection: 'ready', agentName: 'Codex' }));
     transport.publish(state({
       connection: 'ready', agentName: 'Codex',
       messages: [{ id: 'm1', role: 'assistant', text: 'applied slides: Add interactive chart' }],
@@ -69,5 +70,25 @@ describe('filesystem agent panel', () => {
     expect(panel.element.textContent).toContain('Scratchpad · 2 slides');
     expect([...document.querySelectorAll<HTMLIFrameElement>('.agent-scratchpad-panel iframe')].at(-1)?.src)
       .toContain('/draft/source?scratchpad=slides');
+  });
+
+  it('keeps an old scratchpad closed when the deck is opened, and opens the next new one', () => {
+    for (const node of document.querySelectorAll('.agent-scratchpad-panel')) node.remove();
+    const transport = api(state());
+    const panel = new AgentPanel({
+      api: transport, currentDeckPath: () => 'talk', connectCommand: 'slide-agent connect session',
+    });
+    const draft = (draftId: string) => ({
+      draftId, slideCount: 1, sourceUrl: `/draft/${draftId}`, importedUrl: `/draft/${draftId}/imported`,
+      comparisonUrl: '', sourceContactSheetUrl: '', importedContactSheetUrl: '',
+    });
+    const scratchpad = () => document.querySelector<HTMLElement>('.agent-scratchpad-panel')!;
+    transport.publish(state({ scratchpad: draft('old') }));
+    expect(panel.element.textContent).toContain('Scratchpad · 1 slide');
+    expect(scratchpad().hidden).toBe(true);
+    transport.publish(state({ scratchpad: draft('old') }));
+    expect(scratchpad().hidden).toBe(true);
+    transport.publish(state({ scratchpad: draft('new') }));
+    expect(scratchpad().hidden).toBe(false);
   });
 });

@@ -39,6 +39,12 @@ export class AgentPanel {
   private scratchpadView: 'source' | 'imported' = 'source';
   private scratchpadMode: 'slides' | 'contact' = 'slides';
   private lastScratchpadId: string | null = null;
+  /**
+   * False until the first state arrives. The server keeps a participant's
+   * last scratchpad for as long as it runs, so the one a page load finds is
+   * old work: remember it, and open the panel only for a draft made since.
+   */
+  private sawFirstState = false;
 
   constructor(options: AgentPanelOptions) {
     this.options = options;
@@ -169,6 +175,8 @@ export class AgentPanel {
   private applyState(state: AgentPanelState): void {
     const currentDeck = this.options.currentDeckPath();
     if (currentDeck && state.deckPath !== currentDeck) return;
+    // Another deck's scratchpad is as old to this page as the first one was.
+    if (this.state && this.state.deckPath !== state.deckPath) this.sawFirstState = false;
     this.state = state;
     this.status.textContent = state.connection !== 'ready'
       ? 'Waiting for your agent…' : state.busy ? state.activity ?? 'Working…' : 'Connected';
@@ -208,6 +216,7 @@ export class AgentPanel {
     this.scratchpadLabel.textContent = scratchpad
       ? `Scratchpad · ${scratchpad.slideCount} slide${scratchpad.slideCount === 1 ? '' : 's'}` : 'Scratchpad';
     if (!scratchpad) {
+      this.sawFirstState = true;
       this.lastScratchpadId = null;
       this.scratchpadPanel.hidden = true;
       this.scratchpadFrame.removeAttribute('src');
@@ -215,12 +224,15 @@ export class AgentPanel {
     }
     this.source.textContent = scratchpad.sourceLabel ?? 'Source';
     this.imported.textContent = scratchpad.importedLabel ?? 'Imported';
+    const firstState = !this.sawFirstState;
+    this.sawFirstState = true;
     if (scratchpad.draftId !== this.lastScratchpadId) {
       this.lastScratchpadId = scratchpad.draftId;
       this.scratchpadView = 'source';
       this.scratchpadMode = 'slides';
-      this.showScratchpad();
-    } else this.emitScratchpadState();
+      if (!firstState) return this.showScratchpad();
+    }
+    this.emitScratchpadState();
   }
 
   private showScratchpad(view?: 'source' | 'imported', mode?: 'slides' | 'contact'): void {
