@@ -1018,7 +1018,7 @@ after you write the page:
 Each sync stamps \`data-slide-id\` into your file, and saving it again replaces
 that slide. So never copy a page to start another: the copy carries the same
 ids and overwrites the original's slides. To **replace an existing slide**,
-copy its id (from \`inspect --html-body\`) onto your \`<section>\` and save.
+copy its id (from \`inspect --html\`) onto your \`<section>\` and save.
 To delete or reorder slides, \`./deck inspect . --html --slide 8,9 >
 edit/work.html\`, then remove or reorder the \`<section>\`s there and save.
 
