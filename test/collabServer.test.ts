@@ -113,8 +113,11 @@ describe('collab server', () => {
 
   it('lists the decks in the hosted directory', async () => {
     const decks = await (await fetch(`http://127.0.0.1:${server.port}/api/decks`)).json() as
-      Array<{ id: string; title: string; slides: number }>;
-    expect(decks).toEqual([{ id: DECK_ID, title: 'Collab', slides: 2, folder: '' }]);
+      Array<{ id: string; title: string; slides: number; editedAt: string | null; editors: number }>;
+    expect(decks).toEqual([{
+      id: DECK_ID, title: 'Collab', slides: 2, folder: '', editors: 0, editedAt: expect.any(String),
+    }]);
+    expect(Number.isNaN(Date.parse(decks[0].editedAt!))).toBe(false);
   });
 
   it('returns a compact deck-wide transcript in reading order with neighboring slides', async () => {
