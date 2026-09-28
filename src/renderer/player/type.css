@@ -101,7 +101,6 @@
   list-style-position: inside;
   list-style-type: none;
   padding-left: 1.4em;
-  text-indent: -1.4em;
 }
 
 /* Suppressed, not removed. `list-style-type` stays the way an author or an
@@ -111,14 +110,36 @@
   content: '';
 }
 
-/* The marker box. Its width is the item's hanging indent — keep the two in
-   step — and the item's own hanging indent must not shift what it draws. */
+/*
+ * The marker box. Its width is the item's hanging indent — keep the two in
+ * step — and the item's own hanging indent must not shift what it draws.
+ *
+ * The indent is hung by the marker rather than by a negative `text-indent` on
+ * the item. The marker is laid out at the start of the line, painted one
+ * indent to the left of where it sits, and gives that indent back as advance,
+ * so the text after it still lands at the content edge. Relative offsets and
+ * negative margins move what is painted and what follows, never the line box
+ * itself, so all of this comes out where a hanging indent put it.
+ *
+ * The reason to hang it this way is the caret. An item holding nothing but the
+ * placeholder `<br>` has no text node to anchor a caret in, so the only caret
+ * position it has is the item's own start — and with the line box itself
+ * shifted a marker-width left, that start was *before* the marker while
+ * anything typed there landed after it. The caret was drawn on the wrong side
+ * of the bullet and jumped across it on the first keystroke. Leaving the line
+ * box where the text is puts the caret there too, for every shape of empty
+ * item, with no rule that has to guess which items are empty.
+ */
 .text-body li::before {
   content: '';
   display: inline-block;
   /* min-width, not width: a marker wider than the indent (a two-digit
-     number) then pushes its own line along rather than painting over it. */
+     number) then pushes its own line along rather than painting over it —
+     the negative margin gives back one indent, not the marker's full width. */
   min-width: 1.4em;
+  position: relative;
+  left: -1.4em;
+  margin-right: -1.4em;
   text-indent: 0;
 }
 
@@ -165,6 +186,11 @@
 .text-body li[style*="list-style-type"]::before,
 .text-body [style*="list-style-type"] li::before {
   content: none;
+}
+/* With no `::before` to hang the indent, those items hang it the old way. */
+.text-body li[style*="list-style-type"],
+.text-body [style*="list-style-type"] li {
+  text-indent: -1.4em;
 }
 
 /* Blocks nested in an item (a wrapped paragraph, a sub-list) are not the

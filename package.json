@@ -38,6 +38,7 @@
     "test:interactions:exhaustive": "RUN_EXHAUSTIVE_TEXT_BOX_FUZZ=1 vitest run --config vitest.browser.config.ts test/textBoxInteractionExhaustiveBrowser.test.ts",
     "test:paste:exhaustive": "RUN_EXHAUSTIVE_PASTE_FUZZ=1 vitest run --config vitest.serial.config.ts test/pasteMarkupFuzzBrowser.test.ts",
     "test:lists:exhaustive": "RUN_EXHAUSTIVE_LIST_FUZZ=1 vitest run --config vitest.serial.config.ts test/listEditingFuzzBrowser.test.ts",
+    "test:caret:exhaustive": "RUN_EXHAUSTIVE_CARET_FUZZ=1 vitest run --config vitest.browser.config.ts test/listCaretPlacementFuzzBrowser.test.ts",
     "test:osinput": "RUN_OS_INPUT_SMOKE=1 vitest run --config vitest.browser.config.ts test/osInputSmokeBrowser.test.ts",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",

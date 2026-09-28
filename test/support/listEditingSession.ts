@@ -80,6 +80,47 @@ const OUTLINE = `(root) => {
 /** The blocks an author puts a caret in; the nearest one holds the caret. */
 export const TEXT_BLOCKS = 'li, p, div, td, th';
 
+/** Nested lists: the block holding a caret is always the nearest match. */
+export const CARET_BLOCKS = TEXT_BLOCKS;
+
+/**
+ * Where the caret is, and where the block it sits in lets text start.
+ *
+ * `lineStart` is the x the block's first line box begins at; `contentStart` is
+ * the x its content edge sits at, and `blockLeft` its border-box edge. A list
+ * item reserves the strip between `blockLeft` and `contentStart` for the
+ * marker it draws inside its own line (see type.css). A caret on a line with
+ * no text is drawn at `lineStart`, so `lineStart` landing anywhere other than
+ * where text goes is a caret drawn on the wrong side of the marker.
+ */
+export interface CaretGeometry {
+  error?: string;
+  /** Index of the caret's block among the box's blocks, in document order. */
+  blockIndex: number;
+  blockTag: string;
+  /** The block's own text, sub-lists excluded. */
+  blockText: string;
+  /** True when the caret sits in a text node rather than at a block boundary. */
+  anchoredInText: boolean;
+  /** x the collapsed caret reports, or null when it reports no position. */
+  caretX: number | null;
+  /** x the block's first line box begins at. */
+  lineStart: number;
+  /** x the block's content edge sits at. */
+  contentStart: number;
+  blockLeft: number;
+}
+
+/** A block's own text, sub-lists excluded and whitespace collapsed. */
+const OWN_TEXT = `((block) => {
+  const clone = block.cloneNode(true);
+  clone.querySelectorAll('ul, ol').forEach((nested) => nested.remove());
+  return (clone.textContent ?? '').replace(/[\\s\\u00a0\\u200b\\u2060]+/g, ' ').trim();
+})`;
+
+/** One character with a glyph box, typed to find out where text lands. */
+const PROBE_CHARACTER = 'x';
+
 /**
  * Chromium's own list-editing output, legal in the live box and never in what
  * is stored. Its indent command writes a sub-list as a *sibling* of the item
@@ -94,6 +135,26 @@ export const CHROMIUM_NESTING_QUIRKS = [
   'a block is nested inside a block that cannot contain it',
   'a list item is outside a list',
 ];
+
+/**
+ * The one rule the caret suites check: the caret is drawn where your text
+ * goes. A caret anchored in text reports its own position; a caret at a block
+ * boundary — all an empty line has — reports nothing, so the place it is drawn
+ * is the start of that block's line. Returns the author's complaint, or null.
+ */
+export function caretDisagreement(
+  caret: CaretGeometry,
+  typedX: number,
+  tolerance = 1,
+): string | null {
+  if (caret.error) return caret.error;
+  const drawnAt = caret.caretX ?? caret.lineStart;
+  if (Math.abs(drawnAt - typedX) <= tolerance) return null;
+  const where = caret.caretX === null
+    ? `the start of its <${caret.blockTag}> line (x=${caret.lineStart})`
+    : `x=${caret.caretX}`;
+  return `caret drawn at ${where}, text typed there lands at x=${typedX}`;
+}
 
 export interface TextRun {
   /** Index of the run's block among the box's blocks, in document order. */
@@ -162,6 +223,22 @@ export interface ListEditingSession {
   caretAt(offset: number): Promise<void>;
   /** Click into the first item/paragraph whose text starts with `text`. */
   caretIn(text: string, where?: 'start' | 'end'): Promise<void>;
+  /** The box's blocks in document order, as `tag:own text`. */
+  blocks(): Promise<string[]>;
+  /**
+   * Click the middle of block `index`'s first line, clear of any list marker —
+   * the gesture an author uses to put the caret on a line, including a line
+   * with nothing on it.
+   */
+  caretInBlock(index: number): Promise<void>;
+  /** Where the caret is, and where its block lets text start. */
+  caretGeometry(): Promise<CaretGeometry>;
+  /**
+   * The x a character typed at the caret is actually drawn at, measured by
+   * typing one and taking it back. This is the place the author sees their
+   * text appear, so it is the place the caret should already have been.
+   */
+  typedCharacterStart(): Promise<number>;
   /** The live block structure. */
   outline(): Promise<string[]>;
   /** Own text (sub-lists excluded, whitespace collapsed) of every `selector` block, in order. */
@@ -332,6 +409,107 @@ function buildSession(cdp: Cdp, port: number, deckId: string): ListEditingSessio
       if (offset < 0) throw new Error(`no text starting ${JSON.stringify(text)} to click`);
       await cdp.clickTextAtOffset(CONTENT, offset, `the paragraph holding ${text}`);
       await cdp.key(where === 'start' ? 'Home' : 'End', where === 'start' ? 36 : 35);
+    },
+    blocks() {
+      return cdp.evaluate<string[]>(`(() => {
+        const own = ${OWN_TEXT};
+        const root = document.querySelector('${CONTENT}');
+        if (!root) return ['the text box is gone'];
+        return [...root.querySelectorAll('${CARET_BLOCKS}')]
+          .map((block) => block.tagName.toLowerCase() + ':' + own(block));
+      })()`);
+    },
+    async caretInBlock(index) {
+      const point = await cdp.evaluate<{ x: number; y: number } | { error: string }>(`(() => {
+        const root = document.querySelector('${CONTENT}');
+        const block = root?.querySelectorAll('${CARET_BLOCKS}')[${index}];
+        if (!block) return { error: 'no block ${index} in the text box' };
+        const box = block.getBoundingClientRect();
+        const style = getComputedStyle(block);
+        // Computed lengths are in the slide's own pixels, client rects in
+        // screen ones; the canvas paints under a transform between them.
+        const scale = block.offsetWidth > 0 ? box.width / block.offsetWidth : 1;
+        const line = (parseFloat(style.lineHeight) || 0) * scale;
+        // The content edge, which is where the block's text starts and where a
+        // marker drawn in the line has already ended. A click there is a click
+        // on the line, never on the marker.
+        const x = box.left + (parseFloat(style.paddingLeft) || 0) * scale + 4;
+        // The block's *first* line: an item holding a sub-list is as tall as
+        // the sub-list, and its middle is a different item entirely.
+        const y = box.top + Math.min(line || box.height, box.height) / 2;
+        return { x: Math.round(x), y: Math.round(y) };
+      })()`);
+      if ('error' in point) throw new Error(point.error);
+      await cdp.clickAt(point.x, point.y);
+    },
+    caretGeometry() {
+      return cdp.evaluate<CaretGeometry>(`(() => {
+        const own = ${OWN_TEXT};
+        const root = document.querySelector('${CONTENT}');
+        const selection = window.getSelection();
+        const blank = { blockIndex: -1, blockTag: '', blockText: '', anchoredInText: false,
+                        caretX: null, lineStart: 0, contentStart: 0, blockLeft: 0 };
+        if (!root) return { ...blank, error: 'the text box is gone' };
+        if (!selection || selection.rangeCount === 0) return { ...blank, error: 'there is no caret' };
+        const range = selection.getRangeAt(0);
+        if (!root.contains(range.startContainer)) {
+          return { ...blank, error: 'the caret is outside the text box' };
+        }
+        const node = range.startContainer;
+        const holder = node.nodeType === Node.TEXT_NODE ? node.parentElement : node;
+        const block = holder && holder.closest('${CARET_BLOCKS}');
+        if (!block || !root.contains(block)) {
+          return { ...blank, error: 'the caret is not in a block' };
+        }
+        const box = block.getBoundingClientRect();
+        const style = getComputedStyle(block);
+        // The canvas paints the slide under a transform, so client rects are
+        // in screen pixels while computed lengths are in the slide's own. A
+        // hanging indent measured in one and applied to the other is wrong by
+        // the zoom — invisibly so while padding and indent cancel out.
+        const scale = block.offsetWidth > 0 ? box.width / block.offsetWidth : 1;
+        const padding = (parseFloat(style.paddingLeft) || 0) * scale;
+        const indent = (parseFloat(style.textIndent) || 0) * scale;
+        // Only a collapsed caret anchored in text reports a position at all;
+        // one anchored at a block boundary reports nothing, which is why the
+        // block's own geometry has to say where such a caret must be.
+        const rects = [...range.getClientRects()];
+        return {
+          blockIndex: [...root.querySelectorAll('${CARET_BLOCKS}')].indexOf(block),
+          blockTag: block.tagName.toLowerCase(),
+          blockText: own(block),
+          anchoredInText: node.nodeType === Node.TEXT_NODE,
+          caretX: rects.length ? +rects[0].left.toFixed(2) : null,
+          lineStart: +(box.left + padding + indent).toFixed(2),
+          contentStart: +(box.left + padding).toFixed(2),
+          blockLeft: +box.left.toFixed(2),
+        };
+      })()`);
+    },
+    async typedCharacterStart() {
+      await cdp.typeKeys(PROBE_CHARACTER);
+      await wait(80);
+      // The caret now sits just after the character it typed, so the character
+      // is the one before it — and its left edge is the x the caret was asked
+      // to be at. Reading it this way holds at any offset, not only at the
+      // start of a block.
+      const x = await cdp.evaluate<number | null>(`(() => {
+        const selection = window.getSelection();
+        if (!selection || selection.rangeCount === 0) return null;
+        const range = selection.getRangeAt(0);
+        const node = range.startContainer;
+        if (node.nodeType !== Node.TEXT_NODE || range.startOffset < 1) return null;
+        const probe = document.createRange();
+        probe.setStart(node, range.startOffset - 1);
+        probe.setEnd(node, range.startOffset);
+        if (probe.toString() !== ${JSON.stringify(PROBE_CHARACTER)}) return null;
+        const rects = [...probe.getClientRects()];
+        return rects.length ? +rects[0].left.toFixed(2) : null;
+      })()`);
+      await cdp.key('Backspace', 8);
+      await wait(80);
+      if (x === null) throw new Error('the probe character left no measurable glyph');
+      return x;
     },
     outline() {
       return cdp.evaluate<string[]>(`(() => {
