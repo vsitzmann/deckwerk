@@ -15,6 +15,15 @@ Slides are numbered as in the editor's rail. Match the neighbours' fonts,
 colours, margins and title position; `theme.css` holds the deck's styles.
 `slide-agent comments . --unresolved` shows requests people left on slides.
 
+## Themes
+
+A theme sets the fonts, sizes and colours for text roles. Give text the class
+`role-title`, `role-heading`, `role-body` or `role-caption` and it takes the
+deck's theme; don't hard-code fonts or colours the theme already supplies.
+`slide-agent theme list .` prints every theme's title and body typefaces and
+its background, text, muted and accent colours (`chosen` is the deck's
+current one). To switch: `slide-agent theme apply . --id <id> --scope deck`.
+
 ## 2. Write your slide as a normal web page
 
 Create `drafts/slide.html` — not in `edit/`, which the editor watches:
@@ -35,6 +44,11 @@ Use any HTML and CSS: flex/grid, `<img>`, `object-fit`, `border-radius`,
 `slide-agent asset import . <file>`) and refer to them as `assets/<name>`.
 Iterate in a browser, e.g. `chromium --headless --screenshot=/tmp/s.png
 --window-size=1920,1080 drafts/slide.html`. Nothing here involves DeckWerk.
+
+For something that needs JavaScript (a live chart, a demo), write it as its
+own self-contained page, then `slide-agent web add . chart.html --size
+1680x620` and paste the `<div data-element="web" …>` it prints into your
+slide beside a normal title. No network access while presenting.
 
 ## 3. Put it in the deck
 
