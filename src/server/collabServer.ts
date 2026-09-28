@@ -369,6 +369,10 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
     id: string;
     title: string;
     slides: number;
+    /** When deck.json was last saved, which only an edit does; ISO time. */
+    editedAt: string | null;
+    /** People (not agents, not spectators) connected to it right now. */
+    editors: number;
     /** Containing folder, "" at the root. Always present. */
     folder: string;
     /** Present only with access control on. */
@@ -392,6 +396,19 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
   /** Folders nest, but not without limit: a cycle-free tree still needs a floor. */
   const MAX_FOLDER_DEPTH = 8;
 
+  /**
+   * How many people are editing a room. A person with the deck open in two
+   * tabs is one editor; agent bridges and view-only spectators are none.
+   */
+  function editorsIn(room: Room | undefined): number {
+    const people = new Set<string>();
+    for (const [clientId, peer] of room?.peers ?? []) {
+      if (!peer.canEdit || peer.agentFor || peer.state.agent) continue;
+      people.add(peer.identity?.login ?? peer.state.participant ?? clientId);
+    }
+    return people.size;
+  }
+
   async function deckListEntry(
     id: string,
     dir: string,
@@ -402,11 +419,14 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
       const raw = JSON.parse(await readFile(join(dir, 'deck.json'), 'utf8')) as {
         title?: string; slides?: unknown[];
       };
+      const saved = await stat(join(dir, 'deck.json')).catch(() => null);
       const name = id.slice(id.lastIndexOf('/') + 1);
       listed = {
         id,
         title: raw.title ?? name,
         slides: Array.isArray(raw.slides) ? raw.slides.length : 0,
+        editedAt: saved ? saved.mtime.toISOString() : null,
+        editors: editorsIn(rooms.get(id)),
         folder: id.includes('/') ? id.slice(0, id.lastIndexOf('/')) : '',
       };
     } catch {

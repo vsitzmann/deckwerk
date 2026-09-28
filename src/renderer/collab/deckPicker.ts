@@ -21,6 +21,10 @@ interface DeckEntry {
   id: string;
   title: string;
   slides: number;
+  /** ISO time of the last saved edit; null when the server cannot tell. */
+  editedAt: string | null;
+  /** People editing it right now. */
+  editors: number;
   folder: string;
   owner?: string;
   visibility?: 'public' | 'private';
@@ -320,6 +324,21 @@ function pickerRow(
   return row;
 }
 
+/** "just now", "5 min ago", "3 h ago", "yesterday", then the date. */
+export function editedAgo(iso: string, now = Date.now()): string {
+  const minutes = Math.floor((now - Date.parse(iso)) / 60_000);
+  if (!(minutes >= 1)) return 'just now';
+  if (minutes < 60) return `${minutes} min ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours} h ago`;
+  if (hours < 48) return 'yesterday';
+  const date = new Date(iso);
+  return date.toLocaleDateString(undefined, {
+    month: 'short', day: 'numeric',
+    ...(date.getFullYear() === new Date(now).getFullYear() ? {} : { year: 'numeric' }),
+  });
+}
+
 /** Wrap a row with the fixed-width slot its buttons live in. */
 function rowGroup(row: HTMLElement, buttons: HTMLElement[]): HTMLElement {
   const wrapper = document.createElement('div');
@@ -384,6 +403,8 @@ export function showDeckPicker(opts: {
   const folderRow = (entry: FolderEntry): HTMLElement => {
     const row = pickerRow('button', entry.name, [
       `${entry.decks} presentation${entry.decks === 1 ? '' : 's'}`,
+      '',
+      '',
       entry.owner ?? '',
       '',
     ]);
@@ -427,9 +448,13 @@ export function showDeckPicker(opts: {
       : deck.visibility ? (deck.visibility === 'public' ? 'public' : 'private') : '';
     const row = pickerRow('button', deck.title, [
       `${deck.slides} slide${deck.slides === 1 ? '' : 's'}`,
+      deck.editedAt ? editedAgo(deck.editedAt) : '',
+      deck.editors > 0 ? `${deck.editors} editing` : '',
       opts.access && deck.owner && deck.owner !== opts.access.user ? deck.owner : '',
       access,
     ]);
+    if (deck.editedAt) row.children[2]?.setAttribute('title', new Date(deck.editedAt).toLocaleString());
+    if (deck.editors > 0) row.children[3]?.classList.add('deck-picker-live');
     if (deck.id === current) row.classList.add('active');
     row.addEventListener('click', () => {
       if (deck.id === current) overlay.remove();
@@ -613,7 +638,7 @@ export function showDeckPicker(opts: {
   head.append(title, trail);
   const columns = document.createElement('div');
   columns.className = 'deck-picker-columns';
-  columns.append(rowGroup(pickerRow('div', 'Name', ['Size', 'Owner', 'Access']), []));
+  columns.append(rowGroup(pickerRow('div', 'Name', ['Size', 'Last edit', 'Editing', 'Owner', 'Access']), []));
   const foot = document.createElement('div');
   foot.className = 'deck-picker-foot';
   foot.append(progress, actions);

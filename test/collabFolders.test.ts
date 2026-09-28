@@ -67,8 +67,8 @@ describe('collab server folders', () => {
 
     it('lists nested decks by path and every folder that holds them', async () => {
       expect((await api('/api/decks')).body).toEqual([
-        { id: 'clients/acme/pitch', title: 'clients/acme/pitch', slides: 1, folder: 'clients/acme' },
-        { id: 'loose', title: 'loose', slides: 1, folder: '' },
+        { id: 'clients/acme/pitch', title: 'clients/acme/pitch', slides: 1, editedAt: expect.any(String), editors: 0, folder: 'clients/acme' },
+        { id: 'loose', title: 'loose', slides: 1, editedAt: expect.any(String), editors: 0, folder: '' },
       ]);
       expect((await api('/api/folders')).body).toEqual([
         { path: 'clients', name: 'clients', parent: '', decks: 0 },
@@ -145,6 +145,29 @@ describe('collab server folders', () => {
       expect(existsSync(join(rootDir, 'loose', 'deck.json'))).toBe(true);
     });
 
+    it('lists how many people are editing each deck and when it was last edited', async () => {
+      const connect = async (): Promise<WebSocket> => {
+        const socket = new WebSocket(`ws://127.0.0.1:${server.port}/ws?deck=loose`);
+        await new Promise<void>((done, fail) => {
+          socket.on('open', () => socket.send(JSON.stringify({ kind: 'hello', version: COLLAB_PROTOCOL_VERSION })));
+          socket.on('message', () => done());
+          socket.on('error', fail);
+          setTimeout(() => fail(new Error('ws timed out')), 4000);
+        });
+        return socket;
+      };
+      const entry = async (id: string) => ((await api('/api/decks')).body as any[]).find((deck) => deck.id === id);
+      const before = await entry('loose');
+      expect(before.editors).toBe(0);
+      expect(Date.parse(before.editedAt)).toBeGreaterThan(Date.now() - 60_000);
+      const first = await connect();
+      const second = await connect();
+      expect((await entry('loose')).editors).toBe(2);
+      expect((await entry('clients/acme/pitch')).editors).toBe(0);
+      first.terminate();
+      second.terminate();
+    });
+
     it('refuses to move a presentation somebody has open', async () => {
       const socket = new WebSocket(`ws://127.0.0.1:${server.port}/ws?deck=loose`);
       await new Promise<void>((done, fail) => {
@@ -167,7 +190,7 @@ describe('collab server folders', () => {
       expect(JSON.parse(await readFile(join(rootDir, 'Big Talk', 'deck.json'), 'utf8')).title)
         .toBe('Big Talk');
       expect((await api('/api/decks')).body).toContainEqual(
-        { id: 'Big Talk', title: 'Big Talk', slides: 1, folder: '' },
+        { id: 'Big Talk', title: 'Big Talk', slides: 1, editedAt: expect.any(String), editors: 0, folder: '' },
       );
 
       // A deck inside a folder keeps its folder, and a name already taken is
