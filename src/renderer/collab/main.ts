@@ -41,6 +41,7 @@ import { createConnectionNotice } from './connectionNotice.js';
 import { createDeckOnServer, folderOf, importKeynoteToServer, importPowerPointToServer, showDeckPicker, showShareDialog } from './deckPicker.js';
 import { installNetApi } from './netApi.js';
 import { PresenceOverlay } from './presenceOverlay.js';
+import { PresenceBar } from './presenceBar.js';
 import { createAgentPanelApi, type AgentPanelBrowserApi } from './agentPanelApi.js';
 import { openEndCollaborationPopover } from './endCollaborationPopover.js';
 import { decodeEditorView, restoreEditorView } from '@shared/editorView.js';
@@ -255,6 +256,18 @@ cssEditor.onChange = () => {
 // compiler and the live theme buffer.
 const presence = new PresenceOverlay(canvas, store);
 rail.presenceForSlide = (slideId) => presence.peersOnSlide(slideId);
+const slideIndexOf = (slideId: string): number => store.get().deck.slides.findIndex((slide) => slide.id === slideId);
+const presenceBar = new PresenceBar(
+  (slideId) => {
+    const index = slideIndexOf(slideId);
+    return index >= 0 ? `slide ${index + 1}` : null;
+  },
+  (peer) => {
+    const index = peer.activeSlideId ? slideIndexOf(peer.activeSlideId) : -1;
+    if (index >= 0) store.selectSlide(index);
+  },
+);
+presence.onPeersChange = () => presenceBar.setPeers(presence.list());
 
 wireCanvasInspector(canvas, inspector);
 
@@ -330,6 +343,7 @@ const bridge = new CollabBridge(wsUrl, undefined, {
     lastCursorKey = '';
     setIdSuffix(welcome.clientId.slice(0, 4));
     setCommentAuthor(welcome.self.name);
+    presenceBar.setSelf(welcome.self);
     connectionState = `connected as ${welcome.self.name}`;
     // The first welcome opens the document; every later one is a reconnect of
     // the same session, where the revision log and the selection must survive.
@@ -483,6 +497,7 @@ function publishPresence(): void {
 }
 store.subscribe(() => {
   publishPresence();
+  presenceBar.refresh();
   syncSlideSelectionContext();
   const title = document.querySelector<HTMLElement>('.toolbar-deck-title');
   if (title) title.textContent = store.get().deck.title;
@@ -786,6 +801,8 @@ function buildToolbar(): void {
     compactSecondary.classList.add('toolbar-compact-secondary-action');
   }
   right.append(
+    presenceBar.element,
+    divider(),
     secondaryActions,
     ...(compactSecondary ? [compactSecondary] : []),
     createToolbarSplitButton(

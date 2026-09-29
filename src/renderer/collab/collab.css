@@ -208,3 +208,30 @@ button.danger:hover:not(:disabled) {
   padding: 5px 7px;
   font: inherit;
 }
+
+/* Toolbar strip of who is in the deck, as in TeXWerk: you first, outlined;
+   agents round. Colors come inline from each person's presence color. */
+.bar-presence {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+.bar-person {
+  display: grid;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  place-items: center;
+  border: 0;
+  border-radius: 3px;
+  color: #fff;
+  font: 700 10px/1 system-ui, sans-serif;
+  text-shadow: 0 1px 1px rgb(0 0 0 / 35%);
+  cursor: pointer;
+}
+.bar-person.agent { border-radius: 50%; }
+.bar-person.me { outline: 1px solid var(--text); outline-offset: 1px; cursor: default; }
+button.bar-person:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+/* Narrowest toolbar: the strip goes before any action does. */
+#toolbar.toolbar-compact-secondary .bar-presence,
+#toolbar.toolbar-compact-secondary .bar-presence + .bar-divider { display: none; }
