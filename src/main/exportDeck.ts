@@ -1,10 +1,11 @@
 import { existsSync } from 'node:fs';
-import { copyFile, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { dirname, extname, join, relative, resolve } from 'node:path';
 import type { Deck, Slide } from '@shared/deck.js';
 import type { WebExportQuality } from '@shared/ipc.js';
 import { loadTheme, resolveAsset } from './deckStore.js';
 import { encodeImageWebp, probeImage, probeMedia, transcodeVideoForWeb } from './ffmpeg.js';
+import { copyFileStreamed } from './copyFileStreamed.js';
 
 /**
  * Export a deck as a self-contained folder that opens in any browser.
@@ -146,7 +147,7 @@ export async function exportDeck(
   doneWeight += fixedWeight;
 
   report('Copying player.js');
-  await copyFile(playerJs, join(outDir, 'player.js'));
+  await copyFileStreamed(playerJs, join(outDir, 'player.js'));
   doneWeight += fixedWeight;
 
   // The player's structural CSS, then the deck's theme, in that order — the
@@ -280,7 +281,7 @@ async function exportAsset(
     progress('Copying', 0);
     const to = join(outDir, source.within);
     await mkdir(dirname(to), { recursive: true });
-    await copyFile(source.path, to);
+    await copyFileStreamed(source.path, to);
     return { rel, bytes: source.bytes };
   };
 

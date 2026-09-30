@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, realpathSync } from 'node:fs';
-import { copyFile, cp, mkdir, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
+import { cp, mkdir, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
 import { basename, dirname, extname, join, resolve, sep } from 'node:path';
 import { type Deck, emptyDeck, parseDeck } from '@shared/deck.js';
 import type { ImportedAsset } from '@shared/ipc.js';
@@ -8,6 +8,7 @@ import { classifyMediaName, CONVERTED_IMAGE_EXTS } from '@shared/media.js';
 import { serializeSpeakerNotes, SPEAKER_NOTES_FILE } from '@shared/speakerNotes.js';
 import { isWebSafeCodec, probeMedia, transcodeToH264, videoCodec } from './ffmpeg.js';
 import { needsFastStart, writeFastStart } from './mp4FastStart.js';
+import { copyFileStreamed } from './copyFileStreamed.js';
 import { convertHeicToPng } from './heic.js';
 
 /**
@@ -250,7 +251,7 @@ export async function importAsset(
   const name = `${stem}.${hash}${ext}`;
   const dest = join(assetsDir, name);
 
-  if (!existsSync(dest)) await copyFile(sourcePath, dest);
+  if (!existsSync(dest)) await copyFileStreamed(sourcePath, dest);
 
   // Formats Chromium cannot decode import fine and then render as nothing.
   // Both branches below re-encode on the way in, exactly as the Keynote
