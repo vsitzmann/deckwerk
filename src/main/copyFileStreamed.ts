@@ -1,4 +1,5 @@
 import { createReadStream, createWriteStream } from 'node:fs';
+import { rename, rm } from 'node:fs/promises';
 import { pipeline } from 'node:stream/promises';
 
 /**
@@ -10,7 +11,18 @@ import { pipeline } from 'node:stream/promises';
  * `copyFile` on the server path therefore took the whole collab server down
  * mid-request ("upload failed", video never playable). A plain read/write
  * stream only needs open/read/write.
+ *
+ * The bytes land in a sibling temp file that is renamed into place, so a
+ * failed copy never leaves a truncated file under the final name (importAsset
+ * skips copying when the hashed destination already exists).
  */
 export async function copyFileStreamed(source: string, target: string): Promise<void> {
-  await pipeline(createReadStream(source), createWriteStream(target));
+  const temporary = `${target}.${process.pid}.copy-tmp`;
+  try {
+    await pipeline(createReadStream(source), createWriteStream(temporary));
+    await rename(temporary, target);
+  } catch (error) {
+    await rm(temporary, { force: true });
+    throw error;
+  }
 }
