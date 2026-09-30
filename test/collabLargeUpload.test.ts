@@ -7,6 +7,7 @@ import { join, resolve } from 'node:path';
 import { Readable } from 'node:stream';
 import { emptyDeck } from '../src/shared/deck.js';
 import { saveDeck } from '../src/main/deckStore.js';
+import { getFfmpegPath } from '../src/main/ffmpeg.js';
 
 /**
  * Regression: large video uploads to the headless server failed ("upload
@@ -26,6 +27,20 @@ const PRODUCTION_SANDBOX = [
   '-p', 'SystemCallFilter=@system-service',
   '-p', 'SystemCallFilter=~@privileged @resources @mount @reboot @swap @debug @module @obsolete @raw-io @cpu-emulation',
 ];
+
+/**
+ * Whether this machine can run a sandboxed transient unit. CI runners have no
+ * user systemd session; there the server runs unsandboxed, which still covers
+ * the upload and playback path but not the syscall filter itself.
+ */
+function canSandbox(): boolean {
+  try {
+    execFileSync('systemd-run', ['--user', '--wait', '--quiet', '--collect', ...PRODUCTION_SANDBOX, 'true'], { stdio: 'ignore' });
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 function freePort(): Promise<number> {
   return new Promise((resolvePort, reject) => {
@@ -67,21 +82,25 @@ describe('large video upload on the headless server', () => {
     await mkdir(join(rootDir, DECK_ID), { recursive: true });
     await saveDeck(join(rootDir, DECK_ID), emptyDeck('Big video'));
     const clipPath = join(rootDir, 'clip.mp4');
-    execFileSync('ffmpeg', [
+    execFileSync(getFfmpegPath(), [
       '-v', 'error', '-f', 'lavfi', '-i', 'testsrc=size=64x64:rate=10:duration=1',
       '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-movflags', '+faststart', clipPath,
     ]);
     clip = await readFile(clipPath);
 
     port = await freePort();
-    server = spawn('systemd-run', [
-      '--user', '--pipe', '--wait', '--quiet', '--collect',
-      `--working-directory=${REPO}`, `--setenv=PATH=${process.env.PATH}`,
-      ...PRODUCTION_SANDBOX,
+    const command = [
       join(REPO, 'node_modules/.bin/vite-node'),
       '--config', 'vitest.config.ts', 'scripts/collab-server.mts', '--', rootDir,
       '--host', '127.0.0.1', '--port', String(port), '--no-local-agents',
-    ]);
+    ];
+    server = canSandbox()
+      ? spawn('systemd-run', [
+        '--user', '--pipe', '--wait', '--quiet', '--collect',
+        `--working-directory=${REPO}`, `--setenv=PATH=${process.env.PATH}`,
+        ...PRODUCTION_SANDBOX, ...command,
+      ])
+      : spawn(command[0], command.slice(1), { cwd: REPO });
     server.stderr?.on('data', (chunk) => { stderr += chunk; });
     await new Promise<void>((resolveReady, reject) => {
       server.stdout?.on('data', (chunk) => { if (String(chunk).includes('"serving"')) resolveReady(); });
