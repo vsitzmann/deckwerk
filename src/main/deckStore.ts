@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { existsSync, realpathSync } from 'node:fs';
-import { cp, mkdir, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
+import { createReadStream, existsSync, realpathSync } from 'node:fs';
+import { cp, mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { basename, dirname, extname, join, resolve, sep } from 'node:path';
 import { type Deck, emptyDeck, parseDeck } from '@shared/deck.js';
 import type { ImportedAsset } from '@shared/ipc.js';
@@ -251,7 +251,11 @@ export async function importAsset(
   const name = `${stem}.${hash}${ext}`;
   const dest = join(assetsDir, name);
 
-  if (!existsSync(dest)) await copyFileStreamed(sourcePath, dest);
+  // The hashed name is only a cache hit when the bytes behind it are really
+  // that file. A server killed mid-copy once left zero-byte files under
+  // hashed names, and reusing those made every later upload of the same media
+  // "succeed" as a blank image or an unplayable video.
+  if (!existsSync(dest) || (await hashFile(dest)) !== hash) await copyFileStreamed(sourcePath, dest);
 
   // Formats Chromium cannot decode import fine and then render as nothing.
   // Both branches below re-encode on the way in, exactly as the Keynote
@@ -264,7 +268,7 @@ export async function importAsset(
     const converted = `${stem}.${hash}.png`;
     const convertedPath = join(assetsDir, converted);
     onProgress?.(null);
-    if (!existsSync(convertedPath)) await convertHeicToPng(dest, convertedPath);
+    if (!(await hasContent(convertedPath))) await produceAtomically(convertedPath, (tmp) => convertHeicToPng(dest, tmp));
     finalName = converted;
   }
 
@@ -274,7 +278,9 @@ export async function importAsset(
     if (!isWebSafeCodec(codec)) {
       const converted = `${stem}.${hash}.h264.mp4`;
       const convertedPath = join(assetsDir, converted);
-      if (!existsSync(convertedPath)) await transcodeToH264(dest, convertedPath, onProgress);
+      if (!(await hasContent(convertedPath))) {
+        await produceAtomically(convertedPath, (tmp) => transcodeToH264(dest, tmp, onProgress));
+      }
       finalName = converted;
     } else if (await needsFastStart(dest)) {
       // Playable as-is, but indexed at the tail: Chromium would seek to the
@@ -285,7 +291,7 @@ export async function importAsset(
       const relocated = `${stem}.${hash}.fs${ext}`;
       const relocatedPath = join(assetsDir, relocated);
       onProgress?.(null);
-      if (!existsSync(relocatedPath)) await writeFastStart(dest, relocatedPath);
+      if (!(await hasContent(relocatedPath))) await writeFastStart(dest, relocatedPath);
       finalName = relocated;
     }
   }
@@ -434,8 +440,35 @@ function sanitize(name: string): string {
 }
 
 async function hashFile(path: string): Promise<string> {
-  // Whole-file hash: assets are read once on import, and partial hashing would
-  // collide across re-encodes that share a header.
-  const buf = await readFile(path);
-  return createHash('sha256').update(buf).digest('hex').slice(0, 8);
+  // Whole-file hash: partial hashing would collide across re-encodes that
+  // share a header. Streamed, so a long recording is never held in memory.
+  const hash = createHash('sha256');
+  for await (const chunk of createReadStream(path)) hash.update(chunk as Buffer);
+  return hash.digest('hex').slice(0, 8);
+}
+
+/** A derived asset is reusable only when it exists and is not an empty leftover. */
+async function hasContent(path: string): Promise<boolean> {
+  try {
+    return (await stat(path)).size > 0;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Build a derived asset beside its final name and rename it into place, so a
+ * conversion that dies partway (a crash, a killed ffmpeg) never leaves a
+ * truncated file that later imports would mistake for the finished one. The
+ * temporary keeps the target's extension: ffmpeg picks its muxer from it.
+ */
+async function produceAtomically(target: string, make: (temporary: string) => Promise<void>): Promise<void> {
+  const temporary = `${target}.${randomUUID()}.partial${extname(target)}`;
+  try {
+    await make(temporary);
+    await rename(temporary, target);
+  } catch (error) {
+    await rm(temporary, { force: true });
+    throw error;
+  }
 }
