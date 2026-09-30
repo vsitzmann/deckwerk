@@ -12,7 +12,7 @@
   "scripts": {
     "dev": "electron-vite dev",
     "predev": "npm run build:collab",
-    "precollab": "npm run build:collab",
+    "precollab": "node scripts/check-collab-environment.cjs && npm run build:collab",
     "build": "tsc --noEmit && electron-vite build && npm run build:export && npm run build:collab",
     "build:export": "vite build --config vite.export.config.ts",
     "build:importer": "node scripts/build-importer.mjs",

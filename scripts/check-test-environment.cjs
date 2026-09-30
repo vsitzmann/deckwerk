@@ -1,5 +1,5 @@
 const net = require('node:net');
-const { existsSync } = require('node:fs');
+const { findElectronBinary } = require('./electron-binary.cjs');
 
 /**
  * The real-input browser suites `describe.skipIf(!electronBinary)`, so on a
@@ -9,14 +9,7 @@ const { existsSync } = require('node:fs');
  * `SKIP_ELECTRON_CHECK=1` remains for deliberately unit-only environments.
  */
 if (process.env.SKIP_ELECTRON_CHECK !== '1') {
-  let electronBinary = '';
-  try {
-    const resolved = require('electron');
-    electronBinary = typeof resolved === 'string' && existsSync(resolved) ? resolved : '';
-  } catch {
-    electronBinary = '';
-  }
-  if (!electronBinary) {
+  if (!findElectronBinary()) {
     console.error(`
 The Electron binary is missing, so every real-input browser suite would be
 silently skipped and this run would pass without testing the editor at all.
