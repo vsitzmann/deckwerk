@@ -121,7 +121,19 @@ export const ServerWelcomeSchema = z.object({
   seq: z.number().int().nonnegative(),
   deck: DeckSchema,
   themeCss: z.string(),
+  /**
+   * Which variant (original or streaming rendition) each oversized clip is
+   * served as, keyed by its deck src. Clients pin it into the clip's URL so
+   * one <video> never sees its bytes swapped (RenditionStore.variant).
+   */
+  mediaVariants: z.record(z.string(), z.string()).optional(),
   peers: z.array(PresenceStateSchema),
+});
+
+/** A clip's rendition landed: pin the new variants into URLs built from now on. */
+export const ServerMediaSchema = z.object({
+  kind: z.literal('media'),
+  variants: z.record(z.string(), z.string()),
 });
 
 export const ServerTxnSchema = z.object({
@@ -180,6 +192,7 @@ export const ServerMessageSchema = z.discriminatedUnion('kind', [
   ServerPeerLeftSchema,
   ServerThemeSchema,
   ServerEndedSchema,
+  ServerMediaSchema,
 ]);
 
 export type ServerMessage = z.infer<typeof ServerMessageSchema>;

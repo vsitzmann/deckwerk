@@ -22,7 +22,7 @@ import { AgentBridge, type HtmlSyncOutcome } from './agentBridge.js';
 import { AgentPanel } from './agentPanel.js';
 import { createDeckWerkButton } from './aboutDialog.js';
 import { trackPreviewFrameRecovery } from '../player/previewFrameRecovery.js';
-import { EditorCanvas } from './canvas.js';
+import { CANVAS_NOTICE_EVENT, EditorCanvas } from './canvas.js';
 import { CssEditor } from './cssEditor.js';
 import { Inspector } from './inspector.js';
 import { HistoryPanel } from './historyPanel.js';
@@ -125,6 +125,9 @@ let initialViewPending = initialView !== null;
 setRenderInvariantChecks(import.meta.env.DEV);
 setSelectionInvariantChecks(import.meta.env.DEV);
 const canvas = new EditorCanvas(el('canvas'), store);
+el('canvas').addEventListener(CANVAS_NOTICE_EVENT, (event) => {
+  setStatusMessage((event as CustomEvent<string>).detail);
+});
 // A presentation window occludes this one, and a hidden page's media buffers
 // are Chromium's to reclaim -- closing Present used to leave canvas, rail and
 // Morph previews black until something happened to touch them.

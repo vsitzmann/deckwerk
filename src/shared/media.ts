@@ -10,8 +10,8 @@
  */
 
 export const IMAGE_EXTS = new Set([
-  '.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.avif', '.pdf',
-  '.heic', '.heif',
+  '.png', '.jpg', '.jpeg', '.jfif', '.gif', '.webp', '.svg', '.avif', '.pdf',
+  '.heic', '.heif', '.tif', '.tiff', '.bmp',
 ]);
 
 /**
@@ -24,7 +24,7 @@ export const IMAGE_EXTS = new Set([
  * an import detail, the same way an HEVC screen recording is transcoded to
  * H.264 without the author choosing that.
  */
-export const CONVERTED_IMAGE_EXTS = new Set(['.heic', '.heif']);
+export const CONVERTED_IMAGE_EXTS = new Set(['.heic', '.heif', '.tif', '.tiff', '.bmp']);
 export const VIDEO_EXTS = new Set(['.mp4', '.mov', '.m4v', '.webm', '.mkv', '.avi']);
 
 /** Classify by file name/path extension; null means "not droppable media". */
@@ -34,6 +34,28 @@ export function classifyMediaName(name: string): 'image' | 'video' | null {
   if (IMAGE_EXTS.has(ext)) return 'image';
   if (VIDEO_EXTS.has(ext)) return 'video';
   return null;
+}
+
+/** Extensions for media a file names only by MIME type. */
+const EXTENSION_BY_TYPE: Record<string, string> = {
+  'image/png': '.png', 'image/jpeg': '.jpg', 'image/gif': '.gif', 'image/webp': '.webp',
+  'image/svg+xml': '.svg', 'image/avif': '.avif', 'image/heic': '.heic', 'image/heif': '.heif',
+  'image/tiff': '.tiff', 'image/bmp': '.bmp', 'application/pdf': '.pdf',
+  'video/mp4': '.mp4', 'video/quicktime': '.mov', 'video/webm': '.webm',
+  'video/x-matroska': '.mkv', 'video/x-m4v': '.m4v',
+};
+
+/**
+ * The name a dropped file should import under: its own when the extension is
+ * one the importer knows, otherwise with the extension its MIME type calls
+ * for, or null when it is not media at all. A drag out of Photos, a browser's
+ * "save image" or a scanner hands over `image`, `photo.jfif` or `scan.tiff`
+ * often enough; those used to be dropped on the floor without a word.
+ */
+export function mediaFileName(name: string, mimeType: string): string | null {
+  if (classifyMediaName(name)) return name;
+  const ext = EXTENSION_BY_TYPE[mimeType.toLowerCase()];
+  return ext ? `${name}${ext}` : null;
 }
 
 const PENDING_PREFIX = 'pending:';

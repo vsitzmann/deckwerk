@@ -139,6 +139,18 @@ The rules that keep it honest:
   immutable copy of the original would never be asked about again, and the
   rendition would never reach the client. The ETag of the rendition is salted
   so it cannot 304 against the ETag the client holds for the original.
+- **A URL never changes variant under a playing video.** A `<video>` reads
+  its source in many range requests and never revalidates between them, so
+  when a rendition landed mid-show a looping clip asked for `bytes=0-` again,
+  got the rendition's bytes laid out against the original's index, and
+  Chromium failed it with `PIPELINE_ERROR_DECODE`. The welcome therefore
+  carries `mediaVariants` (`o<key>` original, `r<key>` rendition, per deck
+  src), a `media` message announces each rendition as it lands, and the
+  browser clients pin the variant into every video URL (`?v=`;
+  `src/renderer/collab/mediaVariants.ts`). A pinned URL is answered with
+  exactly that variant and cached immutably; a video the client has not been
+  told about yet (just uploaded) pins a bare `o` and gets the original,
+  revalidated. Unpinned URLs (agents, print, older clients) behave as above.
 - **Keyed by name, size and mtime**, not by path, so renaming a deck or a
   folder does not throw away an hour of encoding.
 - **Never bigger than the source.** A rendition that came out larger is

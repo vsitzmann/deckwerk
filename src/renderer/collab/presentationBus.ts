@@ -23,7 +23,7 @@ export type PresentationBusMessage =
   /** A surface announcing itself, so the other one answers with what it knows. */
   | { kind: 'hello'; role: PresentationRole }
   /** Audience → speaker: paint immediately instead of waiting on a socket. */
-  | { kind: 'seed'; deck: Deck; themeCss: string }
+  | { kind: 'seed'; deck: Deck; themeCss: string; mediaVariants?: Record<string, string> }
   /** Audience → speaker: where the presentation is and how long it has run. */
   | { kind: 'state'; state: PresentationState }
   /** Speaker → audience: a presenter control. */

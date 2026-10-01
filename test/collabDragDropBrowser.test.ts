@@ -288,6 +288,68 @@ describe.skipIf(!electronBinary)('collab drag-and-drop', () => {
     );
     expect(live.slides[0].elements).toHaveLength(1);
   }, 120_000);
+
+  it('drops a file whose name carries no extension, by its MIME type', async () => {
+    // A drag out of Photos or a browser's image cache hands over a file named
+    // just `image`. BUG (fixed): the drop was ignored without a word.
+    editor = await openEditor();
+    const png = (await readFile(PNG)).toString('base64');
+    await editor.evaluate(`(() => {
+      const transfer = new DataTransfer();
+      transfer.items.add(new File([Uint8Array.from(atob(${JSON.stringify(png)}), (c) => c.charCodeAt(0))], 'image', { type: 'image/png' }));
+      const host = document.getElementById('canvas');
+      const box = host.querySelector('.slide').getBoundingClientRect();
+      host.dispatchEvent(new DragEvent('drop', {
+        bubbles: true, cancelable: true, dataTransfer: transfer,
+        clientX: box.left + box.width / 2, clientY: box.top + box.height / 2,
+      }));
+    })()`);
+    const [image] = await eventually(
+      async () => editor!.evaluate<DroppedElement[]>(`(() => window.store.get().deck.slides[0].elements
+        .filter((el) => el.type === 'image').map((el) => ({ id: el.id, type: el.type, src: el.src, x: el.x, y: el.y, w: el.w, h: el.h })))()`),
+      'an extension-less image drop never became a resolved image',
+      (els) => els.length === 1 && !els[0].src.startsWith('pending:'),
+      30_000,
+    );
+    expect(image.src).toMatch(/^assets\/image\.[0-9a-f]{8}\.png$/);
+    expect(await eventually(async () => editor!.evaluate<boolean>(`(() => {
+      const img = document.querySelector('[data-element-id="${image.id}"] img');
+      return img?.complete === true && img.naturalWidth > 0;
+    })()`), 'the extension-less image did not render', (ok) => ok, 20_000)).toBe(true);
+  }, 120_000);
+
+  it('drops an image dragged out of another deck on the same server', async () => {
+    // Dragging between two DeckWerk tabs carries the other deck's asset URL —
+    // this server's own, private address. BUG (fixed): the server refused to
+    // fetch it and the drop became an "Upload failed" frame.
+    editor = await openEditor();
+    const otherDir = join(workDir, 'decks', 'other');
+    await mkdir(join(otherDir, 'assets'), { recursive: true });
+    await saveDeck(otherDir, emptyDeck('Other'));
+    await writeFile(join(otherDir, 'assets', 'swatch.png'), await readFile(PNG));
+    const url = `http://127.0.0.1:${server!.port}/decks/other/assets/swatch.png`;
+
+    await editor.evaluate(`(() => {
+      const transfer = new DataTransfer();
+      transfer.setData('text/html', '<img src="${url}">');
+      transfer.setData('text/uri-list', '${url}');
+      const host = document.getElementById('canvas');
+      const box = host.querySelector('.slide').getBoundingClientRect();
+      host.dispatchEvent(new DragEvent('drop', {
+        bubbles: true, cancelable: true, dataTransfer: transfer,
+        clientX: box.left + box.width / 2, clientY: box.top + box.height / 2,
+      }));
+    })()`);
+    const [image] = await eventually(
+      async () => editor!.evaluate<DroppedElement[]>(`(() => window.store.get().deck.slides[0].elements
+        .filter((el) => el.type === 'image').map((el) => ({ id: el.id, type: el.type, src: el.src, x: el.x, y: el.y, w: el.w, h: el.h })))()`),
+      'a cross-deck image drag never resolved',
+      (els) => els.length === 1 && !els[0].src.startsWith('pending:'),
+      30_000,
+    );
+    expect(image.src).toMatch(/^assets\/swatch\.[0-9a-f]{8}\.png$/);
+    expect((await readFile(join(workDir, 'decks', DECK_ID, image.src))).equals(await readFile(PNG))).toBe(true);
+  }, 120_000);
 });
 
 describe.skipIf(electronBinary)('collab drag-and-drop (skipped)', () => {

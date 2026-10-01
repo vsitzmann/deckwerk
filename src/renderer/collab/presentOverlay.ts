@@ -14,6 +14,7 @@
  */
 
 import type { Deck } from '@shared/deck.js';
+import { mediaVariantsSnapshot } from './mediaVariants.js';
 
 /** What the editor tab already knows, so the presentation need not re-fetch it. */
 export interface PresentSeed {
@@ -61,7 +62,7 @@ function onMessage(event: MessageEvent): void {
     const seed = seedProvider?.();
     if (seed && overlay?.contentWindow) {
       overlay.contentWindow.postMessage(
-        { type: 'present-seed', deck: seed.deck, themeCss: seed.themeCss },
+        { type: 'present-seed', deck: seed.deck, themeCss: seed.themeCss, mediaVariants: mediaVariantsSnapshot() },
         location.origin,
       );
     }

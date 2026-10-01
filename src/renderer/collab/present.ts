@@ -18,6 +18,7 @@ import { CollabBridge } from './collabBridge.js';
 import { createConnectionNotice } from './connectionNotice.js';
 import { PlayerPaintReadiness } from './playerReadiness.js';
 import { createPresentationBus, type PresentationRole } from './presentationBus.js';
+import { mediaVariantsSnapshot, pinMediaVariant, setMediaVariants } from './mediaVariants.js';
 import { trackVideoLoading } from '../player/videoLoadingProgress.js';
 import { eventOnInteractiveWeb, slideLinkFromEvent } from '../player/links.js';
 import { selectionPreventsAdvance } from '../player/presentationPointer.js';
@@ -175,8 +176,8 @@ const readiness = new PlayerPaintReadiness({
 readiness.connecting();
 
 function resolveSrc(src: string): string {
-  return `/decks/${encodeURIComponent(deckId!)}/`
-    + src.replace(/^\/+/, '').split('/').map(encodeURIComponent).join('/');
+  return pinMediaVariant(src, `/decks/${encodeURIComponent(deckId!)}/`
+    + src.replace(/^\/+/, '').split('/').map(encodeURIComponent).join('/'));
 }
 
 /* --- audience -------------------------------------------------------------- */
@@ -373,6 +374,10 @@ function applyDeck(nextDeck: Deck, nextThemeCss: string | null, source: 'seed' |
     document.documentElement.dataset.presentSource = source;
     if (role === 'audience') mountAudience();
     else mountSpeaker();
+    // Hand the deck to the other surface unasked. Its own hello went out
+    // before this one existed — Speaker View opens the audience window first
+    // — so without this it sat black for the length of its own handshake.
+    bus?.post({ kind: 'seed', deck: nextDeck, themeCss, mediaVariants: mediaVariantsSnapshot() });
     return;
   }
   if (player) {
@@ -389,13 +394,14 @@ bus?.subscribe((message) => {
     // Whichever surface already has the deck seeds the other, so the second
     // window paints from memory instead of waiting out its own handshake.
     if (!deck) return;
-    bus.post({ kind: 'seed', deck, themeCss });
+    bus.post({ kind: 'seed', deck, themeCss, mediaVariants: mediaVariantsSnapshot() });
     // Only the audience owns the cursor, so only it reports where the show is.
     if (role === 'audience') bus.post({ kind: 'state', state: lastState });
     return;
   }
   if (message.kind === 'seed') {
     if (deck) return;
+    setMediaVariants(message.mediaVariants);
     applyDeck(message.deck, message.themeCss, 'seed');
     return;
   }
@@ -455,9 +461,12 @@ bus?.subscribe((message) => {
 if (embedded) {
   window.addEventListener('message', (event: MessageEvent) => {
     if (event.origin !== location.origin) return;
-    const data = event.data as { type?: string; deck?: unknown; themeCss?: string } | null;
+    const data = event.data as {
+      type?: string; deck?: unknown; themeCss?: string; mediaVariants?: Record<string, string>;
+    } | null;
     if (data?.type !== 'present-seed' || !data.deck) return;
     if (deck) return;
+    setMediaVariants(data.mediaVariants);
     applyDeck(data.deck as Deck, data.themeCss ?? null, 'seed');
     retitle();
   });

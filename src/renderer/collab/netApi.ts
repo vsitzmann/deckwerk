@@ -1,5 +1,6 @@
 import type { AssetImportProgress, ImportedAsset, MediaInfo } from '@shared/ipc.js';
 import { clipboardImageName, type ClipboardImageSource } from '@shared/clipboardImages.js';
+import { pinMediaVariant } from './mediaVariants.js';
 
 /**
  * The browser collab client's stand-in for the Electron preload bridge.
@@ -57,11 +58,23 @@ function uploadFile(deck: string, file: File, token?: string): Promise<ImportedA
   });
 }
 
+/** True for a URL naming one of this server's own deck assets. */
+function isOwnDeckAsset(raw: string): boolean {
+  try {
+    const url = new URL(raw, location.href);
+    return url.origin === location.origin && /^\/decks\/.+\/assets\//.test(url.pathname);
+  } catch {
+    return false;
+  }
+}
+
 export function installNetApi(options: NetApiOptions): void {
   const deck = encodeURIComponent(options.deckId);
   const api = {
-    assetUrl: (src: string): string =>
+    assetUrl: (src: string): string => pinMediaVariant(
+      src,
       `/decks/${deck}/${src.replace(/^\/+/, '').split('/').map(encodeURIComponent).join('/')}`,
+    ),
 
     importAssetFiles: async (files: File[], progressToken?: string): Promise<ImportedAsset[]> => {
       const imported: ImportedAsset[] = [];
@@ -88,7 +101,9 @@ export function installNetApi(options: NetApiOptions): void {
         const response = await fetch(`/api/import-url?deck=${deck}`, {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ url: source.url }),
+          // A drag out of another DeckWerk tab points back at this server; it
+          // copies that file from disk rather than fetch its own private URL.
+          body: JSON.stringify({ url: source.url, deckAsset: isOwnDeckAsset(source.url) }),
         });
         if (!response.ok) return null;
         return await response.json() as ImportedAsset;

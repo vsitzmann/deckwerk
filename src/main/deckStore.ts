@@ -6,7 +6,7 @@ import { type Deck, emptyDeck, parseDeck } from '@shared/deck.js';
 import type { ImportedAsset } from '@shared/ipc.js';
 import { classifyMediaName, CONVERTED_IMAGE_EXTS } from '@shared/media.js';
 import { serializeSpeakerNotes, SPEAKER_NOTES_FILE } from '@shared/speakerNotes.js';
-import { isWebSafeCodec, probeMedia, transcodeToH264, videoCodec } from './ffmpeg.js';
+import { convertImageToPng, isWebSafeCodec, probeMedia, transcodeToH264, videoCodec } from './ffmpeg.js';
 import { needsFastStart, writeFastStart } from './mp4FastStart.js';
 import { copyFileStreamed } from './copyFileStreamed.js';
 import { convertHeicToPng } from './heic.js';
@@ -268,7 +268,8 @@ export async function importAsset(
     const converted = `${stem}.${hash}.png`;
     const convertedPath = join(assetsDir, converted);
     onProgress?.(null);
-    if (!(await hasContent(convertedPath))) await produceAtomically(convertedPath, (tmp) => convertHeicToPng(dest, tmp));
+    const convert = ext === '.heic' || ext === '.heif' ? convertHeicToPng : convertImageToPng;
+    if (!(await hasContent(convertedPath))) await produceAtomically(convertedPath, (tmp) => convert(dest, tmp));
     finalName = converted;
   }
 

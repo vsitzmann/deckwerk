@@ -2,13 +2,15 @@ import { renameRetiredFields } from '@shared/fieldAliases.js';
 import { spawn } from 'node:child_process';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { lookup } from 'node:dns/promises';
-import { createReadStream, existsSync } from 'node:fs';
+import { createReadStream, createWriteStream, existsSync, statSync } from 'node:fs';
+import { pipeline } from 'node:stream/promises';
 import { mkdir, mkdtemp, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { createHash, randomUUID } from 'node:crypto';
 import { networkInterfaces, tmpdir } from 'node:os';
 import { basename, dirname, extname, join, normalize, resolve } from 'node:path';
 import { isIP } from 'node:net';
 import { pathToFileURL } from 'node:url';
+import { gzipSync } from 'node:zlib';
 import { WebSocketServer, type WebSocket } from 'ws';
 import {
   createDeck, importAsset, importWebPage, loadDeck, loadTheme, resolveAsset, saveDeck,
@@ -45,6 +47,7 @@ import { deckRevision } from '../main/agentRuntime.js';
 import { applyAgentTransaction, validateDeckIntegrity, type AgentOperation } from '../shared/agent.js';
 import { NativeEditRequestSchema, applyNativeEdits, nativeEditContract } from '../shared/nativeEdits.js';
 import { SlideSchema, type Deck, type Slide, type SlideElement } from '../shared/deck.js';
+import { classifyMediaName } from '../shared/media.js';
 import { deckOutline } from '../shared/deckDigest.js';
 import type { AgentPanelState } from '../shared/ipc.js';
 import type { LocalAgentRegistry } from './localAgents.js';
@@ -87,6 +90,7 @@ const MIME: Record<string, string> = {
   '.png': 'image/png',
   '.jpg': 'image/jpeg',
   '.jpeg': 'image/jpeg',
+  '.jfif': 'image/jpeg',
   '.gif': 'image/gif',
   '.webp': 'image/webp',
   '.avif': 'image/avif',
@@ -277,12 +281,37 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
       if (event.status === 'started') console.log(`  preparing ${name} for streaming…`);
       else if (event.status === 'done') {
         console.log(`  prepared ${name} (${Math.round((event.savedBytes ?? 0) / 1048576)} MB smaller)`);
+        // Tell every deck showing this clip that its rendition now exists, so
+        // the next <video> each client builds for it asks for the small copy.
+        for (const room of rooms.values()) {
+          if (!deckVideoAssets(room.session.dir, room.session.deck).includes(event.source)) continue;
+          broadcast(room, { kind: 'media', variants: deckMediaVariants(room.session.dir, room.session.deck) });
+        }
       } else if (event.status === 'failed') {
         console.warn(`  could not prepare ${name}: ${event.detail ?? ''}`);
       }
       if (typeof options.mediaRenditions === 'object') options.mediaRenditions.onProgress?.(event);
     },
   });
+  /** The variant each oversized clip in a deck is served as right now (see RenditionStore.variant). */
+  function deckMediaVariants(deckDir: string, deck: Deck): Record<string, string> {
+    const variants: Record<string, string> = {};
+    if (!renditions) return variants;
+    for (const slide of deck.slides) {
+      for (const element of slide.elements) {
+        if (element.type !== 'video' || element.src in variants) continue;
+        try {
+          const absolute = resolveAsset(deckDir, element.src);
+          const info = statSync(absolute);
+          const variant = renditions.variant(absolute, info.size, info.mtimeMs);
+          if (variant) variants[element.src] = variant;
+        } catch {
+          // A pending or missing src has no variant to pin.
+        }
+      }
+    }
+    return variants;
+  }
   // Renditions of assets that have since been edited or deleted are dead
   // weight on a server that hosts years of talks.
   if (renditions) {
@@ -972,11 +1001,24 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
       // transcode for a deck nobody has warmed.
       let served = absolute;
       let revalidate = false;
+      let pinned = false;
       if (renditions && isVideoAsset(absolute)) {
         try {
           const info = await stat(absolute);
           const ready = renditions.ready(absolute, info.size, info.mtimeMs);
-          if (ready) {
+          // A pinned URL (`?v=`) always answers with the variant it names, so a
+          // playing <video> never sees its bytes swapped mid-stream. The pin
+          // carries the source's size and mtime, so its answer is immutable.
+          const pin = url.searchParams.get('v');
+          const pinnedFile = pin ? renditions.pinned(absolute, info.size, info.mtimeMs, pin) : null;
+          if (pinnedFile) {
+            served = pinnedFile;
+            // A bare `o` names no particular revision of the file, so it stays
+            // revalidated; a keyed pin names exact bytes.
+            pinned = pin !== 'o';
+            revalidate = pin === 'o';
+            if (pinnedFile === absolute && !ready) void renditions.ensure(absolute).catch(() => null);
+          } else if (ready) {
             served = ready;
             revalidate = true;
           } else if (renditions.pending(absolute, info.size, info.mtimeMs)) {
@@ -992,6 +1034,7 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
       }
       await serveFileWithRanges(request, response, served, undefined, {
         revalidate,
+        immutable: pinned,
         etagSalt: served === absolute ? '' : 'rendition',
       });
       return;
@@ -1523,11 +1566,13 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
     if (path === '/api/upload' && request.method === 'POST') {
       if (!deckParam) return respondJson(response, 400, { error: 'missing deck' });
       const name = url.searchParams.get('name') ?? 'upload';
-      const body = await readBody(request);
       const dir = await mkdtemp(join(tmpdir(), 'collab-upload-'));
       const tmpFile = join(dir, sanitizeFilename(name));
       try {
-        await writeFile(tmpFile, body);
+        // Streamed to disk, never buffered: a screen recording is routinely a
+        // gigabyte, and holding it (twice, through Buffer.concat) in the
+        // server's heap is what pushed it into the GC storms it died in.
+        await pipeline(request, createWriteStream(tmpFile));
         const imported = await importAsset(deckDirOf(deckParam), tmpFile);
         respondJson(response, 200, imported);
       } catch (error) {
@@ -1540,12 +1585,40 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
 
     if (path === '/api/import-url' && request.method === 'POST') {
       if (!deckParam) return respondJson(response, 400, { error: 'missing deck' });
-      const payload = JSON.parse((await readBody(request)).toString('utf8')) as { url?: string; name?: string };
+      const payload = JSON.parse((await readBody(request)).toString('utf8')) as {
+        url?: string; name?: string; deckAsset?: boolean;
+      };
       if (!payload.url) return respondJson(response, 400, { error: 'missing url' });
+      // An image dragged out of another DeckWerk tab is one of this server's own
+      // deck assets. Fetching it back over the network is refused (a tailnet
+      // address is not public) and left an "Upload failed" frame; it is a file
+      // on this disk, so copy it — as long as this user may see that deck.
+      const local = payload.deckAsset
+        ? /^\/decks\/(.+)\/(assets\/.+)$/.exec(decodeURIComponent(new URL(payload.url).pathname))
+        : null;
+      if (local) {
+        if (!(await deckAllowed(identity, local[1]))) return respondJson(response, 403, { error: 'forbidden' });
+        try {
+          const sourceDir = deckDirOf(local[1]);
+          const absolute = resolveAsset(sourceDir, local[2]);
+          if (!absolute.startsWith(join(sourceDir, 'assets') + '/')) throw new Error('outside assets');
+          respondJson(response, 200, await importAsset(deckDirOf(deckParam), absolute));
+        } catch (error) {
+          respondJson(response, 400, { error: String(error instanceof Error ? error.message : error) });
+        }
+        return;
+      }
       const dir = await mkdtemp(join(tmpdir(), 'collab-url-import-'));
       try {
         const downloaded = await downloadPublicAsset(payload.url);
-        const requestedName = payload.name?.trim() || basename(downloaded.url.pathname) || 'download';
+        // Image CDNs (Unsplash, Google's thumbnails, most of them) serve from
+        // paths with no extension; the importer decides by extension, so name
+        // the bytes by what the server said they are.
+        const requestedName = withMediaExtension(
+          payload.name?.trim() || basename(downloaded.url.pathname) || 'download',
+          downloaded.contentType,
+          downloaded.bytes,
+        );
         const tmpFile = join(dir, sanitizeFilename(requestedName));
         await writeFile(tmpFile, downloaded.bytes);
         const imported = await importAsset(deckDirOf(deckParam), tmpFile);
@@ -2688,7 +2761,10 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
     await serveFileWithRanges(request, response, file, [CONTENT_HASHED_NAME, VITE_HASHED_NAME]);
   }
 
-  const wss = new WebSocketServer({ noServer: true });
+  // permessage-deflate: a welcome carries the whole deck, and a talk's deck
+  // is a megabyte or more of JSON. Uncompressed, that one frame was most of
+  // the wait before a presentation could paint its first slide.
+  const wss = new WebSocketServer({ noServer: true, perMessageDeflate: { threshold: 1024 } });
   httpServer.on('upgrade', (request, socket, head) => {
     const url = new URL(request.url ?? '/', 'http://localhost');
     if (url.pathname !== '/ws') {
@@ -2814,6 +2890,7 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
           seq: room.session.seq,
           deck: room.session.deck,
           themeCss: room.session.themeCss,
+          mediaVariants: deckMediaVariants(room.session.dir, room.session.deck),
           peers: [
             ...[...room.peers.values()]
               .filter((p) => p !== peer && p.greeted)
@@ -2988,7 +3065,7 @@ function sanitizeFilename(name: string): string {
   return base || 'upload';
 }
 
-async function downloadPublicAsset(raw: string): Promise<{ bytes: Buffer; url: URL }> {
+async function downloadPublicAsset(raw: string): Promise<{ bytes: Buffer; url: URL; contentType: string }> {
   let current = new URL(raw);
   for (let redirects = 0; redirects <= 5; redirects += 1) {
     await assertPublicHttpUrl(current);
@@ -3004,9 +3081,45 @@ async function downloadPublicAsset(raw: string): Promise<{ bytes: Buffer; url: U
     if (length > 100 * 1024 * 1024) throw new Error('asset is larger than 100 MB');
     const bytes = Buffer.from(await response.arrayBuffer());
     if (bytes.byteLength > 100 * 1024 * 1024) throw new Error('asset is larger than 100 MB');
-    return { bytes, url: current };
+    return { bytes, url: current, contentType: response.headers.get('content-type') ?? '' };
   }
   throw new Error('asset has too many redirects');
+}
+
+/** Extensions for the media types a URL import may name only by MIME type. */
+const MEDIA_EXTENSION_BY_TYPE: Record<string, string> = {
+  'image/jpeg': '.jpg', 'image/png': '.png', 'image/gif': '.gif', 'image/webp': '.webp',
+  'image/avif': '.avif', 'image/svg+xml': '.svg', 'image/heic': '.heic', 'image/heif': '.heif',
+  'video/mp4': '.mp4', 'video/quicktime': '.mov', 'video/webm': '.webm',
+};
+
+/**
+ * `name`, given the extension its bytes call for when it has no media
+ * extension of its own. The Content-Type decides; bytes are sniffed only when
+ * the server sent something generic (octet-stream is common on CDNs).
+ */
+export function withMediaExtension(name: string, contentType: string, bytes: Uint8Array): string {
+  if (classifyMediaName(name)) return name;
+  const type = contentType.split(';')[0].trim().toLowerCase();
+  const ext = MEDIA_EXTENSION_BY_TYPE[type] ?? sniffMediaExtension(bytes);
+  return ext ? `${name}${ext}` : name;
+}
+
+function sniffMediaExtension(bytes: Uint8Array): string | null {
+  const ascii = (from: number, to: number) => String.fromCharCode(...bytes.subarray(from, to));
+  if (bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return '.jpg';
+  if (ascii(1, 4) === 'PNG') return '.png';
+  if (ascii(0, 4) === 'GIF8') return '.gif';
+  if (ascii(0, 4) === 'RIFF' && ascii(8, 12) === 'WEBP') return '.webp';
+  if (ascii(4, 8) === 'ftyp') {
+    const brand = ascii(8, 12);
+    if (brand === 'avif') return '.avif';
+    if (brand === 'heic' || brand === 'heix' || brand === 'mif1') return '.heic';
+    if (brand === 'qt  ') return '.mov';
+    return '.mp4';
+  }
+  if (/^\s*(?:<\?xml[^>]*>\s*)?<svg[\s>]/i.test(ascii(0, Math.min(bytes.length, 256)))) return '.svg';
+  return null;
 }
 
 async function assertPublicHttpUrl(url: URL): Promise<void> {
@@ -3742,6 +3855,36 @@ interface ServeVariant {
   revalidate?: boolean;
   /** Distinguishes the ETag of one variant of a URL from another's. */
   etagSalt?: string;
+  /** The URL names these exact bytes (a pinned variant), so cache them for good. */
+  immutable?: boolean;
+}
+
+/** Text the client bundle and decks are made of; media is already compressed. */
+const COMPRESSIBLE_TYPES = /^(?:text\/|application\/json|image\/svg\+xml)/;
+const GZIP_CACHE_LIMIT = 64 * 1024 * 1024;
+const gzipCache = new Map<string, Buffer>();
+let gzipCacheBytes = 0;
+
+/**
+ * The gzip of a static text file, compressed once per revision. The bundle a
+ * presentation needs before it can paint is ~0.5 MB of JavaScript and CSS,
+ * which gzip takes to a third; over a tailnet link that was a visible part
+ * of the wait for the first slide.
+ */
+async function gzippedFile(absolute: string, size: number, mtimeMs: number): Promise<Buffer | null> {
+  if (size < 1024 || size > 16 * 1024 * 1024) return null;
+  const key = `${absolute}\0${size}\0${Math.round(mtimeMs)}`;
+  const cached = gzipCache.get(key);
+  if (cached) return cached;
+  const gzipped = gzipSync(await readFile(absolute));
+  while (gzipCacheBytes + gzipped.length > GZIP_CACHE_LIMIT && gzipCache.size > 0) {
+    const [oldest, bytes] = gzipCache.entries().next().value!;
+    gzipCache.delete(oldest);
+    gzipCacheBytes -= bytes.length;
+  }
+  gzipCache.set(key, gzipped);
+  gzipCacheBytes += gzipped.length;
+  return gzipped;
 }
 
 async function serveFileWithRanges(
@@ -3774,10 +3917,12 @@ async function serveFileWithRanges(
   // anything else the validator makes revalidation a 304, not a re-download.
   const etag = `"${variant.etagSalt ? `${variant.etagSalt}-` : ''}${info.size}-${Math.round(info.mtimeMs)}"`;
   const name = basename(absolute);
-  const cacheControl = !variant.revalidate && hashedNames.some((pattern) => pattern.test(name))
+  const cacheControl = variant.immutable
+    || (!variant.revalidate && hashedNames.some((pattern) => pattern.test(name)))
     ? 'public, max-age=31536000, immutable'
     : 'public, no-cache';
-  if (request.headers['if-none-match'] === etag) {
+  const held = request.headers['if-none-match'];
+  if (held === etag || held === `${etag.slice(0, -1)}-gz"`) {
     response.writeHead(304, { etag, 'cache-control': cacheControl });
     response.end();
     return;
@@ -3790,6 +3935,21 @@ async function serveFileWithRanges(
   };
 
   if (!range) {
+    const gzipped = COMPRESSIBLE_TYPES.test(type) && /\bgzip\b/.test(String(request.headers['accept-encoding'] ?? ''))
+      ? await gzippedFile(absolute, info.size, info.mtimeMs)
+      : null;
+    if (gzipped) {
+      response.writeHead(200, {
+        ...common,
+        // A different body is a different entity: its validator must differ.
+        etag: `${etag.slice(0, -1)}-gz"`,
+        'content-encoding': 'gzip',
+        vary: 'accept-encoding',
+        'content-length': gzipped.length,
+      });
+      response.end(gzipped);
+      return;
+    }
     response.writeHead(200, { ...common, 'content-length': info.size });
     createReadStream(absolute).pipe(response);
     return;

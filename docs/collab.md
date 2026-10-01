@@ -305,8 +305,10 @@ the participant id.
   `player.css`, `theme.css` and only the assets the deck references. Open the
   folder's `index.html` in any browser, with or without DeckWerk installed.
   The live session is flushed first, so the bundle is what everyone currently
-  sees. A server started without the built export player
-  (`npm run build:export`) says so instead of downloading a broken archive.
+  sees. The server's own build (`npm run build:collab`, run by `npm run
+  collab` before it starts) builds the export player too; a server started
+  some other way without it (`npm run build:export`) says so instead of
+  downloading a broken archive.
 - **Save As… → Lossy export → PDF…** — opens a print tab (`print.html?deck=…&mode=…`) that
   builds the same `.pdf-page` document the desktop exporter renders — one page
   per slide, or per build stage when "Include each stage of builds" is ticked —

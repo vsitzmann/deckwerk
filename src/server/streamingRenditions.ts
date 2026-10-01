@@ -115,12 +115,15 @@ export function defaultRenditionCacheDir(): string {
  * three is not a thing that happens.
  */
 export function renditionPath(absolute: string, size: number, mtimeMs: number, cacheDir: string): string {
-  const key = createHash('sha256')
+  const stem = basename(absolute, extname(absolute)).slice(0, 40).replace(/[^\w.-]+/g, '_');
+  return join(cacheDir, `${stem}.${sourceKey(absolute, size, mtimeMs)}.mp4`);
+}
+
+function sourceKey(absolute: string, size: number, mtimeMs: number): string {
+  return createHash('sha256')
     .update(`${basename(absolute)}\0${size}\0${Math.round(mtimeMs)}`)
     .digest('hex')
     .slice(0, 24);
-  const stem = basename(absolute, extname(absolute)).slice(0, 40).replace(/[^\w.-]+/g, '_');
-  return join(cacheDir, `${stem}.${key}.mp4`);
 }
 
 export function isVideoAsset(absolute: string): boolean {
@@ -167,6 +170,40 @@ export class RenditionStore {
     if (!isVideoAsset(absolute) || size < MIN_SOURCE_BYTES) return false;
     if (this.passed.has(absolute)) return false;
     return !existsSync(renditionPath(absolute, size, mtimeMs, this.cacheDir));
+  }
+
+  /**
+   * Which bytes this file's URL answers with right now: `o<key>` for the
+   * original, `r<key>` for its rendition, null for a file the store never
+   * replaces (whose URL is stable anyway).
+   *
+   * A <video> reads its source in many range requests and never revalidates
+   * between them, so the bytes behind one URL must not change under it. When
+   * a rendition landed mid-show, a looping clip asked for bytes=0- again, got
+   * the rendition's bytes laid out against the original's index, and Chromium
+   * failed it with PIPELINE_ERROR_DECODE. Clients pin a variant into the URL
+   * (`?v=`) and the server answers that URL with exactly that variant.
+   */
+  variant(absolute: string, size: number, mtimeMs: number): string | null {
+    if (!isVideoAsset(absolute) || size < MIN_SOURCE_BYTES) return null;
+    const key = sourceKey(absolute, size, mtimeMs);
+    return `${this.ready(absolute, size, mtimeMs) ? 'r' : 'o'}${key}`;
+  }
+
+  /**
+   * The file a pinned `?v=` URL names, or null when the pin no longer
+   * describes this source (it was edited) and the request should be served
+   * as if unpinned. A bare `o` is a client that has not been told this clip's
+   * variant yet (it was just uploaded): it gets the original, never a
+   * rendition that might land between two of its range requests.
+   */
+  pinned(absolute: string, size: number, mtimeMs: number, variant: string): string | null {
+    if (variant === 'o') return absolute;
+    if (!isVideoAsset(absolute) || size < MIN_SOURCE_BYTES) return null;
+    if (variant.slice(1) !== sourceKey(absolute, size, mtimeMs)) return null;
+    if (variant[0] === 'o') return absolute;
+    if (variant[0] === 'r') return this.ready(absolute, size, mtimeMs);
+    return null;
   }
 
   /**

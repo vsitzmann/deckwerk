@@ -4,7 +4,7 @@ import '../editor/editor.css';
 import './collab.css';
 import { emptyDeck } from '@shared/deck.js';
 import { setIdSuffix } from '@shared/geometry.js';
-import { EditorCanvas } from '../editor/canvas.js';
+import { CANVAS_NOTICE_EVENT, EditorCanvas } from '../editor/canvas.js';
 import { SpeakerNotesDrawer } from '../editor/speakerNotesDrawer.js';
 import { createDeckWerkButton } from '../editor/aboutDialog.js';
 import { setCommentAuthor } from '../editor/comments.js';
@@ -215,6 +215,9 @@ const store = new EditorStore(emptyDeck('Connecting…'));
 setRenderInvariantChecks(import.meta.env.DEV);
 setSelectionInvariantChecks(import.meta.env.DEV);
 const canvas = new EditorCanvas(el('canvas'), store);
+el('canvas').addEventListener(CANVAS_NOTICE_EVENT, (event) => {
+  setStatusMessage((event as CustomEvent<string>).detail);
+});
 // Remote sessions fetch video bytes over the wire; until a frame decodes each
 // video is a black box, so overlay loading progress on the editing canvas.
 trackVideoLoading(el('canvas'));

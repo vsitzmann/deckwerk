@@ -1,4 +1,5 @@
 import { renameRetiredFields } from '@shared/fieldAliases.js';
+import { setMediaVariants } from './mediaVariants.js';
 import type { AgentOperation } from '@shared/agent.js';
 import { applyOpsLenient } from '@shared/collabApply.js';
 import {
@@ -265,6 +266,7 @@ export class CollabBridge {
     const message = ServerMessageSchema.parse(renameRetiredFields(raw));
     switch (message.kind) {
       case 'welcome': {
+        setMediaVariants(message.mediaVariants, true);
         this.clientId = message.clientId;
         this.seq = message.seq;
         this.shadow = message.deck;
@@ -355,6 +357,9 @@ export class CollabBridge {
         return;
       case 'theme':
         this.hooks.onThemeCss(message.css);
+        return;
+      case 'media':
+        setMediaVariants(message.variants);
         return;
       case 'ended':
         // Deliberate teardown, not a network blip: don't reconnect.

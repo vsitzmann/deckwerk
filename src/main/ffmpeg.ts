@@ -311,6 +311,13 @@ export function run(
   });
 }
 
+/** A still Chromium cannot decode (TIFF, BMP), re-encoded as PNG. */
+export async function convertImageToPng(input: string, output: string): Promise<void> {
+  await run(getFfmpegPath(), [
+    '-hide_banner', '-loglevel', 'error', '-y', '-i', input, '-frames:v', '1', '-f', 'image2', '-c:v', 'png', output,
+  ]);
+}
+
 /** Pixel dimensions and pixel format of a still image, or nulls if unknown. */
 export async function probeImage(
   absolutePath: string,

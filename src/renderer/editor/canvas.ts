@@ -26,7 +26,7 @@ import {
   sanitizePastedTextHtml, stripLayoutDeclarations,
 } from '@shared/htmlSafety.js';
 import { isBaselineFormat, type BaselineFormat, type InlineTextFormat } from './textFormatting.js';
-import { classifyMediaName, isPendingSrc, makePendingSrc, pendingToken } from '@shared/media.js';
+import { classifyMediaName, isPendingSrc, makePendingSrc, mediaFileName, pendingToken } from '@shared/media.js';
 import {
   normalizeParagraphHtml,
   stripStructuralWhitespace,
@@ -594,6 +594,9 @@ type DragMode =
       origins: Map<string, { start: XY; end: XY }>;
     }
   | { kind: 'curve-control'; elementId: string };
+
+/** Fired on the canvas host with a message (`detail`) for the shell's status bar. */
+export const CANVAS_NOTICE_EVENT = 'deckwerk-canvas-notice';
 
 export class EditorCanvas {
   private store: EditorStore;
@@ -6174,14 +6177,36 @@ export class EditorCanvas {
         y: (e.clientY - r.top) / this.scale,
       };
 
-      const files = [...(e.dataTransfer?.files ?? [])]
-        .map((file) => ({ file, kind: classifyMediaName(file.name) }))
-        .filter((f): f is { file: File; kind: 'image' | 'video' } => f.kind !== null);
+      // A file is media by its extension, or failing that by its MIME type:
+      // Photos, a browser's "save image" and scanners hand over `image`,
+      // `photo.jfif` or `scan.tiff`, and those used to vanish without a word.
+      const dropped = [...(e.dataTransfer?.files ?? [])];
+      const files = dropped.flatMap((original) => {
+        const name = mediaFileName(original.name, original.type);
+        const kind = name ? classifyMediaName(name) : null;
+        if (!name || (kind !== 'image' && kind !== 'video')) return [];
+        const file = name === original.name
+          ? original
+          : new File([original], name, { type: original.type, lastModified: original.lastModified });
+        return [{ file, kind }];
+      });
+      const refused = dropped.filter((file) => !mediaFileName(file.name, file.type)).map((file) => file.name);
+      // Read while the event is still dispatching: the drag's data is gone after.
+      const offeredImage = /<img\b/i.test(e.dataTransfer?.getData('text/html') ?? '')
+        || (e.dataTransfer?.types ?? []).includes('text/uri-list');
       // A drag out of a web page carries no file at all -- only markup and the
       // image's URL -- so it takes the fetch-the-bytes path instead.
       if (files.length === 0) {
-        await this.dropWebImage(e.dataTransfer, dropPoint);
+        const fetched = await this.dropWebImage(e.dataTransfer, dropPoint);
+        if (!fetched && (refused.length > 0 || offeredImage)) {
+          this.notice(refused.length > 0
+            ? `Can't add ${refused.join(', ')}: only images and videos can go on a slide.`
+            : "That image can't be copied out of the page it came from. Save it, then drop the file.");
+        }
         return;
+      }
+      if (refused.length > 0) {
+        this.notice(`Skipped ${refused.join(', ')}: only images and videos can go on a slide.`);
       }
 
       // Natural size and a preview frame are read from the local bytes before
@@ -6269,6 +6294,11 @@ export class EditorCanvas {
     });
   }
 
+  /** Tell the shell something the user needs to know; it owns the status bar. */
+  private notice(message: string): void {
+    this.host.dispatchEvent(new CustomEvent(CANVAS_NOTICE_EVENT, { detail: message, bubbles: true }));
+  }
+
   /**
    * Drop an image dragged out of a web page.
    *
@@ -6281,16 +6311,16 @@ export class EditorCanvas {
   private async dropWebImage(
     data: DataTransfer | null,
     dropPoint: { x: number; y: number },
-  ): Promise<void> {
+  ): Promise<boolean> {
     // `getData` only answers during the event's own dispatch, so read the
     // whole drag before the first await.
-    if (!data) return;
+    if (!data) return false;
     const source = dragImageSource(
       data.getData('text/html'),
       data.getData('text/uri-list'),
       data.getData('text/plain'),
     );
-    if (!source || !window.api.importImageUrl) return;
+    if (!source || !window.api.importImageUrl) return false;
 
     const href = source.kind === 'url'
       ? source.url
@@ -6339,6 +6369,7 @@ export class EditorCanvas {
       markPendingFailed(id);
       applyPendingHud(this.slideLayer);
     }
+    return true;
   }
 
   /** Upload/import one dropped file and resolve its pending placeholder. */
