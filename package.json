@@ -80,5 +80,10 @@
     "vite": "^5.4.8",
     "vite-node": "^2.1.1",
     "vitest": "^2.1.1"
+  },
+  "overrides": {
+    "extract-zip": {
+      "yauzl": "^3.4.0"
+    }
   }
 }
