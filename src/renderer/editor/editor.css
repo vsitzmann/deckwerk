@@ -3355,7 +3355,7 @@ button.morph-object-hit.selected-source:hover:not(:disabled) {
    a place you browse, so it takes the window — a frame of overlay around a
    header, a scrolling list of rows in columns, and a footer of actions. */
 .workflow-dialog.deck-picker {
-  --deck-picker-columns: minmax(0, 1fr) 130px 110px 90px 190px 110px;
+  --deck-picker-columns: minmax(0, 1fr) 130px 110px 110px 90px 190px 110px;
   --deck-picker-gutter: 18px;
   width: calc(100vw - 48px);
   height: calc(100vh - 48px);

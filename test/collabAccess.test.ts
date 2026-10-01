@@ -485,7 +485,7 @@ describe('collab server without --access (unchanged behavior)', () => {
     const decks = await (await fetch(`http://127.0.0.1:${server.port}/api/decks`, {
       headers: { 'tailscale-user-login': 'anyone@example.com' },
     })).json() as any[];
-    expect(decks).toEqual([{ id: 'open', title: 'Open deck', slides: 1, editedAt: expect.any(String), editors: 0, folder: '' }]);
+    expect(decks).toEqual([{ id: 'open', title: 'Open deck', slides: 1, editedAt: expect.any(String), createdAt: expect.any(String), editors: 0, folder: '' }]);
     expect((await fetch(`http://127.0.0.1:${server.port}/api/deck?deck=open`)).status).toBe(200);
     expect((await fetch(`http://127.0.0.1:${server.port}/api/access?deck=open`)).status).toBe(404);
   });

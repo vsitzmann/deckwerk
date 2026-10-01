@@ -23,6 +23,8 @@ interface DeckEntry {
   slides: number;
   /** ISO time of the last saved edit; null when the server cannot tell. */
   editedAt: string | null;
+  /** ISO time the deck was created; null when the server cannot tell. */
+  createdAt?: string | null;
   /** People editing it right now. */
   editors: number;
   folder: string;
@@ -405,6 +407,7 @@ export function showDeckPicker(opts: {
       `${entry.decks} presentation${entry.decks === 1 ? '' : 's'}`,
       '',
       '',
+      '',
       entry.owner ?? '',
       '',
     ]);
@@ -448,13 +451,15 @@ export function showDeckPicker(opts: {
       : deck.visibility ? (deck.visibility === 'public' ? 'public' : 'private') : '';
     const row = pickerRow('button', deck.title, [
       `${deck.slides} slide${deck.slides === 1 ? '' : 's'}`,
+      deck.createdAt ? editedAgo(deck.createdAt) : '',
       deck.editedAt ? editedAgo(deck.editedAt) : '',
       deck.editors > 0 ? `${deck.editors} editing` : '',
       opts.access && deck.owner && deck.owner !== opts.access.user ? deck.owner : '',
       access,
     ]);
-    if (deck.editedAt) row.children[2]?.setAttribute('title', new Date(deck.editedAt).toLocaleString());
-    if (deck.editors > 0) row.children[3]?.classList.add('deck-picker-live');
+    if (deck.createdAt) row.children[2]?.setAttribute('title', new Date(deck.createdAt).toLocaleString());
+    if (deck.editedAt) row.children[3]?.setAttribute('title', new Date(deck.editedAt).toLocaleString());
+    if (deck.editors > 0) row.children[4]?.classList.add('deck-picker-live');
     if (deck.id === current) row.classList.add('active');
     row.addEventListener('click', () => {
       if (deck.id === current) overlay.remove();
@@ -638,7 +643,7 @@ export function showDeckPicker(opts: {
   head.append(title, trail);
   const columns = document.createElement('div');
   columns.className = 'deck-picker-columns';
-  columns.append(rowGroup(pickerRow('div', 'Name', ['Size', 'Last edit', 'Editing', 'Owner', 'Access']), []));
+  columns.append(rowGroup(pickerRow('div', 'Name', ['Size', 'Created', 'Last edit', 'Editing', 'Owner', 'Access']), []));
   const foot = document.createElement('div');
   foot.className = 'deck-picker-foot';
   foot.append(progress, actions);

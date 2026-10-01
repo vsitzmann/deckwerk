@@ -400,6 +400,8 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
     slides: number;
     /** When deck.json was last saved, which only an edit does; ISO time. */
     editedAt: string | null;
+    /** When the deck folder was created (its birth time); ISO time. */
+    createdAt: string | null;
     /** People (not agents, not spectators) connected to it right now. */
     editors: number;
     /** Containing folder, "" at the root. Always present. */
@@ -449,12 +451,20 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
         title?: string; slides?: unknown[];
       };
       const saved = await stat(join(dir, 'deck.json')).catch(() => null);
+      // deck.json is replaced on every save, so its own birth time is the last
+      // save; the folder's is when the deck was made. Without birth times,
+      // the earliest time we have is the best guess.
+      const folder = await stat(dir).catch(() => null);
+      const createdMs = folder?.birthtimeMs
+        ? folder.birthtimeMs
+        : Math.min(folder?.mtimeMs ?? Infinity, saved?.mtimeMs ?? Infinity);
       const name = id.slice(id.lastIndexOf('/') + 1);
       listed = {
         id,
         title: raw.title ?? name,
         slides: Array.isArray(raw.slides) ? raw.slides.length : 0,
         editedAt: saved ? saved.mtime.toISOString() : null,
+        createdAt: Number.isFinite(createdMs) ? new Date(createdMs).toISOString() : null,
         editors: editorsIn(rooms.get(id)),
         folder: id.includes('/') ? id.slice(0, id.lastIndexOf('/')) : '',
       };
