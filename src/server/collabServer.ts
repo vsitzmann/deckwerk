@@ -24,7 +24,13 @@ import {
   pruneRenditions,
   type RenditionOptions,
 } from './streamingRenditions.js';
-import { ClientMessageSchema, COLLAB_PROTOCOL_VERSION, type PresenceState, type ServerMessage } from '../shared/collab.js';
+import {
+  ClientMessageSchema,
+  COLLAB_CLOSE,
+  COLLAB_PROTOCOL_VERSION,
+  type PresenceState,
+  type ServerMessage,
+} from '../shared/collab.js';
 import { CollabSession } from './collabSession.js';
 import { readZip, writeZip, type ZipEntry, type ZipFile } from './zip.js';
 import {
@@ -138,6 +144,12 @@ interface Room {
    * person. Without access control there is no identity to pin it to.
    */
   participantLogins: Map<string, string>;
+  /**
+   * Set once a live rename has begun. From then on nothing a peer sends is
+   * applied: the session is being flushed and closed, and its folder is about
+   * to stop existing under this id.
+   */
+  relocating: boolean;
 }
 
 interface HttpHtmlDraft {
@@ -329,6 +341,20 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
   const userDirectory = accessControl ? new UserDirectory(join(resolve(options.rootDir), 'users.json')) : null;
   const rooms = new Map<string, Room>();
   const roomsOpening = new Map<string, Promise<Room>>();
+  /**
+   * Renames in progress, by the id being renamed away from. Anything that
+   * would open that id — a socket joining, an HTTP route reaching for the
+   * room — waits for the rename to land first, so it never opens a session
+   * on a folder that is about to move out from under it.
+   */
+  const relocations = new Map<string, Promise<void>>();
+  /**
+   * Where renamed decks went, by their old id. A client that was offline
+   * while its deck was renamed reconnects to the old id; it is sent on to the
+   * new one rather than told the deck is gone. Only consulted while nothing
+   * exists at the old id, and forgotten with the process.
+   */
+  const movedDecks = new Map<string, { id: string; title: string }>();
   const htmlDrafts = new Map<string, HttpHtmlDraft>();
   const latestHtmlDrafts = new Map<string, string>();
   const htmlIdempotency = new Map<string, { revision: string; slideIds: string[]; label: string }>();
@@ -393,6 +419,14 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
   }
 
   const isDeckDir = (dir: string): boolean => existsSync(join(dir, 'deck.json'));
+  /** Whether a deck is at this id; an invalid id holds none. */
+  const deckFolderExists = (deckId: string): boolean => {
+    try {
+      return isDeckDir(deckDirOf(deckId));
+    } catch {
+      return false;
+    }
+  };
 
   interface DeckListEntry {
     id: string;
@@ -568,32 +602,96 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
    * Put a deck's folder at another id, or hold still and say why not.
    *
    * The deck id is the room key and the session's directory, so moving and
-   * renaming are the same act under the same rule: it is only safe while
-   * nobody is in the room. Anyone connected keeps the old path open in their
-   * editor, so ask for the room to be empty instead of renaming the ground
-   * out from under them. `toId === fromId` still drains the room — the caller
-   * is about to rewrite deck.json.
+   * renaming are the same act on disk. A move waits for the room to be empty:
+   * it is filed away from the picker, by someone who does not have it open.
+   * A rename is done from inside the deck (the toolbar's name field), so with
+   * `live` it goes ahead with people in the room:
+   *
+   *   1. the room stops applying anything peers send (`relocating`);
+   *   2. the session is closed, which writes every edit it accepted;
+   *   3. the folder is renamed and, for a rename, the title rewritten;
+   *   4. every peer is told where the deck went (`deckMoved`) and its socket
+   *      closed — clients rejoin under the new id from there.
+   *
+   * Edits a peer sent after step 1 are dropped; its client counts them when
+   * the `deckMoved` arrives. `toId === fromId` still drains the room — the
+   * caller is rewriting deck.json.
    */
   async function relocateDeck(
     fromId: string,
     toId: string,
     verb: 'moving' | 'renaming',
+    options: { title?: string; live?: boolean } = {},
   ): Promise<{ status: number; error: string } | null> {
-    const room = rooms.get(fromId);
-    if (room && room.peers.size > 0) {
-      return {
-        status: 409,
-        error: `somebody has this presentation open — close it everywhere before ${verb} it`,
-      };
+    if (relocations.has(fromId)) {
+      return { status: 409, error: `this presentation is already being ${verb === 'moving' ? 'moved' : 'renamed'}` };
     }
-    if (room) {
-      await room.session.flush();
-      await room.session.close();
-      rooms.delete(fromId);
+    const occupied = (): boolean => (rooms.get(fromId)?.peers.size ?? 0) > 0;
+    const refusal = {
+      status: 409,
+      error: `somebody has this presentation open — close it everywhere before ${verb} it`,
+    };
+    if (!options.live && occupied()) return refusal;
+    // Registered before the first await, so a socket or route arriving from
+    // here on waits for the folder to land instead of opening the old one.
+    let settle!: () => void;
+    relocations.set(fromId, new Promise<void>((resolvePromise) => { settle = resolvePromise; }));
+    try {
+      await roomsOpening.get(fromId)?.catch(() => undefined);
+      if (!options.live && occupied()) return refusal;
+      const room = rooms.get(fromId);
+      if (room) {
+        room.relocating = true;
+        await room.session.close();
+        rooms.delete(fromId);
+      }
+      forgetDeckState(fromId);
+      // Whatever an earlier deck at the new id left behind is not this one's.
+      if (toId !== fromId) forgetDeckState(toId);
+      const fromDir = deckDirOf(fromId);
+      const toDir = deckDirOf(toId);
+      // The caller checked nothing is at the new id. A room still cached
+      // under it is a deck whose folder was removed outside the server; its
+      // in-memory copy must not be what this deck opens as.
+      const stale = toId !== fromId ? rooms.get(toId) : undefined;
+      if (stale) {
+        stale.relocating = true;
+        stale.session.discard();
+        rooms.delete(toId);
+        for (const peer of stale.peers.values()) peer.socket.close(COLLAB_CLOSE.noSuchDeck, 'This presentation no longer exists here.');
+      }
+      let title: string;
+      try {
+        if (toId !== fromId) await rename(fromDir, toDir);
+        const deck = await loadDeck(toDir);
+        title = options.title ?? deck.title;
+        if (options.title !== undefined) await saveDeck(toDir, { ...deck, title: options.title });
+      } catch (error) {
+        // The session is already closed. Send its peers through an ordinary
+        // reconnect, which opens whatever the disk now holds.
+        for (const peer of room?.peers.values() ?? []) peer.socket.close(1011, `${verb} failed`);
+        throw error;
+      }
+      if (toId !== fromId) {
+        localAgents?.relocate(fromDir, toDir, `The presentation was renamed to “${title}”.`);
+        // Forwarding addresses stay one hop: whatever pointed at the old id
+        // now points at the new one.
+        for (const [oldId, target] of movedDecks) {
+          if (target.id === fromId) movedDecks.set(oldId, { id: toId, title });
+        }
+        movedDecks.set(fromId, { id: toId, title });
+        movedDecks.delete(toId);
+      }
+      for (const peer of room?.peers.values() ?? []) {
+        // Greeted or not: one still mid-hello must not reconnect to the old id.
+        send(peer, { kind: 'deckMoved', deckId: toId, title });
+        peer.socket.close(COLLAB_CLOSE.moved, 'presentation renamed');
+      }
+      return null;
+    } finally {
+      relocations.delete(fromId);
+      settle();
     }
-    forgetDeckState(fromId);
-    if (toId !== fromId) await rename(deckDirOf(fromId), deckDirOf(toId));
-    return null;
   }
 
   /** Whether `folderPath` exists and this person is allowed to see it. */
@@ -633,6 +731,10 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
   }
 
   async function getRoom(deckId: string): Promise<Room> {
+    // Mid-rename, the old id's folder is about to move: opening a session on
+    // it now would leave one writing into a path that no longer holds the deck.
+    const relocating = relocations.get(deckId);
+    if (relocating) await relocating;
     const existing = rooms.get(deckId);
     if (existing) return existing;
     // A page opens its WebSocket and its agent-state stream at the same
@@ -650,7 +752,12 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
   async function openRoom(deckId: string): Promise<Room> {
     const session = await CollabSession.open(deckDirOf(deckId));
     const room: Room = {
-      session, peers: new Map(), guestCounter: 0, agentPresence: null, participantLogins: new Map(),
+      session,
+      peers: new Map(),
+      guestCounter: 0,
+      agentPresence: null,
+      participantLogins: new Map(),
+      relocating: false,
     };
     session.watch({
       onExternalDeck: (deck, seq) => broadcast(room, {
@@ -988,6 +1095,16 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
     // marker is what separates it from the file being served.
     const assetMatch = /^\/decks\/(.+)\/(assets\/.+)$/.exec(path);
     if (assetMatch) {
+      // A view still open on a renamed deck (a Speaker View window, a tab
+      // that has not followed yet) asks for media under the old id. Send it
+      // on, so a clip that loads late in a talk still plays.
+      const forward = movedDecks.get(assetMatch[1]);
+      if (forward && !deckFolderExists(assetMatch[1]) && await deckAllowed(identity, forward.id)) {
+        const encoded = (value: string): string => value.split('/').map(encodeURIComponent).join('/');
+        response.writeHead(307, { location: `/decks/${encoded(forward.id)}/${encoded(assetMatch[2])}${url.search}` });
+        response.end();
+        return;
+      }
       if (!(await deckAllowed(identity, assetMatch[1]))) {
         response.writeHead(403, { 'content-type': 'text/plain' });
         response.end('forbidden');
@@ -1460,11 +1577,26 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
       if (id !== deckParam && existsSync(to)) {
         return respondJson(response, 409, { error: `"${id}" already exists` });
       }
-      // Even a title-only change rewrites deck.json underneath a live
-      // session, so it waits for the room to empty just as a move does.
-      const busy = await relocateDeck(deckParam, id, 'renaming');
+      // The folder keeps its name, so only the title can change (an imported
+      // deck can carry one its folder does not). With the deck open that is
+      // an ordinary edit, broadcast like any other, not a reason to send
+      // everybody away.
+      const live = rooms.get(deckParam);
+      if (id === deckParam && live && live.peers.size > 0 && !live.relocating) {
+        if (live.session.deck.title !== name) {
+          const ops: AgentOperation[] = [{ op: 'updateDeck', title: name }];
+          const applied = live.session.applyOps(ops);
+          broadcast(live, {
+            kind: 'txn', seq: applied.seq, txnId: `rename-${randomUUID()}`,
+            byClientId: '', label: `Rename to “${name}”`, ops,
+          });
+        }
+        respondJson(response, 200, { id, title: name });
+        return;
+      }
+      // Renaming the folder is renaming the room: done live, peers follow.
+      const busy = await relocateDeck(deckParam, id, 'renaming', { title: name, live: true });
       if (busy) return respondJson(response, busy.status, { error: busy.error });
-      await saveDeck(to, { ...await loadDeck(to), title: name });
       respondJson(response, 200, { id, title: name });
       return;
     }
@@ -2815,6 +2947,28 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
         canEdit = role !== 'view';
         if (userDirectory) void userDirectory.note(identity);
       }
+      // A rename of this very deck may be landing right now; let it, then
+      // look at what is on disk. A missing deck is answered here rather than
+      // by getRoom's failure: a client that knew the old id is sent on to
+      // where the deck went, or told plainly that there is nothing there.
+      await relocations.get(deckId);
+      let deckDir: string | null = null;
+      try {
+        deckDir = deckDirOf(deckId);
+      } catch {
+        // An invalid id; getRoom below refuses it with the reason.
+      }
+      if (deckDir && !isDeckDir(deckDir)) {
+        socket.resume();
+        const moved = movedDecks.get(deckId);
+        if (moved && deckFolderExists(moved.id) && await deckAllowed(identity, moved.id)) {
+          socket.send(JSON.stringify({ kind: 'deckMoved', deckId: moved.id, title: moved.title } satisfies ServerMessage));
+          socket.close(COLLAB_CLOSE.moved, 'presentation renamed');
+        } else {
+          socket.close(COLLAB_CLOSE.noSuchDeck, 'This presentation no longer exists here. It may have been renamed or moved.');
+        }
+        return;
+      }
       let room: Room;
       try {
         room = await getRoom(deckId);
@@ -2855,6 +3009,11 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
       } catch {
         return; // Trusted network; a malformed frame is a bug, not an attack. Drop it.
       }
+
+      // Mid-rename: the session is closing and its folder moving. Anything
+      // applied now would be written nowhere; the peer is about to be told
+      // where the deck went.
+      if (room.relocating) return;
 
       if (message.kind === 'hello') {
         if (message.agentFor && localAgents) {

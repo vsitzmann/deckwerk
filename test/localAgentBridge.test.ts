@@ -14,7 +14,7 @@ import {
 } from '../src/shared/collab.js';
 import { startCollabServer, type RunningCollabServer } from '../src/server/collabServer.js';
 import { LocalAgentRegistry } from '../src/server/localAgents.js';
-import { connectAgentBridge, parseSessionUrl, type AgentBridge } from '../src/cli/agentConnect.js';
+import { MIRROR_MARKER_FILE, connectAgentBridge, parseSessionUrl, type AgentBridge } from '../src/cli/agentConnect.js';
 import { EXIT_OK, runAgentCli } from '../src/cli/agentCli.js';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -313,6 +313,39 @@ describe('slide-agent connect', { timeout: 120_000 }, () => {
     const context2 = JSON.parse(await readFile(agentRuntimePaths(mirrorDir).context, 'utf8')) as { live: boolean };
     expect(context2.live).toBe(false);
     expect(JSON.parse((await cli('context', mirrorDir)).stdout).live).toBe(false);
+  });
+
+  it('follows the deck to its new id when it is renamed while mirrored', async () => {
+    const { peer: browser } = await connectPeer({ name: 'Vincent', participant: PARTICIPANT });
+    bridge = connectAgentBridge({ url: sessionUrl(), dir: mirrorDir, name: 'Test agent', io: io() });
+    await bridge.ready;
+    const NEW_ID = 'Renamed Talk';
+    const renamed = await fetch(`${base()}/api/decks/rename?deck=${DECK_ID}&name=${encodeURIComponent(NEW_ID)}`, {
+      method: 'POST',
+    });
+    expect(await renamed.json()).toEqual({ id: NEW_ID, title: NEW_ID });
+    expect((await browser.nextOfKind('deckMoved')).deckId).toBe(NEW_ID);
+
+    // The bridge rejoins under the new id, and the panel there has the
+    // history it had under the old one.
+    const renamedState = async (): Promise<AgentChatState> => (await fetch(
+      `${base()}/api/agent-panel/state?deck=${encodeURIComponent(NEW_ID)}&participant=${PARTICIPANT}`,
+    )).json() as Promise<AgentChatState>;
+    const rejoined = await until(async () => {
+      const current = await renamedState();
+      return current.connection === 'ready' ? current : null;
+    }, 'the bridge to rejoin the renamed deck');
+    expect(rejoined.messages.some((message) => message.text.includes(`renamed to “${NEW_ID}”`))).toBe(true);
+    expect(bridge.target.deckId).toBe(NEW_ID);
+    expect(JSON.parse(await readFile(join(mirrorDir, MIRROR_MARKER_FILE), 'utf8')).deckId).toBe(NEW_ID);
+    expect(await readFile(join(mirrorDir, 'AGENTS.md'), 'utf8')).toContain(`mirrors the deck \`${NEW_ID}\``);
+
+    // The mirror's CLI now drives the renamed deck.
+    const commented = await cli('comments', mirrorDir, '--add', 'Still here', '--slide', '1');
+    expect(commented.code).toBe(EXIT_OK);
+    const deck = parseDeck(await (await fetch(`${base()}/api/deck?deck=${encodeURIComponent(NEW_ID)}`)).json());
+    expect(deck.slides[0].comments?.map((comment) => comment.text)).toEqual(['Still here']);
+    expect(existsSync(deckDir)).toBe(false);
   });
 
   it('answers a stale revision with a conflict instead of applying it', async () => {

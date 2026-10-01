@@ -183,6 +183,20 @@ export const ServerEndedSchema = z.object({
   kind: z.literal('ended'),
 });
 
+/**
+ * The deck was renamed while this peer had it open. A deck's id is its folder
+ * path, so the room this socket joined no longer exists: the server has
+ * flushed every edit it accepted, renamed the folder, and is about to close
+ * the socket. Rejoin under `deckId` instead of reconnecting to the old one.
+ * Also sent, in place of a welcome, to a peer that reconnects to an id the
+ * server knows was renamed.
+ */
+export const ServerDeckMovedSchema = z.object({
+  kind: z.literal('deckMoved'),
+  deckId: z.string().min(1),
+  title: z.string(),
+});
+
 export const ServerMessageSchema = z.discriminatedUnion('kind', [
   ServerWelcomeSchema,
   ServerTxnSchema,
@@ -193,8 +207,22 @@ export const ServerMessageSchema = z.discriminatedUnion('kind', [
   ServerThemeSchema,
   ServerEndedSchema,
   ServerMediaSchema,
+  ServerDeckMovedSchema,
 ]);
+
+/**
+ * WebSocket close codes after which a client stops retrying, because the same
+ * request would get the same answer. (4003, an identity refused access, is
+ * older and spelled as a literal at its call sites.)
+ */
+export const COLLAB_CLOSE = {
+  /** No deck by that id — never was one, or it was renamed away. */
+  noSuchDeck: 4404,
+  /** The deck was renamed; a `deckMoved` message preceded this close. */
+  moved: 4301,
+} as const;
 
 export type ServerMessage = z.infer<typeof ServerMessageSchema>;
 export type ServerTxnMessage = z.infer<typeof ServerTxnSchema>;
 export type ServerWelcomeMessage = z.infer<typeof ServerWelcomeSchema>;
+export type ServerDeckMovedMessage = z.infer<typeof ServerDeckMovedSchema>;

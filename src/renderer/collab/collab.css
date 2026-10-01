@@ -235,3 +235,65 @@ button.bar-person:focus-visible { outline: 2px solid var(--accent); outline-offs
 /* Narrowest toolbar: the strip goes before any action does. */
 #toolbar.toolbar-compact-secondary .bar-presence,
 #toolbar.toolbar-compact-secondary .bar-presence + .bar-divider { display: none; }
+
+/* The deck's name in the toolbar is also where it is renamed (deckNameField.ts).
+   The name's own box becomes the text field: at rest its border is invisible,
+   on hover it shows the button hairline, and while editing it takes the
+   focused-field look of the inspector's inputs (.field input:focus). The
+   input inside is bare, so the text does not move when editing starts. */
+.bar-deck-name {
+  display: inline-flex;
+  align-items: baseline;
+  min-width: 0;
+}
+.bar-deck-folder {
+  flex: 0 1000 auto; /* the folder ellipsizes before the name does */
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-weight: 400;
+  text-overflow: ellipsis;
+}
+.bar-deck-folder[hidden] { display: none; }
+.bar-deck-label {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.bar-deck-name.is-editable {
+  padding: 2px 6px;
+  border: 1px solid transparent;
+  cursor: text;
+}
+.bar-deck-name.is-editable:hover {
+  border-color: var(--muted);
+  background: var(--panel-2);
+}
+.bar-deck-name.is-editable:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: 1px;
+}
+.bar-deck-name.is-editing,
+.bar-deck-name.is-editing:hover {
+  border-color: var(--accent);
+  background: var(--bg);
+}
+.bar-deck-name.is-busy { color: var(--muted); }
+/* #toolbar outranks appChrome's input reset, which pads and borders every
+   text field. */
+#toolbar .bar-deck-input {
+  flex: 0 1 auto;
+  min-width: 4ch;
+  max-width: 100%;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  line-height: inherit;
+}
+/* Narrowing the toolbar hides the name; never while someone is typing in it. */
+#toolbar.toolbar-hide-deck-name .bar-deck-name.is-editing { display: inline-flex; }

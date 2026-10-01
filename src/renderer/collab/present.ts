@@ -508,6 +508,11 @@ const bridge = new CollabBridge(wsUrl, name ? `${name} (${label.toLowerCase()})`
     else connectionNotice.showDisconnected();
   },
   onEnded: () => connectionNotice.showEnded('The host ended this presentation.'),
+  // Renamed mid-talk: the show goes on from memory — the server forwards
+  // media requests for the old id — and nothing is put over the slides the
+  // audience is watching. Edits made from here on no longer reach this view.
+  onMoved: () => {},
+  onUnavailable: (reason) => connectionNotice.showEnded(reason),
 });
 
 window.addEventListener('resize', () => speaker?.refresh());

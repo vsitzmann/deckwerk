@@ -116,6 +116,7 @@ describe('collab server', () => {
       Array<{ id: string; title: string; slides: number; editedAt: string | null; editors: number }>;
     expect(decks).toEqual([{
       id: DECK_ID, title: 'Collab', slides: 2, folder: '', editors: 0, editedAt: expect.any(String),
+      createdAt: expect.any(String),
     }]);
     expect(Number.isNaN(Date.parse(decks[0].editedAt!))).toBe(false);
   });

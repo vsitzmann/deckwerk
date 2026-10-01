@@ -17,6 +17,7 @@ import {
   type AgentResponse,
 } from '@shared/agent.js';
 import {
+  COLLAB_CLOSE,
   COLLAB_PROTOCOL_VERSION,
   ServerMessageSchema,
   type ClientMessage,
@@ -259,16 +260,21 @@ export function connectAgentBridge(options: ConnectOptions): AgentBridge {
     await mkdir(join(dir, 'assets'), { recursive: true });
     await mkdir(paths.inbox, { recursive: true });
     await mkdir(paths.responses, { recursive: true });
-    await atomicJson(marker, {
+    await writeMarker();
+    // The agent's command: generated, executable, always the server's version.
+    const helper = join(dir, HELPER_FILE);
+    await writeFile(helper, deckHelperSource, 'utf8');
+    await chmod(helper, 0o755);
+  }
+
+  /** The marker is also where `./deck` reads which session (and deck id) this is. */
+  async function writeMarker(): Promise<void> {
+    await atomicJson(join(dir, MIRROR_MARKER_FILE), {
       origin: target.origin,
       deckId: target.deckId,
       participantId: target.participantId,
       connectedAt: new Date().toISOString(),
     });
-    // The agent's command: generated, executable, always the server's version.
-    const helper = join(dir, HELPER_FILE);
-    await writeFile(helper, deckHelperSource, 'utf8');
-    await chmod(helper, 0o755);
   }
 
   async function syncFiles(): Promise<void> {
@@ -790,6 +796,17 @@ export function connectAgentBridge(options: ConnectOptions): AgentBridge {
         pending.delete(id);
       }
       if (closed) return;
+      if (event.code === COLLAB_CLOSE.noSuchDeck) {
+        const why = `The deck "${target.deckId}" no longer exists on ${target.origin} — it may have been `
+          + 'renamed or deleted. Copy the command from the Agent panel again to connect to it.';
+        if (!readySettled) {
+          readySettled = true;
+          failReady(new Error(why));
+        }
+        log(`disconnected: ${why}`);
+        closed = true;
+        return;
+      }
       if (event.code === 4003) {
         const why = event.reason || 'the server refused this connection';
         if (!readySettled) {
@@ -872,6 +889,22 @@ export function connectAgentBridge(options: ConnectOptions): AgentBridge {
       case 'ended': {
         log('the host ended the session');
         await close();
+        return;
+      }
+      case 'deckMoved': {
+        // Renamed while mirrored. The id is all that changed: the folder here
+        // keeps its path, and the server closes this socket next, so the
+        // ordinary reconnect joins the deck under its new id. Switch before
+        // the first await so that reconnect cannot dial the old one.
+        const previous = target.deckId;
+        target.deckId = msg.deckId;
+        const ws = new URL(target.wsUrl);
+        ws.searchParams.set('deck', msg.deckId);
+        target.wsUrl = ws.href;
+        reconnectDelay = RECONNECT_MIN_MS;
+        log(`the deck "${previous}" was renamed to "${msg.deckId}" — following it`);
+        await writeMarker();
+        await writeGuides();
         return;
       }
     }

@@ -40,6 +40,13 @@ export class CollabSession {
   private lastSavedTheme: string | null = null;
   private watchers: FSWatcher[] = [];
   private events: CollabSessionEvents | null = null;
+  /**
+   * Set by close(). A closed session owns nothing on disk any more — its
+   * folder may already have been renamed — and `saveDeck` creates the folder
+   * it is told to write into, so one late write would resurrect a copy of
+   * the deck at the old path. Every write path checks this.
+   */
+  private closed = false;
 
   private constructor(
     readonly dir: string,
@@ -61,6 +68,7 @@ export class CollabSession {
    * idempotent by construction.
    */
   applyOps(ops: AgentOperation[]): AppliedTxn {
+    if (this.closed) throw new Error('this presentation was closed (renamed or moved) — reopen it');
     const { deck: next, skipped } = applyOpsLenient(this.deck, ops);
     const errors = validateDeckIntegrity(next);
     if (errors.length > 0) {
@@ -75,6 +83,7 @@ export class CollabSession {
   }
 
   saveThemeCss(css: string): void {
+    if (this.closed) return;
     this.themeCss = css;
     this.lastSavedTheme = css;
     void saveTheme(this.dir, this.deck.theme, css).catch((error) => {
@@ -120,10 +129,26 @@ export class CollabSession {
   async close(): Promise<void> {
     for (const watcher of this.watchers) watcher.close();
     this.watchers = [];
+    // Closed first, so nothing can schedule a write while the last one runs;
+    // the flush itself still persists what was accepted before this call.
+    this.closed = true;
     await this.flush();
   }
 
+  /**
+   * Close without writing. Only for a session whose folder is already gone
+   * (deleted outside the server): flushing it would recreate the folder.
+   */
+  discard(): void {
+    for (const watcher of this.watchers) watcher.close();
+    this.watchers = [];
+    this.closed = true;
+    if (this.saveTimer) clearTimeout(this.saveTimer);
+    this.saveTimer = null;
+  }
+
   private schedulePersist(): void {
+    if (this.closed) return;
     if (this.saveTimer) clearTimeout(this.saveTimer);
     this.saveTimer = setTimeout(() => {
       this.saveTimer = null;
@@ -140,6 +165,7 @@ export class CollabSession {
   }
 
   private async reloadDeckFromDisk(): Promise<void> {
+    if (this.closed) return;
     try {
       const { readFile } = await import('node:fs/promises');
       const raw = await readFile(join(this.dir, 'deck.json'), 'utf8');
