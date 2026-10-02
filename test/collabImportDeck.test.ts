@@ -86,7 +86,7 @@ describe('collab server deck archive import', () => {
       expect([...await readFile(join(rootDir, 'talk', 'assets', 'diagram.png'))])
         .toEqual([0x89, 0x50, 0x4e, 0x47]);
       expect((await api('/api/decks')).body)
-        .toEqual([{ id: 'talk', title: 'Keynote 2026', slides: 1, editedAt: expect.any(String), editors: 0, folder: '' }]);
+        .toEqual([{ id: 'talk', title: 'Keynote 2026', slides: 1, editedAt: expect.any(String), createdAt: expect.any(String), editors: 0, folder: '' }]);
     });
 
     it('round-trips a deck downloaded from the server', async () => {
