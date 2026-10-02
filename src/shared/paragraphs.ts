@@ -695,6 +695,36 @@ function adoptOrphanListItems(root: ParentNode & Node): void {
   }
 }
 
+/**
+ * Text or inline markup sitting directly in a list, outside every item.
+ * Return inside an item that holds paragraphs ahead of its text can make
+ * Chromium open the new item *inside* the old one; the next parse closes
+ * the inner item early and strands the old item's trailing words in the
+ * list itself, where no block -- and no line of the outline -- holds them.
+ * Give them back to the item they followed, or to an item of their own.
+ */
+function adoptStrayListContent(root: ParentNode & Node): void {
+  const doc = root.ownerDocument ?? document;
+  for (const list of [...root.querySelectorAll<HTMLElement>('ul, ol')]) {
+    for (const child of [...list.childNodes]) {
+      if (child instanceof Element && (child.tagName === 'LI' || LIST_TAGS.has(child.tagName))) continue;
+      if (child instanceof Text && MARKUP_WHITESPACE.test(child.data)) continue;
+      if (!(child instanceof Text) && !(child instanceof Element)) continue;
+      let item = child.previousSibling;
+      while (item instanceof Text && MARKUP_WHITESPACE.test(item.data)) item = item.previousSibling;
+      if (!(item instanceof Element && item.tagName === 'LI')) {
+        item = doc.createElement('li');
+        list.insertBefore(item, child);
+      }
+      // An item that is only a placeholder line takes the words in its place.
+      if (item.childNodes.length === 1 && item.firstChild instanceof Element && item.firstChild.tagName === 'BR') {
+        item.firstChild.remove();
+      }
+      item.appendChild(child);
+    }
+  }
+}
+
 /** Whitespace that is only ever markup formatting, never a typed character. */
 const MARKUP_WHITESPACE = /^[ \t\r\n]*$/;
 /** Blocks whose own text a person reads (lists and tables are containers). */
@@ -822,6 +852,7 @@ export function normalizeParagraphHtml(html: string, splitBreaks = false): strin
   stripStructuralWhitespace(template.content);
   adoptOrphanListItems(template.content);
   nestStrayLists(template.content);
+  adoptStrayListContent(template.content);
   mergeAdjacentLists(template.content);
   hoistBlocksOutOfInlines(template.content);
   // Nesting a stray list into the item before it puts that item's trailing

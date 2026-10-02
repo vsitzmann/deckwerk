@@ -43,3 +43,21 @@ describe('blocks that belong where they are', () => {
     expect(doc.querySelectorAll('table tr')).toHaveLength(1);
   });
 });
+
+describe('words stranded in a list outside every item', () => {
+  it('go back into an item (list fuzz seed 20261004)', () => {
+    const html = '<ul><li><p>beta</p><p><br></p></li><li><br></li>beta</ul>';
+    const doc = document.createElement('div');
+    doc.innerHTML = normalizeParagraphHtml(html, true);
+    const list = doc.querySelector('ul')!;
+    expect([...list.childNodes].every((node) => node instanceof Element && node.tagName === 'LI'), doc.innerHTML).toBe(true);
+    expect(list.lastElementChild?.textContent).toBe('beta');
+    expect(normalizeParagraphHtml(doc.innerHTML, true)).toBe(doc.innerHTML);
+  });
+
+  it('get an item of their own when no item comes before them', () => {
+    const doc = document.createElement('div');
+    doc.innerHTML = normalizeParagraphHtml('<ol>lead<li>one</li></ol>', true);
+    expect([...doc.querySelectorAll('li')].map((item) => item.textContent)).toEqual(['lead', 'one']);
+  });
+});
