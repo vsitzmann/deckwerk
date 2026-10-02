@@ -96,6 +96,9 @@ import {
   type Identity,
 } from './accessControl.js';
 
+/** How long shutdown lets peers finish the WebSocket close handshake. */
+const SOCKET_CLOSE_GRACE_MS = 500;
+
 /** A local agent bridge identifies its own requests with this header. */
 export const BRIDGE_HEADER = 'x-deckwerk-bridge';
 
@@ -3339,12 +3342,29 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
       unsubscribeSharedAgent?.();
       for (const stream of sharedAgentStreams) stream.response.end();
       sharedAgentStreams.clear();
-      for (const room of rooms.values()) {
-        // Shutdown cannot wait for a renderer that is paused, presenting, or
-        // already tearing down to complete the WebSocket close handshake.
-        // Upgraded sockets are not covered by closeAllConnections(), so end
-        // them synchronously before awaiting the HTTP server's close callback.
-        for (const peer of room.peers.values()) peer.socket.terminate();
+      // A graceful close sends what is queued first -- above all the `ended`
+      // that notifyEnded() broadcast a moment ago. Terminating straight away
+      // destroyed the socket with that frame unsent, so a peer saw a dropped
+      // connection and kept "reconnecting…" instead of learning the host had
+      // ended the session. Shutdown still cannot wait on a renderer that is
+      // paused, presenting or tearing down, so whatever has not closed after
+      // a short grace is terminated. Upgraded sockets are not covered by
+      // closeAllConnections(), so they are ended here, before awaiting it.
+      const sockets = [...rooms.values()].flatMap((room) => [...room.peers.values()].map((peer) => peer.socket));
+      await Promise.race([
+        Promise.all(sockets.map((socket) => new Promise<void>((resolveClosed) => {
+          if (socket.readyState === socket.CLOSED) return resolveClosed();
+          socket.once('close', () => resolveClosed());
+          try {
+            socket.close(1001, 'session ended');
+          } catch {
+            resolveClosed();
+          }
+        }))),
+        new Promise<void>((resolveGrace) => setTimeout(resolveGrace, SOCKET_CLOSE_GRACE_MS)),
+      ]);
+      for (const socket of sockets) {
+        if (socket.readyState !== socket.CLOSED) socket.terminate();
       }
       // `close()` alone only stops new connections: it waits for every open
       // one to go idle first. A browser leaves plenty that never will — a
