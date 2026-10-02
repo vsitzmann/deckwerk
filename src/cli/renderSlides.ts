@@ -112,10 +112,12 @@ export async function checkWebPage(request: {
   // workflow. Both commands receive the same bridge-injected document, so
   // keep the expensive Chromium result briefly and let add reuse it. The
   // short TTL protects pages that load sibling files whose contents are not
-  // represented in the HTML digest.
+  // represented in the HTML digest. The version tag changes whenever the
+  // checker itself changes how it runs a page (v2: the GPU is on, so WebGL
+  // pages no longer come back as blank failures).
   const source = await readFile(request.pagePath);
   const digest = createHash('sha256')
-    .update('deckwerk-web-check-v1\0')
+    .update('deckwerk-web-check-v2\0')
     .update(source)
     .update(`\0${request.width}x${request.height}`)
     .digest('hex');

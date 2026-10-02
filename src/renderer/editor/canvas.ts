@@ -1,6 +1,7 @@
 import { openContextMenu } from './contextMenuPlacement.js';
 import type { Deck, Slide, SlideElement } from '@shared/deck.js';
 import { type Rect, fitScale, makeId } from '@shared/geometry.js';
+import { isMeshName } from '@shared/meshFiles.js';
 
 type XY = { x: number; y: number };
 import {
@@ -6180,7 +6181,12 @@ export class EditorCanvas {
       // A file is media by its extension, or failing that by its MIME type:
       // Photos, a browser's "save image" and scanners hand over `image`,
       // `photo.jfif` or `scan.tiff`, and those used to vanish without a word.
-      const dropped = [...(e.dataTransfer?.files ?? [])];
+      // 3D models become one interactive page between them (dropMeshes); the
+      // rest of the drop goes on as usual.
+      const all = [...(e.dataTransfer?.files ?? [])];
+      const meshes = all.filter((file) => isMeshName(file.name));
+      if (meshes.length > 0) await this.dropMeshes(meshes, dropPoint);
+      const dropped = all.filter((file) => !isMeshName(file.name));
       const files = dropped.flatMap((original) => {
         const name = mediaFileName(original.name, original.type);
         const kind = name ? classifyMediaName(name) : null;
@@ -6197,16 +6203,17 @@ export class EditorCanvas {
       // A drag out of a web page carries no file at all -- only markup and the
       // image's URL -- so it takes the fetch-the-bytes path instead.
       if (files.length === 0) {
+        if (meshes.length > 0 && refused.length === 0) return;
         const fetched = await this.dropWebImage(e.dataTransfer, dropPoint);
         if (!fetched && (refused.length > 0 || offeredImage)) {
           this.notice(refused.length > 0
-            ? `Can't add ${refused.join(', ')}: only images and videos can go on a slide.`
+            ? `Can't add ${refused.join(', ')}: only images, videos and 3D models (.glb, .gltf, .obj) can go on a slide.`
             : "That image can't be copied out of the page it came from. Save it, then drop the file.");
         }
         return;
       }
       if (refused.length > 0) {
-        this.notice(`Skipped ${refused.join(', ')}: only images and videos can go on a slide.`);
+        this.notice(`Skipped ${refused.join(', ')}: only images, videos and 3D models (.glb, .gltf, .obj) can go on a slide.`);
       }
 
       // Natural size and a preview frame are read from the local bytes before
@@ -6308,6 +6315,39 @@ export class EditorCanvas {
    * straight away -- the browser can decode a remote image for display, so
    * its natural size and a live preview are known before the fetch lands.
    */
+  /**
+   * Dropped .glb/.gltf/.obj files: built into one interactive 3D page (the
+   * main process or the collab server does the work, see meshPage.ts) and
+   * placed as a web element centred on the drop.
+   */
+  private async dropMeshes(files: File[], dropPoint: { x: number; y: number }): Promise<void> {
+    if (!window.api.importMeshFiles) return;
+    this.notice(files.length > 1 ? `Building a 3D view of ${files.length} models…` : 'Building a 3D view…');
+    let page: Awaited<ReturnType<typeof window.api.importMeshFiles>>;
+    try {
+      page = await window.api.importMeshFiles(files);
+    } catch (error) {
+      this.notice(`Could not show that model: ${error instanceof Error ? error.message : String(error)}`);
+      return;
+    }
+    const { canvas } = this.store.get().deck;
+    const scale = Math.min(1, (canvas.w * 0.8) / page.w, (canvas.h * 0.8) / page.h);
+    const w = Math.round(page.w * scale);
+    const h = Math.round(page.h * scale);
+    const id = makeId('web');
+    this.store.commit((deck) => {
+      const slide = deck.slides[this.store.get().slideIndex];
+      const z = slide.elements.reduce((max, el) => Math.max(max, el.z), 0) + 1;
+      slide.elements.push({
+        id, type: 'web', src: page.src, poster: page.poster, title: page.title, interactive: true,
+        x: Math.round(Math.min(Math.max(0, dropPoint.x - w / 2), canvas.w - w)),
+        y: Math.round(Math.min(Math.max(0, dropPoint.y - h / 2), canvas.h - h)),
+        w, h, rot: 0, z, opacity: 1, class: [], style: {},
+      });
+    }, { label: 'Add 3D model' });
+    this.store.select([id]);
+  }
+
   private async dropWebImage(
     data: DataTransfer | null,
     dropPoint: { x: number; y: number },
