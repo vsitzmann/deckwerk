@@ -55,6 +55,8 @@ import { planHtmlReplacement } from './htmlReplacement.js';
 import { MirrorThemeRequestSchema, mirrorThemeAction, type MirrorThemeRequest } from './mirrorTheme.js';
 import { htmlDraftWorkflow, type HtmlDraftWorkflow } from './htmlDraftWorkflow.js';
 import { injectWebBridgeRuntime } from '../shared/webBridge.js';
+import { importMeshPage } from '../main/meshPage.js';
+import { isMeshName } from '@shared/meshFiles.js';
 import { checkWebPage } from '../cli/renderSlides.js';
 import {
   canAccessDeck,
@@ -1579,6 +1581,25 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
         respondJson(response, 400, { error: String(error instanceof Error ? error.message : error) });
       } finally {
         await rm(dir, { recursive: true, force: true });
+      }
+      return;
+    }
+
+    // Dropped 3D models, as { files: [{ name, data: base64 }] }: one
+    // interactive page in the deck, the same as the app's mesh import.
+    if (path === '/api/import-mesh' && request.method === 'POST') {
+      if (!deckParam) return respondJson(response, 400, { error: 'missing deck' });
+      try {
+        const payload = JSON.parse((await readBody(request)).toString('utf8')) as {
+          files?: Array<{ name?: string; data?: string }>;
+        };
+        const sources = (payload.files ?? [])
+          .filter((file) => file.name && file.data && isMeshName(file.name))
+          .map((file) => ({ name: sanitizeFilename(file.name!), bytes: Buffer.from(file.data!, 'base64') }));
+        if (sources.length === 0) return respondJson(response, 400, { error: 'no .glb, .gltf or .obj files' });
+        respondJson(response, 200, await importMeshPage(deckDirOf(deckParam), sources));
+      } catch (error) {
+        respondJson(response, 400, { error: String(error instanceof Error ? error.message : error) });
       }
       return;
     }

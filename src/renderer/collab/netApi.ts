@@ -1,4 +1,4 @@
-import type { AssetImportProgress, ImportedAsset, MediaInfo } from '@shared/ipc.js';
+import type { AssetImportProgress, ImportedAsset, MediaInfo, ImportedMeshPage } from '@shared/ipc.js';
 import { clipboardImageName, type ClipboardImageSource } from '@shared/clipboardImages.js';
 import { pinMediaVariant } from './mediaVariants.js';
 
@@ -82,6 +82,23 @@ export function installNetApi(options: NetApiOptions): void {
         imported.push(await uploadFile(deck, file, progressToken));
       }
       return imported;
+    },
+
+    /** Dropped 3D models: the server builds the page (meshPage.ts). */
+    importMeshFiles: async (files: File[]): Promise<ImportedMeshPage> => {
+      const encoded = await Promise.all(files.map(async (file) => {
+        const bytes = new Uint8Array(await file.arrayBuffer());
+        let binary = '';
+        for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+        return { name: file.name, data: btoa(binary) };
+      }));
+      const response = await fetch(`/api/import-mesh?deck=${deck}`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ files: encoded }),
+      });
+      if (!response.ok) throw new Error((await response.json().catch(() => ({}))).error ?? `HTTP ${response.status}`);
+      return await response.json() as ImportedMeshPage;
     },
 
     /**

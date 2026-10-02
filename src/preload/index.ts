@@ -35,6 +35,7 @@ import type {
   VideoPosterRequest,
   VideoPosterResult,
   WebExportRequest,
+  ImportedMeshPage,
 } from '@shared/ipc.js';
 
 /**
@@ -112,6 +113,16 @@ const api = {
       IPC.assetImport,
       files.map((file) => webUtils.getPathForFile(file)).filter(Boolean),
       progressToken,
+    ),
+  /**
+   * Turn dropped 3D models (.glb, .gltf, .obj) into one interactive page in
+   * the deck, ready for a web element. The browser collab client uploads the
+   * bytes instead (netApi.ts).
+   */
+  importMeshFiles: (files: File[]): Promise<ImportedMeshPage> =>
+    ipcRenderer.invoke(
+      IPC.meshImport,
+      files.map((file) => webUtils.getPathForFile(file)).filter(Boolean),
     ),
   /**
    * Import an image that a drag or a paste only pointed at — a remote URL or
