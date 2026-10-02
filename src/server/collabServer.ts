@@ -31,6 +31,17 @@ import {
   type PresenceState,
   type ServerMessage,
 } from '../shared/collab.js';
+import {
+  AGENT_MENTION,
+  CHAT_FILE,
+  CHAT_ID_PATTERN,
+  CHAT_TEXT_MAX,
+  ChatRefSchema,
+  mentionsAgent,
+  parseMentions,
+  type ChatMessage,
+  type ChatRef,
+} from '../shared/chat.js';
 import { CollabSession } from './collabSession.js';
 import { readZip, writeZip, type ZipEntry, type ZipFile } from './zip.js';
 import {
@@ -73,6 +84,7 @@ import {
   readDeckAccess,
   readFolderOwner,
   resolveIdentity,
+  roleMayComment,
   UserDirectory,
   writeDeckAccess,
   writeFolderOwner,
@@ -127,6 +139,11 @@ interface Peer {
    * presence and everyone else's edits, and nothing it sends is applied.
    */
   canEdit: boolean;
+  /**
+   * Whether this peer may post to the deck chat. Decided like `canEdit`, and
+   * by the same rule as commenting (`roleMayComment`).
+   */
+  canComment: boolean;
   /** Set when this peer is a local agent bridge: whose agent it is. */
   agentFor: string | null;
 }
@@ -803,6 +820,63 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
       cursor: null,
     };
     broadcast(room, { kind: 'presence', state: room.agentPresence });
+  };
+
+  /**
+   * Accept one chat message into the room: persist it, broadcast it to every
+   * peer (its sender confirms its pending copy by id), and — when a person
+   * calls for `@agent` — tell each local agent attached to the deck, in its
+   * participant's Agent panel. Returns null for a resend of an id already
+   * accepted, or a room that is closing.
+   */
+  const postChat = (room: Room, input: {
+    id?: string;
+    author: string;
+    login?: string;
+    agent: boolean;
+    text: string;
+    ref?: ChatRef;
+  }): ChatMessage | null => {
+    if (room.relocating) return null;
+    const text = input.text.trim().slice(0, CHAT_TEXT_MAX);
+    if (!text) return null;
+    const message: ChatMessage = {
+      id: input.id && CHAT_ID_PATTERN.test(input.id) ? input.id : `chat-${randomUUID()}`,
+      author: input.author.slice(0, 120) || 'Guest',
+      ...(input.login ? { login: input.login } : {}),
+      agent: input.agent,
+      ts: new Date().toISOString(),
+      text,
+      mentions: parseMentions(text),
+      ...(input.ref ? { ref: input.ref } : {}),
+    };
+    if (!room.session.chat.append(message)) return null;
+    broadcast(room, { kind: 'chat', message });
+    if (localAgents && !message.agent && mentionsAgent(message)) {
+      const told = new Set<string>();
+      for (const peer of room.peers.values()) {
+        if (!peer.greeted || !peer.agentFor || told.has(peer.agentFor)) continue;
+        told.add(peer.agentFor);
+        localAgents.event(room.session.dir, peer.agentFor, {
+          text: `${message.author} asked @${AGENT_MENTION} in chat: ${text.slice(0, 300)}`,
+        });
+      }
+    }
+    return message;
+  };
+
+  /** A chat ref that names something this deck holds, or null. */
+  const resolveChatRef = (deck: Deck, ref: ChatRef | undefined): ChatRef | null | undefined => {
+    if (!ref) return undefined;
+    if ('commentId' in ref) {
+      const exists = deck.slides.some((slide) => slide.comments?.some((comment) => comment.id === ref.commentId)
+        || slide.elements.some((element) => element.comments?.some((comment) => comment.id === ref.commentId)));
+      return exists ? ref : null;
+    }
+    const slide = deck.slides.find((candidate) => candidate.id === ref.slideId);
+    if (!slide) return null;
+    if (ref.elementId && !slide.elements.some((element) => element.id === ref.elementId)) return null;
+    return ref;
   };
 
   /**
@@ -2263,6 +2337,90 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
       return;
     }
 
+    // The deck chat (shared/chat.ts): never in deck.json, never a transaction.
+    // `?since=<id>` returns what came after that message. `?wait=1` is a long
+    // poll for `slide-agent chat --wait`: it answers with the first message
+    // a *person* posts mentioning `@<mention>` (default @agent) after `since`
+    // — or, without `since`, after the request arrived — or with nothing
+    // once `timeout` ms (at most 60 s) pass.
+    if (path === '/api/chat' && request.method === 'GET') {
+      if (!deckParam) return respondJson(response, 400, { error: 'missing deck' });
+      const room = await getRoom(deckParam);
+      const since = url.searchParams.get('since');
+      if (url.searchParams.get('wait') === '1') {
+        const mention = (url.searchParams.get('mention') ?? AGENT_MENTION).replace(/^@/, '').toLowerCase();
+        const timeout = Math.min(Math.max(Number(url.searchParams.get('timeout')) || 25_000, 100), 60_000);
+        const waiting = room.session.chat.wait(
+          since,
+          (message) => !message.agent && message.mentions.includes(mention),
+          timeout,
+        );
+        response.on('close', waiting.cancel);
+        const messages = await waiting.result;
+        if (response.destroyed) return;
+        respondJson(response, 200, {
+          chatCount: messages.length, messages, last: messages.at(-1)?.id ?? since ?? null, timedOut: messages.length === 0,
+        });
+        return;
+      }
+      const messages = room.session.chat.since(since);
+      respondJson(response, 200, {
+        chatCount: messages.length, messages, last: room.session.chat.recent(1)[0]?.id ?? null,
+      });
+      return;
+    }
+
+    if (path === '/api/chat' && request.method === 'POST') {
+      if (!deckParam) return respondJson(response, 400, { error: 'missing deck' });
+      let body: { text?: unknown; author?: unknown; ref?: unknown; slide?: unknown; id?: unknown };
+      try {
+        body = JSON.parse((await readBody(request)).toString('utf8')) as typeof body;
+      } catch {
+        return respondJson(response, 400, { error: 'body must be JSON' });
+      }
+      if (typeof body.text !== 'string' || !body.text.trim()) return respondJson(response, 400, { error: 'missing text' });
+      const room = await getRoom(deckParam);
+      const deck = room.session.deck;
+      let ref: ChatRef | undefined;
+      if (body.slide !== undefined && body.slide !== null && body.slide !== '') {
+        // The id or the 1-based number, like every other --slide.
+        const wanted = String(body.slide);
+        const slide = deck.slides.find((candidate) => candidate.id === wanted)
+          ?? (/^\d+$/.test(wanted) ? deck.slides[Number(wanted) - 1] : undefined);
+        if (!slide) return respondJson(response, 404, { error: `no slide ${wanted}; this deck has ${deck.slides.length}` });
+        ref = { slideId: slide.id };
+      } else if (body.ref !== undefined) {
+        const parsed = ChatRefSchema.safeParse(body.ref);
+        if (!parsed.success) return respondJson(response, 400, { error: 'ref must be {slideId, elementId?} or {commentId}' });
+        const resolved = resolveChatRef(deck, parsed.data);
+        if (!resolved) return respondJson(response, 404, { error: 'ref names nothing in this deck' });
+        ref = resolved;
+      }
+      const bridge = agentSessionParam && localAgents ? localAgents.linked(room.session.dir, agentSessionParam) : null;
+      const author = typeof body.author === 'string' && body.author.trim()
+        ? body.author.trim()
+        : bridge?.name ?? (identity ? `${identity.name} · agent` : 'Agent');
+      const message = postChat(room, {
+        id: typeof body.id === 'string' ? body.id : undefined,
+        author,
+        login: identity?.login,
+        agent: true,
+        text: body.text,
+        ref,
+      });
+      if (!message) {
+        if (typeof body.id === 'string' && room.session.chat.has(body.id)) {
+          return respondJson(response, 200, room.session.chat.all().find((entry) => entry.id === body.id));
+        }
+        return respondJson(response, 409, { error: 'this presentation is closing; try again' });
+      }
+      if (localAgents && agentSessionParam) {
+        localAgents.event(room.session.dir, agentSessionParam, { text: `said in chat: ${message.text.slice(0, 160)}` });
+      }
+      respondJson(response, 200, message);
+      return;
+    }
+
     if (path === '/api/context' && request.method === 'GET') {
       if (!deckParam) return respondJson(response, 400, { error: 'missing deck' });
       const room = await getRoom(deckParam);
@@ -2934,6 +3092,7 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
       // serve headers as any HTTP request, so the identity rules match.
       let identity: Identity | null = null;
       let canEdit = true;
+      let canComment = true;
       if (accessControl) {
         identity = resolveIdentity(request, accessControl);
         const role = identity ? await deckRoleOf(identity, deckId) : null;
@@ -2945,6 +3104,7 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
           return;
         }
         canEdit = role !== 'view';
+        canComment = roleMayComment(role);
         if (userDirectory) void userDirectory.note(identity);
       }
       // A rename of this very deck may be landing right now; let it, then
@@ -2976,18 +3136,25 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
         socket.close(4004, String(error instanceof Error ? error.message : error).slice(0, 120));
         return;
       }
-      bindPeer(room, socket, identity, canEdit);
+      bindPeer(room, socket, identity, canEdit, canComment);
       socket.resume();
     })();
   });
 
-  function bindPeer(room: Room, socket: WebSocket, identity: Identity | null, canEdit: boolean): void {
+  function bindPeer(
+    room: Room,
+    socket: WebSocket,
+    identity: Identity | null,
+    canEdit: boolean,
+    canComment: boolean,
+  ): void {
     const clientId = randomUUID();
     const peer: Peer = {
       socket,
       greeted: false,
       identity,
       canEdit,
+      canComment,
       agentFor: null,
       state: {
         clientId,
@@ -3066,6 +3233,7 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
               .map((p) => p.state),
             ...(room.agentPresence ? [room.agentPresence] : []),
           ],
+          chat: room.session.chat.recent(),
         });
         broadcast(room, { kind: 'presence', state: peer.state }, clientId);
         return;
@@ -3117,6 +3285,19 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
           room.session.saveThemeCss(message.css);
           broadcast(room, { kind: 'theme', css: message.css, byClientId: clientId }, clientId);
           return;
+        case 'chat-post': {
+          if (!peer.canComment) return;
+          const ref = resolveChatRef(room.session.deck, message.ref) ?? undefined;
+          postChat(room, {
+            id: message.id,
+            author: peer.state.name,
+            login: identity?.login,
+            agent: Boolean(peer.agentFor || peer.state.agent),
+            text: message.text,
+            ref,
+          });
+          return;
+        }
         case 'agentEvent':
           if (peer.agentFor && localAgents) {
             localAgents.event(room.session.dir, peer.agentFor, {
@@ -3862,7 +4043,7 @@ async function collectMirrorFiles(deckDir: string, themeFile: string): Promise<M
   // The mirror generates its own brief and helper; the deck's desktop-facing
   // AGENTS.md would send an agent looking for a CLI it does not have.
   const skip = new Set([
-    'deck.json', 'notes.md', 'agent-chats.json', 'access.json', 'edit', themeFile,
+    'deck.json', 'notes.md', 'agent-chats.json', 'access.json', CHAT_FILE, 'edit', themeFile,
     'AGENTS.md', 'CLAUDE.md', 'deck',
   ]);
   const files: MirrorFileEntry[] = [];

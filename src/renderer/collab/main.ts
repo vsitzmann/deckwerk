@@ -41,7 +41,8 @@ import { createConnectionNotice } from './connectionNotice.js';
 import { createDeckOnServer, folderOf, importKeynoteToServer, importPowerPointToServer, showDeckPicker, showShareDialog } from './deckPicker.js';
 import { installNetApi } from './netApi.js';
 import { PresenceOverlay } from './presenceOverlay.js';
-import { PresenceBar } from './presenceBar.js';
+import { PresenceBar, isAgentPeer } from './presenceBar.js';
+import { ChatPanel } from './chatPanel.js';
 import { createAgentPanelApi, type AgentPanelBrowserApi } from './agentPanelApi.js';
 import { openEndCollaborationPopover } from './endCollaborationPopover.js';
 import { captureEditorView, decodeEditorView, encodeEditorView, restoreEditorView } from '@shared/editorView.js';
@@ -277,6 +278,57 @@ const presenceBar = new PresenceBar(
 );
 presence.onPeersChange = () => presenceBar.setPeers(presence.list());
 
+/* --- deck chat ---------------------------------------------------------------- */
+
+let chatSelf: { name: string; color: string } | null = null;
+const chatPanel = new ChatPanel(el('chat'), {
+  deckId,
+  send: (post) => bridge.sendChat(post),
+  self: () => chatSelf,
+  peers: () => presence.list().map((peer) => ({ name: peer.name, color: peer.color, agent: isAgentPeer(peer) })),
+  currentSlide: () => {
+    const { deck, slideIndex } = store.get();
+    const slide = deck.slides[slideIndex];
+    return slide ? { id: slide.id, number: slideIndex + 1 } : null;
+  },
+  slideNumber: (slideId) => {
+    const index = slideIndexOf(slideId);
+    return index >= 0 ? index + 1 : null;
+  },
+  slideOfComment: (commentId) => store.get().deck.slides.find((slide) =>
+    slide.comments?.some((comment) => comment.id === commentId)
+    || slide.elements.some((element) => element.comments?.some((comment) => comment.id === commentId)))?.id ?? null,
+  jumpTo: (slideId, elementId) => {
+    const index = slideIndexOf(slideId);
+    if (index < 0) return;
+    store.selectSlide(index);
+    if (elementId && store.get().deck.slides[index].elements.some((element) => element.id === elementId)) {
+      store.select([elementId]);
+    }
+  },
+  onUnreadChange: (unread, mentions) => setChatBadge(unread, mentions),
+});
+
+/** The Chat tab's unread count; accented when one of them mentions this person. */
+function setChatBadge(unread: number, mentions: number): void {
+  const tab = document.querySelector<HTMLButtonElement>('#side-tabs button[data-panel="chat"]');
+  if (!tab) return;
+  let badge = tab.querySelector<HTMLElement>('.chat-tab-badge');
+  if (unread === 0) {
+    badge?.remove();
+    tab.removeAttribute('aria-description');
+    return;
+  }
+  if (!badge) {
+    badge = document.createElement('span');
+    badge.className = 'chat-tab-badge';
+    tab.append(badge);
+  }
+  badge.textContent = unread > 99 ? '99+' : String(unread);
+  badge.classList.toggle('is-mention', mentions > 0);
+  tab.setAttribute('aria-description', `${unread} unread${mentions > 0 ? `, ${mentions} mentioning you` : ''}`);
+}
+
 wireCanvasInspector(canvas, inspector);
 
 const designWorkspace = new DesignWorkspace({
@@ -353,6 +405,8 @@ const bridge = new CollabBridge(wsUrl, undefined, {
     lastCursorKey = '';
     setIdSuffix(welcome.clientId.slice(0, 4));
     setCommentAuthor(welcome.self.name);
+    chatSelf = welcome.self;
+    chatPanel.setHistory(welcome.chat ?? []);
     presenceBar.setSelf(welcome.self);
     connectionState = `connected as ${welcome.self.name}`;
     // The first welcome opens the document; every later one is a reconnect of
@@ -379,6 +433,7 @@ const bridge = new CollabBridge(wsUrl, undefined, {
     rail.refreshPresence();
   },
   onPeerCursor: (clientId, cursor) => presence.moveCursor(clientId, cursor),
+  onChat: (message) => chatPanel.receive(message),
   onPeerLeft: (clientId) => {
     presence.remove(clientId);
     rail.refreshPresence();
@@ -512,9 +567,18 @@ function publishPresence(): void {
   lastPresenceKey = key;
   bridge.sendPresence(state);
 }
+let chatDeck = store.get().deck;
+let chatSlideIndex = store.get().slideIndex;
 store.subscribe(() => {
   publishPresence();
   presenceBar.refresh();
+  // Slide numbers in the chat follow the deck; skip the work on selection churn.
+  const { deck, slideIndex } = store.get();
+  if (deck !== chatDeck || slideIndex !== chatSlideIndex) {
+    chatDeck = deck;
+    chatSlideIndex = slideIndex;
+    chatPanel.refresh();
+  }
   syncSlideSelectionContext();
   renderStatus();
 });
@@ -924,7 +988,11 @@ const PANELS = [
   { id: 'themePanel', label: 'Design' },
   { id: 'timeline', label: 'Build' },
   { id: 'history', label: 'History' },
+  { id: 'chat', label: 'Chat' },
 ] as const;
+
+/** Tabs that stay open while several slides are selected: they are not about one slide. */
+const DECK_LEVEL_PANELS: ReadonlySet<string> = new Set(['themePanel', 'inspector', 'chat']);
 
 let activePanelId = 'inspector';
 
@@ -942,7 +1010,7 @@ function buildTabs(): void {
 }
 
 function showPanel(id: string): void {
-  if (store.get().slideSelection.size > 1 && id !== 'themePanel' && id !== 'inspector') return;
+  if (store.get().slideSelection.size > 1 && !DECK_LEVEL_PANELS.has(id)) return;
   activePanelId = id;
   for (const panel of PANELS) el(panel.id).hidden = panel.id !== id;
   for (const b of el('side-tabs').querySelectorAll('button')) {
@@ -960,11 +1028,9 @@ function syncSlideSelectionContext(): void {
   const count = store.get().slideSelection.size;
   const multiple = count > 1;
   for (const button of el('side-tabs').querySelectorAll<HTMLButtonElement>('button')) {
-    button.disabled = multiple
-      && button.dataset.panel !== 'themePanel'
-      && button.dataset.panel !== 'inspector';
+    button.disabled = multiple && !DECK_LEVEL_PANELS.has(button.dataset.panel ?? '');
   }
-  if (multiple && activePanelId !== 'themePanel' && activePanelId !== 'inspector') {
+  if (multiple && !DECK_LEVEL_PANELS.has(activePanelId)) {
     showPanel('themePanel');
   }
   themePanel.syncScope(count);

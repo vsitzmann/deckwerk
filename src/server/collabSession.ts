@@ -4,6 +4,7 @@ import { loadDeck, saveDeck, loadTheme, saveTheme, serializeDeck } from '../main
 import { validateDeckIntegrity, type AgentOperation } from '../shared/agent.js';
 import { applyOpsLenient } from '../shared/collabApply.js';
 import type { Deck } from '../shared/deck.js';
+import { ChatLog } from './chatLog.js';
 
 const SAVE_DEBOUNCE_MS = 800;
 const WATCH_DEBOUNCE_MS = 200;
@@ -52,13 +53,19 @@ export class CollabSession {
     readonly dir: string,
     public deck: Deck,
     public themeCss: string,
+    /**
+     * The deck's chat. Owned here so it opens, flushes and closes with the
+     * session — but it is never part of `deck`, `seq` or any transaction.
+     */
+    readonly chat: ChatLog,
     public seq = 0,
   ) {}
 
   static async open(dir: string): Promise<CollabSession> {
     const deck = await loadDeck(dir);
     const themeCss = await loadTheme(dir, deck.theme);
-    return new CollabSession(dir, deck, themeCss);
+    const chat = await ChatLog.load(dir);
+    return new CollabSession(dir, deck, themeCss, chat);
   }
 
   /**
@@ -124,6 +131,7 @@ export class CollabSession {
       this.saveTimer = null;
       await this.persist();
     }
+    await this.chat.flush();
   }
 
   async close(): Promise<void> {
@@ -132,6 +140,7 @@ export class CollabSession {
     // Closed first, so nothing can schedule a write while the last one runs;
     // the flush itself still persists what was accepted before this call.
     this.closed = true;
+    await this.chat.close();
     await this.flush();
   }
 
@@ -143,6 +152,8 @@ export class CollabSession {
     for (const watcher of this.watchers) watcher.close();
     this.watchers = [];
     this.closed = true;
+    // Closing the log writes nothing new; it only stops appends and wakes waiters.
+    void this.chat.close();
     if (this.saveTimer) clearTimeout(this.saveTimer);
     this.saveTimer = null;
   }

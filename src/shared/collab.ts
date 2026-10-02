@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { DeckSchema } from './deck.js';
 import { AgentOperationSchema } from './agent.js';
+import { CHAT_ID_PATTERN, CHAT_TEXT_MAX, ChatMessageSchema, ChatRefSchema } from './chat.js';
 
 /**
  * Wire protocol for collaborative editing.
@@ -99,6 +100,19 @@ export const ClientAgentEventSchema = z.object({
   error: z.boolean().optional(),
 });
 
+/**
+ * Post to the deck's chat (see chat.ts). Not an edit: it never enters a
+ * transaction, the undo stacks or History. `id` is the sender's, so the
+ * `chat` echo confirms the message it shows as pending; the server derives
+ * author, time and mentions itself. Refused from peers that may not comment.
+ */
+export const ClientChatPostSchema = z.object({
+  kind: z.literal('chat-post'),
+  id: z.string().regex(CHAT_ID_PATTERN),
+  text: z.string().min(1).max(CHAT_TEXT_MAX),
+  ref: ChatRefSchema.optional(),
+});
+
 export const ClientMessageSchema = z.discriminatedUnion('kind', [
   ClientHelloSchema,
   ClientTxnSchema,
@@ -106,6 +120,7 @@ export const ClientMessageSchema = z.discriminatedUnion('kind', [
   ClientCursorSchema,
   ClientThemeSchema,
   ClientAgentEventSchema,
+  ClientChatPostSchema,
 ]);
 
 export type ClientMessage = z.infer<typeof ClientMessageSchema>;
@@ -128,6 +143,8 @@ export const ServerWelcomeSchema = z.object({
    */
   mediaVariants: z.record(z.string(), z.string()).optional(),
   peers: z.array(PresenceStateSchema),
+  /** The newest chat messages (up to CHAT_HISTORY_LIMIT), oldest first. */
+  chat: z.array(ChatMessageSchema).optional(),
 });
 
 /** A clip's rendition landed: pin the new variants into URLs built from now on. */
@@ -178,6 +195,12 @@ export const ServerThemeSchema = z.object({
   byClientId: z.string(),
 });
 
+/** One accepted chat message, broadcast to every peer including its sender. */
+export const ServerChatSchema = z.object({
+  kind: z.literal('chat'),
+  message: ChatMessageSchema,
+});
+
 /** Hosted session torn down on purpose (host clicked End collaboration). */
 export const ServerEndedSchema = z.object({
   kind: z.literal('ended'),
@@ -208,6 +231,7 @@ export const ServerMessageSchema = z.discriminatedUnion('kind', [
   ServerEndedSchema,
   ServerMediaSchema,
   ServerDeckMovedSchema,
+  ServerChatSchema,
 ]);
 
 /**
@@ -225,4 +249,5 @@ export const COLLAB_CLOSE = {
 export type ServerMessage = z.infer<typeof ServerMessageSchema>;
 export type ServerTxnMessage = z.infer<typeof ServerTxnSchema>;
 export type ServerWelcomeMessage = z.infer<typeof ServerWelcomeSchema>;
+export type ClientChatPostMessage = z.infer<typeof ClientChatPostSchema>;
 export type ServerDeckMovedMessage = z.infer<typeof ServerDeckMovedSchema>;

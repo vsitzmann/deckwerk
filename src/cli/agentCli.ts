@@ -53,6 +53,7 @@ import { spawn } from 'node:child_process';
 import { htmlEditTransaction } from '../main/htmlAuthoring.js';
 import { checkWebPage, renderSlidesToPng } from './renderSlides.js';
 import { runConnectCommand } from './agentConnect.js';
+import { ChatUsageError, listChat, postChat, resolveChatTarget, waitForMention } from './chatClient.js';
 
 /**
  * `slide-agent` — the filesystem-first agent interface.
@@ -177,6 +178,15 @@ Everything else:
                                           after acting on it; never delete)
   comments  [deck] --add <text> (--slide <id|number> | --element <elementId>)
                                           [--author <name>]  reply on a thread
+  chat      [deck] [--since <messageId>]  the deck's chat, oldest first. Lives on
+                                          the collab server, not in the folder:
+                                          run it in a connected mirror, or pass
+                                          --server <origin> --deck-id <id>
+  chat      [deck] --wait [--since <id>] [--timeout <seconds>]
+                                          block until a person writes @agent in
+                                          the chat, then print that message
+  say       [deck] <text> [--slide <id|number>]
+                                          post to the chat as the agent
   transaction apply <deck> <file.json>    JSON fallback, for tooling with no
                                           browser — not how slides are authored
 
@@ -229,6 +239,10 @@ export async function runAgentCli(argv: string[], io: CliIo): Promise<number> {
         return await themeCommand(rest, io);
       case 'comments':
         return await commentsCommand(rest, io);
+      case 'chat':
+        return await chatCommand(rest, io);
+      case 'say':
+        return await sayCommand(rest, io);
       case 'transaction':
         return await transactionCommand(rest, io);
       case 'connect':
@@ -1222,6 +1236,56 @@ async function commentsCommand(argv: string[], io: CliIo): Promise<number> {
   const rows = listComments(deck).filter((row) => !flags.has('unresolved') || !row.resolved);
   io.out(json({ commentCount: rows.length, comments: rows }));
   return EXIT_OK;
+}
+
+/**
+ * The deck chat, for an agent: read it, or wait for somebody to address it.
+ * Unlike comments this is not deck content, so it is fetched from the server
+ * rather than read off disk.
+ */
+async function chatCommand(argv: string[], io: CliIo): Promise<number> {
+  const { flags, options, positional } = parseFlags(argv, ['since', 'timeout', 'server', 'deck-id']);
+  ensureKnownFlags('chat', flags, ['wait']);
+  ensurePositionals('chat', positional, 1);
+  const target = chatTargetFor(positional[0], options, io);
+  const since = options.get('since');
+  if (flags.has('wait')) {
+    const timeout = options.get('timeout');
+    if (timeout !== undefined && !(Number(timeout) > 0)) throw new UsageError('--timeout takes seconds, e.g. --timeout 600');
+    const messages = await waitForMention(target, {
+      since, deadlineMs: timeout !== undefined ? Number(timeout) * 1000 : undefined,
+    });
+    io.out(json({ chatCount: messages.length, messages, last: messages.at(-1)?.id ?? since ?? null, timedOut: messages.length === 0 }));
+    return messages.length > 0 ? EXIT_OK : EXIT_ERROR;
+  }
+  const listing = await listChat(target, since);
+  io.out(jsonCompactArrays({ chatCount: listing.chatCount, last: listing.last, messages: listing.messages }, ['messages']));
+  return EXIT_OK;
+}
+
+async function sayCommand(argv: string[], io: CliIo): Promise<number> {
+  const { flags, options, positional } = parseFlags(argv, ['server', 'deck-id']);
+  ensureKnownFlags('say', flags, ['slide']);
+  if (positional.length === 0 || positional.length > 2) {
+    throw new UsageError('usage: slide-agent say [deck] "text" [--slide <id|number>]');
+  }
+  const text = positional[positional.length - 1];
+  if (!text.trim()) throw new UsageError('say needs some text');
+  const slides = requestedSlideIds(flags);
+  if (slides.length > 1) throw new UsageError('say points at one slide at most');
+  const target = chatTargetFor(positional.length === 2 ? positional[0] : undefined, options, io);
+  const message = await postChat(target, text, slides[0]);
+  io.out(json({ status: 'posted', id: message.id, message }));
+  return EXIT_OK;
+}
+
+function chatTargetFor(deckArg: string | undefined, options: Map<string, string>, io: CliIo) {
+  try {
+    return resolveChatTarget(io.cwd, deckArg, { server: options.get('server'), deckId: options.get('deck-id') });
+  } catch (error) {
+    if (error instanceof ChatUsageError) throw new UsageError(error.message);
+    throw error;
+  }
 }
 
 interface CommentRow extends Comment {

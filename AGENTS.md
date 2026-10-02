@@ -477,9 +477,47 @@ Diagnostics go to stderr. Exit codes are `0` ok, `1` error,
 | `validate [deck]` | Schema, duplicate ids, timeline references, missing assets |
 | `asset import <deck> <paths...>` | Media copied into `assets/`, deduped, probed, transcoded |
 | `theme list\|show\|create\|delete\|choose\|apply [deck]` | The theme system: what is on offer, and writing, choosing and adopting one |
+| `chat [deck] [--since <id>]` | The deck's chat with the people in it (hosted decks only; see below) |
+| `chat [deck] --wait [--since <id>] [--timeout <s>]` | Blocks until a person writes `@agent`, then prints that message |
+| `say [deck] <text> [--slide <id\|number>]` | Posts to the chat as the agent |
 | `transaction apply <deck> <file.json>` | One atomic, named change |
 
 The deck argument defaults to the current directory.
+
+### Comments and chat
+
+People leave you work in two places. **Comments** sit on a slide or an
+object, live inside `deck.json`, and are review state: `slide-agent comments
+--unresolved` at the start of a task, act on each, then `--resolve <id>`
+(never delete). **Chat** is the running conversation about a hosted deck —
+"@agent can you tighten slide 4?" — and is deliberately *not* part of the
+document: the collab server keeps it per deck in `chat.jsonl` beside
+`deck.json` (append-only, one JSON message per line), and it never enters a
+transaction, undo or History. So chat needs the server: run the commands in
+the folder `slide-agent connect` mirrored (they read its
+`.deckwerk-mirror.json`), or name it with `--server <origin> --deck-id <id>`.
+In a mirror, `./deck chat` / `./deck say` are the same commands.
+
+```bash
+slide-agent chat                          # everything, oldest first; prints "last"
+slide-agent chat --since chat-…           # only what came after that message
+slide-agent say "Done — slide 4 is two lines now." --slide 4
+slide-agent chat --wait                   # blocks until someone writes @agent
+slide-agent chat --wait --since chat-…    # …after that message (no gaps between waits)
+```
+
+`chat --wait` exits 0 with the message(s) that woke it, or 1 with
+`timedOut: true` after `--timeout` seconds (default: wait forever). Only a
+person's message wakes it, never an agent's. Loop on it with `--since` set
+to the `last` it printed, so a message posted between two waits is not
+lost. A person's `@agent` also shows up in their Agent panel when your
+bridge is connected. Messages you post are attributed as the agent; a
+`--slide` ref renders as a chip that jumps to the slide.
+
+Over HTTP the same thing is `GET /api/chat?deck=<id>[&since=<id>]` and
+`POST /api/chat?deck=<id>` with `{ "text", "slide"?: id|number }`, scoped and
+authorized exactly like `/api/comments` (viewers may read but not post). The
+long poll is `GET /api/chat?deck=<id>&wait=1&since=<id>[&mention=agent][&timeout=ms]`.
 
 ### Repair import gaps
 

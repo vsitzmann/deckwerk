@@ -297,3 +297,133 @@ button.bar-person:focus-visible { outline: 2px solid var(--accent); outline-offs
 }
 /* Narrowing the toolbar hides the name; never while someone is typing in it. */
 #toolbar.toolbar-hide-deck-name .bar-deck-name.is-editing { display: inline-flex; }
+
+/* --- deck chat (chatPanel.ts) ---
+   A side panel like History, built from the comment popover's pieces: the
+   same meta line, text and compose box, so a chat message and a comment
+   read as relatives. */
+#chat.chat-panel {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+#chat.chat-panel[hidden] { display: none; }
+.chat-panel .panel-header { flex: none; }
+.chat-panel > .insp-hint { flex: none; margin-top: 0; }
+.chat-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  margin: 0 -14px;
+  border-top: 1px solid var(--line);
+}
+.chat-empty { padding: 10px 14px; }
+.chat-message {
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--line);
+}
+.chat-message.pending { opacity: 0.6; }
+.chat-message.mentions-me {
+  background: var(--accent-soft);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+.chat-meta { align-items: center; }
+.chat-dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--muted);
+}
+.chat-message.agent .chat-dot { border-radius: 2px; }
+.chat-text { overflow-wrap: anywhere; }
+.chat-mention { color: var(--accent); font-weight: 600; }
+.chat-mention.is-me {
+  padding: 0 2px;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--accent) 24%, transparent);
+  color: var(--text);
+}
+.chat-ref {
+  margin-top: 4px;
+  padding: 1px 7px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel-2);
+  color: var(--muted);
+  font-size: 11px;
+  cursor: pointer;
+}
+.chat-ref:not(:disabled):hover { border-color: var(--accent); color: var(--text); }
+.chat-ref:disabled { cursor: default; opacity: 0.6; }
+.chat-compose {
+  position: relative;
+  flex: none;
+  flex-direction: column;
+  margin: 0 -14px -12px;
+  padding: 8px 14px 12px;
+}
+.chat-compose textarea { min-height: 44px; }
+.chat-compose-actions {
+  display: flex;
+  justify-content: space-between;
+  gap: 6px;
+}
+.chat-compose .chat-compose-actions button:last-child {
+  border: 0;
+  border-radius: 6px;
+  background: var(--accent);
+  color: #fff;
+  padding: 6px 10px;
+}
+/* .comment-compose paints every button as its primary Send; the slide
+   toggle is a secondary control, so it gets the ordinary button back. */
+.chat-compose .chat-ref-toggle {
+  align-self: auto;
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--muted);
+  font-size: 11px;
+  padding: 4px 8px;
+}
+.chat-compose .chat-ref-toggle:not(:disabled):hover { border-color: var(--accent); color: var(--text); }
+.chat-compose .chat-ref-toggle[aria-pressed="true"] {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 24%, var(--panel-2));
+  color: var(--text);
+}
+.chat-completions {
+  top: auto;
+  bottom: calc(100% - 4px);
+  left: 14px;
+  max-height: 180px;
+  overflow-y: auto;
+}
+.chat-completions[hidden] { display: none; }
+.chat-completions .shape-menu-item.is-active { background: var(--accent); color: #fff; }
+.chat-bell {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px 6px;
+  color: var(--muted);
+}
+.chat-bell[aria-pressed="true"] { color: var(--accent); border-color: var(--accent); }
+#side-tabs button .chat-tab-badge {
+  display: inline-block;
+  min-width: 16px;
+  margin-left: 4px;
+  padding: 0 4px;
+  border-radius: 8px;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  color: var(--text);
+  font-size: 10px;
+  line-height: 14px;
+  text-align: center;
+}
+#side-tabs button .chat-tab-badge.is-mention {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}

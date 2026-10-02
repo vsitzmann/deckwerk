@@ -12,6 +12,7 @@ import {
   type ServerDeckMovedMessage,
   type ServerWelcomeMessage,
 } from '@shared/collab.js';
+import type { ChatMessage, ChatRef } from '@shared/chat.js';
 import type { Deck } from '@shared/deck.js';
 import { diffDecks } from '@shared/deckDiff.js';
 import { makeId } from '@shared/geometry.js';
@@ -56,6 +57,8 @@ export interface CollabBridgeHooks {
   onPeerCursor: (clientId: string, cursor: CursorPosition | null) => void;
   onPeerLeft: (clientId: string) => void;
   onThemeCss: (css: string) => void;
+  /** One accepted chat message, including the echo of this client's own. */
+  onChat?: (message: ChatMessage) => void;
   onStatus: (text: string) => void;
   /** True while no local transaction is awaiting confirmation. */
   onCleanChange: (clean: boolean) => void;
@@ -258,6 +261,18 @@ export class CollabBridge {
     this.send({ kind: 'theme', css });
   }
 
+  /**
+   * Post to the deck chat. Fire-and-forget: the caller shows the message as
+   * pending under `id` and confirms it when the `chat` echo carries that id.
+   * Returns false while disconnected, so the caller can resend after the
+   * next welcome (the server ignores an id it already accepted).
+   */
+  sendChat(post: { id: string; text: string; ref?: ChatRef }): boolean {
+    if (this.socket?.readyState !== WebSocket.OPEN) return false;
+    this.send({ kind: 'chat-post', ...post });
+    return true;
+  }
+
   private seq = 0;
 
   private applyHistoryOps(currentDeck: Deck, ops: AgentOperation[], label: string): void {
@@ -385,6 +400,9 @@ export class CollabBridge {
         return;
       case 'media':
         setMediaVariants(message.variants);
+        return;
+      case 'chat':
+        this.hooks.onChat?.(message.message);
         return;
       case 'ended':
         // Deliberate teardown, not a network blip: don't reconnect.
