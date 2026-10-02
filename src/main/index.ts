@@ -17,6 +17,7 @@ import {
   rewriteAssetSrcs,
 } from '@shared/clipboard.js';
 import { importClipboardImageUrl, importImageSource } from './clipboardImageFetch.js';
+import { clipboardFilePaths, firstClipboardMediaPath } from '@shared/clipboardFiles.js';
 import type { ClipboardImageSource } from '@shared/clipboardImages.js';
 import { IPC } from '@shared/ipc.js';
 import type {
@@ -847,6 +848,25 @@ function registerHandlers(): void {
     },
   );
 
+  /** Files a file manager's Copy left on the pasteboard, in each OS's format. */
+  const readClipboardFilePaths = (): string[] => {
+    const read = (format: string): string => {
+      try {
+        return clipboard.readBuffer(format).toString(format === 'FileNameW' ? 'utf16le' : 'utf8');
+      } catch {
+        return '';
+      }
+    };
+    if (process.platform === 'win32') {
+      const path = read('FileNameW').replace(/\0+$/, '');
+      return path ? [path] : [];
+    }
+    const lists = process.platform === 'darwin'
+      ? [read('public.file-url')]
+      : [read('text/uri-list'), read('x-special/gnome-copied-files')];
+    return lists.map((list) => clipboardFilePaths(list)).find((paths) => paths.length > 0) ?? [];
+  };
+
   // Copy: serialise the fragment onto the OS pasteboard under a private
   // format, with absolute asset paths attached, so any instance of this app —
   // including a different process with a different deck open — can paste it.
@@ -880,6 +900,14 @@ function registerHandlers(): void {
       // copied cells wants cells.
       if (/<table\b/i.test(html)) {
         return { kind: 'external-html', html, text };
+      }
+      // A file copied in the file manager: the pasteboard holds only its
+      // path (and, from Finder, the file's icon as a bitmap, which must not
+      // win). Import the file itself, video included.
+      const copiedFile = firstClipboardMediaPath(readClipboardFilePaths());
+      if (copiedFile) {
+        const asset = await importAsset(requireSession(event).dir, copiedFile);
+        return { kind: 'external-image', asset };
       }
       const image = clipboard.readImage();
       if (!image.isEmpty()) {

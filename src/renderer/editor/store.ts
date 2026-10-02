@@ -1087,7 +1087,7 @@ export async function pasteFromClipboard(
   if (!payload) return null;
 
   if (payload.kind === 'external-image') {
-    return insertClipboardImage(store, payload.asset);
+    return insertClipboardMedia(store, payload.asset);
   }
 
   if (payload.kind === 'external-html') {
@@ -1207,8 +1207,11 @@ export async function pasteInAppClipboard(
 
 /** Native browser paste events expose image bytes even on plain HTTP origins,
  * where `navigator.clipboard.read()` is unavailable. Upload those bytes using
- * the same collaboration asset bridge as drag-and-drop. */
-export async function pasteImageFilesFromClipboard(
+ * the same collaboration asset bridge as drag-and-drop.
+ *
+ * A file copied in the file manager arrives the same way, as a File carrying
+ * its own name -- and that may be a video as well as an image. */
+export async function pasteMediaFilesFromClipboard(
   store: EditorStore,
   files: File[],
 ): Promise<{ kind: 'elements'; count: number } | null> {
@@ -1216,15 +1219,21 @@ export async function pasteImageFilesFromClipboard(
   // manager can hand over any format the importer accepts — including the
   // ones it has to re-encode. Matching PNG alone dropped those pastes with no
   // element and no error.
-  const image = files.find((file) => clipboardImageName(file) !== null);
-  if (!image || !window.api.importAssetFiles) return null;
-  const name = clipboardImageName(image) as string;
+  const media = files.find((file) => clipboardMediaName(file) !== null);
+  if (!media || !window.api.importAssetFiles) return null;
+  const name = clipboardMediaName(media) as string;
   const [asset] = await window.api.importAssetFiles([
     // The name is what tells the importer which format this is, so it has to
     // survive the hand-off; the bytes are re-wrapped only to rename them.
-    new File([image], name, { type: image.type }),
+    new File([media], name, { type: media.type }),
   ]);
-  return asset ? insertClipboardImage(store, asset) : null;
+  return asset ? insertClipboardMedia(store, asset) : null;
+}
+
+/** The name to import a pasted file under: a video keeps its own name. */
+function clipboardMediaName(file: { name: string; type: string }): string | null {
+  if (classifyMediaName(file.name) === 'video') return file.name;
+  return clipboardImageName(file);
 }
 
 /**
@@ -1247,11 +1256,11 @@ export function clipboardImageName(file: { name: string; type: string }): string
   return classifyMediaName(name) === 'image' ? name : null;
 }
 
-function insertClipboardImage(
+function insertClipboardMedia(
   store: EditorStore,
   asset: Extract<ClipboardReadResult, { kind: 'external-image' }>['asset'],
 ): { kind: 'elements'; count: number } {
-  const id = makeId('image');
+  const id = makeId(asset.kind);
   store.commit((deck) => {
     const slide = deck.slides[store.get().slideIndex];
     if (!slide) return;
@@ -1264,9 +1273,8 @@ function insertClipboardImage(
     );
     const w = Math.round(naturalW * scale);
     const h = Math.round(naturalH * scale);
-    slide.elements.push({
+    const base = {
       id,
-      type: 'image',
       x: Math.round((deck.canvas.w - w) / 2),
       y: Math.round((deck.canvas.h - h) / 2),
       w,
@@ -1277,11 +1285,24 @@ function insertClipboardImage(
       class: [],
       style: {},
       src: asset.src,
-      fit: 'contain',
-      alt: 'Pasted screenshot',
+      fit: 'contain' as const,
       sourceBox: null,
-    });
-  }, { label: 'Paste screenshot' });
+    };
+    // Same defaults as a video dropped onto the slide.
+    slide.elements.push(asset.kind === 'video'
+      ? {
+          ...base,
+          type: 'video',
+          autoplay: true,
+          loop: true,
+          muted: true,
+          controls: false,
+          start: 0,
+          end: null,
+          poster: null,
+        }
+      : { ...base, type: 'image', alt: 'Pasted screenshot' });
+  }, { label: asset.kind === 'video' ? 'Paste video' : 'Paste screenshot' });
   store.select([id]);
   return { kind: 'elements', count: 1 };
 }

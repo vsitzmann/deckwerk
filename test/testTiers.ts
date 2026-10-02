@@ -53,6 +53,7 @@ const CLIPBOARD_MARKERS = [
   /pasteFromClipboard/,
   /\[\s*'(?:paste|cut|copy)'\s*\]/,
   /clipboard\.(?:write|read)/,
+  /copyFilesLikeFileManager/,
 ];
 
 /** Suites that share machine state or need a process topology of their own. */
