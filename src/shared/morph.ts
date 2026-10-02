@@ -69,6 +69,54 @@ export function essentialMorphPairs(
 }
 
 /**
+ * The same object, restyled: a duplicate of a source object (it carries the
+ * source's id as its lineage) that still says the same thing in the same
+ * place, and differs only in paint — a new colour, fill, border or shadow.
+ * Without a pair it would fade out and a recoloured copy fade in; paired, the
+ * player blends the paint across the transition instead. Geometry is held to
+ * the same small tolerance as `essentialMorphPairs`, and the content (the
+ * words, the kind of shape, the picture) must match, so a pair here is never
+ * a different object that merely descends from this one.
+ */
+export function restyledMorphPairs(
+  previous: SlideElement[],
+  next: SlideElement[],
+): MorphPair[] {
+  const POSITION_EPSILON = 8;
+  const ROTATION_EPSILON = 1;
+  const byId = new Map(previous.map((element) => [element.id, element]));
+  const claimed = new Set<SlideElement>();
+  const pairs: MorphPair[] = [];
+  for (const target of next) {
+    const source = target.lineageId ? byId.get(target.lineageId) : undefined;
+    if (!source || claimed.has(source) || source.type !== target.type) continue;
+    const key = contentKey(target);
+    if (key === null || contentKey(source) !== key) continue;
+    if (Math.abs(source.x - target.x) > POSITION_EPSILON ||
+      Math.abs(source.y - target.y) > POSITION_EPSILON ||
+      Math.abs(source.w - target.w) > POSITION_EPSILON ||
+      Math.abs(source.h - target.h) > POSITION_EPSILON ||
+      Math.abs(source.rot - target.rot) > ROTATION_EPSILON) continue;
+    claimed.add(source);
+    pairs.push([source, target]);
+  }
+  return pairs;
+}
+
+/** What an element says, apart from how it is painted; null when that cannot be told. */
+function contentKey(element: SlideElement): string | null {
+  switch (element.type) {
+    case 'text': return `text:${plainText(element.html)}`;
+    case 'shape':
+      return `shape:${element.shape}:${element.path ?? ''}:${element.control ? 'curve' : 'straight'}`
+        + `:${element.arrowStart}:${element.arrowEnd}`;
+    case 'image':
+    case 'video': return `${element.type}:${element.src}`;
+    default: return null;
+  }
+}
+
+/**
  * Runtime matching is deliberately explicit: unpaired objects never animate.
  *
  * A pairing id is meant to be unique per slide — the pairing UI clears the id
