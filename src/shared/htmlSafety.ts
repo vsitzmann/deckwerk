@@ -217,6 +217,31 @@ export function restoreKatexSourceHtml(html: string): string {
   return template.innerHTML;
 }
 
+/**
+ * Drop solid backgrounds from pasted runs of text.
+ *
+ * Copying styled text makes Chromium write the background of the nearest
+ * painted ancestor onto the copied run: the editor's own tint on a box being
+ * edited, or the fill of the text box it came from. Pasted, that becomes a
+ * coloured slab behind the words inside another box. The editor has no
+ * run-level highlight to preserve, and a box's fill belongs to the box, so a
+ * pasted run keeps its colour and type but never a background. Gradient text
+ * (a background clipped to the glyphs) is paint of the letters and stays.
+ */
+function stripRunBackgrounds(root: DocumentFragment): void {
+  for (const node of [...root.querySelectorAll<HTMLElement>('[style*="background"]')].reverse()) {
+    const clip = node.style.getPropertyValue('background-clip')
+      || node.style.getPropertyValue('-webkit-background-clip');
+    if (/text/i.test(clip)) continue;
+    node.style.removeProperty('background-color');
+    const shorthand = node.style.getPropertyValue('background');
+    if (shorthand && !/gradient\(|url\(/i.test(shorthand)) node.style.removeProperty('background');
+    if (node.getAttribute('style')?.trim()) continue;
+    node.removeAttribute('style');
+    if (node.tagName === 'SPAN' && node.attributes.length === 0) node.replaceWith(...node.childNodes);
+  }
+}
+
 export function sanitizePastedTextHtml(html: string): string {
   const template = document.createElement('template');
   // Copying rendered maths from the canvas puts KaTeX's generated render tree
@@ -283,6 +308,7 @@ export function sanitizePastedTextHtml(html: string): string {
     if (!node.getAttribute('style')?.trim()) node.removeAttribute('style');
   }
   stripLayoutDeclarations(root);
+  stripRunBackgrounds(root);
   for (const node of root.querySelectorAll<HTMLElement>('*')) {
     for (const attribute of [...node.attributes]) {
       const name = attribute.name.toLowerCase();

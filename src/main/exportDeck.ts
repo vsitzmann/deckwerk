@@ -470,6 +470,10 @@ export function referencedAssets(deck: Deck): Set<string> {
         collectFallbackAssets(el.html, wanted);
         collectFallbackAssets(el.css ?? '', wanted);
       }
+      // A picture can also live in the element's own CSS (a background image,
+      // text filled with a picture) or in a styled run of its text.
+      for (const value of Object.values(el.style)) collectFallbackAssets(value, wanted);
+      if (el.type === 'text') collectFallbackAssets(el.html, wanted);
     }
   }
   return wanted;
@@ -517,7 +521,10 @@ export function rewriteAssetReferences(
   const rewriteSlide = <T extends Pick<Slide, 'background' | 'elements'>>(slide: T): T => ({
     ...slide,
     background: { ...slide.background, image: swap(slide.background.image) },
-    elements: slide.elements.map((el) => {
+    elements: slide.elements.map((original) => {
+      const el = Object.values(original.style).some((value) => value.includes('url('))
+        ? { ...original, style: Object.fromEntries(Object.entries(original.style).map(([k, v]) => [k, swapInSource(v)])) }
+        : original;
       if (el.type === 'image') return { ...el, src: swap(el.src) as string };
       if (el.type === 'video') {
         return {
@@ -531,6 +538,7 @@ export function rewriteAssetReferences(
       if (el.type === 'html') {
         return { ...el, html: swapInSource(el.html), css: el.css === undefined ? el.css : swapInSource(el.css) };
       }
+      if (el.type === 'text') return { ...el, html: swapInSource(el.html) };
       return el;
     }),
   });

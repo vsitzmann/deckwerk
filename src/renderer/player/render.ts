@@ -238,7 +238,7 @@ export function renderElement(
   node.dataset.elementId = el.id;
   node.dataset.elementType = el.type;
 
-  applyElementBoxStyles(node, el);
+  applyElementBoxStyles(node, el, undefined, opts.resolveSrc);
 
   const body = renderBody(el, opts);
   if (
@@ -270,12 +270,16 @@ export function renderElement(
  * One function, called by both paths, removes that whole failure mode.
  *
  * `previous` is the element as it was last rendered, when known: keys it had
- * and this one does not must be cleared from a reused node.
+ * and this one does not must be cleared from a reused node. `resolveSrc`
+ * points a deck-relative `url(assets/…)` in the element's own CSS (a
+ * background image, text filled with a picture) at the deck's files; without
+ * it the URL resolves against the app's page and the picture never loads.
  */
 export function applyElementBoxStyles(
   node: HTMLElement,
   el: SlideElement,
   previous?: SlideElement,
+  resolveSrc?: (src: string) => string,
 ): void {
   const s = node.style;
   if (previous) {
@@ -295,7 +299,7 @@ export function applyElementBoxStyles(
       s.removeProperty(k);
       continue;
     }
-    s.setProperty(k, v);
+    s.setProperty(k, resolveSrc && v.includes('url(') ? rewriteCssAssetUrls(v, resolveSrc) : v);
   }
   // Shape paint lives in an SVG child, but CSS effects such as box-shadow live
   // on this positioned wrapper. Give that wrapper the same contour as the SVG
@@ -1006,6 +1010,9 @@ function renderVideo(
   const video = document.createElement('video');
   video.playsInline = true;
   video.dataset.mediaKey = videoPresentationKey(el, opts.resolveSrc(el.src));
+  // Black only once decoding has failed (player.css): a black surface behind a
+  // working video shows as a dark hairline at its scaled edges on light slides.
+  video.addEventListener('error', () => video.classList.add('media-failed'));
   const preload = opts.mediaPreload ?? 'auto';
   // The preload hint must be in place before src: assigning src is what
   // starts resource selection, and it reads the hint of that moment.

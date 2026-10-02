@@ -44,8 +44,10 @@
 
 /* Chromium prints a video surface as black when decoding fails. Give the
    on-screen Player the same stable fallback instead of exposing the slide
-   background through a transparent, unplayable media box. */
-.element video {
+   background through a transparent, unplayable media box -- but only then:
+   a black surface behind a playing video bleeds through its antialiased,
+   scaled edges as a dark hairline around light footage. */
+.element video.media-failed {
   background: #000;
 }
 

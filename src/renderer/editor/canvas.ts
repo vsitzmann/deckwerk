@@ -1302,7 +1302,7 @@ export class EditorCanvas {
       // and forgotten by the other. Everything below is genuinely editor-side:
       // details that live on child nodes a rebuild would have recreated.
       const before = previous?.elements.find((e) => e.id === el.id);
-      applyElementBoxStyles(node, el, before);
+      applyElementBoxStyles(node, el, before, resolve.resolveSrc);
       applyTextRenderState(node, el, before);
       if (el.type === 'image' || el.type === 'video') {
         syncMediaFrame(node, el);

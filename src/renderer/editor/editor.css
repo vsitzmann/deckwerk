@@ -619,7 +619,11 @@ body.panel-resizing iframe { pointer-events: none; }
    even when the text is short or the slide background matches it. */
 .element.editing {
   outline: 2px solid var(--accent);
-  background: rgb(59 130 246 / 8%);
+  /* An inset shadow, not a background: Chromium copies an ancestor's
+     background onto text copied out of it, and a pasted run then carried the
+     editor's tint as a coloured slab behind its words. A shadow is paint the
+     copy ignores, and it lies over a filled box instead of replacing it. */
+  box-shadow: inset 0 0 0 100vmax rgb(59 130 246 / 8%);
 }
 
 .element.editing [contenteditable] {
@@ -2115,7 +2119,7 @@ input[type="range"] { accent-color: var(--accent); border: 0; background: transp
 }
 
 /* The element being typed into. */
-.element.editing { outline-color: var(--accent); background: var(--accent-soft); }
+.element.editing { outline-color: var(--accent); box-shadow: inset 0 0 0 100vmax var(--accent-soft); }
 
 /* Colour picker: theme palette and full RGBA controls open in one popover. */
 .field-color { flex-direction: row; align-items: center; gap: 8px; }
@@ -4271,6 +4275,9 @@ select.panel-action-select {
 .toggle-segment:has(> input:indeterminate) { background: var(--accent-soft); color: var(--text); }
 .toggle-segment:has(> input:focus-visible) { outline: 2px solid var(--accent); outline-offset: -2px; }
 .toggle-segment > .toggle-segment-short { font: 10.5px var(--mono); letter-spacing: 0; text-transform: none; }
+/* The label's own span rule (muted grey) would otherwise win over the strip's
+   colour, leaving grey text on the accent fill. */
+.toggle-segment > .toggle-segment-short { color: inherit; }
 
 .media-mask-settings { margin-bottom: 4px; }
 .media-mask-settings .field-check { min-height: 26px; }
