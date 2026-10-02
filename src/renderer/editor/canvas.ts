@@ -757,6 +757,16 @@ export class EditorCanvas {
     /** The click was the second of a double-click: take the word under it. */
     selectWord: boolean;
   } | null = null;
+  /**
+   * A video or web element whose second click of a double-click went down on
+   * it; the pointer-up toggles it unless the press became a drag. Safari does
+   * not reliably dispatch `dblclick` on the canvas (the first click's selection
+   * redraw and the host's pointer capture leave it no common target), so the
+   * native event alone left double-click-to-play inert there.
+   */
+  private pendingMediaToggle: string | null = null;
+  /** When the pointer path last toggled media, so the native dblclick skips. */
+  private mediaToggledAt = Number.NEGATIVE_INFINITY;
 
   /**
    * Id of the element whose crop is being edited, if any.
@@ -2189,6 +2199,10 @@ export class EditorCanvas {
         && (hit.type === 'text' || hit.type === 'html')
         ? { elementId: hit.id, clientX: ev.clientX, clientY: ev.clientY, selectWord: secondClick }
         : null;
+      this.pendingMediaToggle = secondClick && !ev.shiftKey
+        && (hit.type === 'video' || hit.type === 'web')
+        ? hit.id
+        : null;
       if (!selection.has(hit.id)) {
         this.store.select([hit.id], ev.shiftKey);
       } else if (ev.shiftKey) {
@@ -2643,6 +2657,8 @@ export class EditorCanvas {
       return;
     }
     const textEdit = !this.dragStarted ? this.pendingTextEdit : null;
+    const mediaToggle = !this.dragStarted ? this.pendingMediaToggle : null;
+    this.pendingMediaToggle = null;
     if (this.drag.kind === 'marquee' && this.marquee) {
       const slide = this.store.slide;
       if (slide) {
@@ -2657,6 +2673,16 @@ export class EditorCanvas {
     this.host.releasePointerCapture?.(ev.pointerId);
     this.endDrag();
     if (textEdit) this.beginTextEdit(textEdit.elementId, textEdit, textEdit.selectWord);
+    if (mediaToggle) {
+      this.mediaToggledAt = ev.timeStamp;
+      this.toggleMedia(mediaToggle);
+    }
+  }
+
+  private toggleMedia(elementId: string): void {
+    const el = this.store.slide?.elements.find((e) => e.id === elementId);
+    if (el?.type === 'video') this.toggleVideo(elementId);
+    else if (el?.type === 'web') this.toggleWebLive(elementId);
   }
 
   private endDrag(): void {
@@ -2670,6 +2696,7 @@ export class EditorCanvas {
     this.sizeMatches = [];
     this.marquee = null;
     this.pendingTextEdit = null;
+    this.pendingMediaToggle = null;
 
     // Deliberately *not* a full render. Redrawing the slide layer here would
     // replace the node the pointer went down on, and a browser cannot
@@ -2814,10 +2841,11 @@ export class EditorCanvas {
 
     if (hit.type === 'text' || hit.type === 'html') {
       this.beginTextEdit(hit.id);
-    } else if (hit.type === 'video') {
-      this.toggleVideo(hit.id);
-    } else if (hit.type === 'web') {
-      this.toggleWebLive(hit.id);
+    } else if (hit.type === 'video' || hit.type === 'web') {
+      // Browsers that do dispatch dblclick (Chromium) already had the pair
+      // toggled on its second pointer-up; toggling again would undo it.
+      if (ev.timeStamp - this.mediaToggledAt <= DOUBLE_CLICK_MS) return;
+      this.toggleMedia(hit.id);
     }
   }
 

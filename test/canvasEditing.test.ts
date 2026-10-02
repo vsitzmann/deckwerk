@@ -1614,6 +1614,29 @@ describe('inline text editing', () => {
     expect(canvas.isPlaying('video-1')).toBe(true);
   });
 
+  it('plays the video on a pointer double-click without a native dblclick (Safari)', () => {
+    const { canvas, host } = setup();
+    const stage = host.querySelector<HTMLElement>('.stage')!;
+    stage.getBoundingClientRect = () =>
+      ({ left: 0, top: 0, width: 1920, height: 1080 }) as DOMRect;
+    const press = () => {
+      const at = { clientX: 300, clientY: 400, bubbles: true, button: 0, pointerId: 1 };
+      host.dispatchEvent(new PointerEvent('pointerdown', at));
+      host.dispatchEvent(new PointerEvent('pointerup', at));
+    };
+
+    press();
+    expect(canvas.isPlaying('video-1')).toBe(false);
+    press();
+    expect(canvas.isPlaying('video-1')).toBe(true);
+
+    // Chromium also dispatches dblclick for the same pair; it must not pause.
+    host.dispatchEvent(
+      new MouseEvent('dblclick', { clientX: 300, clientY: 400, bubbles: true }),
+    );
+    expect(canvas.isPlaying('video-1')).toBe(true);
+  });
+
   it('marks videos with a small editor-only corner badge', () => {
     const { host } = setup();
     const video = host.querySelector<HTMLElement>('[data-element-id="video-1"]')!;
