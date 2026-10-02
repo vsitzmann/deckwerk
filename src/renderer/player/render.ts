@@ -1,3 +1,4 @@
+import { curvedShadowClasses } from '@shared/shapeShadow.js';
 import { MIRRORED_TEXT_STYLE_PROPERTIES } from '@shared/deck.js';
 import type { Deck, MediaEffect, Slide, SlideElement } from '@shared/deck.js';
 import { fitScale } from '@shared/geometry.js';
@@ -297,6 +298,8 @@ export function applyElementBoxStyles(
     }
     s.setProperty(k, v);
   }
+  // A curved (paper) shadow is drawn by player.css from these settings.
+  node.classList.toggle('shadow-curved', curvedShadowClasses(el.style).length > 0);
   // Shape paint lives in an SVG child, but CSS effects such as box-shadow live
   // on this positioned wrapper. Give that wrapper the same contour as the SVG
   // or a circular imported frame casts a square shadow and a rounded card casts

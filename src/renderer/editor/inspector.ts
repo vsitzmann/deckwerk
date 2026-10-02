@@ -30,7 +30,31 @@ import {
 } from '@shared/themes.js';
 import { colorField, colorForInput } from './colorPicker.js';
 import { setCircularMask } from '@shared/mediaMask.js';
+import {
+  hasTextBox,
+  setTextBoxBorder,
+  setTextBoxFill,
+  setTextBoxRadius,
+  textBoxPaint,
+} from '@shared/shapeText.js';
+import {
+  DEFAULT_SHAPE_SHADOW,
+  DEFAULT_TEXT_SHADOW,
+  boxShadow,
+  setBoxShadow,
+  setShapeShadow,
+  setTextShadow,
+  shadowOffset,
+  shadowPolar,
+  shapeShadow,
+  textShadow,
+  curvedShadow,
+  setCurvedShadow,
+  DEFAULT_CURVED_SHADOW,
+  type ShapeShadow,
+} from '@shared/shapeShadow.js';
 import { mediaNaturalSize } from './mediaNatural.js';
+import { angleDial } from './angleDial.js';
 import {
   cssMediaBorder,
   cssMediaRadius,
@@ -47,6 +71,7 @@ import {
   wholeTextFormatState,
   applyTextRole,
   isBaselineFormat,
+  recordTextOverride,
   type InlineTextFormat,
 } from './textFormatting.js';
 
@@ -188,7 +213,7 @@ export class Inspector {
   private lastSlide = -1;
   private lastSlideSelection = '';
   /** Keep the opacity slider mounted while its live drag updates the deck. */
-  private changingOpacity = false;
+  private continuousEdit = false;
   private morphHost = document.createElement('section');
   private morphPanel: MorphPanel;
   /** Enter the dedicated editor for the three fixed layout masters. */
@@ -211,23 +236,24 @@ export class Inspector {
       const { deck, selection, slideIndex, slideSelection } = this.store.get();
       const sel = [...selection].sort().join(',');
       const slideSel = [...slideSelection].sort().join(',');
-      // Opacity previews continuously on the canvas. Those transient deck
-      // updates must not replace the range input currently under the pointer.
+      // Opacity and a shadow's angle dial preview continuously on the canvas.
+      // Those transient deck updates must not replace the control currently
+      // under the pointer.
       // A genuine selection change still rebuilds the panel as usual.
       if (
-        this.changingOpacity
+        this.continuousEdit
         && sel === this.lastSelection
         && slideIndex === this.lastSlide
         && slideSel === this.lastSlideSelection
       ) {
         return;
       }
-      if (this.changingOpacity) {
+      if (this.continuousEdit) {
         // A selection change can remove the focused slider before its normal
         // pointerup/blur cleanup. Close the drag transaction before rendering
         // the newly selected object's controls.
         this.store.endTransaction();
-        this.changingOpacity = false;
+        this.continuousEdit = false;
       }
       // Speaker notes are not shown here. Each keystroke in the notes drawer
       // commits a fresh deck, and rebuilding for it re-mounted the layout and
@@ -367,9 +393,19 @@ export class Inspector {
         this.host.appendChild(this.multiShapeSection(
           selected as Array<Extract<SlideElement, { type: 'shape' }>>,
         ));
+      }
+      if (sameType && first.type === 'shape') {
+        // A shadow means the same thing on every kind of shape, so a mixed
+        // selection of boxes, lines and arrows can still share one.
+        this.host.appendChild(this.shadowSection(
+          selected as Array<Extract<SlideElement, { type: 'shape' }>>, 'shape',
+        ));
       } else if (sameType && first.type === 'text') {
         this.host.appendChild(this.multiTextSection(
           selected as Array<Extract<SlideElement, { type: 'text' }>>,
+        ));
+        this.host.appendChild(this.shadowSection(
+          selected as Array<Extract<SlideElement, { type: 'text' }>>, 'text',
         ));
       } else if (sameType && (first.type === 'image' || first.type === 'video')) {
         this.host.appendChild(this.multiMediaSection(
@@ -772,7 +808,7 @@ export class Inspector {
     bottom.appendChild(opacityField(
       multi ? commonValue(selected.map((element) => element.opacity)) : first.opacity,
       () => {
-        this.changingOpacity = true;
+        this.continuousEdit = true;
         this.store.beginTransaction('Change opacity');
       },
       (value) => this.store.updateSelected((element) => {
@@ -780,7 +816,7 @@ export class Inspector {
       }, { label: 'Change opacity' }),
       () => {
         this.store.endTransaction();
-        this.changingOpacity = false;
+        this.continuousEdit = false;
       },
     ));
 
@@ -869,6 +905,313 @@ export class Inspector {
   }
 
   /** Shared, safe style controls for a same-kind shape multi-selection. */
+  /**
+   * A shape's fill as a gradient: Solid, Linear or Radial, then the colour it
+   * runs to and, for a linear one, its direction on the same knob as a
+   * shadow's. The gradient runs from the Fill colour above.
+   */
+  private gradientFields(shapes: Array<Extract<SlideElement, { type: 'shape' }>>): HTMLElement {
+    const box = document.createElement('div');
+    box.className = 'gradient-fields';
+    const styleOf = (shape: (typeof shapes)[number]): string =>
+      !shape.fillGradient ? 'Solid' : shape.fillGradient.kind === 'radial' ? 'Radial gradient' : 'Linear gradient';
+    const style = commonValue(shapes.map(styleOf)) ?? 'Solid';
+    box.appendChild(selectField('Fill style', ['Solid', 'Linear gradient', 'Radial gradient'], style, (value) =>
+      this.store.updateSelected((element) => {
+        if (element.type !== 'shape') return;
+        if (value === 'Solid') { element.fillGradient = null; return; }
+        if (!element.fill) element.fill = '#7b90e1';
+        element.fillGradient = {
+          to: element.fillGradient?.to ?? '#ec6b14',
+          angle: element.fillGradient?.angle ?? 270,
+          kind: value === 'Radial gradient' ? 'radial' : 'linear',
+        };
+      }, { label: value === 'Solid' ? 'Solid fill' : 'Gradient fill' })));
+    const gradients = shapes.map((shape) => shape.fillGradient).filter((g): g is NonNullable<typeof g> => Boolean(g));
+    if (gradients.length === 0) return box;
+    const change = (apply: (gradient: NonNullable<(typeof shapes)[number]['fillGradient']>) => void, label: string): void =>
+      this.store.updateSelected((element) => {
+        if (element.type !== 'shape' || !element.fillGradient) return;
+        const next = { ...element.fillGradient };
+        apply(next);
+        element.fillGradient = next;
+      }, { label });
+    const to = commonValue(gradients.map((gradient) => gradient.to));
+    box.appendChild(colorField('To', to ?? gradients[0].to, (value) => {
+      if (value) change((gradient) => { gradient.to = value; }, 'Change gradient colour');
+    }, { mixed: to === null }));
+    if (gradients.every((gradient) => gradient.kind !== 'radial')) {
+      const row = document.createElement('div');
+      row.className = 'compact-field-row shadow-direction-row';
+      const angle = commonValue(gradients.map((gradient) => gradient.angle));
+      const turn = (value: number): void => change((gradient) => { gradient.angle = ((value % 360) + 360) % 360; }, 'Turn gradient');
+      const angleField = numberField('ANGLE', angle, turn, { unit: '°' });
+      row.appendChild(angleDial(angle, {
+        onBegin: () => { this.continuousEdit = true; this.store.beginTransaction('Turn gradient'); },
+        onInput: (degrees) => {
+          const input = angleField.querySelector('input');
+          if (input) input.value = String(degrees);
+          turn(degrees);
+        },
+        onEnd: () => { this.store.endTransaction(); this.continuousEdit = false; this.render(); },
+      }, 'Gradient direction'));
+      row.appendChild(angleField);
+      box.appendChild(row);
+    }
+    return box;
+  }
+
+  /**
+   * Drop shadow for shapes or for text boxes, one or several: a toggle, then
+   * colour, offset (as x/y and as angle/distance, two views of one value) and
+   * blur. The values live in the element's CSS (see `shapeShadow.ts`), so the
+   * canvas, the player and the HTML round trip need nothing new.
+   */
+  private shadowSection(
+    targets: Array<Extract<SlideElement, { type: 'shape' | 'text' }>>,
+    /** A shape's shadow, the shadow of a text box's glyphs, or of its filled box. */
+    kind: 'shape' | 'text' | 'box',
+  ): HTMLElement {
+    const section = optionSection(
+      kind === 'shape' ? 'Shadow' : kind === 'text' ? 'Text shadow' : 'Box shadow',
+      `${kind}-shadow-options`,
+    );
+    const fallback = kind === 'text' ? DEFAULT_TEXT_SHADOW : DEFAULT_SHAPE_SHADOW;
+    const read = (element: SlideElement): ShapeShadow | null => {
+      if (kind === 'shape') return element.type === 'shape' ? shapeShadow(element.style) : null;
+      if (element.type !== 'text') return null;
+      return kind === 'text' ? textShadow(element.style) : boxShadow(element.style);
+    };
+    const write = (element: SlideElement, shadow: ShapeShadow | null): void => {
+      if (kind === 'shape') {
+        if (element.type === 'shape') setShapeShadow(element.style, shadow);
+        return;
+      }
+      if (element.type !== 'text') return;
+      const property = kind === 'text' ? 'text-shadow' : 'box-shadow';
+      if (kind === 'text') setTextShadow(element.style, shadow);
+      else setBoxShadow(element.style, shadow);
+      // The theme may rewrite a text box's pinned styles; a shadow is the author's.
+      recordTextOverride(element, property, shadow !== null);
+    };
+
+    if (kind === 'shape') {
+      const curved = targets.map((element) => curvedShadow(element.style));
+      if (curved.some((shadow) => shadow !== null)) {
+        return this.curvedShadowSection(section, curved);
+      }
+    }
+
+    const current = targets.map(read);
+    const enabled = commonValue(current.map((shadow) => shadow !== null));
+    section.content.appendChild(mixedCheckboxField('Drop shadow', enabled, (on) =>
+      this.store.updateSelected((element) => {
+        write(element, on ? read(element) ?? { ...fallback } : null);
+      }, { label: on ? 'Add drop shadow' : 'Remove drop shadow' }),
+    ));
+    const shadows = current.filter((shadow): shadow is ShapeShadow => shadow !== null);
+    // Nothing to tune until at least one selected object casts a shadow.
+    if (shadows.length === 0) return section.section;
+    if (kind === 'shape') section.content.appendChild(this.shadowStyleField('Drop'));
+
+    // Editing a value on a mixed selection gives the unshadowed objects the
+    // default shadow with that one value changed, so the selection ends alike.
+    const change = (apply: (shadow: ShapeShadow) => void, label: string): void =>
+      this.store.updateSelected((element) => {
+        const next = { ...(read(element) ?? fallback) };
+        apply(next);
+        write(element, next);
+      }, { label });
+
+    const color = commonValue(shadows.map((shadow) => shadow.color));
+    section.content.appendChild(colorField(
+      'Color',
+      color ?? shadows[0].color,
+      (value) => {
+        if (value === null) {
+          this.store.updateSelected((element) => write(element, null),
+            { label: 'Remove drop shadow' });
+        } else change((shadow) => { shadow.color = value; }, 'Change shadow color');
+      },
+      { clear: { kind: 'none', label: 'No shadow' }, mixed: color === null },
+    ));
+    const numbers = document.createElement('div');
+    numbers.className = 'compact-field-row';
+    numbers.appendChild(numberField(
+      'X',
+      commonValue(shadows.map((shadow) => shadow.x)),
+      (value) => change((shadow) => { shadow.x = value; }, 'Move shadow'),
+      { unit: 'px' },
+    ));
+    numbers.appendChild(numberField(
+      'Y',
+      commonValue(shadows.map((shadow) => shadow.y)),
+      (value) => change((shadow) => { shadow.y = value; }, 'Move shadow'),
+      { unit: 'px' },
+    ));
+    numbers.appendChild(numberField(
+      'BLUR',
+      commonValue(shadows.map((shadow) => shadow.blur)),
+      (value) => change((shadow) => { shadow.blur = Math.max(0, value); }, 'Change shadow blur'),
+      { unit: 'px' },
+    ));
+    section.content.appendChild(numbers);
+
+    // The same offset as a direction and a distance. Each object keeps its
+    // own other half, so turning a mixed selection does not also resize it.
+    const polar = shadows.map(shadowPolar);
+    const direction = document.createElement('div');
+    direction.className = 'compact-field-row shadow-direction-row';
+    const turn = (value: number): void => change((shadow) => {
+      Object.assign(shadow, shadowOffset(value, shadowPolar(shadow).distance));
+    }, 'Turn shadow');
+    const angle = commonValue(polar.map((value) => value.angle));
+    const angleField = numberField('ANGLE', angle, turn, { unit: '°' });
+    // The knob and the number are two faces of one value: turning the knob
+    // previews on the canvas as it goes and is one undo step when let go.
+    direction.appendChild(angleDial(angle, {
+      onBegin: () => {
+        this.continuousEdit = true;
+        this.store.beginTransaction('Turn shadow');
+      },
+      onInput: (degrees) => {
+        const input = angleField.querySelector('input');
+        if (input) input.value = String(degrees);
+        turn(degrees);
+      },
+      onEnd: () => {
+        this.store.endTransaction();
+        this.continuousEdit = false;
+        this.render();
+      },
+    }, 'Shadow angle'));
+    direction.appendChild(angleField);
+    direction.appendChild(numberField(
+      'DISTANCE',
+      commonValue(polar.map((value) => value.distance)),
+      (value) => change((shadow) => {
+        Object.assign(shadow, shadowOffset(shadowPolar(shadow).angle, value));
+      }, 'Move shadow'),
+      { unit: 'px' },
+    ));
+    section.content.appendChild(direction);
+    return section.section;
+  }
+
+  /** Drop shadow or curved (paper) shadow, for shapes. Switching keeps the colour and blur. */
+  private shadowStyleField(current: 'Drop' | 'Curved'): HTMLElement {
+    return selectField('Style', ['Drop', 'Curved'], current, (value) =>
+      this.store.updateSelected((element) => {
+        if (element.type !== 'shape') return;
+        if (value === 'Curved') {
+          const drop = shapeShadow(element.style);
+          setShapeShadow(element.style, null);
+          setCurvedShadow(element.style, {
+            ...DEFAULT_CURVED_SHADOW,
+            ...(drop ? { color: drop.color, blur: drop.blur } : {}),
+          });
+        } else {
+          const curved = curvedShadow(element.style);
+          setCurvedShadow(element.style, null);
+          setShapeShadow(element.style, {
+            ...DEFAULT_SHAPE_SHADOW,
+            ...(curved ? { color: curved.color, blur: curved.blur } : {}),
+          });
+        }
+      }, { label: value === 'Curved' ? 'Curved shadow' : 'Drop shadow' }));
+  }
+
+  /**
+   * A curved shadow's controls: the toggle, the style, its colour, blur and
+   * how far the corners lift.
+   */
+  private curvedShadowSection(
+    section: { section: HTMLElement; content: HTMLElement },
+    current: Array<ReturnType<typeof curvedShadow>>,
+  ): HTMLElement {
+    const enabled = commonValue(current.map((shadow) => shadow !== null));
+    section.content.appendChild(mixedCheckboxField('Drop shadow', enabled, (on) =>
+      this.store.updateSelected((element) => {
+        if (element.type !== 'shape') return;
+        setCurvedShadow(element.style, on ? curvedShadow(element.style) ?? { ...DEFAULT_CURVED_SHADOW } : null);
+      }, { label: on ? 'Add curved shadow' : 'Remove shadow' })));
+    section.content.appendChild(this.shadowStyleField('Curved'));
+    const shadows = current.filter((shadow): shadow is NonNullable<typeof shadow> => shadow !== null);
+    const change = (apply: (shadow: NonNullable<ReturnType<typeof curvedShadow>>) => void, label: string): void =>
+      this.store.updateSelected((element) => {
+        if (element.type !== 'shape') return;
+        const next = { ...(curvedShadow(element.style) ?? DEFAULT_CURVED_SHADOW) };
+        apply(next);
+        setCurvedShadow(element.style, next);
+      }, { label });
+    const color = commonValue(shadows.map((shadow) => shadow.color));
+    section.content.appendChild(colorField('Color', color ?? shadows[0].color, (value) => {
+      if (value === null) {
+        this.store.updateSelected((element) => { if (element.type === 'shape') setCurvedShadow(element.style, null); },
+          { label: 'Remove shadow' });
+      } else change((shadow) => { shadow.color = value; }, 'Change shadow color');
+    }, { clear: { kind: 'none', label: 'No shadow' }, mixed: color === null }));
+    const numbers = document.createElement('div');
+    numbers.className = 'compact-field-row';
+    numbers.appendChild(numberField('LIFT', commonValue(shadows.map((shadow) => shadow.lift)),
+      (value) => change((shadow) => { shadow.lift = Math.max(0, value); }, 'Change shadow lift'), { unit: 'px' }));
+    numbers.appendChild(numberField('BLUR', commonValue(shadows.map((shadow) => shadow.blur)),
+      (value) => change((shadow) => { shadow.blur = Math.max(0, value); }, 'Change shadow blur'), { unit: 'px' }));
+    section.content.appendChild(numbers);
+    return section.section;
+  }
+
+  /**
+   * Fill, border and corner radius of a text box: what makes a label in a
+   * rectangle one object. The values are CSS on the box (see `shapeText.ts`).
+   */
+  private textBoxSection(el: Extract<SlideElement, { type: 'text' }>): HTMLElement {
+    const section = optionSection('Box', 'text-box-options');
+    const paint = textBoxPaint(el.style);
+    const update = (apply: (style: Record<string, string>) => void, label: string): void =>
+      this.store.updateSelected((element) => {
+        if (element.type !== 'text') return;
+        apply(element.style);
+      }, { label });
+
+    const colors = document.createElement('div');
+    colors.className = 'compact-field-row';
+    const fill = colorField('Fill', paint.fill, (value) =>
+      update((style) => setTextBoxFill(style, value), value ? 'Change box fill' : 'Remove box fill'),
+      { clear: { kind: 'none', label: 'No fill (transparent)' } },
+    );
+    fill.classList.add('field-color-stacked');
+    colors.appendChild(fill);
+    const stroke = colorField('Border', paint.border?.color ?? null, (value) =>
+      update((style) => setTextBoxBorder(
+        style,
+        value ? { color: value, width: textBoxPaint(style).border?.width ?? 2 } : null,
+      ), value ? 'Change box border' : 'Remove box border'),
+      { clear: { kind: 'none', label: 'No border' } },
+    );
+    stroke.classList.add('field-color-stacked');
+    colors.appendChild(stroke);
+    section.content.appendChild(colors);
+
+    const numbers = document.createElement('div');
+    numbers.className = 'compact-field-row';
+    numbers.appendChild(numberField('WIDTH', paint.border?.width ?? 0, (value) =>
+      update((style) => {
+        const border = textBoxPaint(style).border;
+        setTextBoxBorder(style, value > 0
+          ? { color: border?.color ?? '#111111', width: value } : null);
+      }, 'Change box border width'),
+      { unit: 'px' },
+    ));
+    // A round box (50%) has no pixel radius to show; typing one makes it a rounded rectangle.
+    numbers.appendChild(numberField('RADIUS', paint.round ? null : paint.radius, (value) =>
+      update((style) => setTextBoxRadius(style, Math.max(0, value)), 'Change box radius'),
+      { unit: 'px' },
+    ));
+    section.content.appendChild(numbers);
+    return section.section;
+  }
+
   private multiShapeSection(
     shapes: Array<Extract<SlideElement, { type: 'shape' }>>,
   ): HTMLElement {
@@ -896,6 +1239,7 @@ export class Inspector {
         }),
         { clear: { kind: 'none', label: 'No fill (transparent)' } },
       ));
+      wrap.appendChild(this.gradientFields(shapes));
     }
 
     wrap.appendChild(colorField(
@@ -1808,7 +2152,10 @@ export class Inspector {
               : null,
           },
         ));
-        wrap.append(typography.section, layout.section);
+        wrap.append(typography.section, layout.section, this.textBoxSection(el));
+        wrap.appendChild(this.shadowSection([el], 'text'));
+        // A box shadow needs a box: it appears once the text has a fill or a border.
+        if (hasTextBox(el.style)) wrap.appendChild(this.shadowSection([el], 'box'));
         return wrap;
       }
 
@@ -1888,7 +2235,7 @@ export class Inspector {
         // Imported vector art keeps its geometry as a path; it can be shown
         // but not chosen, since there is no path to switch another kind to.
         if (el.shape === 'path') {
-          kinds.push({ value: 'path', title: 'Path (imported)', icon: SHAPE_KIND_GLYPHS.path });
+          kinds.push({ value: 'path', title: 'Path (drag its corners on the slide)', icon: SHAPE_KIND_GLYPHS.path });
         }
         style.content.appendChild(
           segmentedSelectField('Kind', kinds, el.shape, (v) =>
@@ -1927,6 +2274,7 @@ export class Inspector {
         );
         if (stroked) paint.appendChild(width);
         style.content.appendChild(paint);
+        if (!stroked) style.content.appendChild(this.gradientFields([el]));
         if (!stroked) {
           const nums = document.createElement('div');
           nums.className = 'compact-field-row';
@@ -1969,6 +2317,7 @@ export class Inspector {
           style.content.appendChild(flags);
         }
         wrap.appendChild(style.section);
+        wrap.appendChild(this.shadowSection([el], 'shape'));
         return wrap;
       }
 

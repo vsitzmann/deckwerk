@@ -277,6 +277,9 @@ export function capabilities(): Capability[] {
         'An arrow’s `control` is an absolute canvas-space point making it a quadratic curve.',
         'shape: "path" carries real SVG path data, scaled from pathSize to the element box — this is how imported vector art keeps its geometry.',
         'arrowStart/arrowEnd put heads on a line or arrow at either end, or both.',
+        'A drop shadow is CSS on the element: style: { filter: "drop-shadow(0px 8px 24px rgba(0, 0, 0, 0.3))" }. It follows the shape’s own paint (a line or an outline casts the shadow of its strokes), and Props → Shadow edits the same value.',
+        'A gradient fill: fillGradient: { to: "#ec6b14", angle: 270, kind: "linear" } runs from fill to `to`; angle is degrees counter-clockwise from the right (270 = top to bottom); kind "radial" spreads from the centre. In HTML: data-fill-to, data-fill-angle, data-fill-gradient.',
+        'A curved (paper) shadow, the object lifting at its bottom corners: style custom properties --curl-color, --curl-blur and --curl-lift (px). Props → Shadow → Style: Curved edits them.',
       ],
       elements: [
         text('cap-shape-title', 'Shapes and connectors', TITLE, { class: ['role-title'] }),
@@ -321,6 +324,7 @@ export function capabilities(): Capability[] {
         'Objects with no build are visible from the start.',
         "An appear with value: 'byParagraph' on a text element reveals it one paragraph (or list item) at a time, in document order — one click each, or a cascade when triggered afterPrev/withPrev.",
         'withPrev fires together with the step before it; afterPrev fires on its own after that step, with an optional delay in ms.',
+        'An appear or disappear with value: \'dissolve\' fades the element in or out; an appear with value: \'draw\' on a shape is Line Draw: a line or arrow grows from its start with its head leading, and a box, ellipse or path is traced along its outline with its fill following. action.duration is the time in ms (defaults 1000 and 600), and an afterPrev build waits for an animated one before it to finish. In authoring HTML: data-build="click" data-build-effect="dissolve" data-build-duration="800". Animations play when a step is reached by advancing (including builds that run on arriving at a slide); jumping to a step shows its finished state.',
         "The other actions are disappear, play/pause (media), seek (value: seconds) and addClass/removeClass (value: the class name) — the last two are the hook for anything theme.css can animate.",
       ],
       elements: [

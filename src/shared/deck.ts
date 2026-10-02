@@ -252,6 +252,16 @@ const ShapeElement = BaseElement.extend({
   type: z.literal('shape'),
   shape: z.enum(['rect', 'ellipse', 'line', 'arrow', 'path']),
   fill: z.string().nullable().default(null),
+  /**
+   * A two-colour gradient: from `fill` to `to`, running in `angle` degrees
+   * counter-clockwise from the right (270 is top to bottom), like the shadow
+   * direction. Absent or null is a flat fill.
+   */
+  fillGradient: z.object({
+    to: z.string(),
+    angle: z.number().default(270),
+    kind: z.enum(['linear', 'radial']).default('linear'),
+  }).nullable().optional(),
   stroke: z.string().nullable().default(null),
   strokeWidth: z.number().min(0).default(2),
   radius: z.number().min(0).default(0),
@@ -361,8 +371,16 @@ export const ActionSchema = z.object({
     'removeClass',
   ]),
   target: Id,
-  /** Seconds for `seek`; class name for `addClass`/`removeClass`. */
+  /**
+   * Seconds for `seek`; class name for `addClass`/`removeClass`. On `appear`,
+   * `"byParagraph"` reveals text a paragraph at a time and `"draw"` draws a
+   * line or arrow in from its start to its end. On `appear` or `disappear`,
+   * `"dissolve"` fades the element in or out and `"blur"` brings it into (or
+   * takes it out of) focus as it fades.
+   */
   value: z.union([z.number(), z.string()]).nullable().default(null),
+  /** Milliseconds an animated build takes (`"draw"`, `"dissolve"`, `"blur"`). */
+  duration: z.number().min(0).optional(),
 });
 
 export const TimelineEntrySchema = z.object({
