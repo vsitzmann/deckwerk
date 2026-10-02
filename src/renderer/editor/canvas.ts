@@ -389,6 +389,50 @@ function crossesBlocks(range: Range, body: HTMLElement): boolean {
   return start !== null && end !== null && start !== end;
 }
 
+/**
+ * Delete the typing-style sentinel from text nodes in place. `deleteData`
+ * rather than assigning `data`, so a live selection inside the text keeps
+ * its offsets.
+ */
+function deleteSentinels(texts: Iterable<Text>): void {
+  for (const text of texts) {
+    for (let at = text.data.lastIndexOf(TYPING_STYLE_SENTINEL); at >= 0;
+      at = at > 0 ? text.data.lastIndexOf(TYPING_STYLE_SENTINEL, at - 1) : -1) {
+      text.deleteData(at, TYPING_STYLE_SENTINEL.length);
+    }
+  }
+}
+
+function textNodesIn(root: Node): Text[] {
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  const texts: Text[] = [];
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) texts.push(node as Text);
+  return texts;
+}
+
+/**
+ * Turn every pending typing run that already holds typed text into the
+ * plain styled span it will be saved as. Chromium's own cut and copy
+ * serialize the live DOM, so a run still pending when the author copies
+ * would otherwise put its invisible sentinel on the clipboard -- and a paste
+ * lands it outside any marker, as a real character in the text.
+ */
+function settleTypedMarkers(body: HTMLElement): void {
+  for (const marker of [...body.querySelectorAll<HTMLElement>('[data-editor-typing-style]')]) {
+    if ((marker.textContent ?? '').replaceAll(TYPING_STYLE_SENTINEL, '') === '') continue;
+    deleteSentinels(textNodesIn(marker));
+    marker.removeAttribute('data-editor-typing-style');
+  }
+}
+
+/** A sentinel outside a pending run is a leak (an older clipboard, say). */
+function deleteStraySentinels(body: HTMLElement): void {
+  deleteSentinels(textNodesIn(body).filter((text) => (
+    text.data.includes(TYPING_STYLE_SENTINEL)
+    && !text.parentElement?.closest('[data-editor-typing-style]')
+  )));
+}
+
 /** Serialize authored text without editor-only table selection chrome. */
 function authoredTextHtml(body: HTMLElement): string {
   const clone = body.cloneNode(true) as HTMLElement;
@@ -3505,6 +3549,8 @@ export class EditorCanvas {
       body.removeEventListener('keydown', onKey);
       body.removeEventListener('beforeinput', onBeforeInput);
       body.removeEventListener('input', onInput);
+      body.removeEventListener('copy', onCopyOrCut);
+      body.removeEventListener('cut', onCopyOrCut);
       body.removeEventListener('paste', onPaste);
       body.removeEventListener('compositionstart', onCompositionStart);
       body.removeEventListener('compositionend', onCompositionEnd);
@@ -3591,6 +3637,7 @@ export class EditorCanvas {
      * the text came from — list conversion in particular needs real blocks.
      */
     const repairPastedMarkup = () => {
+      deleteStraySentinels(body);
       const range = this.activeTextRange(body);
       const offsets = range ? this.textOffsetsForRange(body, range) : null;
       const normalized = normalizeParagraphHtml(sanitizePastedTextHtml(body.innerHTML), true);
@@ -3941,6 +3988,10 @@ export class EditorCanvas {
     body.addEventListener('keydown', onKey);
     this.finishTextEdit = finish;
     body.addEventListener('beforeinput', onBeforeInput);
+    // Before Chromium serializes the selection for the clipboard.
+    const onCopyOrCut = () => settleTypedMarkers(body);
+    body.addEventListener('copy', onCopyOrCut);
+    body.addEventListener('cut', onCopyOrCut);
     body.addEventListener('input', onInput);
     body.addEventListener('paste', onPaste);
     body.addEventListener('compositionstart', onCompositionStart);

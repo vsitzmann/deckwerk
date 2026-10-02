@@ -22,6 +22,12 @@ const LIST_TAGS = new Set(['UL', 'OL']);
 export const TYPING_STYLE_SENTINEL = '\u2060';
 export const LIST_MARKER_COLOR_ATTRIBUTE = 'data-list-marker-color';
 export const LIST_MARKER_COLOR_PROPERTY = '--list-marker-color';
+/** Inline wrappers that only format their text. */
+const INLINE_FORMAT_TAGS = new Set([
+  'SPAN', 'FONT', 'B', 'STRONG', 'I', 'EM', 'U', 'S', 'STRIKE', 'DEL', 'INS',
+  'SUB', 'SUP', 'MARK', 'SMALL', 'BIG', 'CODE', 'A',
+]);
+
 const BLOCK_TAGS = new Set([
   'P', 'DIV', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6',
   'BLOCKQUOTE', 'PRE', 'TABLE', 'FIGURE', 'SECTION', 'ARTICLE', 'UL', 'OL', 'LI',
@@ -575,6 +581,78 @@ function collectParagraphs(
 }
 
 /**
+ * Pasting a copied line into the middle of a formatted word makes Chromium
+ * put the line's block inside the word's inline wrapper:
+ * `<span bold>f72f73b<p style="font-weight: 400"><br></p>b</span>`. That is
+ * not a shape the block model has -- the run segmentation above never looks
+ * inside a span -- and the caret later lands in the stranded block, where
+ * typing picks up formatting the line does not show. Split each inline
+ * wrapper around the block instead, the way Chromium splits it on Return.
+ * The block's content stays wrapped in the inline's formatting, less any
+ * declaration the block itself sets (its own wins, as it did when nested).
+ */
+function hoistBlocksOutOfInlines(root: ParentNode & Node): void {
+  // Formatting wrappers only: a table cell or anything else structural that
+  // is not in BLOCK_TAGS is a legitimate home for a block.
+  const isInline = (node: Node | null): node is HTMLElement => (
+    node instanceof Element && INLINE_FORMAT_TAGS.has(node.tagName) && node !== root
+  );
+  const blockSelector = [...BLOCK_TAGS].map((tag) => tag.toLowerCase()).join(', ');
+  let hoisted = false;
+  for (const block of [...root.querySelectorAll<HTMLElement>(blockSelector)]) {
+    while (isInline(block.parentNode)) {
+      const inline = block.parentNode;
+      // Everything after the block moves to a copy of the wrapper after it.
+      const after = inline.cloneNode(false) as HTMLElement;
+      while (block.nextSibling) after.appendChild(block.nextSibling);
+      // The block's own content keeps the wrapper's formatting.
+      const inner = inline.cloneNode(false) as HTMLElement;
+      for (let index = 0; index < block.style.length; index += 1) {
+        inner.style.removeProperty(block.style.item(index));
+      }
+      if (inner.getAttribute('style') === '') inner.removeAttribute('style');
+      while (block.firstChild) inner.appendChild(block.firstChild);
+      const innerHasText = (inner.textContent ?? '') !== '';
+      if (innerHasText) block.appendChild(inner);
+      else block.append(...inner.childNodes);
+      inline.after(block);
+      if (after.childNodes.length > 0) block.after(after);
+      if (inline.childNodes.length === 0) inline.remove();
+      hoisted = true;
+    }
+    if (hoisted) splitItemAtHoistedBlock(block);
+    hoisted = false;
+  }
+}
+
+/**
+ * A paragraph hoisted out of a word now sits in the middle of a list item,
+ * between that item's own text runs: one bullet showing three lines, whose
+ * first line ends in one format while the item as a whole ends in another.
+ * What was pasted was a line *break*, so make it one: the text after the
+ * block becomes the next item. A block that is empty was only that break
+ * and goes; one with content stays with the item before the split.
+ */
+function splitItemAtHoistedBlock(block: HTMLElement): void {
+  const item = block.parentElement;
+  if (!item || item.tagName !== 'LI' || block.tagName === 'UL' || block.tagName === 'OL') return;
+  const contentful = (node: Node | null): boolean => (
+    node !== null && (node instanceof Element ? node.tagName !== 'BR' : (node.textContent ?? '') !== '')
+  );
+  let before = false;
+  for (let node = block.previousSibling; node; node = node.previousSibling) before ||= contentful(node);
+  let after = false;
+  for (let node = block.nextSibling; node; node = node.nextSibling) after ||= contentful(node);
+  if (!after) return;
+  const next = item.cloneNode(false) as HTMLElement;
+  next.removeAttribute('value');
+  while (block.nextSibling) next.appendChild(block.nextSibling);
+  item.after(next);
+  const empty = (block.textContent ?? '') === '' && !block.querySelector('img, video, svg, table');
+  if (empty && before) block.remove();
+}
+
+/**
  * Chrome's indent command nests a list as a *sibling* of the `<li>`s
  * (`<ul><li>a</li><ul>…`), which is invalid HTML and invisible to the
  * paragraph segmentation above. Fold each such list into the `<li>` before
@@ -745,6 +823,7 @@ export function normalizeParagraphHtml(html: string, splitBreaks = false): strin
   adoptOrphanListItems(template.content);
   nestStrayLists(template.content);
   mergeAdjacentLists(template.content);
+  hoistBlocksOutOfInlines(template.content);
   // Nesting a stray list into the item before it puts that item's trailing
   // space beside a block; the same pass takes it out.
   stripStructuralWhitespace(template.content);
