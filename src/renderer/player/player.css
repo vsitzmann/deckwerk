@@ -217,3 +217,22 @@
 
 
 
+
+/* A curved ("paper") shadow: the object lifts off the slide at its bottom
+   corners. Two blurred slivers, skewed outwards, sit behind it -- inside its
+   own stacking context, so they paint over the slide but under the object. */
+.element.shadow-curved { isolation: isolate; }
+.element.shadow-curved::before,
+.element.shadow-curved::after {
+  content: '';
+  position: absolute;
+  z-index: -1;
+  pointer-events: none;
+  bottom: calc(var(--curl-lift, 20px) * 0.4);
+  width: 48%;
+  height: min(40%, 120px);
+  box-shadow: 0 var(--curl-lift, 20px) var(--curl-blur, 14px) var(--curl-color, rgba(0, 0, 0, 0.5));
+  background: transparent;
+}
+.element.shadow-curved::before { left: 2.5%; transform-origin: 0 100%; transform: skewX(-18deg) rotate(-3.5deg); }
+.element.shadow-curved::after { right: 2.5%; transform-origin: 100% 100%; transform: skewX(18deg) rotate(3.5deg); }

@@ -1,5 +1,7 @@
 import { openContextMenu } from './contextMenuPlacement.js';
 import type { Deck, Slide, SlideElement } from '@shared/deck.js';
+import { canHoldText, shapeToTextBox } from '@shared/shapeText.js';
+import { moveCorner, polygonPoints } from '@shared/polygonShape.js';
 import { type Rect, fitScale, makeId } from '@shared/geometry.js';
 
 type XY = { x: number; y: number };
@@ -593,7 +595,8 @@ type DragMode =
       /** Original endpoints of every selected line, keyed by id. */
       origins: Map<string, { start: XY; end: XY }>;
     }
-  | { kind: 'curve-control'; elementId: string };
+  | { kind: 'curve-control'; elementId: string }
+  | { kind: 'polygon-corner'; elementId: string; index: number };
 
 /** Fired on the canvas host with a message (`detail`) for the shell's status bar. */
 export const CANVAS_NOTICE_EVENT = 'deckwerk-canvas-notice';
@@ -1800,6 +1803,23 @@ export class EditorCanvas {
         box.appendChild(h);
       }
       if (selection.size === 1) {
+        // A straight-sided shape offers its corners. The box is rotated with
+        // the element, so corners are placed in its own unrotated frame.
+        const corners = el.type === 'shape' ? polygonPoints(el) : null;
+        if (corners && el.type === 'shape') {
+          const size = el.pathSize ?? { w: el.w, h: el.h };
+          corners.forEach((corner, index) => {
+            const h = document.createElement('div');
+            h.className = 'handle handle-corner';
+            h.dataset.corner = String(index);
+            h.dataset.elementId = el.id;
+            h.title = 'Drag to move this corner';
+            h.style.left = `${(corner.x / size.w) * el.w}px`;
+            h.style.top = `${(corner.y / size.h) * el.h}px`;
+            h.style.margin = '0';
+            box.appendChild(h);
+          });
+        }
         if (tableLayout && tableLayout.columnWidths.length > 1) {
           const total = tableLayout.columnWidths.reduce((sum, width) => sum + width, 0);
           let offset = 0;
@@ -2038,7 +2058,7 @@ export class EditorCanvas {
     // turns any ordinary object handle into a rotation handle. Curve controls
     // remain dedicated to bending the curve.
     const rotationHandle = target.closest<HTMLElement>(
-      '.handle:not(.handle-curve-control)[data-element-id]',
+      '.handle:not(.handle-curve-control):not(.handle-corner)[data-element-id]',
     );
     if (commandModifier(ev) && rotationHandle?.dataset.elementId) {
       const el = slide.elements.find(
@@ -2060,6 +2080,17 @@ export class EditorCanvas {
         };
         return;
       }
+    }
+
+    // A corner of a straight-sided shape: drag it anywhere, the frame follows.
+    if (target.dataset?.corner !== undefined && target.dataset.elementId) {
+      this.store.beginTransaction('Move corner');
+      this.drag = {
+        kind: 'polygon-corner',
+        elementId: target.dataset.elementId,
+        index: Number(target.dataset.corner),
+      };
+      return;
     }
 
     // Bend handle on a quadratic line or arrow.
@@ -2228,7 +2259,8 @@ export class EditorCanvas {
       !this.dragStarted &&
       this.drag.kind !== 'marquee' &&
       this.drag.kind !== 'endpoint' &&
-      this.drag.kind !== 'curve-control'
+      this.drag.kind !== 'curve-control' &&
+      this.drag.kind !== 'polygon-corner'
     ) {
       const start = this.drag.startCanvas;
       const moved =
@@ -2613,6 +2645,16 @@ export class EditorCanvas {
         break;
       }
 
+      case 'polygon-corner': {
+        const drag = this.drag;
+        this.store.updateSelected((target) => {
+          if (target.id === drag.elementId && target.type === 'shape') {
+            moveCorner(target, drag.index, point);
+          }
+        });
+        break;
+      }
+
       case 'marquee': {
         const s = this.drag.startCanvas;
         this.marquee = {
@@ -2813,6 +2855,19 @@ export class EditorCanvas {
     if (!hit) return;
 
     if (hit.type === 'text' || hit.type === 'html') {
+      this.beginTextEdit(hit.id);
+    } else if (hit.type === 'shape' && canHoldText(hit)) {
+      // Typing into a rectangle or an ellipse makes it a text box with the
+      // same fill, border and corners: one object, not a label laid over a
+      // shape. The store renders synchronously, so the box is on the canvas
+      // by the time the edit opens.
+      const index = this.store.get().slideIndex;
+      this.store.commit((deck) => {
+        const elements = deck.slides[index].elements;
+        const at = elements.findIndex((candidate) => candidate.id === hit.id);
+        const shape = elements[at];
+        if (shape?.type === 'shape') elements[at] = shapeToTextBox(shape);
+      }, { label: 'Add text to shape' });
       this.beginTextEdit(hit.id);
     } else if (hit.type === 'video') {
       this.toggleVideo(hit.id);
