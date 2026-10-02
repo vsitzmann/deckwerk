@@ -2,6 +2,8 @@ import '../player/player.css';
 import '../appChrome.css';
 import '../editor/editor.css';
 import './collab.css';
+import '../lightTheme.css';
+import { applyUiTheme, uiThemeButton } from '../uiTheme.js';
 import { emptyDeck } from '@shared/deck.js';
 import { setIdSuffix } from '@shared/geometry.js';
 import { CANVAS_NOTICE_EVENT, EditorCanvas } from '../editor/canvas.js';
@@ -54,6 +56,8 @@ import { trackVideoLoading } from '../player/videoLoadingProgress.js';
 import { DelayedOperationProgress } from '../editor/operationProgress.js';
 import { DesignWorkspace } from '../editor/designWorkspace.js';
 import { installResponsiveToolbar } from '../editor/responsiveToolbar.js';
+
+applyUiTheme();
 
 /**
  * Browser collaboration shell: the same canvas, rail, inspector, theme
@@ -715,6 +719,7 @@ function buildToolbar(): void {
 
   const right = document.createElement('div');
   right.className = 'bar-group bar-right';
+  right.append(uiThemeButton());
   const secondaryActions = document.createElement('span');
   secondaryActions.className = 'toolbar-expanded-secondary-actions';
   const compactSecondaryEntries: ToolbarPickerEntry[] = [];

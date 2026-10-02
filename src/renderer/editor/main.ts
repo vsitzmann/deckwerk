@@ -2,6 +2,8 @@ import '../player/player.css';
 import '../appChrome.css';
 import './editor.css';
 import '../collab/collab.css';
+import '../lightTheme.css';
+import { applyUiTheme, uiThemeButton } from '../uiTheme.js';
 import { applyAgentTransaction } from '@shared/agent.js';
 import type { Deck, SlideElement } from '@shared/deck.js';
 import { emptyDeck } from '@shared/deck.js';
@@ -60,6 +62,8 @@ import { setSelectionInvariantChecks } from './selectionInvariants.js';
 import { SpeakerNotesDrawer } from './speakerNotesDrawer.js';
 import { applySpeakerNotes } from '@shared/speakerNotes.js';
 import { installResponsiveToolbar } from './responsiveToolbar.js';
+
+applyUiTheme();
 
 /**
  * Editor shell: wires the panels to one store, owns the toolbar, the keyboard
@@ -488,7 +492,9 @@ function buildToolbar(): void {
     { label: 'Collaboration…', action: () => void startSharing() },
   ]);
   compactSecondary.classList.add('toolbar-compact-secondary-action');
+  const themeButton = uiThemeButton();
   right.append(
+    themeButton,
     secondaryActions,
     compactSecondary,
     createToolbarSplitButton(
