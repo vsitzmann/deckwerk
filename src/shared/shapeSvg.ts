@@ -100,21 +100,65 @@ function gradientDef(
 }
 
 function arrowMarker(id: string, color: string): string {
-  return `<defs><marker id="${id}" markerWidth="6" markerHeight="6" refX="5" refY="3"`
-    + ` orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="${color}"/></marker></defs>`;
+  return `<defs><marker id="${id}" markerWidth="6" markerHeight="6" refX="${ARROWHEAD_REF.x}" refY="${ARROWHEAD_REF.y}"`
+    + ` orient="auto"><path d="${ARROWHEAD_PATH}" fill="${color}"/></marker></defs>`;
 }
 
-/** Quadratic Bézier path in the rotated line element's local coordinates. */
-export function quadraticPath(el: Shape): string {
-  if (!el.control) return '';
+/** A curved line's control point in the rotated element's local coordinates. */
+function localControl(el: Shape): { x: number; y: number } | null {
+  if (!el.control) return null;
   const cx = el.x + el.w / 2;
   const cy = el.y + el.h / 2;
   const radians = (el.rot * Math.PI) / 180;
   const dx = el.control.x - cx;
   const dy = el.control.y - cy;
-  const localX = dx * Math.cos(radians) + dy * Math.sin(radians) + el.w / 2;
-  const localY = -dx * Math.sin(radians) + dy * Math.cos(radians) + el.h / 2;
-  return `M 0 ${el.h / 2} Q ${localX} ${localY} ${el.w} ${el.h / 2}`;
+  return {
+    x: dx * Math.cos(radians) + dy * Math.sin(radians) + el.w / 2,
+    y: -dx * Math.sin(radians) + dy * Math.cos(radians) + el.h / 2,
+  };
+}
+
+/** Quadratic Bézier path in the rotated line element's local coordinates. */
+export function quadraticPath(el: Shape): string {
+  const control = localControl(el);
+  if (!control) return '';
+  return `M 0 ${el.h / 2} Q ${control.x} ${control.y} ${el.w} ${el.h / 2}`;
+}
+
+/** The arrowhead, in stroke-width units, and the point of it that sits on the line's end. */
+export const ARROWHEAD_PATH = 'M0,0 L6,3 L0,6 Z';
+export const ARROWHEAD_REF = { x: 5, y: 3 };
+
+/**
+ * The attributes of a line or arrow drawn only as far as `progress` (0..1)
+ * along its length, for the draw-in build. The geometry itself is shortened,
+ * rather than masked with a dash pattern, so an arrowhead rides the tip of
+ * the stroke and turns with a curve instead of waiting at the far end.
+ *
+ * A straight line shortens its `x2`. A curve is cut with de Casteljau: the
+ * first `progress` of a quadratic is itself a quadratic, from the same start,
+ * through the control point pulled back by the same fraction.
+ */
+export function partialStroke(
+  el: Shape,
+  progress: number,
+): { x2: number } | { d: string } | null {
+  if (el.shape !== 'line' && el.shape !== 'arrow') return null;
+  const clamped = Math.min(1, Math.max(0, progress));
+  const control = localControl(el);
+  if (!control) return { x2: el.w * clamped };
+  if (clamped === 1) return { d: quadraticPath(el) };
+  // A curve of no length has no direction, and an arrowhead on it would point
+  // along the x axis until the first frame turned it. A sliver keeps the
+  // head facing the way the curve sets off.
+  const t = Math.max(clamped, 0.002);
+  const start = { x: 0, y: el.h / 2 };
+  const end = { x: el.w, y: el.h / 2 };
+  const mix = (a: { x: number; y: number }, b: { x: number; y: number }) =>
+    ({ x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t });
+  const first = mix(start, control);
+  const tip = mix(first, mix(control, end));
+  return { d: `M ${start.x} ${start.y} Q ${first.x} ${first.y} ${tip.x} ${tip.y}` };
 }
 
 function escapeAttr(value: string): string {

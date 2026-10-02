@@ -324,6 +324,7 @@ export function capabilities(): Capability[] {
         'Objects with no build are visible from the start.',
         "An appear with value: 'byParagraph' on a text element reveals it one paragraph (or list item) at a time, in document order — one click each, or a cascade when triggered afterPrev/withPrev.",
         'withPrev fires together with the step before it; afterPrev fires on its own after that step, with an optional delay in ms.',
+        'An appear or disappear with value: \'dissolve\' fades the element in or out; an appear with value: \'draw\' on a shape is Line Draw: a line or arrow grows from its start with its head leading, and a box, ellipse or path is traced along its outline with its fill following. action.duration is the time in ms (defaults 1000 and 600), and an afterPrev build waits for an animated one before it to finish. In authoring HTML: data-build="click" data-build-effect="dissolve" data-build-duration="800". Animations play when a step is reached by advancing (including builds that run on arriving at a slide); jumping to a step shows its finished state.',
         "The other actions are disappear, play/pause (media), seek (value: seconds) and addClass/removeClass (value: the class name) — the last two are the hook for anything theme.css can animate.",
       ],
       elements: [

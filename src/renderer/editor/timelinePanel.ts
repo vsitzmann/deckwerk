@@ -1,6 +1,16 @@
 import type { Slide, TimelineEntry } from '@shared/deck.js';
 import { makeId } from '@shared/geometry.js';
-import { expandTimeline, groupIntoSteps, isParagraphBuild } from '@shared/timeline.js';
+import {
+  DEFAULT_BLUR_DURATION,
+  DEFAULT_DISSOLVE_DURATION,
+  DEFAULT_DRAW_DURATION,
+  buildEffect,
+  effectDuration,
+  expandTimeline,
+  groupIntoSteps,
+  isParagraphBuild,
+} from '@shared/timeline.js';
+import { durationField } from './durationField.js';
 import { countParagraphs, paragraphTexts } from '@shared/paragraphs.js';
 import { describeElement, renderElementLabel } from './elementLabel.js';
 import type { EditorStore } from './store.js';
@@ -197,6 +207,7 @@ export class TimelinePanel {
   private entryRow(entry: TimelineEntry, slide: Slide, numbers: number[]): HTMLElement {
     const elements = slide.elements;
     const byParagraph = isParagraphBuild(entry, slide);
+    const effect = buildEffect(entry, slide);
     const row = document.createElement('div');
     row.className = 'timeline-row';
     row.dataset.entryId = entry.id;
@@ -256,18 +267,47 @@ export class TimelinePanel {
       opt.textContent = 'appear by paragraph';
       action.insertBefore(opt, action.children[1]);
     }
-    action.value = byParagraph ? 'appear:paragraph' : entry.action.type;
+    // Any element can dissolve in or out; a line or arrow can also be drawn
+    // in from its start to its end. Each is one more choice on the same card.
+    const optionAfter = (value: string, label: string, after: string): void => {
+      const opt = document.createElement('option');
+      opt.value = value;
+      opt.textContent = label;
+      const anchor = [...action.options].find((candidate) => candidate.value === after);
+      action.insertBefore(opt, anchor?.nextSibling ?? null);
+    };
+    optionAfter('appear:dissolve', 'dissolve in', 'appear');
+    optionAfter('appear:blur', 'blur in', 'appear:dissolve');
+    // Keynote's name for it: a shape drawn in as if by a pen.
+    if (targetEl?.type === 'shape') optionAfter('appear:draw', 'line draw', 'appear:blur');
+    optionAfter('disappear:dissolve', 'dissolve out', 'disappear');
+    optionAfter('disappear:blur', 'blur out', 'disappear:dissolve');
+    action.value = byParagraph ? 'appear:paragraph'
+      : effect ? `${entry.action.type}:${effect}` : entry.action.type;
     action.addEventListener('change', () =>
       this.mutate(entry.id, (e) => {
-        if (action.value === 'appear:paragraph') {
-          e.action.type = 'appear';
-          e.action.value = 'byParagraph';
-        } else {
-          e.action.type = action.value as 'appear';
-          if (e.action.value === 'byParagraph') e.action.value = null;
+        const [type, variant] = action.value.split(':') as ['appear', string | undefined];
+        e.action.type = type;
+        if (variant === 'paragraph') e.action.value = 'byParagraph';
+        else if (variant === 'draw' || variant === 'dissolve' || variant === 'blur') e.action.value = variant;
+        else if (['byParagraph', 'draw', 'dissolve', 'blur'].includes(String(e.action.value))) {
+          e.action.value = null;
         }
+        // A time belongs to an animation; switching between two keeps the author's.
+        if (variant === 'draw' || variant === 'dissolve' || variant === 'blur') {
+          e.action.duration ??= variant === 'draw' ? DEFAULT_DRAW_DURATION
+            : variant === 'blur' ? DEFAULT_BLUR_DURATION : DEFAULT_DISSOLVE_DURATION;
+        } else delete e.action.duration;
       }),
     );
+
+    // How long the animation takes, beside the action that uses it.
+    const durationWrap = durationField(
+      effect ? effectDuration(entry, effect) : 0,
+      (ms) => this.mutate(entry.id, (e) => { e.action.duration = ms; }),
+      { inputClass: 'delay-input build-duration', label: 'Animation time' },
+    );
+    durationWrap.classList.add('build-duration-wrap');
 
     // Each card is bound to one element — matching the numbered badge on the
     // canvas — rather than offering a dropdown to retarget it. A by-paragraph
@@ -384,6 +424,12 @@ export class TimelinePanel {
     actionLabel.className = 'build-action-label';
     actionLabel.textContent = 'action';
     what.append(actionLabel, action);
+    if (effect) {
+      const over = document.createElement('span');
+      over.className = 'build-action-label';
+      over.textContent = 'over';
+      what.append(over, durationWrap);
+    }
     row.append(head, when, what);
 
     // The paragraphs build in document order and cannot be reordered, so they

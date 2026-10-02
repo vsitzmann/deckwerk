@@ -967,10 +967,17 @@ export function elementFromNode(
 
 /**
  * `data-build="click"`, `data-build="afterPrev"`, `data-build="afterPrev+500"`.
+ * `data-build-effect="dissolve"` fades the element in, `"blur"` brings it into
+ * focus as it fades, and on a line or arrow
+ * `data-build-effect="draw"` draws it in; `data-build-duration` is the time in ms.
  *
  * Builds have no CSS analogue, so they ride on data attributes rather than in
  * a side-channel the author has to keep in sync with the markup.
  */
+function isEffectName(value: unknown): value is 'draw' | 'dissolve' | 'blur' {
+  return value === 'draw' || value === 'dissolve' || value === 'blur';
+}
+
 export function buildFromNode(
   node: MeasuredNode,
   elementId: string,
@@ -982,10 +989,20 @@ export function buildFromNode(
   const on = (['click', 'afterPrev', 'withPrev', 'mediaEnd'] as const)
     .find((candidate) => candidate.toLowerCase() === name.trim().toLowerCase());
   if (!on) return null;
+  // `data-build-effect` draws a line or arrow in ("draw") or fades anything in
+  // ("dissolve"); its time rides beside it.
+  const effect = node.dataset.buildEffect;
+  const animated = effect === 'draw' || effect === 'dissolve' || effect === 'blur';
+  const duration = Number(node.dataset.buildDuration);
   return {
     id: `${elementId}-build-${index + 1}`,
     trigger: { on, ref: node.dataset.buildRef ?? null, delay: Number(delay ?? 0) || 0 },
-    action: { type: 'appear', target: elementId, value: null },
+    action: {
+      type: 'appear',
+      target: elementId,
+      value: animated ? effect : null,
+      ...(animated && Number.isFinite(duration) && duration >= 0 ? { duration } : {}),
+    },
   };
 }
 
@@ -1047,6 +1064,11 @@ function elementToHtml(element: SlideElement, build?: TimelineEntry): string {
     element.lineageId !== undefined
       ? `data-lineage-id="${escape(element.lineageId ?? '')}"` : '',
     build ? `data-build="${build.trigger.on}${build.trigger.delay ? `+${build.trigger.delay}` : ''}"` : '',
+    build && isEffectName(build.action.value)
+      ? `data-build-effect="${build.action.value}"` : '',
+    build && isEffectName(build.action.value)
+      && build.action.duration !== undefined
+      ? `data-build-duration="${build.action.duration}"` : '',
     element.type === 'text' && element.layoutPlaceholder
       ? `data-layout-slot="${element.layoutPlaceholder}"` : '',
   ].filter(Boolean).join(' ');
