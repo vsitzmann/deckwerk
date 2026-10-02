@@ -149,6 +149,24 @@ export function unbulletListItems(items: HTMLElement[]): HTMLElement[] {
     let number = Number.isFinite(declared) && declared > 0 ? declared : 1;
     const fragment = doc.createDocumentFragment();
     let chunk: HTMLElement | null = null;
+    // Whether the item just before was one being freed. No chunk is open at
+    // the start of the list either, and a sub-list there was freed with
+    // nothing: it stays where it is.
+    let afterFreed = false;
+    const free = (nestedList: Element) => {
+      for (const nested of [...nestedList.children] as HTMLElement[]) {
+        if (nested.tagName === 'LI') {
+          for (const paragraph of listItemParagraphs(nested)) {
+            fragment.appendChild(paragraph);
+            inserted.push(paragraph);
+          }
+        } else if (LIST_TAGS.test(nested.tagName)) {
+          // Chromium's indent nests stray lists inside stray lists; dropping
+          // the deeper one dropped its text with it (list fuzz seed 20261014).
+          free(nested);
+        }
+      }
+    };
     const newChunk = (): HTMLElement => {
       const next = doc.createElement(list.tagName.toLowerCase());
       for (const attr of [...list.attributes]) {
@@ -164,6 +182,7 @@ export function unbulletListItems(items: HTMLElement[]): HTMLElement[] {
       if (el && group.has(el)) {
         // The next kept item starts a new list after the gap.
         chunk = null;
+        afterFreed = true;
         for (const paragraph of listItemParagraphs(el)) {
           fragment.appendChild(paragraph);
           inserted.push(paragraph);
@@ -174,23 +193,18 @@ export function unbulletListItems(items: HTMLElement[]): HTMLElement[] {
         if (!chunk) chunk = newChunk();
         chunk.appendChild(el);
         number += 1;
+        afterFreed = false;
         continue;
       }
       if (el && LIST_TAGS.test(el.tagName)) {
         // A sub-list Chromium wrote as a sibling of a list's items belongs to
         // the item before it. That item keeps it — unless the item was the one
         // being freed, in which case its sub-items are freed with it.
-        if (chunk) {
-          chunk.appendChild(el);
-        } else {
-          for (const nested of [...el.children] as HTMLElement[]) {
-            if (nested.tagName !== 'LI') continue;
-            for (const paragraph of listItemParagraphs(nested)) {
-              fragment.appendChild(paragraph);
-              inserted.push(paragraph);
-            }
-          }
+        if (afterFreed) {
+          free(el);
           el.remove();
+        } else {
+          (chunk ??= newChunk()).appendChild(el);
         }
         continue;
       }

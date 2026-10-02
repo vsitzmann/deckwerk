@@ -351,7 +351,10 @@ async function runWalk(seed: number): Promise<void> {
       case 'escape and re-enter': {
         if ((await session.text()).length === 0) break;
         // Focus may sit in the inspector, where Escape means something else.
-        await session.cdp.click(CONTENT, 'the text box before Escape');
+        // Its first character, not its centre: a long walk grows the box down
+        // over the other text box, whose paragraph then owns the centre point
+        // (seed 20261013) -- the same overlap the 'other box' step skips.
+        await session.caretAt(0);
         await session.cdp.key('Escape', 27);
         await eventually(async () => session.cdp.evaluate<boolean>(
           `document.querySelector('${CONTENT}')?.isContentEditable !== true`,
@@ -627,6 +630,10 @@ async function shiftSelection(next: () => number, direction: 'in' | 'out', label
   // test: the baseline is the box as it stands now, immediately before Tab.
   before = await session.outline();
   itemsBefore = await session.blocksOf('li');
+  // The text in document order. Rebuilding it from the outline is not the
+  // same thing: the outline lists an item's own text ahead of its nested
+  // lists, and an item may carry a paragraph *after* one (seed 20261009).
+  const textBefore = compact(await session.text());
   if (direction === 'in') await session.cdp.key('Tab', 9);
   else await session.cdp.chord('Tab', 'Tab', 9, SHIFT);
   const after = await session.blocksOf('li');
@@ -644,8 +651,7 @@ async function shiftSelection(next: () => number, direction: 'in' | 'out', label
       .toBeLessThanOrEqual(itemsBefore.length);
   }
   expect(compact(await session.text()), `${label}: the selection's text changed; ${picture}`)
-    .toBe(compact(before.filter((line) => !/^\s*(\?)?(ul|ol)(@\d+)?$/.test(line))
-      .map((line) => line.replace(/^\s*(- |p: |div: )/, '')).join('')));
+    .toBe(textBefore);
 }
 
 /** A nonce no other step has typed anywhere, so "landed only there" is exact. */

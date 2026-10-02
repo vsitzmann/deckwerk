@@ -623,6 +623,12 @@ function hoistBlocksOutOfInlines(root: ParentNode & Node): void {
     if (hoisted) splitItemAtHoistedBlock(block);
     hoisted = false;
   }
+  // A cut list item pasted into the start of another arrives as its text, a
+  // <br> and an empty list where the item break was: the same break, spelled
+  // with a list instead of a paragraph (list fuzz seed 20261007).
+  for (const list of [...root.querySelectorAll<HTMLElement>('li > ul:empty, li > ol:empty')]) {
+    splitItemAtHoistedBlock(list, true);
+  }
 }
 
 /**
@@ -633,9 +639,10 @@ function hoistBlocksOutOfInlines(root: ParentNode & Node): void {
  * block becomes the next item. A block that is empty was only that break
  * and goes; one with content stays with the item before the split.
  */
-function splitItemAtHoistedBlock(block: HTMLElement): void {
+function splitItemAtHoistedBlock(block: HTMLElement, emptyList = false): void {
   const item = block.parentElement;
-  if (!item || item.tagName !== 'LI' || block.tagName === 'UL' || block.tagName === 'OL') return;
+  if (!item || item.tagName !== 'LI') return;
+  if (!emptyList && (block.tagName === 'UL' || block.tagName === 'OL')) return;
   const contentful = (node: Node | null): boolean => (
     node !== null && (node instanceof Element ? node.tagName !== 'BR' : (node.textContent ?? '') !== '')
   );
@@ -643,13 +650,24 @@ function splitItemAtHoistedBlock(block: HTMLElement): void {
   for (let node = block.previousSibling; node; node = node.previousSibling) before ||= contentful(node);
   let after = false;
   for (let node = block.nextSibling; node; node = node.nextSibling) after ||= contentful(node);
-  if (!after) return;
+  const empty = (block.textContent ?? '') === '' && !block.querySelector('img, video, svg, table');
+  if (!after) {
+    // An empty list at the end of an item renders nothing and breaks nothing.
+    if (emptyList) block.remove();
+    return;
+  }
   const next = item.cloneNode(false) as HTMLElement;
   next.removeAttribute('value');
   while (block.nextSibling) next.appendChild(block.nextSibling);
   item.after(next);
-  const empty = (block.textContent ?? '') === '' && !block.querySelector('img, video, svg, table');
-  if (empty && before) block.remove();
+  if (empty && before) {
+    // The <br> that ended the line ahead of the block ends the item now.
+    if (block.previousSibling instanceof Element && block.previousSibling.tagName === 'BR'
+      && block.previousSibling.previousSibling) block.previousSibling.remove();
+    block.remove();
+  } else if (emptyList) {
+    block.remove();
+  }
 }
 
 /**

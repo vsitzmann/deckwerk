@@ -285,3 +285,24 @@ describe('moving an indented item out one level', () => {
     expect(root.innerHTML).toBe('<ul><li>one</li></ul>');
   });
 });
+
+describe('unbulletListItems and stray sub-lists', () => {
+  it('leaves a stray sub-list at the top of the list alone (list fuzz seed 20261014)', () => {
+    const body = document.createElement('div');
+    body.innerHTML = '<ol><ol><ol><li>5</li></ol></ol><li>d74</li><li>f52b</li><li><br></li></ol>';
+    const [, , f52b, empty] = [...body.querySelectorAll('li')] as HTMLElement[];
+    unbulletListItems([f52b, empty]);
+    expect(body.textContent).toBe('5d74f52b');
+    expect(body.querySelector('ol ol li')?.textContent).toBe('5');
+    expect([...body.querySelectorAll(':scope > p')].map((p) => p.textContent)).toEqual(['f52b', '']);
+  });
+
+  it('frees every level of a stray sub-list with the item it followed', () => {
+    const body = document.createElement('div');
+    body.innerHTML = '<ul><li>one</li><ul><li>two</li><ul><li>three</li></ul></ul><li>four</li></ul>';
+    const one = body.querySelector('li') as HTMLElement;
+    unbulletListItems([one]);
+    expect(body.textContent).toBe('onetwothreefour');
+    expect([...body.querySelectorAll(':scope > p')].map((p) => p.textContent)).toEqual(['one', 'two', 'three']);
+  });
+});

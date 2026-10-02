@@ -61,3 +61,21 @@ describe('words stranded in a list outside every item', () => {
     expect([...doc.querySelectorAll('li')].map((item) => item.textContent)).toEqual(['lead', 'one']);
   });
 });
+
+describe('an empty list left inside an item by a paste', () => {
+  it('becomes the item break it stood for (list fuzz seed 20261007)', () => {
+    const html = '<ol><li>elta<span style="font-weight: 700;">f13a</span><br><ol></ol>beta<b>f5b</b></li><li>gamma</li></ol>';
+    const doc = document.createElement('div');
+    doc.innerHTML = normalizeParagraphHtml(html, true);
+    expect([...doc.querySelectorAll('li')].map((item) => item.textContent)).toEqual(['eltaf13a', 'betaf5b', 'gamma']);
+    expect(doc.querySelector('ol ol, li br'), doc.innerHTML).toBeNull();
+    expect(normalizeParagraphHtml(doc.innerHTML, true)).toBe(doc.innerHTML);
+  });
+
+  it('simply goes when it ends the item', () => {
+    const doc = document.createElement('div');
+    doc.innerHTML = normalizeParagraphHtml('<ul><li>one<ul></ul></li><li>two</li></ul>', true);
+    expect(doc.querySelector('ul ul')).toBeNull();
+    expect([...doc.querySelectorAll('li')].map((item) => item.textContent)).toEqual(['one', 'two']);
+  });
+});
