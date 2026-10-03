@@ -404,7 +404,14 @@ describe('slide-agent connect', { timeout: 120_000 }, () => {
     first.peer.send({
       kind: 'presence', activeSlideId: 's2', selectedSlideIds: ['s2'], selectedElementIds: [], editingElementId: null,
     });
-    const seen = await second.peer.nextOfKind('presence');
+    // B can hear other presence first, depending on which request won the
+    // race: A's arrival (the server announces a newcomer, nothing selected yet)
+    // when B was in the room before A, and the agent's own presence. The state
+    // under test is the one A sent. In two rooms it would never come at all.
+    let seen = await second.peer.nextOfKind('presence');
+    while (seen.state.name !== 'A' || seen.state.selectedSlideIds.length === 0) {
+      seen = await second.peer.nextOfKind('presence');
+    }
     expect(seen.state).toMatchObject({ name: 'A', participant: PARTICIPANT, selectedSlideIds: ['s2'] });
     events.abort();
   });
