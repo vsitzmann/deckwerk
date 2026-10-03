@@ -10,7 +10,6 @@ import {
   Cdp,
   eventually,
   findTarget,
-  freePort,
   launchBrowser,
   stopBrowser,
 } from './support/browserSession.js';
@@ -96,8 +95,7 @@ describe('pasting a video file copied in the file manager', () => {
 
     const appDir = join(workDir, 'app');
     await materializeDesktopApp(appDir, 'deckwerk-clipboard-file-test');
-    const inspectorPort = await freePort();
-    const app = await launchDesktopApp(appDir, [deckDir, `--inspect=${inspectorPort}`], {
+    const app = await launchDesktopApp(appDir, [deckDir, '--inspect=0'], {
       profileDir,
       visible: NEEDS_VISIBLE_WINDOW_ON_CI,
     });
@@ -110,7 +108,7 @@ describe('pasting a video file copied in the file manager', () => {
         && Boolean(document.querySelector('#canvas .slide'))
     )`), 'desktop editor did not open the clipboard test deck');
 
-    releaseClipboard = await copyFilesLikeFileManager(inspectorPort, [clip]);
+    releaseClipboard = await copyFilesLikeFileManager(app.inspectorPort!, [clip]);
     await editor.call('Page.bringToFront');
     await editor.chord('v', 'KeyV', 86, PASTE_MODIFIER);
 
@@ -144,11 +142,10 @@ describe('pasting a video file copied in the file manager', () => {
       host: '127.0.0.1',
       port: 0,
     });
-    const inspectorPort = await freePort();
     const browser = await launchBrowser(
       `http://127.0.0.1:${server.port}/?deck=clipboard-file&name=Clipboard%20File`,
       profileDir,
-      [`--inspect=${inspectorPort}`],
+      ['--inspect=0'],
     );
     appProcess = browser.process;
     const target = await findTarget(
@@ -163,7 +160,7 @@ describe('pasting a video file copied in the file manager', () => {
       && Boolean(document.querySelector('#canvas .slide'))
     ))()`), 'Web UI did not connect to the headless server');
 
-    releaseClipboard = await copyFilesLikeFileManager(inspectorPort, [clip]);
+    releaseClipboard = await copyFilesLikeFileManager(browser.inspectorPort!, [clip]);
     await editor.call('Page.bringToFront');
     await editor.evaluate('window.focus()');
     await editor.chord('v', 'KeyV', 86, PASTE_MODIFIER, ['Paste']);

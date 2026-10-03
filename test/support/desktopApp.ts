@@ -2,7 +2,7 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import { mkdir, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { build } from 'electron-vite';
-import { collectProcessOutput, electronBinary, freePort, type DevToolsTarget } from './browserSession.js';
+import { collectProcessOutput, electronBinary, reportedPorts, type DevToolsTarget } from './browserSession.js';
 import { collabClientDir, sharedBuild } from './collabClient.js';
 
 /**
@@ -89,6 +89,8 @@ export async function materializeDesktopApp(appDir: string, name: string): Promi
 export interface RunningApp {
   process: ChildProcess;
   debugPort: number;
+  /** The main process's Node inspector, when `args` asked for `--inspect=0`. */
+  inspectorPort?: number;
   /** Everything the app has written to stdout and stderr so far. */
   log: () => string;
 }
@@ -104,25 +106,25 @@ export function launchDesktopApp(appDir: string, args: string[], options: {
   env?: Record<string, string>;
   visible?: boolean;
 }): Promise<RunningApp> {
-  return freePort().then((debugPort) => {
-    const child = spawn(electronBinary, [
-      appDir,
-      `--remote-debugging-port=${debugPort}`,
-      '--remote-allow-origins=*',
-      `--user-data-dir=${options.profileDir}`,
-      ...args,
-    ], {
-      cwd: options.cwd ?? process.cwd(),
-      stdio: ['ignore', 'pipe', 'pipe'],
-      env: {
-        ...process.env,
-        ELECTRON_DISABLE_SECURITY_WARNINGS: '1',
-        ...(options.visible ? {} : { DECKWERK_HEADLESS_TEST: '1' }),
-        ...options.env,
-      },
-    });
-    return { process: child, debugPort, log: collectProcessOutput(child) };
+  const child = spawn(electronBinary, [
+    appDir,
+    // Chromium picks the port; see `reportedPorts`.
+    '--remote-debugging-port=0',
+    '--remote-allow-origins=*',
+    `--user-data-dir=${options.profileDir}`,
+    ...args,
+  ], {
+    cwd: options.cwd ?? process.cwd(),
+    stdio: ['ignore', 'pipe', 'pipe'],
+    env: {
+      ...process.env,
+      ELECTRON_DISABLE_SECURITY_WARNINGS: '1',
+      ...(options.visible ? {} : { DECKWERK_HEADLESS_TEST: '1' }),
+      ...options.env,
+    },
   });
+  const log = collectProcessOutput(child);
+  return reportedPorts(child, args, log).then((ports) => ({ process: child, log, ...ports }));
 }
 
 /** The editor window among an app's DevTools targets. */

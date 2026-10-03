@@ -1,7 +1,6 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { createRequire } from 'node:module';
-import { createServer } from 'node:net';
 import { join } from 'node:path';
 import WebSocket from 'ws';
 
@@ -854,6 +853,8 @@ export class Cdp {
 export interface RunningBrowser {
   process: ChildProcess;
   debugPort: number;
+  /** The main process's Node inspector, when it was launched with `--inspect=0`. */
+  inspectorPort?: number;
   log: () => string;
 }
 
@@ -861,14 +862,14 @@ export interface RunningBrowser {
 export async function launchBrowser(
   url: string,
   profileDir: string,
-  /** Extra Electron switches, e.g. `--inspect=<port>` for the main process. */
+  /** Extra Electron switches, e.g. `--inspect=0` for the main process. */
   electronArgs: string[] = [],
 ): Promise<RunningBrowser> {
-  const debugPort = await freePort();
   const child = spawn(electronBinary, [
     join(process.cwd(), 'scripts/eval-browser.cjs'),
     url,
-    String(debugPort),
+    // Chromium picks the port; see `reportedPorts`.
+    '0',
     profileDir,
     ...electronArgs,
   ], {
@@ -876,7 +877,61 @@ export async function launchBrowser(
     stdio: ['ignore', 'pipe', 'pipe'],
     env: { ...process.env, ELECTRON_DISABLE_SECURITY_WARNINGS: '1' },
   });
-  return { process: child, debugPort, log: collectProcessOutput(child) };
+  const log = collectProcessOutput(child);
+  return { process: child, log, ...await reportedPorts(child, electronArgs, log) };
+}
+
+const DEVTOOLS_LISTENING = /DevTools listening on ws:\/\/[^\s/]+:(\d+)\//;
+const INSPECTOR_LISTENING = /Debugger listening on ws:\/\/[^\s/]+:(\d+)\//;
+
+/**
+ * The ports an Electron launched with `--remote-debugging-port=0` (and, when
+ * `args` asks for it, `--inspect=0`) actually bound, as it reports them on
+ * stderr.
+ *
+ * Asking the OS for a free port and handing the number to Electron was a race:
+ * the probe socket closes before Electron binds, and with a tier's worth of
+ * Electrons starting at once another one took the port in between. The loser
+ * logged "bind() failed: Address already in use", exposed no DevTools at all,
+ * and its suite timed out waiting for a target. Port 0 cannot collide.
+ */
+export function reportedPorts(
+  child: ChildProcess,
+  args: string[],
+  log: () => string,
+  timeoutMs = FIND_TARGET_TIMEOUT_MS,
+): Promise<{ debugPort: number; inspectorPort?: number }> {
+  const wantsInspector = args.includes('--inspect=0');
+  return new Promise((resolve, reject) => {
+    let text = '';
+    const finish = (error?: Error) => {
+      clearTimeout(timer);
+      child.stderr?.off('data', onData);
+      child.off('exit', onExit);
+      if (error) {
+        reject(error);
+        return;
+      }
+      const inspector = INSPECTOR_LISTENING.exec(text);
+      resolve({
+        debugPort: Number(DEVTOOLS_LISTENING.exec(text)![1]),
+        ...(inspector ? { inspectorPort: Number(inspector[1]) } : {}),
+      });
+    };
+    const onData = (chunk: unknown) => {
+      text += String(chunk);
+      if (DEVTOOLS_LISTENING.test(text) && (!wantsInspector || INSPECTOR_LISTENING.test(text))) {
+        finish();
+      }
+    };
+    const onExit = () => finish(new Error(`Electron exited before exposing DevTools\n${log()}`));
+    const timer = setTimeout(
+      () => finish(new Error(`Electron did not report its DevTools port in ${timeoutMs} ms\n${log()}`)),
+      timeoutMs,
+    );
+    child.stderr?.on('data', onData);
+    child.once('exit', onExit);
+  });
 }
 
 /**
@@ -963,8 +1018,102 @@ export async function textEditingState(cdp: Cdp, selector: string): Promise<stri
       hit: describe(hit),
       overlays: [...document.querySelectorAll('#ctx-menu, .color-picker-popover, dialog[open], .modal')]
         .filter((node) => node.getClientRects().length > 0).map(describe),
-    });
+    }) + (window.__deckwerkTrace
+      ? '\\ntrace (ms since install, newest last):\\n  ' + window.__deckwerkTrace.slice(-80).join('\\n  ')
+      : '');
   })()`).catch((error) => `(state unreadable: ${error instanceof Error ? error.message : String(error)})`);
+}
+
+/**
+ * Record, in the page, every pointer and key event the canvas could see and
+ * every change to the selection, the document and the edit session, with the
+ * call site that made it. `textEditingState` prints the tail. A lost
+ * double-click leaves only its end state behind ("selection: []"); this says
+ * whether the press arrived, what it hit, and what took the selection away.
+ *
+ * Needs `window.store` and `window.canvas` (both shells expose them).
+ */
+export async function installEditingTrace(cdp: Cdp): Promise<void> {
+  await cdp.evaluate(`(() => {
+    if (window.__deckwerkTrace || !window.store || !window.canvas) return false;
+    const log = [];
+    window.__deckwerkTrace = log;
+    const t0 = performance.now();
+    const push = (line) => {
+      log.push((performance.now() - t0).toFixed(0).padStart(7) + ' ' + line);
+      if (log.length > 400) log.shift();
+    };
+    const describe = (node) => node instanceof Element
+      ? node.tagName.toLowerCase() + (typeof node.className === 'string' && node.className.trim()
+        ? '.' + node.className.trim().split(/\\s+/).slice(0, 3).join('.') : '')
+      : String(node);
+    // The caller of a wrapped method: skip this wrapper's own frame.
+    const caller = () => (new Error().stack ?? '').split('\\n').slice(3, 6)
+      .map((frame) => frame.trim().replace(/^at /, '').replace(/\\(?https?:\\/\\/[^/]+\\//, '(')).join(' < ');
+    // Moves are only interesting while a press is held: that is when the
+    // canvas reads one as a drag. Log each, with the buttons it reports.
+    let held = 0;
+    window.addEventListener('pointerdown', () => { held = 8; }, true);
+    window.addEventListener('pointerup', () => { held = 0; }, true);
+    window.addEventListener('pointermove', (event) => {
+      if (held <= 0) return;
+      held -= 1;
+      push('pointermove ' + describe(event.target) + ' x=' + Math.round(event.clientX)
+        + ' y=' + Math.round(event.clientY) + ' buttons=' + event.buttons
+        + ' trusted=' + event.isTrusted + ' t=' + event.timeStamp.toFixed(0));
+    }, true);
+    // Where the slide view sits: a re-fit under a held pointer remaps it.
+    const stage = document.querySelector('#canvas .stage');
+    if (stage) {
+      new MutationObserver(() => push('stage ' + stage.style.left + ',' + stage.style.top
+        + ' ' + stage.style.transform)).observe(stage, { attributes: true, attributeFilter: ['style'] });
+    }
+    for (const type of ['pointerdown', 'pointerup', 'pointercancel', 'lostpointercapture', 'dblclick', 'keydown']) {
+      window.addEventListener(type, (event) => push(type + ' ' + describe(event.target)
+        + (event.key ? ' key=' + event.key : '')
+        + (event.pointerId !== undefined ? ' x=' + Math.round(event.clientX) + ' y=' + Math.round(event.clientY)
+          + ' buttons=' + event.buttons : '')
+        + (event.detail ? ' detail=' + event.detail : '')
+        + ' t=' + event.timeStamp.toFixed(0)), true);
+    }
+    const store = window.store;
+    const canvas = window.canvas;
+    const state = () => '[' + [...store.get().selection].join(',') + '] editing=' + canvas.editingId;
+    const wrap = (owner, name, label) => {
+      const original = owner[name];
+      if (typeof original !== 'function') return;
+      owner[name] = function (...args) {
+        const before = state();
+        try {
+          return original.apply(this, args);
+        } finally {
+          push(label + '.' + name + ' ' + before + ' -> ' + state() + ' from ' + caller());
+        }
+      };
+    };
+    for (const name of ['select', 'clearSelection', 'load', 'resyncRemote', 'replaceExternal',
+      'undo', 'redo', 'restoreHistory', 'deleteSelection', 'selectSlide']) wrap(store, name, 'store');
+    for (const name of ['beginTextEdit', 'commitTextEdit', 'endTextEditing']) wrap(canvas, name, 'canvas');
+    // Remote and local commits are frequent; log them only by label.
+    const applyRemote = store.applyRemote;
+    store.applyRemote = function (deck, label, ...rest) {
+      push('store.applyRemote ' + JSON.stringify(label));
+      return applyRemote.call(this, deck, label, ...rest);
+    };
+    const commit = store.commit;
+    store.commit = function (fn, opts = {}) {
+      push('store.commit ' + JSON.stringify(opts.label ?? '') + (opts.transient ? ' transient' : '')
+        + (opts.measurement ? ' measurement' : ''));
+      return commit.call(this, fn, opts);
+    };
+    let last = state();
+    store.subscribe(() => {
+      const now = state();
+      if (now !== last) push('state ' + last + ' -> ' + now);
+      last = now;
+    });
+    return true;
+  })()`);
 }
 
 export function collectProcessOutput(child: ChildProcess): () => string {
@@ -973,19 +1122,6 @@ export function collectProcessOutput(child: ChildProcess): () => string {
   child.stdout?.on('data', (chunk) => (stdout += String(chunk)));
   child.stderr?.on('data', (chunk) => (stderr += String(chunk)));
   return () => [stdout, stderr].filter(Boolean).join('\n').trim();
-}
-
-export async function freePort(): Promise<number> {
-  const portServer = createServer();
-  await new Promise<void>((resolve, reject) => {
-    portServer.once('error', reject);
-    portServer.listen({ host: '127.0.0.1', port: 0, exclusive: true }, resolve);
-  });
-  const address = portServer.address();
-  if (!address || typeof address === 'string') throw new Error('could not allocate debug port');
-  await new Promise<void>((resolve, reject) =>
-    portServer.close((error) => error ? reject(error) : resolve()));
-  return address.port;
 }
 
 export function wait(ms: number): Promise<void> {

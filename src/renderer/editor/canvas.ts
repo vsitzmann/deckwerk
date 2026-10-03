@@ -2326,6 +2326,8 @@ export class EditorCanvas {
     // dragging, so collaborators see the cursor move, not only the edits.
     this.onPointerSample?.(this.toCanvas(ev));
     if (this.drag.kind === 'none') return;
+    // Only a held button drags. See `isHoverMove`.
+    if (isHoverMove(ev)) return;
     let slide = this.store.slide;
     if (!slide) return;
 
@@ -3614,7 +3616,7 @@ export class EditorCanvas {
         const edge = cell ? borderEdgeAtPointer(cell, event) : null;
         if (cell && edge) {
           this.showTableBorderPreview(cell, edge);
-          if (borderPaintDrag?.pointerId === event.pointerId) {
+          if (borderPaintDrag?.pointerId === event.pointerId && !isHoverMove(event)) {
             event.preventDefault();
             this.paintTableBorderEdge(cell, edge);
             borderPaintDrag.changed = true;
@@ -3624,7 +3626,7 @@ export class EditorCanvas {
         }
         return;
       }
-      if (!tableDrag || event.pointerId !== tableDrag.pointerId) return;
+      if (!tableDrag || event.pointerId !== tableDrag.pointerId || isHoverMove(event)) return;
       const cell = tableCellFromEvent(event);
       if (!cell) return;
       const point = tableCoordinates(cell);
@@ -6882,6 +6884,25 @@ export function measureTextToSize(
     : el.align === 'right' ? el.x + el.w - w
       : el.x;
   return { x, w, h };
+}
+
+/**
+ * Whether a pointer move is a hover: a mouse or pen reporting no button held.
+ *
+ * A press starts a drag, and only moves made with the button still down may
+ * carry it on. The window system can deliver a move for a pointer that is not
+ * pressing at all — on CI's window-manager-less X display a hover at the
+ * window's centre arrives whenever a window maps, and a button released where
+ * the page never hears of it leaves the next hover in the same state.
+ * Treating those as the drag moved
+ * the pressed object to wherever that pointer happened to be, so a click on a
+ * selected box flung it across the slide (test/pointerDragBugs.test.ts).
+ *
+ * Touch never reports a hover while it is down, and a pointer type the
+ * browser did not set is not a device that can say either way.
+ */
+export function isHoverMove(ev: PointerEvent): boolean {
+  return ev.buttons === 0 && (ev.pointerType === 'mouse' || ev.pointerType === 'pen');
 }
 
 /** Whether a point is inside the visible crop window of a media element. */

@@ -3652,6 +3652,36 @@ describe('spacing and sizing guides', () => {
   });
 });
 
+describe('moves while a press is held', () => {
+  beforeEach(() => document.body.replaceChildren());
+
+  /** A pointermove as a mouse reports it: jsdom's shim has no pointerType. */
+  const mouseMove = (x: number, y: number, buttons: number) => {
+    const event = new PointerEvent('pointermove', {
+      clientX: x, clientY: y, bubbles: true, pointerId: 1, button: -1, buttons,
+    });
+    Object.defineProperty(event, 'pointerType', { value: 'mouse' });
+    return event;
+  };
+
+  it('does not drag the pressed object on a hover that reports no button held', () => {
+    const { store, host } = setupRow();
+    host.dispatchEvent(new PointerEvent('pointerdown', {
+      clientX: 850, clientY: 550, bubbles: true, pointerId: 1, button: 0, buttons: 1,
+    }));
+    // The window system's move for a pointer that is not pressing, far away.
+    host.dispatchEvent(mouseMove(1300, 900, 0));
+    expect(store.slide!.elements.find((el) => el.id === 'c')).toMatchObject({ x: 800, y: 500 });
+
+    // The same move with the button held is a drag (soundness control).
+    host.dispatchEvent(mouseMove(1300, 900, 1));
+    expect(store.slide!.elements.find((el) => el.id === 'c')!.x).toBeGreaterThan(800);
+    host.dispatchEvent(new PointerEvent('pointerup', {
+      clientX: 1300, clientY: 900, bubbles: true, pointerId: 1, button: 0,
+    }));
+  });
+});
+
 describe('pointer-ups on chrome laid over the canvas', () => {
   it('does not end a transaction another control owns', () => {
     const { store, host } = setup();

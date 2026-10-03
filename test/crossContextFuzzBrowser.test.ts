@@ -138,7 +138,7 @@ type OpName =
   | 'click' | 'shift-click' | 'double-click text' | 'double-click image then text'
   | 'type nonce' | 'bold mid-word' | 'escape' | 'click empty' | 'marquee'
   | 'rail hop' | 'undo' | 'redo' | 'undo round-trip' | 'delete selection'
-  | 'cmd+a';
+  | 'cmd+a' | 'click with stray hover';
 
 interface Violation { seed: number; step: number; op: OpName; oracle: string; detail: string }
 
@@ -368,6 +368,7 @@ function chooseOp(next: () => number, pre: CrossState): OpName {
   if (targets.length > 0) {
     add('click', 3);
     add('shift-click', 2);
+    add('click with stray hover', 1);
     if (targets.some((id) => id !== IMAGE)) add('double-click text', 3);
   }
   if (pre.slideIndex === 0 && pre.elements.includes(IMAGE)
@@ -411,6 +412,24 @@ async function performOp(
     case 'shift-click':
       await session.shiftClick(pick(next, targets));
       return 'same';
+    case 'click with stray hover': {
+      // A click is not a drag, whatever the window system reports in between:
+      // nothing on the slide may have moved.
+      const where = `(() => {
+        const state = window.store.get();
+        return Object.fromEntries(state.deck.slides[state.slideIndex].elements
+          .map((element) => [element.id, element.x + ',' + element.y]));
+      })()`;
+      const before = await session.cdp.evaluate<Record<string, string>>(where);
+      await session.clickWithStrayHover(pick(next, targets));
+      const after = await session.cdp.evaluate<Record<string, string>>(where);
+      for (const [id, at] of Object.entries(before)) {
+        if (after[id] !== undefined && after[id] !== at) {
+          flag('census', `${id} moved from ${at} to ${after[id]} on a click with a stray hover`);
+        }
+      }
+      return 'same';
+    }
     case 'double-click text':
       await session.doubleClick(pick(next, targets.filter((id) => id !== IMAGE)));
       return 'same';

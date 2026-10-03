@@ -12,6 +12,7 @@ import {
   launchBrowser,
   stopBrowser,
   textEditingState,
+  installEditingTrace,
   wait,
   type RunningBrowser,
 } from './browserSession.js';
@@ -321,6 +322,7 @@ export async function startListEditingSession(deckId: string, name: string): Pro
   await eventually(async () => cdp!.evaluate<boolean>(
     `Boolean(document.querySelector('${CONTENT}'))`), 'the list fixture never loaded');
   await cdp.click('#side-tabs button[data-panel="inspector"]', 'Props tab');
+  await installEditingTrace(cdp);
 
   const port = server.port;
   const session = buildSession(cdp, port, deckId);

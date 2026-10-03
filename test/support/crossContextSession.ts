@@ -223,6 +223,12 @@ export interface CrossSession {
   doubleClick(elementId: string): Promise<void>;
   clickEmpty(): Promise<void>;
   clickRail(index: number): Promise<void>;
+  /**
+   * A click on an element during which the window system reports a hover
+   * elsewhere with no button held — what CI's X display sends whenever a
+   * window maps. It is a click, not a drag (test/pointerDragBugs.test.ts).
+   */
+  clickWithStrayHover(elementId: string): Promise<void>;
   /** A real primary-button marquee drag along viewport points. */
   dragPath(points: Array<{ x: number; y: number }>): Promise<void>;
   /** Viewport box of a selector. */
@@ -354,6 +360,24 @@ function buildSession(cdp: Cdp): CrossSession {
     async clickRail(index) {
       await cdp.click(`.rail-item[data-index="${index}"]`, `rail slide ${index}`);
       await wait(150);
+    },
+    async clickWithStrayHover(elementId) {
+      const box = await session.boxOf(elementSelector(elementId));
+      const x = box.left + box.width / 2;
+      const y = box.top + box.height / 2;
+      await cdp.call('Input.dispatchMouseEvent', {
+        type: 'mouseMoved', x, y, button: 'none', buttons: 0,
+      });
+      await cdp.call('Input.dispatchMouseEvent', {
+        type: 'mousePressed', x, y, button: 'left', buttons: 1, clickCount: 1,
+      });
+      await cdp.call('Input.dispatchMouseEvent', {
+        type: 'mouseMoved', x: x + 240, y: y + 160, button: 'none', buttons: 0,
+      });
+      await cdp.call('Input.dispatchMouseEvent', {
+        type: 'mouseReleased', x, y, button: 'left', buttons: 0, clickCount: 1,
+      });
+      await wait(60);
     },
     async dragPath(points) {
       const start = points[0];
