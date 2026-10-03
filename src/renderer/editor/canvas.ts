@@ -1996,8 +1996,11 @@ export class EditorCanvas {
     const slide = this.store.slide;
     if (!slide) return;
     // A press that reaches the canvas was not on a live page (the frame keeps
-    // those), so it is the implicit "back to editing".
-    this.endWebLive();
+    // those), so it is the implicit "back to editing". Unless it follows a
+    // pointer toggle inside the double-click window: a selection click and a
+    // quick double-click pair up early, and the double-click's own second
+    // press would otherwise end the page it just made live.
+    if (ev.timeStamp - this.mediaToggledAt > DOUBLE_CLICK_MS) this.endWebLive();
 
     // Suppress the browser's own text selection: dragging across a slide would
     // otherwise sweep-select the text of every element it crossed.
