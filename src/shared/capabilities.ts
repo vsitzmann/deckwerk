@@ -119,6 +119,7 @@ export function capabilities(): Capability[] {
         'inspect reports the size it settled on as text.fittedFontSize.',
         'noWrap: true disables automatic line wrapping — lines break only where the author wrote one — and implies the auto-fit shrink for overlong lines.',
         "noWrapMode picks how a no-wrap line is compressed: 'shrink' (default) reduces the font size uniformly; 'condense' keeps the size and squeezes the type horizontally.",
+        'autoSize: true makes the box hug its text: lines break only where the author wrote one, and the editor keeps w/h at the text’s laid-out size, anchored at the edge its align names and at the top — a label rather than a column of prose. Resizing the box by hand turns it back into an ordinary wrapping box. It implies no auto-fit.',
       ],
       elements: [
         text('cap-fit-title', 'Auto-fit', TITLE, { class: ['role-title'] }),
