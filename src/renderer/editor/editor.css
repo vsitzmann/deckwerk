@@ -3670,9 +3670,9 @@ select.panel-action-select {
   color: var(--text);
   text-align: left;
 }
-/* `:not(:disabled)` matches the generic `button:hover:not(:disabled)` rule's
-   specificity, which otherwise wins the background and leaves white text on
-   the plain hover grey (unreadable in light mode). */
+/* `:not(:disabled)` matches the specificity of the generic button hover
+   rule, which otherwise wins the background and leaves white text on the
+   plain hover grey (unreadable in light mode). */
 .shape-menu-item:hover:not(:disabled) { background: var(--accent); color: #fff; border-color: transparent; }
 .shape-menu-item:hover:not(:disabled) svg { color: #fff; }
 .shape-menu-item[aria-checked]::after { content: ''; width: 1em; margin-left: auto; text-align: right; }
