@@ -260,6 +260,16 @@ const ShapeElement = BaseElement.extend({
   type: z.literal('shape'),
   shape: z.enum(['rect', 'ellipse', 'line', 'arrow', 'path']),
   fill: z.string().nullable().default(null),
+  /**
+   * A two-colour gradient: from `fill` to `to`, running in `angle` degrees
+   * counter-clockwise from the right (270 is top to bottom), like the shadow
+   * direction. Absent or null is a flat fill.
+   */
+  fillGradient: z.object({
+    to: z.string(),
+    angle: z.number().default(270),
+    kind: z.enum(['linear', 'radial']).default('linear'),
+  }).nullable().optional(),
   stroke: z.string().nullable().default(null),
   strokeWidth: z.number().min(0).default(2),
   radius: z.number().min(0).default(0),

@@ -31,6 +31,9 @@ document.getElementById('hits').addEventListener('click', function () { n += 1; 
 deckwerk.onActive(function (e) { document.getElementById('status').textContent = 'active ' + e.step + '/' + e.steps; });
 </script></body></html>`;
 
+/** Under the test's budget, so a command that never answers fails by name. */
+const COMMAND_TIMEOUT_MS = 30_000;
+
 let workDir = '';
 let server: RunningCollabServer | null = null;
 let browser: RunningBrowser | null = null;
@@ -80,7 +83,7 @@ describe.skipIf(!electronBinary)('web element in the browser editor and presenta
       browser.debugPort, (candidate) => candidate.url.includes(`deck=${DECK_ID}`) && !candidate.url.includes('present.html'),
       browser.log,
     );
-    editor = await Cdp.connect(target.webSocketDebuggerUrl!);
+    editor = await Cdp.connect(target.webSocketDebuggerUrl!, { commandTimeoutMs: COMMAND_TIMEOUT_MS });
     const FRAME = `#canvas [data-element-id="${WEB_ID}"] iframe.web-frame`;
     await eventually(async () => editor!.evaluate<boolean>(
       `Boolean(document.querySelector('${FRAME}'))`), 'the web element never rendered on the canvas');
@@ -101,12 +104,32 @@ describe.skipIf(!electronBinary)('web element in the browser editor and presenta
       `document.querySelectorAll('.handle[data-element-id="${WEB_ID}"]').length`),
       'the web element was not selected by clicking it', (count) => count > 0);
 
-    /* Live on the canvas: double-click runs the page in place, Escape ends it. */
-    const box = await editor.evaluate<{ x: number; y: number }>(`(() => {
+    /* Live on the canvas: double-click runs the page in place, Escape ends it.
+
+       First a click on the empty slide, away from the element. The canvas
+       pairs presses into a double-click by time and distance, so a selection
+       click followed at once by a double-click on the same spot is a triple
+       click to it: the page went live on the double-click's *first* press, and
+       its second landed in the new live frame whenever that frame was ready in
+       time. The page then held focus, Escape reached the page's bridge, and
+       ending live mode on its keydown tore down the frame the keyup was
+       addressed to -- a key event DevTools never acknowledges, so the test
+       hung until its budget ran out. A press elsewhere starts a fresh pair:
+       this double-click selects on its first press and runs the page on its
+       second, with nothing after it to land in the page. */
+    const spots = await editor.evaluate<{ empty: { x: number; y: number }; web: { x: number; y: number } }>(`(() => {
+      const slide = document.querySelector('#canvas .slide').getBoundingClientRect();
       const r = document.querySelector('#canvas [data-element-id="${WEB_ID}"]').getBoundingClientRect();
-      return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+      return {
+        empty: { x: slide.left + (r.left - slide.left) / 2, y: slide.top + (r.top - slide.top) / 2 },
+        web: { x: r.left + r.width / 2, y: r.top + r.height / 2 },
+      };
     })()`);
-    await editor.doubleClickAt(box.x, box.y);
+    await editor.clickAt(spots.empty.x, spots.empty.y);
+    await eventually(async () => editor!.evaluate<number>(
+      `document.querySelectorAll('.handle[data-element-id="${WEB_ID}"]').length`),
+      'a click on the empty slide did not clear the selection', (count) => count === 0);
+    await editor.doubleClickAt(spots.web.x, spots.web.y);
     const liveState = () => editor!.evaluate<{ live: boolean; badge: string | null; pe: string | null }>(`(() => {
       const n = document.querySelector('#canvas [data-element-id="${WEB_ID}"]');
       const f = n?.querySelector('iframe.web-frame');
@@ -115,6 +138,8 @@ describe.skipIf(!electronBinary)('web element in the browser editor and presenta
     })()`);
     await eventually(liveState, 'double-click did not make the page live', (s) => s.live && s.pe === 'auto');
     expect((await liveState()).badge).toMatch(/Esc/);
+    // Both presses were the canvas's: neither reached the page, which would have taken the keyboard.
+    expect(await editor.evaluate<string>('document.activeElement?.tagName ?? ""')).not.toBe('IFRAME');
     await editor.key('Escape', 27);
     await eventually(liveState, 'Escape did not return the page to editing', (s) => !s.live && s.pe === 'none');
 
@@ -150,15 +175,18 @@ describe.skipIf(!electronBinary)('web element in the browser editor and presenta
         (candidate) => candidate.url.includes('present.html') && candidate.url.includes(`deck=${DECK_ID}`),
         browser!.log);
     })();
-    present = await Cdp.connect(presentTarget.webSocketDebuggerUrl!);
+    present = await Cdp.connect(presentTarget.webSocketDebuggerUrl!, { commandTimeoutMs: COMMAND_TIMEOUT_MS });
     await eventually(async () => present!.evaluate<string>(
       `getComputedStyle(document.querySelector('iframe.web-frame') ?? document.body).pointerEvents`),
       'the presentation never showed the live frame', (pe) => pe === 'auto');
 
-    // The frame is a separate target (opaque origin): read it through its own session.
+    /* The frame is a separate target (opaque origin): read it through its own
+       session. The editor's canvas previews load the same page, so the frame
+       is picked by the presentation that embeds it, not by its URL alone. */
     const pageTarget = await findTarget(browser.debugPort,
-      (candidate) => candidate.url.includes('assets/web/probe.html'), browser.log);
-    const page = await Cdp.connect(pageTarget.webSocketDebuggerUrl!);
+      (candidate) => candidate.url.includes('assets/web/probe.html') && candidate.parentId === presentTarget.id,
+      browser.log);
+    const page = await Cdp.connect(pageTarget.webSocketDebuggerUrl!, { commandTimeoutMs: COMMAND_TIMEOUT_MS });
     try {
       await eventually(async () => page.evaluate<string>(
         `document.getElementById('status').textContent`),

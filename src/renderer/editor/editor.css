@@ -682,8 +682,8 @@ body.panel-resizing iframe { pointer-events: none; }
 
 /* Keynote-style Command-drag rotation. The host class changes on keydown, so
    the cursor updates even when the pointer is already stationary on a handle. */
-.canvas-host.command-rotate .handle:not(.handle-curve-control),
-.canvas-host.is-rotating .handle:not(.handle-curve-control) {
+.canvas-host.command-rotate .handle:not(.handle-curve-control):not(.handle-corner),
+.canvas-host.is-rotating .handle:not(.handle-curve-control):not(.handle-corner) {
   cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'%3E%3Cpath d='M18.5 8A7 7 0 1 0 19 15' fill='none' stroke='white' stroke-width='4' stroke-linecap='round'/%3E%3Cpath d='M18.5 8A7 7 0 1 0 19 15' fill='none' stroke='black' stroke-width='2' stroke-linecap='round'/%3E%3Cpath d='M15 4l4 4-4 4' fill='white' stroke='white' stroke-width='3' stroke-linejoin='round'/%3E%3Cpath d='M15 4l4 4-4 4' fill='none' stroke='black' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") 12 12, crosshair;
 }
 
@@ -691,6 +691,20 @@ body.panel-resizing iframe { pointer-events: none; }
 .handle-endpoint {
   margin: 0;
   transform: translate(-50%, -50%);
+}
+
+/* A corner of a straight-sided shape: round, so it reads as a point to move
+   rather than a side to resize. */
+.handle-corner {
+  width: calc(12px * var(--inv));
+  height: calc(12px * var(--inv));
+  border: calc(2px * var(--inv)) solid var(--build-orange, #f59e0b);
+  background: #fff;
+  border-radius: 50%;
+  cursor: move;
+  pointer-events: auto;
+  transform: translate(-50%, -50%) !important;
+  z-index: 2;
 }
 
 .handle-curve-control {
@@ -2078,6 +2092,8 @@ input[type="range"] { accent-color: var(--accent); border: 0; background: transp
 .sel-box { outline-color: var(--accent); }
 .handle { border-color: var(--accent); box-shadow: none; }
 .handle-endpoint { border-radius: 50% !important; border-color: var(--green); }
+/* Corners of a straight-sided shape: round and orange, so they never read as resize handles. */
+.handle.handle-corner { border-radius: 50% !important; border-color: var(--build-orange, #f59e0b); border-width: calc(2px * var(--inv)); }
 .mask-ghost { border-color: var(--green); background: rgb(158 206 106 / 8%); }
 .sel-box.masking { outline-color: var(--green); }
 .sel-box.masking .handle { border-color: var(--green); }
@@ -4411,6 +4427,33 @@ button.ghost:hover:not(:disabled) { color: var(--text); background: transparent;
 .build-delay-wrap > input { padding: 3px 24px 3px 6px; height: 24px; }
 .build-card-what { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; }
 .build-action-label { color: var(--muted); font: 9.5px var(--mono); letter-spacing: 0.08em; text-transform: uppercase; }
+/* A shadow's direction: the knob, then Angle and Distance. */
+.shadow-direction-row { grid-template-columns: 40px repeat(2, minmax(0, 1fr)); }
+.angle-dial {
+  position: relative; width: 40px; height: 40px; border-radius: 50%;
+  border: 1px solid var(--line); background: var(--panel-2);
+  cursor: grab; touch-action: none; align-self: end;
+}
+.angle-dial:active { cursor: grabbing; }
+.angle-dial:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+/* The hand runs from the centre to the rim, pointing where the shadow falls. */
+.angle-dial-hand {
+  position: absolute; left: 50%; top: 50%; width: 16px; height: 2px; margin-top: -1px;
+  background: var(--accent); border-radius: 1px; transform-origin: 0 50%;
+}
+.angle-dial-hand::after {
+  content: ''; position: absolute; right: -3px; top: -2px; width: 6px; height: 6px;
+  border-radius: 50%; background: var(--accent);
+}
+.angle-dial.is-mixed .angle-dial-hand { opacity: 0.35; }
+
+/* An animation's time: a slider for feel and a number for precision, on its
+   own line under the action it belongs to. */
+.duration-field { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.duration-field .duration-slider { flex: 1 1 auto; min-width: 60px; }
+.duration-field .duration-number { flex: 0 0 76px; }
+.duration-field .duration-number > input { width: 100%; padding: 3px 24px 3px 6px; height: 24px; }
+.build-duration-wrap { width: 100%; }
 .timeline-row select.build-action { padding: 2px 20px 2px 6px; height: 24px; font: 10.5px var(--mono); }
 .timeline-row select.build-trigger { flex: none; }
 .build-num { min-width: 16px; height: 16px; font: 700 9.5px/1 var(--mono); color: #000; }

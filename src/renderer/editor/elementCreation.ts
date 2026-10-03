@@ -1,5 +1,6 @@
 import type { ShapeEl, TextEl } from '@shared/deck.js';
 import { makeId } from '@shared/geometry.js';
+import { presetPath, type PolygonPreset } from '@shared/polygonShape.js';
 import { applyTableColumnWidths } from '@shared/paragraphs.js';
 import { newObjectColors } from '@shared/themes.js';
 import type { EditorStore } from './store.js';
@@ -76,6 +77,31 @@ export function insertShape(store: EditorStore, kind: 'rect' | 'ellipse'): Shape
   return created;
 }
 
+/**
+ * Insert a straight-sided shape — a trapezoid, a parallelogram, a free
+ * four-cornered shape — and select it. It is a path shape whose corners the
+ * canvas offers as handles (see `polygonShape.ts`), so any of them becomes
+ * any quadrilateral by dragging a corner.
+ */
+export function insertPolygon(store: EditorStore, preset: PolygonPreset): ShapeEl {
+  const { deck } = store.get();
+  const { fill } = newObjectColors(deck);
+  const w = 400;
+  const h = 240;
+  const created: ShapeEl = {
+    type: 'shape', id: makeId('shape'),
+    x: Math.round(deck.canvas.w * 0.4), y: Math.round(deck.canvas.h * 0.4),
+    w, h, rot: 0, z: nextZ(store), opacity: 1, class: [], style: {},
+    shape: 'path', fill, stroke: null, strokeWidth: 2, radius: 0,
+    path: presetPath(preset, w, h), pathSize: { w, h }, arrowStart: false, arrowEnd: false,
+  };
+  store.commit((d) => d.slides[store.get().slideIndex].elements.push(created), {
+    label: `Insert ${preset}`,
+  });
+  store.select([created.id]);
+  return created;
+}
+
 /** Insert a native line or arrow and select it. */
 export function insertLine(
   store: EditorStore,
@@ -100,7 +126,7 @@ export function insertLine(
   return created;
 }
 
-type ShapeKind = 'rect' | 'ellipse' | 'line' | 'arrow' | 'curved-arrow';
+type ShapeKind = 'rect' | 'ellipse' | PolygonPreset | 'line' | 'arrow' | 'curved-arrow';
 
 function shapeIcon(paths: string): string {
   return (
@@ -115,6 +141,12 @@ const SHAPE_OPTIONS: Array<{ kind: ShapeKind; label: string; icon: string }> = [
     icon: shapeIcon('<rect x="2" y="3.5" width="12" height="9" rx="1.5"/>') },
   { kind: 'ellipse', label: 'Ellipse',
     icon: shapeIcon('<ellipse cx="8" cy="8" rx="6" ry="4.5"/>') },
+  { kind: 'trapezoid', label: 'Trapezoid',
+    icon: shapeIcon('<path d="M5 3.5h6l3 9H2z"/>') },
+  { kind: 'parallelogram', label: 'Parallelogram',
+    icon: shapeIcon('<path d="M5.5 3.5H14l-3.5 9H2z"/>') },
+  { kind: 'quadrilateral', label: 'Four-sided shape',
+    icon: shapeIcon('<path d="M3 3.8 13.5 3l-1.2 9.5L2 10.8z"/>') },
   { kind: 'line', label: 'Line',
     icon: shapeIcon('<path d="M2.5 13.5 13.5 2.5"/>') },
   { kind: 'arrow', label: 'Arrow',
@@ -178,7 +210,8 @@ export function createShapeInsertPicker(store: EditorStore): HTMLElement {
         trigger.blur();
         if (kind === 'curved-arrow') insertLine(store, 'arrow', true);
         else if (kind === 'line' || kind === 'arrow') insertLine(store, kind);
-        else insertShape(store, kind);
+        else if (kind === 'rect' || kind === 'ellipse') insertShape(store, kind);
+        else insertPolygon(store, kind);
       });
       menu.appendChild(item);
     }

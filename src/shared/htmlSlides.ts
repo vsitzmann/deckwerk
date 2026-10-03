@@ -842,6 +842,11 @@ export function elementFromNode(
       type: 'shape',
       shape: shapeKind(node.dataset.shape),
       fill: node.dataset.fill ?? null,
+      ...(node.dataset.fillTo ? { fillGradient: {
+        to: node.dataset.fillTo,
+        angle: Number(node.dataset.fillAngle ?? 270) || 0,
+        kind: node.dataset.fillGradient === 'radial' ? 'radial' as const : 'linear' as const,
+      } } : {}),
       stroke: node.dataset.stroke ?? null,
       strokeWidth: Number(node.dataset.strokeWidth ?? 2) || 0,
       radius: Number(node.dataset.radius ?? 0) || 0,
@@ -1141,6 +1146,9 @@ function elementToHtml(element: SlideElement, build?: TimelineEntry): string {
       // the way back rather than being flattened into a picture.
       return `  <div ${attrs} data-element="shape" data-shape="${element.shape}"`
         + attr('data-fill', element.fill)
+        + (element.fillGradient ? attr('data-fill-to', element.fillGradient.to)
+          + attr('data-fill-angle', String(element.fillGradient.angle))
+          + attr('data-fill-gradient', element.fillGradient.kind) : '')
         + attr('data-stroke', element.stroke)
         + ` data-stroke-width="${element.strokeWidth}" data-radius="${element.radius}"`
         + (element.arrowStart ? ' data-arrow-start="true"' : '')
@@ -1407,7 +1415,8 @@ function attr(name: string, value: string | null): string {
 function pickStyle(style: Record<string, string>): Record<string, string> {
   const kept: Record<string, string> = {};
   for (const [property, value] of Object.entries(style)) {
-    if (PRESENTATIONAL_STYLE.has(property) && value) kept[property] = value;
+    // `--curl-*` are a curved (paper) shadow's settings, read by player.css.
+    if ((PRESENTATIONAL_STYLE.has(property) || property.startsWith('--curl-')) && value) kept[property] = value;
   }
   return kept;
 }

@@ -27,6 +27,9 @@ export const electronBinary = (() => {
 })();
 
 export interface DevToolsTarget {
+  id?: string;
+  /** For an out-of-process frame, the target id of the page that embeds it. */
+  parentId?: string;
   title: string;
   url: string;
   webSocketDebuggerUrl?: string;
@@ -51,7 +54,7 @@ export class Cdp {
     reject: (error: Error) => void;
   }>();
 
-  private constructor(private socket: WebSocket) {
+  private constructor(private socket: WebSocket, private commandTimeoutMs: number) {
     socket.on('message', (raw) => {
       const message = JSON.parse(String(raw));
       if (typeof message.id !== 'number') return;
@@ -69,13 +72,21 @@ export class Cdp {
     });
   }
 
-  static async connect(webSocketDebuggerUrl: string): Promise<Cdp> {
+  /**
+   * `commandTimeoutMs` lowers the cap of every `call` on this connection, for
+   * a test whose own budget is shorter than the default: a command that never
+   * answers then fails naming itself rather than as a bare test timeout.
+   */
+  static async connect(
+    webSocketDebuggerUrl: string,
+    { commandTimeoutMs = CDP_COMMAND_TIMEOUT_MS }: { commandTimeoutMs?: number } = {},
+  ): Promise<Cdp> {
     const socket = new WebSocket(webSocketDebuggerUrl);
     await new Promise<void>((resolve, reject) => {
       socket.once('open', resolve);
       socket.once('error', reject);
     });
-    const cdp = new Cdp(socket);
+    const cdp = new Cdp(socket, commandTimeoutMs);
     await cdp.call('Runtime.enable');
     return cdp;
   }
@@ -92,7 +103,7 @@ export class Cdp {
   call(
     method: string,
     params: Record<string, unknown> = {},
-    timeoutMs = CDP_COMMAND_TIMEOUT_MS,
+    timeoutMs = this.commandTimeoutMs,
   ): Promise<any> {
     const id = this.nextId++;
     return new Promise((resolve, reject) => {

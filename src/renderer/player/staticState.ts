@@ -1,6 +1,7 @@
 import type { Slide } from '@shared/deck.js';
 import { applyParagraphVisibility } from '@shared/paragraphs.js';
 import type { SlideState } from '@shared/timeline.js';
+import { curvedShadowClasses } from '@shared/shapeShadow.js';
 
 /**
  * Apply the resolved, motion-free endpoint of one build state.
@@ -28,6 +29,7 @@ export function applyStaticSlideState(
       'element',
       `element-${element.type}`,
       ...(state.classes.get(element.id) ?? element.class),
+      ...curvedShadowClasses(element.style),
     ].join(' ');
   }
 }
