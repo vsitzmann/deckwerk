@@ -2,55 +2,77 @@
  * Light or dark editor chrome. The slides keep their deck's own theme either
  * way; this only recolours the app around them. The choice is per machine,
  * kept in localStorage, and set on <html> before first paint so the window
- * never flashes the other one.
+ * never flashes the other one. `system` (the default) follows the OS
+ * appearance and keeps following it while the window is open.
  */
 export type UiTheme = 'dark' | 'light';
+export type UiThemePreference = UiTheme | 'system';
 
 const KEY = 'deckwerk.uiTheme';
 
-export function storedUiTheme(): UiTheme {
+export function storedUiThemePreference(): UiThemePreference {
   try {
-    return localStorage.getItem(KEY) === 'light' ? 'light' : 'dark';
+    const value = localStorage.getItem(KEY);
+    return value === 'light' || value === 'dark' ? value : 'system';
   } catch {
-    return 'dark';
+    return 'system';
   }
 }
 
-export function applyUiTheme(theme: UiTheme = storedUiTheme()): UiTheme {
+function systemUiTheme(): UiTheme {
+  return typeof matchMedia === 'function' && matchMedia('(prefers-color-scheme: light)').matches
+    ? 'light'
+    : 'dark';
+}
+
+export function resolveUiTheme(preference: UiThemePreference = storedUiThemePreference()): UiTheme {
+  return preference === 'system' ? systemUiTheme() : preference;
+}
+
+let following = false;
+
+/**
+ * Paint the stored preference onto <html>, and from then on keep it current:
+ * an OS appearance change (while on `system`) and a choice made in another
+ * window of the app (Speaker View, a second editor) both land here.
+ */
+export function applyUiTheme(): UiTheme {
+  const theme = resolveUiTheme();
   document.documentElement.dataset.uiTheme = theme;
+  if (!following) {
+    following = true;
+    if (typeof matchMedia === 'function') {
+      matchMedia('(prefers-color-scheme: light)').addEventListener('change', () => applyUiTheme());
+    }
+    window.addEventListener('storage', (event) => {
+      if (event.key === KEY) applyUiTheme();
+    });
+  }
   return theme;
 }
 
-export function setUiTheme(theme: UiTheme): UiTheme {
+export function setUiThemePreference(preference: UiThemePreference): UiTheme {
   try {
-    localStorage.setItem(KEY, theme);
+    if (preference === 'system') localStorage.removeItem(KEY);
+    else localStorage.setItem(KEY, preference);
   } catch {
     // A locked-down profile still gets the theme for this window.
   }
-  return applyUiTheme(theme);
+  return applyUiTheme();
 }
 
-export function toggleUiTheme(): UiTheme {
-  return setUiTheme(storedUiTheme() === 'light' ? 'dark' : 'light');
-}
-
-const SUN_ICON = '<svg class="bar-icon" viewBox="0 0 16 16" width="15" height="15" aria-hidden="true">'
-  + '<circle cx="8" cy="8" r="3" fill="none" stroke="currentColor" stroke-width="1.5"/>'
-  + '<path d="M8 1v2M8 13v2M1 8h2M13 8h2M3 3l1.4 1.4M11.6 11.6L13 13M3 13l1.4-1.4M11.6 4.4L13 3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>';
-const MOON_ICON = '<svg class="bar-icon" viewBox="0 0 16 16" width="15" height="15" aria-hidden="true">'
-  + '<path d="M13 9.5A5.5 5.5 0 1 1 6.5 3a4.5 4.5 0 0 0 6.5 6.5z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></svg>';
-
-/** The toolbar's sun/moon: shows the mode a click switches to. */
-export function uiThemeButton(): HTMLButtonElement {
-  const button = document.createElement('button');
-  button.className = 'bar-icon-button ui-theme-toggle';
-  const paint = (): void => {
-    const light = storedUiTheme() === 'light';
-    button.innerHTML = light ? MOON_ICON : SUN_ICON;
-    button.title = light ? 'Dark mode' : 'Light mode';
-    button.setAttribute('aria-label', button.title);
+/** The Appearance section of the DeckWerk menu. */
+export function appearanceMenuSection(): {
+  label: string;
+  options: { label: string; action: () => void; checked: () => boolean }[];
+} {
+  const option = (label: string, preference: UiThemePreference) => ({
+    label,
+    action: () => { setUiThemePreference(preference); },
+    checked: () => storedUiThemePreference() === preference,
+  });
+  return {
+    label: 'Appearance',
+    options: [option('System', 'system'), option('Light', 'light'), option('Dark', 'dark')],
   };
-  paint();
-  button.addEventListener('click', () => { toggleUiTheme(); paint(); });
-  return button;
 }

@@ -19,8 +19,9 @@ import { collabClientDir } from './support/collabClient.js';
 /**
  * Light mode in the real editor.
  *
- * The toolbar's sun turns the chrome light (the slide keeps its own theme),
- * the button then offers the moon, and the choice survives a reload.
+ * Appearance → Light in the DeckWerk menu turns the chrome light (the slide
+ * keeps its own theme), the menu then ticks Light, and the choice survives a
+ * reload.
  */
 const DECK_ID = 'light';
 
@@ -41,7 +42,7 @@ afterEach(async () => {
 });
 
 describe.skipIf(!electronBinary)('light mode', () => {
-  it('turns the chrome light from the toolbar and keeps it across a reload', { timeout: 120_000 }, async () => {
+  it('turns the chrome light from the DeckWerk menu and keeps it across a reload', { timeout: 120_000 }, async () => {
     workDir = await mkdtemp(join(tmpdir(), 'light-'));
     const decksRoot = join(workDir, 'decks');
     const deckDir = join(decksRoot, DECK_ID);
@@ -54,13 +55,22 @@ describe.skipIf(!electronBinary)('light mode', () => {
     browser = await launchBrowser(`http://127.0.0.1:${server.port}/?deck=${DECK_ID}&name=Light`, profileDir);
     const target = await findTarget(browser.debugPort, (c) => c.url.includes(`deck=${DECK_ID}`), browser.log);
     editor = await Cdp.connect(target.webSocketDebuggerUrl!);
-    await eventually(async () => editor!.evaluate<boolean>(`Boolean(document.querySelector('.ui-theme-toggle'))`), 'no theme toggle');
-
+    await eventually(async () => editor!.evaluate<boolean>(`Boolean(document.querySelector('.brand-button'))`), 'no DeckWerk menu');
+    const choose = async (name: string): Promise<void> => {
+      await editor!.click('.brand-button', 'the DeckWerk menu');
+      await editor!.evaluate(
+        `[...document.querySelectorAll('[role="menuitemradio"]')].find((i) => i.textContent === ${JSON.stringify(name)}).click()`,
+      );
+    };
+    // System follows the machine's appearance, so pin Dark first.
+    await choose('Dark');
     expect(await editor.evaluate<string>('document.documentElement.dataset.uiTheme')).toBe('dark');
-    expect(await editor.evaluate<string>(`document.querySelector('.ui-theme-toggle').title`)).toBe('Light mode');
-    await editor.click('.ui-theme-toggle', 'the theme toggle');
+    await choose('Light');
     expect(await editor.evaluate<string>('document.documentElement.dataset.uiTheme')).toBe('light');
-    expect(await editor.evaluate<string>(`document.querySelector('.ui-theme-toggle').title`)).toBe('Dark mode');
+    await editor.click('.brand-button', 'the DeckWerk menu');
+    expect(await editor.evaluate<string | null>(
+      `[...document.querySelectorAll('[role="menuitemradio"]')].find((i) => i.textContent === 'Light').getAttribute('aria-checked')`,
+    )).toBe('true');
     expect(await editor.evaluate<string>('getComputedStyle(document.getElementById("toolbar")).backgroundColor'))
       .toBe('rgb(248, 249, 251)');
     expect(await editor.evaluate<string>('getComputedStyle(document.querySelector(".canvas-host")).backgroundColor'))

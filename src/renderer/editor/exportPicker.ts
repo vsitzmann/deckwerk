@@ -1,6 +1,8 @@
 export interface ToolbarPickerOption {
   label: string;
   action: () => void;
+  /** Makes the entry one of a radio group, ticked while this returns true. */
+  checked?: () => boolean;
 }
 
 export interface ToolbarPickerSection {
@@ -24,20 +26,27 @@ export interface ToolbarSplitButtonConfig {
 export function createToolbarPicker(
   label: string,
   entries: ToolbarPickerEntry[],
-  config: { deckOnly?: boolean; escapeClipping?: boolean } = {},
+  config: {
+    deckOnly?: boolean;
+    escapeClipping?: boolean;
+    /** Replaces the default label-and-chevron trigger (the DeckWerk wordmark). */
+    trigger?: HTMLButtonElement;
+  } = {},
 ): HTMLElement {
   const wrap = document.createElement('span');
   wrap.className = `shape-menu-wrap${config.deckOnly ? ' deck-only' : ''}`;
 
-  const trigger = document.createElement('button');
+  const trigger = config.trigger ?? document.createElement('button');
   trigger.type = 'button';
-  trigger.className = 'shape-menu-trigger';
+  if (!config.trigger) {
+    trigger.className = 'shape-menu-trigger';
+    trigger.innerHTML = `<span>${label}</span>` +
+      '<svg class="shape-menu-chevron" viewBox="0 0 10 10" width="9" height="9" aria-hidden="true">' +
+      '<path d="M2 3.5l3 3 3-3" fill="none" stroke="currentColor" stroke-width="1.5" ' +
+      'stroke-linecap="round" stroke-linejoin="round"/></svg>';
+  }
   trigger.setAttribute('aria-haspopup', 'menu');
   trigger.setAttribute('aria-expanded', 'false');
-  trigger.innerHTML = `<span>${label}</span>` +
-    '<svg class="shape-menu-chevron" viewBox="0 0 10 10" width="9" height="9" aria-hidden="true">' +
-    '<path d="M2 3.5l3 3 3-3" fill="none" stroke="currentColor" stroke-width="1.5" ' +
-    'stroke-linecap="round" stroke-linejoin="round"/></svg>';
 
   let menu: HTMLDivElement | null = null;
   const close = (): void => {
@@ -82,7 +91,8 @@ export function createToolbarPicker(
       const item = document.createElement('button');
       item.type = 'button';
       item.className = 'shape-menu-item';
-      item.setAttribute('role', 'menuitem');
+      item.setAttribute('role', option.checked ? 'menuitemradio' : 'menuitem');
+      if (option.checked) item.setAttribute('aria-checked', String(option.checked()));
       item.textContent = option.label;
       item.addEventListener('click', () => {
         close();
@@ -169,7 +179,8 @@ export function createToolbarSplitButton(
       const item = document.createElement('button');
       item.type = 'button';
       item.className = 'shape-menu-item';
-      item.setAttribute('role', 'menuitem');
+      item.setAttribute('role', option.checked ? 'menuitemradio' : 'menuitem');
+      if (option.checked) item.setAttribute('aria-checked', String(option.checked()));
       item.textContent = option.label;
       item.addEventListener('click', () => {
         close();

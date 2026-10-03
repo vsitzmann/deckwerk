@@ -156,14 +156,13 @@ button.primary {
 }
 
 /* The one style for a side-panel's block action ("Open Morph editor…",
-   "Add animation", "Edit mask", "Reset trim", …). Pair with `primary` for the
-   accent look: class="primary panel-action". */
+   "Add animation", "Edit mask", "Reset trim", …): a standard button laid out
+   as a full-width block. Panel actions never take the accent — `primary` is
+   kept for the toolbar's Present and a dialog's confirming action. */
 button.panel-action {
   display: block;
   width: 100%;
   margin: 10px 0;
-  padding: 6px 11px;
-  font-weight: 600;
 }
 
 /* The "+ Add effect" picker sits where a panel action would; give it the same
@@ -3671,8 +3670,13 @@ select.panel-action-select {
   color: var(--text);
   text-align: left;
 }
-.shape-menu-item:hover { background: var(--accent); color: #fff; border-color: transparent; }
-.shape-menu-item:hover svg { color: #fff; }
+/* `:not(:disabled)` matches the generic `button:hover:not(:disabled)` rule's
+   specificity, which otherwise wins the background and leaves white text on
+   the plain hover grey (unreadable in light mode). */
+.shape-menu-item:hover:not(:disabled) { background: var(--accent); color: #fff; border-color: transparent; }
+.shape-menu-item:hover:not(:disabled) svg { color: #fff; }
+.shape-menu-item[aria-checked]::after { content: ''; width: 1em; margin-left: auto; text-align: right; }
+.shape-menu-item[aria-checked="true"]::after { content: '✓'; }
 .shape-menu-item svg { flex: none; color: var(--muted); }
 
 .table-picker-menu {
@@ -4276,7 +4280,7 @@ select.panel-action-select {
 .media-mask-settings .field-check { min-height: 26px; }
 .media-masking-options > .field-check { margin: 4px 0 0; }
 .mask-action-row { margin-top: 8px; }
-.mask-action-row .panel-action { margin: 0; font-weight: 500; }
+.mask-action-row .panel-action { margin: 0; }
 .mask-action-row .mask-reset-segment {
   border: 1px solid var(--line);
   border-left: 0;

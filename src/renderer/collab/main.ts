@@ -3,7 +3,7 @@ import '../appChrome.css';
 import '../editor/editor.css';
 import './collab.css';
 import '../lightTheme.css';
-import { applyUiTheme, uiThemeButton } from '../uiTheme.js';
+import { applyUiTheme } from '../uiTheme.js';
 import { emptyDeck } from '@shared/deck.js';
 import { setIdSuffix } from '@shared/geometry.js';
 import { CANVAS_NOTICE_EVENT, EditorCanvas } from '../editor/canvas.js';
@@ -900,7 +900,6 @@ function buildToolbar(): void {
 
   const right = document.createElement('div');
   right.className = 'bar-group bar-right';
-  right.append(uiThemeButton());
   const secondaryActions = document.createElement('span');
   secondaryActions.className = 'toolbar-expanded-secondary-actions';
   const compactSecondaryEntries: ToolbarPickerEntry[] = [];

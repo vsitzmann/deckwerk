@@ -24,3 +24,7 @@
 :root[data-ui-theme="light"] button.primary:hover:not(:disabled) { background: rgb(59 99 216 / 18%); }
 :root[data-ui-theme="light"] .rail-item.selected { background: rgb(59 99 216 / 7%); border-color: rgb(59 99 216 / 55%); }
 :root[data-ui-theme="light"] .rail-item.selected .rail-thumb { --rail-thumb-stroke: rgb(59 99 216 / 65%); }
+/* Modal backdrop: a soft scrim rather than the dark theme's near-black. */
+:root[data-ui-theme="light"] .workflow-overlay { background: rgb(31 35 48 / 28%); }
+/* Trim window: the ffmpeg command readout. The viewers stay dark, like the canvas. */
+:root[data-ui-theme="light"] #command { background: var(--panel-2); }

@@ -640,7 +640,7 @@ export function createThemePanel(deps: ThemePanelDeps): ThemePanel {
     themeReadout = hintLine('', 'theme-readout');
     const applyAction = document.createElement('div');
     applyAction.className = 'theme-apply-action';
-    themeApplyButton = barButton(applyButtonLabel(), applyTheme, 'primary panel-action');
+    themeApplyButton = barButton(applyButtonLabel(), applyTheme, 'panel-action');
     themeApplyButton.addEventListener('mouseenter', () => {
       const run = adoptOnClone();
       if (run && !themeApplyButton!.disabled) previewSlideFrom(run.deck, 'Apply theme');

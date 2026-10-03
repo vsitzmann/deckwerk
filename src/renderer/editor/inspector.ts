@@ -500,7 +500,7 @@ export class Inspector {
     wrap.appendChild(button(
       active ? 'Done editing mask' : 'Edit mask',
       () => this.onToggleMask?.(elementId),
-      active ? 'primary panel-action' : 'panel-action',
+      'panel-action',
     ));
 
     const el = this.store
@@ -1243,7 +1243,7 @@ export class Inspector {
         // Preview in place. Double-clicking the video on the canvas does the
         // same thing; this is the discoverable version.
         const play = document.createElement('button');
-        play.className = 'primary panel-action video-preview-toggle';
+        play.className = 'panel-action video-preview-toggle';
         const setLabel = (playing: boolean) => {
           play.textContent = playing ? '❚❚ Pause preview' : '▶ Play preview';
           play.title = playing ? 'Pause the preview on the canvas' : 'Play the clip on the canvas';
@@ -1818,7 +1818,7 @@ export class Inspector {
         // Interact in place. Double-clicking the page on the canvas does the
         // same thing; this is the discoverable version.
         const live = document.createElement('button');
-        live.className = 'primary panel-action web-live-toggle';
+        live.className = 'panel-action web-live-toggle';
         const setLabel = (on: boolean) => {
           live.textContent = on ? 'Back to editing' : 'Interact with page';
           live.title = on

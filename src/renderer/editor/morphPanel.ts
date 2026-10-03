@@ -186,7 +186,7 @@ export class MorphPanel {
       ? `${pairCount} paired; every other object will fade out or in.`
       : `Disabled · ${pairCount} object${pairCount === 1 ? '' : 's'} paired.`;
     const edit = document.createElement('button');
-    edit.className = 'primary panel-action morph-open';
+    edit.className = 'panel-action morph-open';
     edit.textContent = `Open ${MORPH_NAME} editor…`;
     edit.addEventListener('click', () => this.openModal());
     this.host.append(previews, summary, edit);
@@ -216,7 +216,7 @@ export class MorphPanel {
     header.appendChild(title);
 
     const action = document.createElement('button');
-    action.className = 'primary panel-action morph-bulk-pair';
+    action.className = 'panel-action morph-bulk-pair';
     action.textContent = `Enable ${MORPH_NAME} & Auto-Pair`;
     action.addEventListener('click', () => this.autoPairAcross(slides));
 
