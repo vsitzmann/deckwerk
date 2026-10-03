@@ -46,6 +46,8 @@ const CDP_COMMAND_TIMEOUT_MS = 5 * 60_000;
 export class Cdp {
   private nextId = 1;
   private clickTargets = 0;
+  /** DEBUG(webflake): when set, every command's send and reply is logged under this label. */
+  trace: string | null = null;
   private pending = new Map<number, {
     resolve: (value: any) => void;
     reject: (error: Error) => void;
@@ -95,6 +97,9 @@ export class Cdp {
     timeoutMs = CDP_COMMAND_TIMEOUT_MS,
   ): Promise<any> {
     const id = this.nextId++;
+    const sent = Date.now();
+    const trace = this.trace;
+    if (trace) console.error(`[cdp ${trace}] #${id} -> ${method} ${method === 'Runtime.evaluate' ? String(params.expression).slice(0, 80).replace(/\s+/g, ' ') : JSON.stringify(params)}`);
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         if (!this.pending.delete(id)) return;
@@ -103,6 +108,7 @@ export class Cdp {
       this.pending.set(id, {
         resolve: (value) => {
           clearTimeout(timer);
+          if (trace) console.error(`[cdp ${trace}] #${id} <- ${method} ${Date.now() - sent}ms`);
           resolve(value);
         },
         reject: (error) => {
