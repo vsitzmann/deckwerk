@@ -114,7 +114,7 @@ describe.skipIf(!electronBinary)('standalone collaboration browser', () => {
     }))()`), 'browser editor did not finish connecting', (value) => value.connected);
     expect(opened.title).toBe('Browser collaboration smoke');
     expect(opened.controls).toEqual(expect.arrayContaining(['Text', 'Table', 'Present', 'File']));
-    expect(opened.panels).toEqual(['Props', 'Design', 'Build', 'History']);
+    expect(opened.panels).toEqual(['Props', 'Design', 'Build', 'History', 'Chat']);
 
     const peerProfileDir = join(workDir, 'peer-electron-profile');
     await mkdir(peerProfileDir, { recursive: true });
@@ -152,6 +152,13 @@ describe.skipIf(!electronBinary)('standalone collaboration browser', () => {
       selection: 'Smoke Browser',
       railDot: 'Smoke Browser',
     });
+
+    // The toolbar strip lists both people on each side: you first, outlined.
+    const toolbarPeople = await eventually(async () => peerEditor!.evaluate<string[]>(
+      `[...document.querySelectorAll('#toolbar .bar-person')].map((chip) => chip.getAttribute('aria-label') ?? '')`,
+    ), 'peer toolbar did not list the collaborator', (labels) => labels.length === 2);
+    expect(toolbarPeople[0]).toBe('Peer Browser (you)');
+    expect(toolbarPeople[1]).toMatch(/^Smoke Browser — slide 1$/);
 
     // The Web UI has no Electron clipboard bridge. A native browser paste on
     // the slide must consume Google Sheets' TSV/HTML flavours directly and

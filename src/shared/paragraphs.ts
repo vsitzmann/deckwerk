@@ -22,6 +22,12 @@ const LIST_TAGS = new Set(['UL', 'OL']);
 export const TYPING_STYLE_SENTINEL = '\u2060';
 export const LIST_MARKER_COLOR_ATTRIBUTE = 'data-list-marker-color';
 export const LIST_MARKER_COLOR_PROPERTY = '--list-marker-color';
+/** Inline wrappers that only format their text. */
+const INLINE_FORMAT_TAGS = new Set([
+  'SPAN', 'FONT', 'B', 'STRONG', 'I', 'EM', 'U', 'S', 'STRIKE', 'DEL', 'INS',
+  'SUB', 'SUP', 'MARK', 'SMALL', 'BIG', 'CODE', 'A',
+]);
+
 const BLOCK_TAGS = new Set([
   'P', 'DIV', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6',
   'BLOCKQUOTE', 'PRE', 'TABLE', 'FIGURE', 'SECTION', 'ARTICLE', 'UL', 'OL', 'LI',
@@ -575,6 +581,96 @@ function collectParagraphs(
 }
 
 /**
+ * Pasting a copied line into the middle of a formatted word makes Chromium
+ * put the line's block inside the word's inline wrapper:
+ * `<span bold>f72f73b<p style="font-weight: 400"><br></p>b</span>`. That is
+ * not a shape the block model has -- the run segmentation above never looks
+ * inside a span -- and the caret later lands in the stranded block, where
+ * typing picks up formatting the line does not show. Split each inline
+ * wrapper around the block instead, the way Chromium splits it on Return.
+ * The block's content stays wrapped in the inline's formatting, less any
+ * declaration the block itself sets (its own wins, as it did when nested).
+ */
+function hoistBlocksOutOfInlines(root: ParentNode & Node): void {
+  // Formatting wrappers only: a table cell or anything else structural that
+  // is not in BLOCK_TAGS is a legitimate home for a block.
+  const isInline = (node: Node | null): node is HTMLElement => (
+    node instanceof Element && INLINE_FORMAT_TAGS.has(node.tagName) && node !== root
+  );
+  const blockSelector = [...BLOCK_TAGS].map((tag) => tag.toLowerCase()).join(', ');
+  let hoisted = false;
+  for (const block of [...root.querySelectorAll<HTMLElement>(blockSelector)]) {
+    while (isInline(block.parentNode)) {
+      const inline = block.parentNode;
+      // Everything after the block moves to a copy of the wrapper after it.
+      const after = inline.cloneNode(false) as HTMLElement;
+      while (block.nextSibling) after.appendChild(block.nextSibling);
+      // The block's own content keeps the wrapper's formatting.
+      const inner = inline.cloneNode(false) as HTMLElement;
+      for (let index = 0; index < block.style.length; index += 1) {
+        inner.style.removeProperty(block.style.item(index));
+      }
+      if (inner.getAttribute('style') === '') inner.removeAttribute('style');
+      while (block.firstChild) inner.appendChild(block.firstChild);
+      const innerHasText = (inner.textContent ?? '') !== '';
+      if (innerHasText) block.appendChild(inner);
+      else block.append(...inner.childNodes);
+      inline.after(block);
+      if (after.childNodes.length > 0) block.after(after);
+      if (inline.childNodes.length === 0) inline.remove();
+      hoisted = true;
+    }
+    if (hoisted) splitItemAtHoistedBlock(block);
+    hoisted = false;
+  }
+  // A cut list item pasted into the start of another arrives as its text, a
+  // <br> and an empty list where the item break was: the same break, spelled
+  // with a list instead of a paragraph (list fuzz seed 20261007).
+  for (const list of [...root.querySelectorAll<HTMLElement>('li > ul:empty, li > ol:empty')]) {
+    splitItemAtHoistedBlock(list, true);
+  }
+}
+
+/**
+ * A paragraph hoisted out of a word now sits in the middle of a list item,
+ * between that item's own text runs: one bullet showing three lines, whose
+ * first line ends in one format while the item as a whole ends in another.
+ * What was pasted was a line *break*, so make it one: the text after the
+ * block becomes the next item. A block that is empty was only that break
+ * and goes; one with content stays with the item before the split.
+ */
+function splitItemAtHoistedBlock(block: HTMLElement, emptyList = false): void {
+  const item = block.parentElement;
+  if (!item || item.tagName !== 'LI') return;
+  if (!emptyList && (block.tagName === 'UL' || block.tagName === 'OL')) return;
+  const contentful = (node: Node | null): boolean => (
+    node !== null && (node instanceof Element ? node.tagName !== 'BR' : (node.textContent ?? '') !== '')
+  );
+  let before = false;
+  for (let node = block.previousSibling; node; node = node.previousSibling) before ||= contentful(node);
+  let after = false;
+  for (let node = block.nextSibling; node; node = node.nextSibling) after ||= contentful(node);
+  const empty = (block.textContent ?? '') === '' && !block.querySelector('img, video, svg, table');
+  if (!after) {
+    // An empty list at the end of an item renders nothing and breaks nothing.
+    if (emptyList) block.remove();
+    return;
+  }
+  const next = item.cloneNode(false) as HTMLElement;
+  next.removeAttribute('value');
+  while (block.nextSibling) next.appendChild(block.nextSibling);
+  item.after(next);
+  if (empty && before) {
+    // The <br> that ended the line ahead of the block ends the item now.
+    if (block.previousSibling instanceof Element && block.previousSibling.tagName === 'BR'
+      && block.previousSibling.previousSibling) block.previousSibling.remove();
+    block.remove();
+  } else if (emptyList) {
+    block.remove();
+  }
+}
+
+/**
  * Chrome's indent command nests a list as a *sibling* of the `<li>`s
  * (`<ul><li>a</li><ul>…`), which is invalid HTML and invisible to the
  * paragraph segmentation above. Fold each such list into the `<li>` before
@@ -614,6 +710,36 @@ function adoptOrphanListItems(root: ParentNode & Node): void {
     const list = doc.createElement('ul');
     item.replaceWith(list);
     list.appendChild(item);
+  }
+}
+
+/**
+ * Text or inline markup sitting directly in a list, outside every item.
+ * Return inside an item that holds paragraphs ahead of its text can make
+ * Chromium open the new item *inside* the old one; the next parse closes
+ * the inner item early and strands the old item's trailing words in the
+ * list itself, where no block -- and no line of the outline -- holds them.
+ * Give them back to the item they followed, or to an item of their own.
+ */
+function adoptStrayListContent(root: ParentNode & Node): void {
+  const doc = root.ownerDocument ?? document;
+  for (const list of [...root.querySelectorAll<HTMLElement>('ul, ol')]) {
+    for (const child of [...list.childNodes]) {
+      if (child instanceof Element && (child.tagName === 'LI' || LIST_TAGS.has(child.tagName))) continue;
+      if (child instanceof Text && MARKUP_WHITESPACE.test(child.data)) continue;
+      if (!(child instanceof Text) && !(child instanceof Element)) continue;
+      let item = child.previousSibling;
+      while (item instanceof Text && MARKUP_WHITESPACE.test(item.data)) item = item.previousSibling;
+      if (!(item instanceof Element && item.tagName === 'LI')) {
+        item = doc.createElement('li');
+        list.insertBefore(item, child);
+      }
+      // An item that is only a placeholder line takes the words in its place.
+      if (item.childNodes.length === 1 && item.firstChild instanceof Element && item.firstChild.tagName === 'BR') {
+        item.firstChild.remove();
+      }
+      item.appendChild(child);
+    }
   }
 }
 
@@ -744,7 +870,9 @@ export function normalizeParagraphHtml(html: string, splitBreaks = false): strin
   stripStructuralWhitespace(template.content);
   adoptOrphanListItems(template.content);
   nestStrayLists(template.content);
+  adoptStrayListContent(template.content);
   mergeAdjacentLists(template.content);
+  hoistBlocksOutOfInlines(template.content);
   // Nesting a stray list into the item before it puts that item's trailing
   // space beside a block; the same pass takes it out.
   stripStructuralWhitespace(template.content);

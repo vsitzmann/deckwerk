@@ -138,7 +138,7 @@ export class TimelinePanel {
     elements.section.appendChild(list);
 
     const add = document.createElement('button');
-    add.className = 'primary panel-action';
+    add.className = 'panel-action';
     add.textContent = 'Add animation';
     add.disabled = selection.size === 0;
     add.title = add.disabled

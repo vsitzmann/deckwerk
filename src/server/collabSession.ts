@@ -4,6 +4,7 @@ import { loadDeck, saveDeck, loadTheme, saveTheme, serializeDeck } from '../main
 import { validateDeckIntegrity, type AgentOperation } from '../shared/agent.js';
 import { applyOpsLenient } from '../shared/collabApply.js';
 import type { Deck } from '../shared/deck.js';
+import { ChatLog } from './chatLog.js';
 
 const SAVE_DEBOUNCE_MS = 800;
 const WATCH_DEBOUNCE_MS = 200;
@@ -40,18 +41,31 @@ export class CollabSession {
   private lastSavedTheme: string | null = null;
   private watchers: FSWatcher[] = [];
   private events: CollabSessionEvents | null = null;
+  /**
+   * Set by close(). A closed session owns nothing on disk any more — its
+   * folder may already have been renamed — and `saveDeck` creates the folder
+   * it is told to write into, so one late write would resurrect a copy of
+   * the deck at the old path. Every write path checks this.
+   */
+  private closed = false;
 
   private constructor(
     readonly dir: string,
     public deck: Deck,
     public themeCss: string,
+    /**
+     * The deck's chat. Owned here so it opens, flushes and closes with the
+     * session — but it is never part of `deck`, `seq` or any transaction.
+     */
+    readonly chat: ChatLog,
     public seq = 0,
   ) {}
 
   static async open(dir: string): Promise<CollabSession> {
     const deck = await loadDeck(dir);
     const themeCss = await loadTheme(dir, deck.theme);
-    return new CollabSession(dir, deck, themeCss);
+    const chat = await ChatLog.load(dir);
+    return new CollabSession(dir, deck, themeCss, chat);
   }
 
   /**
@@ -61,6 +75,7 @@ export class CollabSession {
    * idempotent by construction.
    */
   applyOps(ops: AgentOperation[]): AppliedTxn {
+    if (this.closed) throw new Error('this presentation was closed (renamed or moved) — reopen it');
     const { deck: next, skipped } = applyOpsLenient(this.deck, ops);
     const errors = validateDeckIntegrity(next);
     if (errors.length > 0) {
@@ -75,6 +90,7 @@ export class CollabSession {
   }
 
   saveThemeCss(css: string): void {
+    if (this.closed) return;
     this.themeCss = css;
     this.lastSavedTheme = css;
     void saveTheme(this.dir, this.deck.theme, css).catch((error) => {
@@ -115,15 +131,35 @@ export class CollabSession {
       this.saveTimer = null;
       await this.persist();
     }
+    await this.chat.flush();
   }
 
   async close(): Promise<void> {
     for (const watcher of this.watchers) watcher.close();
     this.watchers = [];
+    // Closed first, so nothing can schedule a write while the last one runs;
+    // the flush itself still persists what was accepted before this call.
+    this.closed = true;
+    await this.chat.close();
     await this.flush();
   }
 
+  /**
+   * Close without writing. Only for a session whose folder is already gone
+   * (deleted outside the server): flushing it would recreate the folder.
+   */
+  discard(): void {
+    for (const watcher of this.watchers) watcher.close();
+    this.watchers = [];
+    this.closed = true;
+    // Closing the log writes nothing new; it only stops appends and wakes waiters.
+    void this.chat.close();
+    if (this.saveTimer) clearTimeout(this.saveTimer);
+    this.saveTimer = null;
+  }
+
   private schedulePersist(): void {
+    if (this.closed) return;
     if (this.saveTimer) clearTimeout(this.saveTimer);
     this.saveTimer = setTimeout(() => {
       this.saveTimer = null;
@@ -140,6 +176,7 @@ export class CollabSession {
   }
 
   private async reloadDeckFromDisk(): Promise<void> {
+    if (this.closed) return;
     try {
       const { readFile } = await import('node:fs/promises');
       const raw = await readFile(join(this.dir, 'deck.json'), 'utf8');

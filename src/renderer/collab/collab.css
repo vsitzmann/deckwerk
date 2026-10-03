@@ -208,3 +208,222 @@ button.danger:hover:not(:disabled) {
   padding: 5px 7px;
   font: inherit;
 }
+
+/* Toolbar strip of who is in the deck, as in TeXWerk: you first, outlined;
+   agents round. Colors come inline from each person's presence color. */
+.bar-presence {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+.bar-person {
+  display: grid;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  place-items: center;
+  border: 0;
+  border-radius: 3px;
+  color: #fff;
+  font: 700 10px/1 system-ui, sans-serif;
+  text-shadow: 0 1px 1px rgb(0 0 0 / 35%);
+  cursor: pointer;
+}
+.bar-person.agent { border-radius: 50%; }
+.bar-person.me { outline: 1px solid var(--text); outline-offset: 1px; cursor: default; }
+button.bar-person:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+/* Narrowest toolbar: the strip goes before any action does. */
+#toolbar.toolbar-compact-secondary .bar-presence,
+#toolbar.toolbar-compact-secondary .bar-presence + .bar-divider { display: none; }
+
+/* The deck's name in the toolbar is also where it is renamed (deckNameField.ts).
+   The name's own box becomes the text field: at rest its border is invisible,
+   on hover it shows the button hairline, and while editing it takes the
+   focused-field look of the inspector's inputs (.field input:focus). The
+   input inside is bare, so the text does not move when editing starts. */
+.bar-deck-name {
+  display: inline-flex;
+  align-items: baseline;
+  min-width: 0;
+}
+.bar-deck-folder {
+  flex: 0 1000 auto; /* the folder ellipsizes before the name does */
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-weight: 400;
+  text-overflow: ellipsis;
+}
+.bar-deck-folder[hidden] { display: none; }
+.bar-deck-label {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.bar-deck-name.is-editable {
+  padding: 2px 6px;
+  border: 1px solid transparent;
+  cursor: text;
+}
+.bar-deck-name.is-editable:hover {
+  border-color: var(--muted);
+  background: var(--panel-2);
+}
+.bar-deck-name.is-editable:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: 1px;
+}
+.bar-deck-name.is-editing,
+.bar-deck-name.is-editing:hover {
+  border-color: var(--accent);
+  background: var(--bg);
+}
+.bar-deck-name.is-busy { color: var(--muted); }
+/* #toolbar outranks appChrome's input reset, which pads and borders every
+   text field. */
+#toolbar .bar-deck-input {
+  flex: 0 1 auto;
+  min-width: 4ch;
+  max-width: 100%;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  line-height: inherit;
+}
+/* Narrowing the toolbar hides the name; never while someone is typing in it. */
+#toolbar.toolbar-hide-deck-name .bar-deck-name.is-editing { display: inline-flex; }
+
+/* --- deck chat (chatPanel.ts) ---
+   A side panel like History, built from the comment popover's pieces: the
+   same meta line, text and compose box, so a chat message and a comment
+   read as relatives. */
+#chat.chat-panel {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+#chat.chat-panel[hidden] { display: none; }
+.chat-panel .panel-header { flex: none; }
+.chat-panel > .insp-hint { flex: none; margin-top: 0; }
+.chat-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  margin: 0 -14px;
+  border-top: 1px solid var(--line);
+}
+.chat-empty { padding: 10px 14px; }
+.chat-message {
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--line);
+}
+.chat-message.pending { opacity: 0.6; }
+.chat-message.mentions-me {
+  background: var(--accent-soft);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+.chat-meta { align-items: center; }
+.chat-dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--muted);
+}
+.chat-message.agent .chat-dot { border-radius: 2px; }
+.chat-text { overflow-wrap: anywhere; }
+.chat-mention { color: var(--accent); font-weight: 600; }
+.chat-mention.is-me {
+  padding: 0 2px;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--accent) 24%, transparent);
+  color: var(--text);
+}
+.chat-ref {
+  margin-top: 4px;
+  padding: 1px 7px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel-2);
+  color: var(--muted);
+  font-size: 11px;
+  cursor: pointer;
+}
+.chat-ref:not(:disabled):hover { border-color: var(--accent); color: var(--text); }
+.chat-ref:disabled { cursor: default; opacity: 0.6; }
+.chat-compose {
+  position: relative;
+  flex: none;
+  flex-direction: column;
+  margin: 0 -14px -12px;
+  padding: 8px 14px 12px;
+}
+.chat-compose textarea { min-height: 44px; }
+.chat-compose-actions {
+  display: flex;
+  justify-content: space-between;
+  gap: 6px;
+}
+.chat-compose .chat-compose-actions button:last-child {
+  border: 0;
+  border-radius: 6px;
+  background: var(--accent);
+  color: #fff;
+  padding: 6px 10px;
+}
+/* .comment-compose paints every button as its primary Send; the slide
+   toggle is a secondary control, so it gets the ordinary button back. */
+.chat-compose .chat-ref-toggle {
+  align-self: auto;
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--muted);
+  font-size: 11px;
+  padding: 4px 8px;
+}
+.chat-compose .chat-ref-toggle:not(:disabled):hover { border-color: var(--accent); color: var(--text); }
+.chat-compose .chat-ref-toggle[aria-pressed="true"] {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 24%, var(--panel-2));
+  color: var(--text);
+}
+.chat-completions {
+  top: auto;
+  bottom: calc(100% - 4px);
+  left: 14px;
+  max-height: 180px;
+  overflow-y: auto;
+}
+.chat-completions[hidden] { display: none; }
+.chat-completions .shape-menu-item.is-active { background: var(--accent); color: #fff; }
+.chat-bell {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px 6px;
+  color: var(--muted);
+}
+.chat-bell[aria-pressed="true"] { color: var(--accent); border-color: var(--accent); }
+#side-tabs button .chat-tab-badge {
+  display: inline-block;
+  min-width: 16px;
+  margin-left: 4px;
+  padding: 0 4px;
+  border-radius: 8px;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  color: var(--text);
+  font-size: 10px;
+  line-height: 14px;
+  text-align: center;
+}
+#side-tabs button .chat-tab-badge.is-mention {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}

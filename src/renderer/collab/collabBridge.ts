@@ -3,13 +3,16 @@ import { setMediaVariants } from './mediaVariants.js';
 import type { AgentOperation } from '@shared/agent.js';
 import { applyOpsLenient } from '@shared/collabApply.js';
 import {
+  COLLAB_CLOSE,
   COLLAB_PROTOCOL_VERSION,
   ServerMessageSchema,
   type ClientMessage,
   type CursorPosition,
   type PresenceState,
+  type ServerDeckMovedMessage,
   type ServerWelcomeMessage,
 } from '@shared/collab.js';
+import type { ChatMessage, ChatRef } from '@shared/chat.js';
 import type { Deck } from '@shared/deck.js';
 import { diffDecks } from '@shared/deckDiff.js';
 import { makeId } from '@shared/geometry.js';
@@ -54,11 +57,27 @@ export interface CollabBridgeHooks {
   onPeerCursor: (clientId: string, cursor: CursorPosition | null) => void;
   onPeerLeft: (clientId: string) => void;
   onThemeCss: (css: string) => void;
+  /** One accepted chat message, including the echo of this client's own. */
+  onChat?: (message: ChatMessage) => void;
   onStatus: (text: string) => void;
   /** True while no local transaction is awaiting confirmation. */
   onCleanChange: (clean: boolean) => void;
   /** The host ended the session; the bridge stops reconnecting. */
   onEnded?: () => void;
+  /**
+   * The deck was renamed while open, so its id — the room this socket joined
+   * — is gone. The bridge stops reconnecting to the old id; the shell follows
+   * the deck to `moved.deckId`. `unsent` counts local transactions the server
+   * never applied: it stops accepting edits for the room before it renames
+   * the folder, so these did not survive.
+   */
+  onMoved?: (moved: ServerDeckMovedMessage, unsent: number) => void;
+  /**
+   * The server has no deck by this id (deleted, or renamed while this client
+   * was away and the server no longer remembers where to). Retrying cannot
+   * help, so the bridge stops and says why.
+   */
+  onUnavailable?: (reason: string) => void;
   /**
    * False the moment the socket drops (a retry loop begins), true again on
    * every welcome. Distinct from onStatus so callers can drive UI state
@@ -139,6 +158,15 @@ export class CollabBridge {
       if (event.code === 4003) {
         this.closed = true;
         this.hooks.onStatus(event.reason || 'You no longer have access to this presentation');
+        return;
+      }
+      // A deck that is not there (or was renamed: that close follows a
+      // `deckMoved`, which already stopped the bridge) is not a network blip.
+      if (event.code === COLLAB_CLOSE.noSuchDeck || event.code === COLLAB_CLOSE.moved) {
+        this.closed = true;
+        const reason = event.reason || 'This presentation no longer exists';
+        this.hooks.onStatus(reason);
+        this.hooks.onUnavailable?.(reason);
         return;
       }
       this.hooks.onStatus(`Disconnected — retrying in ${Math.round(this.reconnectDelay / 1000)}s`);
@@ -231,6 +259,18 @@ export class CollabBridge {
 
   sendTheme(css: string): void {
     this.send({ kind: 'theme', css });
+  }
+
+  /**
+   * Post to the deck chat. Fire-and-forget: the caller shows the message as
+   * pending under `id` and confirms it when the `chat` echo carries that id.
+   * Returns false while disconnected, so the caller can resend after the
+   * next welcome (the server ignores an id it already accepted).
+   */
+  sendChat(post: { id: string; text: string; ref?: ChatRef }): boolean {
+    if (this.socket?.readyState !== WebSocket.OPEN) return false;
+    this.send({ kind: 'chat-post', ...post });
+    return true;
   }
 
   private seq = 0;
@@ -361,11 +401,27 @@ export class CollabBridge {
       case 'media':
         setMediaVariants(message.variants);
         return;
+      case 'chat':
+        this.hooks.onChat?.(message.message);
+        return;
       case 'ended':
         // Deliberate teardown, not a network blip: don't reconnect.
         this.closed = true;
         this.hooks.onEnded?.();
         return;
+      case 'deckMoved': {
+        // The server closes this socket next. Reconnecting to the old id
+        // would find nothing there, so stop now. Messages arrive in order, so
+        // anything still pending here was sent after the server stopped
+        // applying edits to the room: it was dropped, not merely unconfirmed.
+        this.closed = true;
+        if (this.reconnectTimer) {
+          clearTimeout(this.reconnectTimer);
+          this.reconnectTimer = null;
+        }
+        this.hooks.onMoved?.(message, this.pending.length);
+        return;
+      }
     }
   }
 }

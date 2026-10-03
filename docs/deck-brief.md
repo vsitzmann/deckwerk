@@ -14,6 +14,7 @@ into editable slide objects. Don't read or edit `deck.json`.
 Slides are numbered as in the editor's rail. Match the neighbours' fonts,
 colours, margins and title position; `theme.css` holds the deck's styles.
 `slide-agent comments . --unresolved` shows requests people left on slides.
+Hosted decks have a chat too: `slide-agent chat .`, `say . "text"`, `chat . --wait`.
 
 ## Themes
 

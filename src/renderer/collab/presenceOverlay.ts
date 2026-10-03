@@ -15,6 +15,8 @@ interface PeerView {
  */
 export class PresenceOverlay {
   private peers = new Map<string, PeerView>();
+  /** Called when someone joins, leaves, or moves between slides (not on cursor motion). */
+  onPeersChange?: () => void;
   private layer: HTMLElement;
   private unsubscribe: () => void;
   private readonly viewportHandler = () => this.render();
@@ -42,6 +44,7 @@ export class PresenceOverlay {
       state: { ...state, cursor: state.cursor ?? existing?.state.cursor ?? null },
     });
     this.render();
+    this.onPeersChange?.();
   }
 
   /** Reconcile against the authoritative peer snapshot in a welcome frame. */
@@ -56,6 +59,7 @@ export class PresenceOverlay {
       });
     }
     this.render();
+    this.onPeersChange?.();
   }
 
   moveCursor(clientId: string, cursor: CursorPosition | null): void {
@@ -68,6 +72,12 @@ export class PresenceOverlay {
   remove(clientId: string): void {
     this.peers.delete(clientId);
     this.render();
+    this.onPeersChange?.();
+  }
+
+  /** Everyone else in the deck right now. */
+  list(): PresenceState[] {
+    return [...this.peers.values()].map((peer) => peer.state);
   }
 
   /** Peers whose active slide is the given one — for rail dots and selections. */

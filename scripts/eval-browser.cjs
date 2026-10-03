@@ -30,29 +30,45 @@ app.whenReady().then(async () => {
   // this window against 145 ms/case in the app's shown window on the same
   // runner. Nobody is looking at that display, so showing it costs nothing.
   const showWindow = Boolean(process.env.CI_NO_WINDOW_MANAGER);
-  mainWindow = new BrowserWindow({
-    width: 1600,
-    height: 1000,
-    show: showWindow,
-    webPreferences: {
-      contextIsolation: true,
-      nodeIntegration: false,
-      sandbox: true,
-      autoplayPolicy: 'no-user-gesture-required',
-      // The command-line switches above are not the whole story: Electron
-      // also throttles per window, and treats a window that is never shown as
-      // background -- so under CI's bare Xvfb (the window is never mapped at
-      // all) the page reports itself hidden, requestAnimationFrame stops, and
-      // timers align to one-second ticks. The nightly formatting matrix ran
-      // at 2.8 s/case there against 145 ms/case in the shown Electron window.
-      backgroundThrottling: false,
-      // Hidden, the window is never mapped: no compositor frames, so every
-      // DevTools input event waited out a ~1 s fallback (2.8 s per formatting
-      // case on a developer's machine). Offscreen rendering keeps frames coming
-      // with nothing on screen.
-      offscreen: !showWindow,
-    },
+  const webPreferences = {
+    contextIsolation: true,
+    nodeIntegration: false,
+    sandbox: true,
+    autoplayPolicy: 'no-user-gesture-required',
+    // The command-line switches above are not the whole story: Electron
+    // also throttles per window, and treats a window that is never shown as
+    // background -- so under CI's bare Xvfb (the window is never mapped at
+    // all) the page reports itself hidden, requestAnimationFrame stops, and
+    // timers align to one-second ticks. The nightly formatting matrix ran
+    // at 2.8 s/case there against 145 ms/case in the shown Electron window.
+    backgroundThrottling: false,
+    // Hidden, the window is never mapped: no compositor frames, so every
+    // DevTools input event waited out a ~1 s fallback (2.8 s per formatting
+    // case on a developer's machine). Offscreen rendering keeps frames coming
+    // with nothing on screen.
+    offscreen: !showWindow,
+  };
+  // Tabs a page opens itself (a second editor, a presentation) get the same
+  // window. Left to Electron's defaults they are ordinary visible windows,
+  // and a tiling window manager squeezes them beside whatever else is open:
+  // on a Hyprland desktop the peer editor came up 670 px wide, too narrow
+  // for the layout the tests click through. CI's bare Xvfb never resized it.
+  //
+  // Nor may a page's Fullscreen API reach the window manager: presenting
+  // calls requestFullscreen, Electron turns that into a real OS fullscreen
+  // window, and on leaving it a tiling window manager keeps the window as
+  // one of its own -- the editor came back 670 px wide and later clicks
+  // landed on the wrong controls. Not fullscreenable, the element still goes
+  // fullscreen inside the window, which is all a test observes.
+  const windowOptions = { width: 1600, height: 1000, show: showWindow, fullscreenable: false, webPreferences };
+  app.on('web-contents-created', (_event, contents) => {
+    contents.setWindowOpenHandler(() => ({
+      action: 'allow',
+      overrideBrowserWindowOptions: windowOptions,
+    }));
   });
+  mainWindow = new BrowserWindow(windowOptions);
+
   // The evaluation model may navigate through CDP while this first load is in
   // flight. Keep the window alive and tolerate that intentional cancellation.
   await mainWindow.loadURL(url).catch((error) => {

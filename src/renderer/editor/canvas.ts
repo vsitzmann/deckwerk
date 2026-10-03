@@ -391,6 +391,50 @@ function crossesBlocks(range: Range, body: HTMLElement): boolean {
   return start !== null && end !== null && start !== end;
 }
 
+/**
+ * Delete the typing-style sentinel from text nodes in place. `deleteData`
+ * rather than assigning `data`, so a live selection inside the text keeps
+ * its offsets.
+ */
+function deleteSentinels(texts: Iterable<Text>): void {
+  for (const text of texts) {
+    for (let at = text.data.lastIndexOf(TYPING_STYLE_SENTINEL); at >= 0;
+      at = at > 0 ? text.data.lastIndexOf(TYPING_STYLE_SENTINEL, at - 1) : -1) {
+      text.deleteData(at, TYPING_STYLE_SENTINEL.length);
+    }
+  }
+}
+
+function textNodesIn(root: Node): Text[] {
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  const texts: Text[] = [];
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) texts.push(node as Text);
+  return texts;
+}
+
+/**
+ * Turn every pending typing run that already holds typed text into the
+ * plain styled span it will be saved as. Chromium's own cut and copy
+ * serialize the live DOM, so a run still pending when the author copies
+ * would otherwise put its invisible sentinel on the clipboard -- and a paste
+ * lands it outside any marker, as a real character in the text.
+ */
+function settleTypedMarkers(body: HTMLElement): void {
+  for (const marker of [...body.querySelectorAll<HTMLElement>('[data-editor-typing-style]')]) {
+    if ((marker.textContent ?? '').replaceAll(TYPING_STYLE_SENTINEL, '') === '') continue;
+    deleteSentinels(textNodesIn(marker));
+    marker.removeAttribute('data-editor-typing-style');
+  }
+}
+
+/** A sentinel outside a pending run is a leak (an older clipboard, say). */
+function deleteStraySentinels(body: HTMLElement): void {
+  deleteSentinels(textNodesIn(body).filter((text) => (
+    text.data.includes(TYPING_STYLE_SENTINEL)
+    && !text.parentElement?.closest('[data-editor-typing-style]')
+  )));
+}
+
 /** Serialize authored text without editor-only table selection chrome. */
 function authoredTextHtml(body: HTMLElement): string {
   const clone = body.cloneNode(true) as HTMLElement;
@@ -760,6 +804,16 @@ export class EditorCanvas {
     /** The click was the second of a double-click: take the word under it. */
     selectWord: boolean;
   } | null = null;
+  /**
+   * A video or web element whose second click of a double-click went down on
+   * it; the pointer-up toggles it unless the press became a drag. Safari does
+   * not reliably dispatch `dblclick` on the canvas (the first click's selection
+   * redraw and the host's pointer capture leave it no common target), so the
+   * native event alone left double-click-to-play inert there.
+   */
+  private pendingMediaToggle: string | null = null;
+  /** When the pointer path last toggled media, so the native dblclick skips. */
+  private mediaToggledAt = Number.NEGATIVE_INFINITY;
 
   /**
    * Id of the element whose crop is being edited, if any.
@@ -1305,7 +1359,7 @@ export class EditorCanvas {
       // and forgotten by the other. Everything below is genuinely editor-side:
       // details that live on child nodes a rebuild would have recreated.
       const before = previous?.elements.find((e) => e.id === el.id);
-      applyElementBoxStyles(node, el, before);
+      applyElementBoxStyles(node, el, before, resolve.resolveSrc);
       applyTextRenderState(node, el, before);
       if (el.type === 'image' || el.type === 'video') {
         syncMediaFrame(node, el);
@@ -2006,8 +2060,11 @@ export class EditorCanvas {
     const slide = this.store.slide;
     if (!slide) return;
     // A press that reaches the canvas was not on a live page (the frame keeps
-    // those), so it is the implicit "back to editing".
-    this.endWebLive();
+    // those), so it is the implicit "back to editing". Unless it follows a
+    // pointer toggle inside the double-click window: a selection click and a
+    // quick double-click pair up early, and the double-click's own second
+    // press would otherwise end the page it just made live.
+    if (ev.timeStamp - this.mediaToggledAt > DOUBLE_CLICK_MS) this.endWebLive();
 
     // Suppress the browser's own text selection: dragging across a slide would
     // otherwise sweep-select the text of every element it crossed.
@@ -2219,6 +2276,10 @@ export class EditorCanvas {
         && selection.has(hit.id)
         && (hit.type === 'text' || hit.type === 'html')
         ? { elementId: hit.id, clientX: ev.clientX, clientY: ev.clientY, selectWord: secondClick }
+        : null;
+      this.pendingMediaToggle = secondClick && !ev.shiftKey
+        && (hit.type === 'video' || hit.type === 'web')
+        ? hit.id
         : null;
       if (!selection.has(hit.id)) {
         this.store.select([hit.id], ev.shiftKey);
@@ -2685,6 +2746,8 @@ export class EditorCanvas {
       return;
     }
     const textEdit = !this.dragStarted ? this.pendingTextEdit : null;
+    const mediaToggle = !this.dragStarted ? this.pendingMediaToggle : null;
+    this.pendingMediaToggle = null;
     if (this.drag.kind === 'marquee' && this.marquee) {
       const slide = this.store.slide;
       if (slide) {
@@ -2699,6 +2762,16 @@ export class EditorCanvas {
     this.host.releasePointerCapture?.(ev.pointerId);
     this.endDrag();
     if (textEdit) this.beginTextEdit(textEdit.elementId, textEdit, textEdit.selectWord);
+    if (mediaToggle) {
+      this.mediaToggledAt = ev.timeStamp;
+      this.toggleMedia(mediaToggle);
+    }
+  }
+
+  private toggleMedia(elementId: string): void {
+    const el = this.store.slide?.elements.find((e) => e.id === elementId);
+    if (el?.type === 'video') this.toggleVideo(elementId);
+    else if (el?.type === 'web') this.toggleWebLive(elementId);
   }
 
   private endDrag(): void {
@@ -2712,6 +2785,7 @@ export class EditorCanvas {
     this.sizeMatches = [];
     this.marquee = null;
     this.pendingTextEdit = null;
+    this.pendingMediaToggle = null;
 
     // Deliberately *not* a full render. Redrawing the slide layer here would
     // replace the node the pointer went down on, and a browser cannot
@@ -2869,10 +2943,11 @@ export class EditorCanvas {
         if (shape?.type === 'shape') elements[at] = shapeToTextBox(shape);
       }, { label: 'Add text to shape' });
       this.beginTextEdit(hit.id);
-    } else if (hit.type === 'video') {
-      this.toggleVideo(hit.id);
-    } else if (hit.type === 'web') {
-      this.toggleWebLive(hit.id);
+    } else if (hit.type === 'video' || hit.type === 'web') {
+      // Browsers that do dispatch dblclick (Chromium) already had the pair
+      // toggled on its second pointer-up; toggling again would undo it.
+      if (ev.timeStamp - this.mediaToggledAt <= DOUBLE_CLICK_MS) return;
+      this.toggleMedia(hit.id);
     }
   }
 
@@ -3560,6 +3635,8 @@ export class EditorCanvas {
       body.removeEventListener('keydown', onKey);
       body.removeEventListener('beforeinput', onBeforeInput);
       body.removeEventListener('input', onInput);
+      body.removeEventListener('copy', onCopyOrCut);
+      body.removeEventListener('cut', onCopyOrCut);
       body.removeEventListener('paste', onPaste);
       body.removeEventListener('compositionstart', onCompositionStart);
       body.removeEventListener('compositionend', onCompositionEnd);
@@ -3646,6 +3723,7 @@ export class EditorCanvas {
      * the text came from — list conversion in particular needs real blocks.
      */
     const repairPastedMarkup = () => {
+      deleteStraySentinels(body);
       const range = this.activeTextRange(body);
       const offsets = range ? this.textOffsetsForRange(body, range) : null;
       const normalized = normalizeParagraphHtml(sanitizePastedTextHtml(body.innerHTML), true);
@@ -3996,6 +4074,10 @@ export class EditorCanvas {
     body.addEventListener('keydown', onKey);
     this.finishTextEdit = finish;
     body.addEventListener('beforeinput', onBeforeInput);
+    // Before Chromium serializes the selection for the clipboard.
+    const onCopyOrCut = () => settleTypedMarkers(body);
+    body.addEventListener('copy', onCopyOrCut);
+    body.addEventListener('cut', onCopyOrCut);
     body.addEventListener('input', onInput);
     body.addEventListener('paste', onPaste);
     body.addEventListener('compositionstart', onCompositionStart);

@@ -1,15 +1,23 @@
+import { appearanceMenuSection } from '../uiTheme.js';
+import { createToolbarPicker } from './exportPicker.js';
+
 const ABOUT_DIALOG_ID = 'deckwerk-about';
 
-/** The product wordmark used at the leading edge of editor toolbars. */
-export function createDeckWerkButton(): HTMLButtonElement {
+/**
+ * The product wordmark at the leading edge of editor toolbars. It opens the
+ * app menu: About, and the editor chrome's appearance — settings that are set
+ * once rather than reached for while editing, so they stay out of the toolbar.
+ */
+export function createDeckWerkButton(): HTMLElement {
   const button = document.createElement('button');
-  button.type = 'button';
   button.className = 'brand-button';
   button.textContent = 'DeckWerk';
-  button.setAttribute('aria-label', 'About DeckWerk');
-  button.title = 'About DeckWerk';
-  button.addEventListener('click', showAboutDialog);
-  return button;
+  button.setAttribute('aria-label', 'DeckWerk menu');
+  button.title = 'DeckWerk';
+  return createToolbarPicker('DeckWerk', [
+    { label: 'About DeckWerk', action: showAboutDialog },
+    appearanceMenuSection(),
+  ], { trigger: button });
 }
 
 /** Open the small, renderer-native About dialog. */

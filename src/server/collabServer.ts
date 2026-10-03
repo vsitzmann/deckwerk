@@ -24,7 +24,24 @@ import {
   pruneRenditions,
   type RenditionOptions,
 } from './streamingRenditions.js';
-import { ClientMessageSchema, COLLAB_PROTOCOL_VERSION, type PresenceState, type ServerMessage } from '../shared/collab.js';
+import {
+  ClientMessageSchema,
+  COLLAB_CLOSE,
+  COLLAB_PROTOCOL_VERSION,
+  type PresenceState,
+  type ServerMessage,
+} from '../shared/collab.js';
+import {
+  AGENT_MENTION,
+  CHAT_FILE,
+  CHAT_ID_PATTERN,
+  CHAT_TEXT_MAX,
+  ChatRefSchema,
+  mentionsAgent,
+  parseMentions,
+  type ChatMessage,
+  type ChatRef,
+} from '../shared/chat.js';
 import { CollabSession } from './collabSession.js';
 import { readZip, writeZip, type ZipEntry, type ZipFile } from './zip.js';
 import {
@@ -67,6 +84,7 @@ import {
   readDeckAccess,
   readFolderOwner,
   resolveIdentity,
+  roleMayComment,
   UserDirectory,
   writeDeckAccess,
   writeFolderOwner,
@@ -77,6 +95,9 @@ import {
   type DeckRole,
   type Identity,
 } from './accessControl.js';
+
+/** How long shutdown lets peers finish the WebSocket close handshake. */
+const SOCKET_CLOSE_GRACE_MS = 500;
 
 /** A local agent bridge identifies its own requests with this header. */
 export const BRIDGE_HEADER = 'x-deckwerk-bridge';
@@ -121,6 +142,11 @@ interface Peer {
    * presence and everyone else's edits, and nothing it sends is applied.
    */
   canEdit: boolean;
+  /**
+   * Whether this peer may post to the deck chat. Decided like `canEdit`, and
+   * by the same rule as commenting (`roleMayComment`).
+   */
+  canComment: boolean;
   /** Set when this peer is a local agent bridge: whose agent it is. */
   agentFor: string | null;
 }
@@ -138,6 +164,12 @@ interface Room {
    * person. Without access control there is no identity to pin it to.
    */
   participantLogins: Map<string, string>;
+  /**
+   * Set once a live rename has begun. From then on nothing a peer sends is
+   * applied: the session is being flushed and closed, and its folder is about
+   * to stop existing under this id.
+   */
+  relocating: boolean;
 }
 
 interface HttpHtmlDraft {
@@ -329,6 +361,20 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
   const userDirectory = accessControl ? new UserDirectory(join(resolve(options.rootDir), 'users.json')) : null;
   const rooms = new Map<string, Room>();
   const roomsOpening = new Map<string, Promise<Room>>();
+  /**
+   * Renames in progress, by the id being renamed away from. Anything that
+   * would open that id — a socket joining, an HTTP route reaching for the
+   * room — waits for the rename to land first, so it never opens a session
+   * on a folder that is about to move out from under it.
+   */
+  const relocations = new Map<string, Promise<void>>();
+  /**
+   * Where renamed decks went, by their old id. A client that was offline
+   * while its deck was renamed reconnects to the old id; it is sent on to the
+   * new one rather than told the deck is gone. Only consulted while nothing
+   * exists at the old id, and forgotten with the process.
+   */
+  const movedDecks = new Map<string, { id: string; title: string }>();
   const htmlDrafts = new Map<string, HttpHtmlDraft>();
   const latestHtmlDrafts = new Map<string, string>();
   const htmlIdempotency = new Map<string, { revision: string; slideIds: string[]; label: string }>();
@@ -393,6 +439,14 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
   }
 
   const isDeckDir = (dir: string): boolean => existsSync(join(dir, 'deck.json'));
+  /** Whether a deck is at this id; an invalid id holds none. */
+  const deckFolderExists = (deckId: string): boolean => {
+    try {
+      return isDeckDir(deckDirOf(deckId));
+    } catch {
+      return false;
+    }
+  };
 
   interface DeckListEntry {
     id: string;
@@ -400,6 +454,8 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
     slides: number;
     /** When deck.json was last saved, which only an edit does; ISO time. */
     editedAt: string | null;
+    /** When the deck folder was created (its birth time); ISO time. */
+    createdAt: string | null;
     /** People (not agents, not spectators) connected to it right now. */
     editors: number;
     /** Containing folder, "" at the root. Always present. */
@@ -449,12 +505,20 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
         title?: string; slides?: unknown[];
       };
       const saved = await stat(join(dir, 'deck.json')).catch(() => null);
+      // deck.json is replaced on every save, so its own birth time is the last
+      // save; the folder's is when the deck was made. Without birth times,
+      // the earliest time we have is the best guess.
+      const folder = await stat(dir).catch(() => null);
+      const createdMs = folder?.birthtimeMs
+        ? folder.birthtimeMs
+        : Math.min(folder?.mtimeMs ?? Infinity, saved?.mtimeMs ?? Infinity);
       const name = id.slice(id.lastIndexOf('/') + 1);
       listed = {
         id,
         title: raw.title ?? name,
         slides: Array.isArray(raw.slides) ? raw.slides.length : 0,
         editedAt: saved ? saved.mtime.toISOString() : null,
+        createdAt: Number.isFinite(createdMs) ? new Date(createdMs).toISOString() : null,
         editors: editorsIn(rooms.get(id)),
         folder: id.includes('/') ? id.slice(0, id.lastIndexOf('/')) : '',
       };
@@ -558,32 +622,96 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
    * Put a deck's folder at another id, or hold still and say why not.
    *
    * The deck id is the room key and the session's directory, so moving and
-   * renaming are the same act under the same rule: it is only safe while
-   * nobody is in the room. Anyone connected keeps the old path open in their
-   * editor, so ask for the room to be empty instead of renaming the ground
-   * out from under them. `toId === fromId` still drains the room — the caller
-   * is about to rewrite deck.json.
+   * renaming are the same act on disk. A move waits for the room to be empty:
+   * it is filed away from the picker, by someone who does not have it open.
+   * A rename is done from inside the deck (the toolbar's name field), so with
+   * `live` it goes ahead with people in the room:
+   *
+   *   1. the room stops applying anything peers send (`relocating`);
+   *   2. the session is closed, which writes every edit it accepted;
+   *   3. the folder is renamed and, for a rename, the title rewritten;
+   *   4. every peer is told where the deck went (`deckMoved`) and its socket
+   *      closed — clients rejoin under the new id from there.
+   *
+   * Edits a peer sent after step 1 are dropped; its client counts them when
+   * the `deckMoved` arrives. `toId === fromId` still drains the room — the
+   * caller is rewriting deck.json.
    */
   async function relocateDeck(
     fromId: string,
     toId: string,
     verb: 'moving' | 'renaming',
+    options: { title?: string; live?: boolean } = {},
   ): Promise<{ status: number; error: string } | null> {
-    const room = rooms.get(fromId);
-    if (room && room.peers.size > 0) {
-      return {
-        status: 409,
-        error: `somebody has this presentation open — close it everywhere before ${verb} it`,
-      };
+    if (relocations.has(fromId)) {
+      return { status: 409, error: `this presentation is already being ${verb === 'moving' ? 'moved' : 'renamed'}` };
     }
-    if (room) {
-      await room.session.flush();
-      await room.session.close();
-      rooms.delete(fromId);
+    const occupied = (): boolean => (rooms.get(fromId)?.peers.size ?? 0) > 0;
+    const refusal = {
+      status: 409,
+      error: `somebody has this presentation open — close it everywhere before ${verb} it`,
+    };
+    if (!options.live && occupied()) return refusal;
+    // Registered before the first await, so a socket or route arriving from
+    // here on waits for the folder to land instead of opening the old one.
+    let settle!: () => void;
+    relocations.set(fromId, new Promise<void>((resolvePromise) => { settle = resolvePromise; }));
+    try {
+      await roomsOpening.get(fromId)?.catch(() => undefined);
+      if (!options.live && occupied()) return refusal;
+      const room = rooms.get(fromId);
+      if (room) {
+        room.relocating = true;
+        await room.session.close();
+        rooms.delete(fromId);
+      }
+      forgetDeckState(fromId);
+      // Whatever an earlier deck at the new id left behind is not this one's.
+      if (toId !== fromId) forgetDeckState(toId);
+      const fromDir = deckDirOf(fromId);
+      const toDir = deckDirOf(toId);
+      // The caller checked nothing is at the new id. A room still cached
+      // under it is a deck whose folder was removed outside the server; its
+      // in-memory copy must not be what this deck opens as.
+      const stale = toId !== fromId ? rooms.get(toId) : undefined;
+      if (stale) {
+        stale.relocating = true;
+        stale.session.discard();
+        rooms.delete(toId);
+        for (const peer of stale.peers.values()) peer.socket.close(COLLAB_CLOSE.noSuchDeck, 'This presentation no longer exists here.');
+      }
+      let title: string;
+      try {
+        if (toId !== fromId) await rename(fromDir, toDir);
+        const deck = await loadDeck(toDir);
+        title = options.title ?? deck.title;
+        if (options.title !== undefined) await saveDeck(toDir, { ...deck, title: options.title });
+      } catch (error) {
+        // The session is already closed. Send its peers through an ordinary
+        // reconnect, which opens whatever the disk now holds.
+        for (const peer of room?.peers.values() ?? []) peer.socket.close(1011, `${verb} failed`);
+        throw error;
+      }
+      if (toId !== fromId) {
+        localAgents?.relocate(fromDir, toDir, `The presentation was renamed to “${title}”.`);
+        // Forwarding addresses stay one hop: whatever pointed at the old id
+        // now points at the new one.
+        for (const [oldId, target] of movedDecks) {
+          if (target.id === fromId) movedDecks.set(oldId, { id: toId, title });
+        }
+        movedDecks.set(fromId, { id: toId, title });
+        movedDecks.delete(toId);
+      }
+      for (const peer of room?.peers.values() ?? []) {
+        // Greeted or not: one still mid-hello must not reconnect to the old id.
+        send(peer, { kind: 'deckMoved', deckId: toId, title });
+        peer.socket.close(COLLAB_CLOSE.moved, 'presentation renamed');
+      }
+      return null;
+    } finally {
+      relocations.delete(fromId);
+      settle();
     }
-    forgetDeckState(fromId);
-    if (toId !== fromId) await rename(deckDirOf(fromId), deckDirOf(toId));
-    return null;
   }
 
   /** Whether `folderPath` exists and this person is allowed to see it. */
@@ -623,6 +751,10 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
   }
 
   async function getRoom(deckId: string): Promise<Room> {
+    // Mid-rename, the old id's folder is about to move: opening a session on
+    // it now would leave one writing into a path that no longer holds the deck.
+    const relocating = relocations.get(deckId);
+    if (relocating) await relocating;
     const existing = rooms.get(deckId);
     if (existing) return existing;
     // A page opens its WebSocket and its agent-state stream at the same
@@ -640,7 +772,12 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
   async function openRoom(deckId: string): Promise<Room> {
     const session = await CollabSession.open(deckDirOf(deckId));
     const room: Room = {
-      session, peers: new Map(), guestCounter: 0, agentPresence: null, participantLogins: new Map(),
+      session,
+      peers: new Map(),
+      guestCounter: 0,
+      agentPresence: null,
+      participantLogins: new Map(),
+      relocating: false,
     };
     session.watch({
       onExternalDeck: (deck, seq) => broadcast(room, {
@@ -686,6 +823,63 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
       cursor: null,
     };
     broadcast(room, { kind: 'presence', state: room.agentPresence });
+  };
+
+  /**
+   * Accept one chat message into the room: persist it, broadcast it to every
+   * peer (its sender confirms its pending copy by id), and — when a person
+   * calls for `@agent` — tell each local agent attached to the deck, in its
+   * participant's Agent panel. Returns null for a resend of an id already
+   * accepted, or a room that is closing.
+   */
+  const postChat = (room: Room, input: {
+    id?: string;
+    author: string;
+    login?: string;
+    agent: boolean;
+    text: string;
+    ref?: ChatRef;
+  }): ChatMessage | null => {
+    if (room.relocating) return null;
+    const text = input.text.trim().slice(0, CHAT_TEXT_MAX);
+    if (!text) return null;
+    const message: ChatMessage = {
+      id: input.id && CHAT_ID_PATTERN.test(input.id) ? input.id : `chat-${randomUUID()}`,
+      author: input.author.slice(0, 120) || 'Guest',
+      ...(input.login ? { login: input.login } : {}),
+      agent: input.agent,
+      ts: new Date().toISOString(),
+      text,
+      mentions: parseMentions(text),
+      ...(input.ref ? { ref: input.ref } : {}),
+    };
+    if (!room.session.chat.append(message)) return null;
+    broadcast(room, { kind: 'chat', message });
+    if (localAgents && !message.agent && mentionsAgent(message)) {
+      const told = new Set<string>();
+      for (const peer of room.peers.values()) {
+        if (!peer.greeted || !peer.agentFor || told.has(peer.agentFor)) continue;
+        told.add(peer.agentFor);
+        localAgents.event(room.session.dir, peer.agentFor, {
+          text: `${message.author} asked @${AGENT_MENTION} in chat: ${text.slice(0, 300)}`,
+        });
+      }
+    }
+    return message;
+  };
+
+  /** A chat ref that names something this deck holds, or null. */
+  const resolveChatRef = (deck: Deck, ref: ChatRef | undefined): ChatRef | null | undefined => {
+    if (!ref) return undefined;
+    if ('commentId' in ref) {
+      const exists = deck.slides.some((slide) => slide.comments?.some((comment) => comment.id === ref.commentId)
+        || slide.elements.some((element) => element.comments?.some((comment) => comment.id === ref.commentId)));
+      return exists ? ref : null;
+    }
+    const slide = deck.slides.find((candidate) => candidate.id === ref.slideId);
+    if (!slide) return null;
+    if (ref.elementId && !slide.elements.some((element) => element.id === ref.elementId)) return null;
+    return ref;
   };
 
   /**
@@ -978,6 +1172,16 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
     // marker is what separates it from the file being served.
     const assetMatch = /^\/decks\/(.+)\/(assets\/.+)$/.exec(path);
     if (assetMatch) {
+      // A view still open on a renamed deck (a Speaker View window, a tab
+      // that has not followed yet) asks for media under the old id. Send it
+      // on, so a clip that loads late in a talk still plays.
+      const forward = movedDecks.get(assetMatch[1]);
+      if (forward && !deckFolderExists(assetMatch[1]) && await deckAllowed(identity, forward.id)) {
+        const encoded = (value: string): string => value.split('/').map(encodeURIComponent).join('/');
+        response.writeHead(307, { location: `/decks/${encoded(forward.id)}/${encoded(assetMatch[2])}${url.search}` });
+        response.end();
+        return;
+      }
       if (!(await deckAllowed(identity, assetMatch[1]))) {
         response.writeHead(403, { 'content-type': 'text/plain' });
         response.end('forbidden');
@@ -1450,11 +1654,26 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
       if (id !== deckParam && existsSync(to)) {
         return respondJson(response, 409, { error: `"${id}" already exists` });
       }
-      // Even a title-only change rewrites deck.json underneath a live
-      // session, so it waits for the room to empty just as a move does.
-      const busy = await relocateDeck(deckParam, id, 'renaming');
+      // The folder keeps its name, so only the title can change (an imported
+      // deck can carry one its folder does not). With the deck open that is
+      // an ordinary edit, broadcast like any other, not a reason to send
+      // everybody away.
+      const live = rooms.get(deckParam);
+      if (id === deckParam && live && live.peers.size > 0 && !live.relocating) {
+        if (live.session.deck.title !== name) {
+          const ops: AgentOperation[] = [{ op: 'updateDeck', title: name }];
+          const applied = live.session.applyOps(ops);
+          broadcast(live, {
+            kind: 'txn', seq: applied.seq, txnId: `rename-${randomUUID()}`,
+            byClientId: '', label: `Rename to “${name}”`, ops,
+          });
+        }
+        respondJson(response, 200, { id, title: name });
+        return;
+      }
+      // Renaming the folder is renaming the room: done live, peers follow.
+      const busy = await relocateDeck(deckParam, id, 'renaming', { title: name, live: true });
       if (busy) return respondJson(response, busy.status, { error: busy.error });
-      await saveDeck(to, { ...await loadDeck(to), title: name });
       respondJson(response, 200, { id, title: name });
       return;
     }
@@ -2118,6 +2337,90 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
         }
       });
       respondJson(response, 200, { commentCount: rows.length, comments: rows });
+      return;
+    }
+
+    // The deck chat (shared/chat.ts): never in deck.json, never a transaction.
+    // `?since=<id>` returns what came after that message. `?wait=1` is a long
+    // poll for `slide-agent chat --wait`: it answers with the first message
+    // a *person* posts mentioning `@<mention>` (default @agent) after `since`
+    // — or, without `since`, after the request arrived — or with nothing
+    // once `timeout` ms (at most 60 s) pass.
+    if (path === '/api/chat' && request.method === 'GET') {
+      if (!deckParam) return respondJson(response, 400, { error: 'missing deck' });
+      const room = await getRoom(deckParam);
+      const since = url.searchParams.get('since');
+      if (url.searchParams.get('wait') === '1') {
+        const mention = (url.searchParams.get('mention') ?? AGENT_MENTION).replace(/^@/, '').toLowerCase();
+        const timeout = Math.min(Math.max(Number(url.searchParams.get('timeout')) || 25_000, 100), 60_000);
+        const waiting = room.session.chat.wait(
+          since,
+          (message) => !message.agent && message.mentions.includes(mention),
+          timeout,
+        );
+        response.on('close', waiting.cancel);
+        const messages = await waiting.result;
+        if (response.destroyed) return;
+        respondJson(response, 200, {
+          chatCount: messages.length, messages, last: messages.at(-1)?.id ?? since ?? null, timedOut: messages.length === 0,
+        });
+        return;
+      }
+      const messages = room.session.chat.since(since);
+      respondJson(response, 200, {
+        chatCount: messages.length, messages, last: room.session.chat.recent(1)[0]?.id ?? null,
+      });
+      return;
+    }
+
+    if (path === '/api/chat' && request.method === 'POST') {
+      if (!deckParam) return respondJson(response, 400, { error: 'missing deck' });
+      let body: { text?: unknown; author?: unknown; ref?: unknown; slide?: unknown; id?: unknown };
+      try {
+        body = JSON.parse((await readBody(request)).toString('utf8')) as typeof body;
+      } catch {
+        return respondJson(response, 400, { error: 'body must be JSON' });
+      }
+      if (typeof body.text !== 'string' || !body.text.trim()) return respondJson(response, 400, { error: 'missing text' });
+      const room = await getRoom(deckParam);
+      const deck = room.session.deck;
+      let ref: ChatRef | undefined;
+      if (body.slide !== undefined && body.slide !== null && body.slide !== '') {
+        // The id or the 1-based number, like every other --slide.
+        const wanted = String(body.slide);
+        const slide = deck.slides.find((candidate) => candidate.id === wanted)
+          ?? (/^\d+$/.test(wanted) ? deck.slides[Number(wanted) - 1] : undefined);
+        if (!slide) return respondJson(response, 404, { error: `no slide ${wanted}; this deck has ${deck.slides.length}` });
+        ref = { slideId: slide.id };
+      } else if (body.ref !== undefined) {
+        const parsed = ChatRefSchema.safeParse(body.ref);
+        if (!parsed.success) return respondJson(response, 400, { error: 'ref must be {slideId, elementId?} or {commentId}' });
+        const resolved = resolveChatRef(deck, parsed.data);
+        if (!resolved) return respondJson(response, 404, { error: 'ref names nothing in this deck' });
+        ref = resolved;
+      }
+      const bridge = agentSessionParam && localAgents ? localAgents.linked(room.session.dir, agentSessionParam) : null;
+      const author = typeof body.author === 'string' && body.author.trim()
+        ? body.author.trim()
+        : bridge?.name ?? (identity ? `${identity.name} · agent` : 'Agent');
+      const message = postChat(room, {
+        id: typeof body.id === 'string' ? body.id : undefined,
+        author,
+        login: identity?.login,
+        agent: true,
+        text: body.text,
+        ref,
+      });
+      if (!message) {
+        if (typeof body.id === 'string' && room.session.chat.has(body.id)) {
+          return respondJson(response, 200, room.session.chat.all().find((entry) => entry.id === body.id));
+        }
+        return respondJson(response, 409, { error: 'this presentation is closing; try again' });
+      }
+      if (localAgents && agentSessionParam) {
+        localAgents.event(room.session.dir, agentSessionParam, { text: `said in chat: ${message.text.slice(0, 160)}` });
+      }
+      respondJson(response, 200, message);
       return;
     }
 
@@ -2792,6 +3095,7 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
       // serve headers as any HTTP request, so the identity rules match.
       let identity: Identity | null = null;
       let canEdit = true;
+      let canComment = true;
       if (accessControl) {
         identity = resolveIdentity(request, accessControl);
         const role = identity ? await deckRoleOf(identity, deckId) : null;
@@ -2803,7 +3107,30 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
           return;
         }
         canEdit = role !== 'view';
+        canComment = roleMayComment(role);
         if (userDirectory) void userDirectory.note(identity);
+      }
+      // A rename of this very deck may be landing right now; let it, then
+      // look at what is on disk. A missing deck is answered here rather than
+      // by getRoom's failure: a client that knew the old id is sent on to
+      // where the deck went, or told plainly that there is nothing there.
+      await relocations.get(deckId);
+      let deckDir: string | null = null;
+      try {
+        deckDir = deckDirOf(deckId);
+      } catch {
+        // An invalid id; getRoom below refuses it with the reason.
+      }
+      if (deckDir && !isDeckDir(deckDir)) {
+        socket.resume();
+        const moved = movedDecks.get(deckId);
+        if (moved && deckFolderExists(moved.id) && await deckAllowed(identity, moved.id)) {
+          socket.send(JSON.stringify({ kind: 'deckMoved', deckId: moved.id, title: moved.title } satisfies ServerMessage));
+          socket.close(COLLAB_CLOSE.moved, 'presentation renamed');
+        } else {
+          socket.close(COLLAB_CLOSE.noSuchDeck, 'This presentation no longer exists here. It may have been renamed or moved.');
+        }
+        return;
       }
       let room: Room;
       try {
@@ -2812,18 +3139,25 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
         socket.close(4004, String(error instanceof Error ? error.message : error).slice(0, 120));
         return;
       }
-      bindPeer(room, socket, identity, canEdit);
+      bindPeer(room, socket, identity, canEdit, canComment);
       socket.resume();
     })();
   });
 
-  function bindPeer(room: Room, socket: WebSocket, identity: Identity | null, canEdit: boolean): void {
+  function bindPeer(
+    room: Room,
+    socket: WebSocket,
+    identity: Identity | null,
+    canEdit: boolean,
+    canComment: boolean,
+  ): void {
     const clientId = randomUUID();
     const peer: Peer = {
       socket,
       greeted: false,
       identity,
       canEdit,
+      canComment,
       agentFor: null,
       state: {
         clientId,
@@ -2845,6 +3179,11 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
       } catch {
         return; // Trusted network; a malformed frame is a bug, not an attack. Drop it.
       }
+
+      // Mid-rename: the session is closing and its folder moving. Anything
+      // applied now would be written nowhere; the peer is about to be told
+      // where the deck went.
+      if (room.relocating) return;
 
       if (message.kind === 'hello') {
         if (message.agentFor && localAgents) {
@@ -2897,6 +3236,7 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
               .map((p) => p.state),
             ...(room.agentPresence ? [room.agentPresence] : []),
           ],
+          chat: room.session.chat.recent(),
         });
         broadcast(room, { kind: 'presence', state: peer.state }, clientId);
         return;
@@ -2948,6 +3288,19 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
           room.session.saveThemeCss(message.css);
           broadcast(room, { kind: 'theme', css: message.css, byClientId: clientId }, clientId);
           return;
+        case 'chat-post': {
+          if (!peer.canComment) return;
+          const ref = resolveChatRef(room.session.deck, message.ref) ?? undefined;
+          postChat(room, {
+            id: message.id,
+            author: peer.state.name,
+            login: identity?.login,
+            agent: Boolean(peer.agentFor || peer.state.agent),
+            text: message.text,
+            ref,
+          });
+          return;
+        }
         case 'agentEvent':
           if (peer.agentFor && localAgents) {
             localAgents.event(room.session.dir, peer.agentFor, {
@@ -2989,12 +3342,29 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
       unsubscribeSharedAgent?.();
       for (const stream of sharedAgentStreams) stream.response.end();
       sharedAgentStreams.clear();
-      for (const room of rooms.values()) {
-        // Shutdown cannot wait for a renderer that is paused, presenting, or
-        // already tearing down to complete the WebSocket close handshake.
-        // Upgraded sockets are not covered by closeAllConnections(), so end
-        // them synchronously before awaiting the HTTP server's close callback.
-        for (const peer of room.peers.values()) peer.socket.terminate();
+      // A graceful close sends what is queued first -- above all the `ended`
+      // that notifyEnded() broadcast a moment ago. Terminating straight away
+      // destroyed the socket with that frame unsent, so a peer saw a dropped
+      // connection and kept "reconnecting…" instead of learning the host had
+      // ended the session. Shutdown still cannot wait on a renderer that is
+      // paused, presenting or tearing down, so whatever has not closed after
+      // a short grace is terminated. Upgraded sockets are not covered by
+      // closeAllConnections(), so they are ended here, before awaiting it.
+      const sockets = [...rooms.values()].flatMap((room) => [...room.peers.values()].map((peer) => peer.socket));
+      await Promise.race([
+        Promise.all(sockets.map((socket) => new Promise<void>((resolveClosed) => {
+          if (socket.readyState === socket.CLOSED) return resolveClosed();
+          socket.once('close', () => resolveClosed());
+          try {
+            socket.close(1001, 'session ended');
+          } catch {
+            resolveClosed();
+          }
+        }))),
+        new Promise<void>((resolveGrace) => setTimeout(resolveGrace, SOCKET_CLOSE_GRACE_MS)),
+      ]);
+      for (const socket of sockets) {
+        if (socket.readyState !== socket.CLOSED) socket.terminate();
       }
       // `close()` alone only stops new connections: it waits for every open
       // one to go idle first. A browser leaves plenty that never will — a
@@ -3693,7 +4063,7 @@ async function collectMirrorFiles(deckDir: string, themeFile: string): Promise<M
   // The mirror generates its own brief and helper; the deck's desktop-facing
   // AGENTS.md would send an agent looking for a CLI it does not have.
   const skip = new Set([
-    'deck.json', 'notes.md', 'agent-chats.json', 'access.json', 'edit', themeFile,
+    'deck.json', 'notes.md', 'agent-chats.json', 'access.json', CHAT_FILE, 'edit', themeFile,
     'AGENTS.md', 'CLAUDE.md', 'deck',
   ]);
   const files: MirrorFileEntry[] = [];

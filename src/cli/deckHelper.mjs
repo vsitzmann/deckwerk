@@ -52,6 +52,10 @@ Everything else:
   comments  [--unresolved]                every comment, with its slide number
   comments  --resolve <commentId>         mark a comment done (never delete)
   comments  --add <text> (--slide <id|number> | --element <elementId>) [--author <name>]
+  chat      [--since <messageId>]         the deck's chat with the people in it, oldest first
+  chat      --wait [--since <id>] [--timeout <seconds>]
+                                          block until someone writes @agent, then print it
+  say       <text> [--slide <id|number>]  post to the chat as yourself, the agent
   asset import <paths...>                 import media through the server; the JSON
                                           output tells you the final assets/… src
   web check <page.html> [--size <WxH>]    run an interactive page in the server's
@@ -265,6 +269,47 @@ async function main(argv) {
         images.push({ slide: entry.index, slideId: entry.id, path });
       }
       out({ revision: context.revision, images });
+      return EXIT_OK;
+    }
+    case 'chat': {
+      const { flags, options } = parseArgs(rest, ['since', 'timeout']);
+      if (!flags.has('wait')) {
+        const listing = await api('/api/chat', { since: options.get('since') });
+        out(listing);
+        return EXIT_OK;
+      }
+      // Pin "now" to a message id first, so nothing posted between two
+      // long polls slips through the gap. An id no log holds means "from the start".
+      const since = options.get('since') ?? (await api('/api/chat')).last ?? 'start-of-chat';
+      const seconds = options.has('timeout') ? Number(options.get('timeout')) : Infinity;
+      if (!(seconds > 0)) fail('--timeout takes seconds, e.g. --timeout 600', EXIT_USAGE);
+      const deadline = Date.now() + seconds * 1000;
+      for (;;) {
+        const remaining = deadline - Date.now();
+        if (remaining <= 0) {
+          out({ chatCount: 0, messages: [], last: since, timedOut: true });
+          return EXIT_ERROR;
+        }
+        const result = await api('/api/chat', {
+          since, wait: '1', timeout: Math.min(25_000, Math.max(100, remaining)),
+        });
+        if (result.messages.length > 0) {
+          out(result);
+          return EXIT_OK;
+        }
+      }
+    }
+    case 'say': {
+      const { options, positional: rawPositional } = parseArgs(rest, ['slide']);
+      // `say . "text"` as the brief spells it for slide-agent: the deck is this folder.
+      const positional = rawPositional[0] === '.' ? rawPositional.slice(1) : rawPositional;
+      const text = positional.join(' ').trim();
+      if (!text) fail('usage: ./deck say "text" [--slide <id|number>]', EXIT_USAGE);
+      const message = await api('/api/chat', {}, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ text, ...(options.has('slide') ? { slide: options.get('slide') } : {}) }),
+      });
+      out({ status: 'posted', id: message.id, message });
       return EXIT_OK;
     }
     case 'comments': {

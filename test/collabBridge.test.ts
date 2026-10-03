@@ -134,6 +134,8 @@ describe('connection lifecycle', () => {
       onCleanChange: vi.fn(),
       onConnectionChange: (connected) => events.push(connected),
       onEditsDiscarded: (count) => events.push(`discarded:${count}`),
+      onMoved: (moved, unsent) => events.push(`moved:${moved.deckId}:${unsent}`),
+      onUnavailable: (reason) => events.push(`unavailable:${reason}`),
     });
     const handle = (message: unknown) => (
       bridge as unknown as { handle(message: unknown): void }
@@ -148,8 +150,77 @@ describe('connection lifecycle', () => {
       themeCss: '',
       peers: [],
     });
-    return { bridge, events, welcome };
+    return { bridge, events, welcome, handle };
   }
+
+  class FakeWebSocket {
+    static readonly OPEN = 1;
+    static instances: FakeWebSocket[] = [];
+    readyState = 0;
+    private listeners = new Map<string, Array<(event: unknown) => void>>();
+    constructor(public url: string) {
+      FakeWebSocket.instances.push(this);
+    }
+    addEventListener(type: string, listener: (event: unknown) => void): void {
+      const list = this.listeners.get(type) ?? [];
+      list.push(listener);
+      this.listeners.set(type, list);
+    }
+    dispatch(type: string, event: unknown = {}): void {
+      for (const listener of this.listeners.get(type) ?? []) listener(event);
+    }
+    close(): void {}
+    send(): void {}
+  }
+
+  it('follows a renamed deck instead of reconnecting to its old id', () => {
+    vi.useFakeTimers();
+    FakeWebSocket.instances = [];
+    vi.stubGlobal('WebSocket', FakeWebSocket);
+    try {
+      const { bridge, events, welcome, handle } = lifecycleBridge();
+      bridge.connect();
+      welcome(0);
+      // An edit still unconfirmed when the move arrives was sent after the
+      // server stopped applying edits to the room: it is reported as lost.
+      const deck = emptyDeck('Original');
+      const edited = structuredClone(deck);
+      edited.title = 'Typed during the rename';
+      bridge.localEdit(deck, edited, 'Rename deck');
+      handle({ kind: 'deckMoved', deckId: 'Big Talk', title: 'Big Talk' });
+      expect(events).toEqual([true, 'moved:Big Talk:1']);
+
+      // The close that follows is not a disconnect, and nothing redials.
+      FakeWebSocket.instances[0].dispatch('close', { code: 4301, reason: 'presentation renamed' });
+      vi.advanceTimersByTime(60_000);
+      expect(events).toEqual([true, 'moved:Big Talk:1']);
+      expect(FakeWebSocket.instances).toHaveLength(1);
+    } finally {
+      vi.unstubAllGlobals();
+      vi.useRealTimers();
+    }
+  });
+
+  it('stops retrying a deck the server does not have, and says so', () => {
+    vi.useFakeTimers();
+    FakeWebSocket.instances = [];
+    vi.stubGlobal('WebSocket', FakeWebSocket);
+    try {
+      const { bridge, events } = lifecycleBridge();
+      bridge.connect();
+      FakeWebSocket.instances[0].dispatch('close', { code: 4404, reason: 'This presentation no longer exists here.' });
+      expect(events).toEqual([
+        false,
+        'This presentation no longer exists here.',
+        'unavailable:This presentation no longer exists here.',
+      ]);
+      vi.advanceTimersByTime(60_000);
+      expect(FakeWebSocket.instances).toHaveLength(1);
+    } finally {
+      vi.unstubAllGlobals();
+      vi.useRealTimers();
+    }
+  });
 
   it('reports connected on every welcome, and what a reconnect discarded', () => {
     const { bridge, events, welcome } = lifecycleBridge();

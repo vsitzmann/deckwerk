@@ -100,7 +100,7 @@ async function openFixture(): Promise<WebEditorSession> {
   const panelLabels = await opened.cdp.evaluate<string[]>(
     `[...document.querySelectorAll('#side-tabs button')].map((b) => b.textContent.trim())`,
   );
-  expect(panelLabels).toEqual(['Props', 'Design', 'Build', 'History']);
+  expect(panelLabels).toEqual(['Props', 'Design', 'Build', 'History', 'Chat']);
   await opened.cdp.click('#side-tabs button[data-panel="inspector"]', 'Props tab');
   return opened;
 }

@@ -206,6 +206,16 @@ export function canEditDeck(login: string, access: DeckAccess, config: AccessCon
   return role === 'owner' || role === 'edit';
 }
 
+/**
+ * Whether a role may comment. Comments live inside deck.json, so leaving one
+ * is an edit: viewers may not. The deck chat is not part of the document, but
+ * it follows this same rule, so "may I say something about this deck" has
+ * one answer whichever surface asks.
+ */
+export function roleMayComment(role: DeckRole | null): boolean {
+  return role === 'owner' || role === 'edit';
+}
+
 export function canManageDeck(login: string, access: DeckAccess, config: AccessControlConfig): boolean {
   return login === normalizeLogin(config.admin) || access.owner === login;
 }

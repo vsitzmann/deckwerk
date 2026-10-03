@@ -109,7 +109,7 @@ export interface SlideState {
   visible: Set<string>;
   /** Ids of video elements that should be playing. */
   playing: Set<string>;
-  /** Extra CSS classes applied by `addClass`/`removeClass` actions. */
+  /** Each element's classes at this step: its authored `class`, then `addClass`/`removeClass` on top. */
   classes: Map<string, Set<string>>;
   /** Seek positions in seconds requested by `seek` actions. */
   seeks: Map<string, number>;
@@ -136,7 +136,8 @@ export function resolveState(slide: Slide, step: number): SlideState {
         .filter((e) => e.type === 'video' && e.autoplay && !hidden.has(e.id))
         .map((e) => e.id),
     ),
-    classes: new Map(),
+    // Seeded with the authored classes so `removeClass` can take one away.
+    classes: new Map(slide.elements.map((e) => [e.id, new Set(e.class)])),
     seeks: new Map(),
     // Seeding every by-paragraph target at zero tells the renderers which
     // elements need per-paragraph reconciliation even before their first step.

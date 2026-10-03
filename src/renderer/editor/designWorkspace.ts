@@ -54,7 +54,6 @@ export class DesignWorkspace {
     const edit = barButton('Edit layouts…', () => this.openLayoutEditor(
       (this.deps.store.slide?.layout ?? 'freeform') as FixedLayout,
     ));
-    edit.classList.add('primary');
     header.append(copy, edit);
     this.previewGrid = document.createElement('div');
     this.previewGrid.className = 'design-preview-grid';

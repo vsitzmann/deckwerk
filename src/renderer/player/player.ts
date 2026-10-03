@@ -622,6 +622,7 @@ export class Player {
     video.playsInline = true;
     video.muted = true;
     video.dataset.mediaKey = target.key;
+    video.addEventListener('error', () => video.classList.add('media-failed'));
     const entry = { key: target.key, video };
     this.videoWarmInFlight = entry;
     // Listeners first, then the source: assigning src is what starts the load,

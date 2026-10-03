@@ -16,7 +16,7 @@ import { join } from 'node:path';
 import WebSocket from 'ws';
 import { emptyDeck, parseDeck } from '../src/shared/deck.js';
 import { saveDeck } from '../src/main/deckStore.js';
-import { COLLAB_PROTOCOL_VERSION } from '../src/shared/collab.js';
+import { COLLAB_CLOSE, COLLAB_PROTOCOL_VERSION, ServerMessageSchema, type ServerMessage } from '../src/shared/collab.js';
 import { startCollabServer, type RunningCollabServer } from '../src/server/collabServer.js';
 
 const ADMIN = 'admin@tailnet.example';
@@ -24,6 +24,43 @@ const ALICE = 'alice@tailnet.example';
 const BOB = 'bob@tailnet.example';
 
 const asUser = (login: string): Record<string, string> => ({ 'tailscale-user-login': login });
+
+/** A raw collab socket that keeps every message and how it closed. */
+class Peer {
+  readonly socket: WebSocket;
+  readonly messages: ServerMessage[] = [];
+  readonly closed: Promise<{ code: number; reason: string }>;
+  private listeners: Array<() => void> = [];
+
+  constructor(port: number, deckId: string) {
+    this.socket = new WebSocket(`ws://127.0.0.1:${port}/ws?deck=${encodeURIComponent(deckId)}`);
+    this.socket.on('open', () => this.socket.send(JSON.stringify({ kind: 'hello', version: COLLAB_PROTOCOL_VERSION })));
+    this.socket.on('message', (raw) => {
+      this.messages.push(ServerMessageSchema.parse(JSON.parse(String(raw))));
+      for (const listener of this.listeners.splice(0)) listener();
+    });
+    this.closed = new Promise((done) => {
+      this.socket.on('close', (code, reason) => done({ code, reason: String(reason) }));
+    });
+  }
+
+  async next<K extends ServerMessage['kind']>(
+    kind: K,
+    match: (message: Extract<ServerMessage, { kind: K }>) => boolean = () => true,
+  ): Promise<Extract<ServerMessage, { kind: K }>> {
+    const deadline = Date.now() + 5000;
+    for (;;) {
+      const found = this.messages.find((message): message is Extract<ServerMessage, { kind: K }> =>
+        message.kind === kind && match(message as Extract<ServerMessage, { kind: K }>));
+      if (found) return found;
+      if (Date.now() > deadline) throw new Error(`timed out waiting for ${kind}`);
+      await new Promise<void>((done) => {
+        this.listeners.push(done);
+        setTimeout(done, 100);
+      });
+    }
+  }
+}
 
 describe('collab server folders', () => {
   let rootDir: string;
@@ -67,8 +104,8 @@ describe('collab server folders', () => {
 
     it('lists nested decks by path and every folder that holds them', async () => {
       expect((await api('/api/decks')).body).toEqual([
-        { id: 'clients/acme/pitch', title: 'clients/acme/pitch', slides: 1, editedAt: expect.any(String), editors: 0, folder: 'clients/acme' },
-        { id: 'loose', title: 'loose', slides: 1, editedAt: expect.any(String), editors: 0, folder: '' },
+        { id: 'clients/acme/pitch', title: 'clients/acme/pitch', slides: 1, editedAt: expect.any(String), createdAt: expect.any(String), editors: 0, folder: 'clients/acme' },
+        { id: 'loose', title: 'loose', slides: 1, editedAt: expect.any(String), createdAt: expect.any(String), editors: 0, folder: '' },
       ]);
       expect((await api('/api/folders')).body).toEqual([
         { path: 'clients', name: 'clients', parent: '', decks: 0 },
@@ -190,7 +227,7 @@ describe('collab server folders', () => {
       expect(JSON.parse(await readFile(join(rootDir, 'Big Talk', 'deck.json'), 'utf8')).title)
         .toBe('Big Talk');
       expect((await api('/api/decks')).body).toContainEqual(
-        { id: 'Big Talk', title: 'Big Talk', slides: 1, editedAt: expect.any(String), editors: 0, folder: '' },
+        { id: 'Big Talk', title: 'Big Talk', slides: 1, editedAt: expect.any(String), createdAt: expect.any(String), editors: 0, folder: '' },
       );
 
       // A deck inside a folder keeps its folder, and a name already taken is
@@ -205,20 +242,82 @@ describe('collab server folders', () => {
       expect((await api('/api/decks/rename?deck=nope&name=x', { method: 'POST' })).status).toBe(404);
     });
 
-    it('refuses to rename a presentation somebody has open', async () => {
-      const socket = new WebSocket(`ws://127.0.0.1:${server.port}/ws?deck=loose`);
-      await new Promise<void>((done, fail) => {
-        socket.on('open', () => socket.send(JSON.stringify({ kind: 'hello', version: COLLAB_PROTOCOL_VERSION })));
-        socket.on('message', () => done());
-        socket.on('error', fail);
-        setTimeout(() => fail(new Error('ws timed out')), 4000);
-      });
-      const refused = await api('/api/decks/rename?deck=loose&name=other', { method: 'POST' });
-      expect(refused.status).toBe(409);
-      expect(refused.body.error).toMatch(/open/);
-      expect(existsSync(join(rootDir, 'loose', 'deck.json'))).toBe(true);
-      socket.terminate();
+    it('renames a presentation people have open, and takes them along', async () => {
+      const editor = new Peer(server.port, 'loose');
+      const watcher = new Peer(server.port, 'loose');
+      await editor.next('welcome');
+      await watcher.next('welcome');
+      // An edit the server has accepted but not yet written (saves are
+      // debounced): the rename has to land it in the renamed folder.
+      editor.socket.send(JSON.stringify({
+        kind: 'txn', txnId: 'txn-before-rename', baseSeq: 0, label: 'Add slide',
+        ops: [{ op: 'insertSlides', afterSlideId: 's1', slides: [{ id: 's2', name: 'Two' }] }],
+      }));
+      await watcher.next('txn', (message) => message.txnId === 'txn-before-rename');
+
+      const renamed = await api('/api/decks/rename?deck=loose&name=Big%20Talk', { method: 'POST' });
+      expect(renamed).toEqual({ status: 200, body: { id: 'Big Talk', title: 'Big Talk' } });
+
+      // Everybody in the room is told where the deck went, then let go.
+      for (const peer of [editor, watcher]) {
+        expect(await peer.next('deckMoved')).toEqual({ kind: 'deckMoved', deckId: 'Big Talk', title: 'Big Talk' });
+        expect((await peer.closed).code).toBe(COLLAB_CLOSE.moved);
+      }
+      const saved = JSON.parse(await readFile(join(rootDir, 'Big Talk', 'deck.json'), 'utf8'));
+      expect(saved.title).toBe('Big Talk');
+      expect(saved.slides.map((slide: { id: string }) => slide.id)).toEqual(['s1', 's2']);
+      expect(existsSync(join(rootDir, 'loose'))).toBe(false);
+
+      // The old session's save debounce has long passed: nothing came back
+      // to life at the old path.
+      await new Promise((done) => setTimeout(done, 1200));
+      expect(existsSync(join(rootDir, 'loose'))).toBe(false);
+
+      // A client reconnecting to the old id is sent on, not given an empty
+      // deck; the new id opens the renamed deck with the edit in it.
+      const late = new Peer(server.port, 'loose');
+      expect(await late.next('deckMoved')).toMatchObject({ deckId: 'Big Talk' });
+      expect((await late.closed).code).toBe(COLLAB_CLOSE.moved);
+      expect(existsSync(join(rootDir, 'loose'))).toBe(false);
+      const rejoined = new Peer(server.port, 'Big Talk');
+      const welcome = await rejoined.next('welcome');
+      expect(welcome.deck.title).toBe('Big Talk');
+      expect(welcome.deck.slides).toHaveLength(2);
+      rejoined.socket.terminate();
+
+      // An id that never held anything is a clean refusal, not a retry loop.
+      const nowhere = new Peer(server.port, 'never-was');
+      expect((await nowhere.closed).code).toBe(COLLAB_CLOSE.noSuchDeck);
+      expect(nowhere.messages).toEqual([]);
+      expect(existsSync(join(rootDir, 'never-was'))).toBe(false);
     });
+
+    it('sends media requests for a renamed deck on to its new id', async () => {
+      await mkdir(join(rootDir, 'loose', 'assets'), { recursive: true });
+      await writeFile(join(rootDir, 'loose', 'assets', 'clip.txt'), 'frames', 'utf8');
+      await api('/api/decks/rename?deck=loose&name=Big%20Talk', { method: 'POST' });
+      const response = await fetch(`${base}/decks/loose/assets/clip.txt`);
+      expect(response.status).toBe(200);
+      expect(response.url).toBe(`${base}/decks/Big%20Talk/assets/clip.txt`);
+      expect(await response.text()).toBe('frames');
+    });
+
+    it('changes only the title of an open deck whose folder keeps its name', async () => {
+      const peer = new Peer(server.port, 'loose');
+      await peer.next('welcome');
+      await writeFile(join(rootDir, 'loose', 'deck.json'), JSON.stringify({
+        ...JSON.parse(await readFile(join(rootDir, 'loose', 'deck.json'), 'utf8')), title: 'Imported title',
+      }), 'utf8');
+      // The session picks up the outside edit before the rename arrives.
+      await peer.next('deck', (message) => message.deck.title === 'Imported title');
+      const renamed = await api('/api/decks/rename?deck=loose&name=loose', { method: 'POST' });
+      expect(renamed.body).toEqual({ id: 'loose', title: 'loose' });
+      const txn = await peer.next('txn');
+      expect(txn.ops).toEqual([{ op: 'updateDeck', title: 'loose' }]);
+      expect(peer.messages.some((message) => message.kind === 'deckMoved')).toBe(false);
+      peer.socket.terminate();
+    });
+
 
     it('renames a folder, taking every presentation in it along', async () => {
       const renamed = await api('/api/folders/rename?path=clients%2Facme&name=globex', { method: 'POST' });
@@ -355,6 +454,30 @@ describe('collab server folders', () => {
       expect(aliceFolder.body).toEqual({ path: 'alice-plans' });
       expect((await api('/api/decks', { headers: asUser(BOB) })).body)
         .toEqual([expect.objectContaining({ id: 'alice-plans/Plan B', title: 'Plan B' })]);
+    });
+
+    it('forwards a renamed deck only to people who may open it', async () => {
+      const renamed = await api('/api/decks/rename?deck=alice-work%2Fprivate-plan&name=secret-plan', {
+        method: 'POST', headers: asUser(ALICE),
+      });
+      expect(renamed.body).toEqual({ id: 'alice-work/secret-plan', title: 'secret-plan' });
+      const knock = (login: string) => {
+        const socket = new WebSocket(
+          `ws://127.0.0.1:${server.port}/ws?deck=${encodeURIComponent('alice-work/private-plan')}`,
+          { headers: asUser(login) },
+        );
+        const messages: string[] = [];
+        socket.on('message', (raw) => messages.push(String(raw)));
+        return new Promise<{ code: number; messages: string[] }>((done) => {
+          socket.on('close', (code) => done({ code, messages }));
+        });
+      };
+      const alice = await knock(ALICE);
+      expect(alice.code).toBe(COLLAB_CLOSE.moved);
+      expect(JSON.parse(alice.messages[0])).toMatchObject({ kind: 'deckMoved', deckId: 'alice-work/secret-plan' });
+      // Bob never had this deck: the old id tells him nothing about the new one.
+      const bob = await knock(BOB);
+      expect(bob).toEqual({ code: COLLAB_CLOSE.noSuchDeck, messages: [] });
     });
 
     it('refuses to reach a private deck by way of its own subdirectories', async () => {

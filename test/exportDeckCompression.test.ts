@@ -151,6 +151,23 @@ describe.skipIf(webExportUnavailableReason() !== null)('web export compression',
     expect([...referencedAssets(deck)].sort()).toEqual(['assets/bg.png', 'assets/f.png']);
   });
 
+  it('carries a picture a text box is filled with, and renames it with the file', () => {
+    const deck = emptyDeck();
+    deck.slides[0].elements.push(
+      element({ id: 't', type: 'text', html: 'Title <span style="background-image:url(assets/run.png)">run</span>',
+        align: 'center', valign: 'top',
+        style: { 'background-image': 'url(assets/title-code.png)', 'background-clip': 'text', color: 'transparent' } }),
+    );
+    expect([...referencedAssets(deck)].sort()).toEqual(['assets/run.png', 'assets/title-code.png']);
+    const out = rewriteAssetReferences(deck, new Map([
+      ['assets/title-code.png', 'assets/title-code.webp'], ['assets/run.png', 'assets/run.webp'],
+    ]));
+    const text = out.slides[0].elements[0] as { style: Record<string, string>; html: string };
+    expect(text.style['background-image']).toBe('url(assets/title-code.webp)');
+    expect(text.style['background-clip']).toBe('text');
+    expect(text.html).toContain('url(assets/run.webp)');
+  });
+
   it('rewrites references inside HTML regions and posters without touching others', () => {
     const deck = emptyDeck();
     deck.slides[0].elements.push(

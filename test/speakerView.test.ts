@@ -84,6 +84,20 @@ describe('speaker view', () => {
     view.destroy();
   });
 
+  it('shows the current slide\'s speaker notes', () => {
+    const view = open();
+    const deck = deckOf(['Intro', 'Method']);
+    deck.slides[1]!.notes = 'Say <b>this</b>\nthen that';
+    view.setDeck(deck);
+    const notes = host.querySelector('.speaker-notes')!;
+    expect(notes.textContent).toBe('');
+
+    view.setState(state({ cursor: { slide: 1, step: 0 } }));
+    expect(notes.textContent).toBe('Say <b>this</b>\nthen that');
+    expect(notes.children).toHaveLength(0);
+    view.destroy();
+  });
+
   it('reports slide and build position', () => {
     const view = open();
     view.setDeck(deckOf(['Intro', 'Method', 'Results']));

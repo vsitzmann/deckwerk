@@ -110,9 +110,21 @@ function imagesSettled(doc: Document): Promise<unknown> {
     })));
 }
 
+/**
+ * Wait for layout to settle. A window that is not painting — the display
+ * asleep, the screen locked — never runs animation frames, and an agent's
+ * apply then waited forever behind it; layout itself does not need a paint, so
+ * a timer stands in for the frame after a moment.
+ */
 function nextFrame(): Promise<void> {
   if (typeof requestAnimationFrame !== 'function') return Promise.resolve();
-  return new Promise((resolve) => requestAnimationFrame(() => resolve()));
+  return new Promise((resolve) => {
+    const timer = setTimeout(resolve, 250);
+    requestAnimationFrame(() => {
+      clearTimeout(timer);
+      resolve();
+    });
+  });
 }
 
 /**

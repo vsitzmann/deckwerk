@@ -2,6 +2,8 @@ import '../player/player.css';
 import '../appChrome.css';
 import '../editor/editor.css';
 import './collab.css';
+import '../lightTheme.css';
+import { applyUiTheme } from '../uiTheme.js';
 import { emptyDeck } from '@shared/deck.js';
 import { setIdSuffix } from '@shared/geometry.js';
 import { CANVAS_NOTICE_EVENT, EditorCanvas } from '../editor/canvas.js';
@@ -41,9 +43,12 @@ import { createConnectionNotice } from './connectionNotice.js';
 import { createDeckOnServer, folderOf, importKeynoteToServer, importPowerPointToServer, showDeckPicker, showShareDialog } from './deckPicker.js';
 import { installNetApi } from './netApi.js';
 import { PresenceOverlay } from './presenceOverlay.js';
+import { PresenceBar, isAgentPeer } from './presenceBar.js';
+import { ChatPanel } from './chatPanel.js';
 import { createAgentPanelApi, type AgentPanelBrowserApi } from './agentPanelApi.js';
 import { openEndCollaborationPopover } from './endCollaborationPopover.js';
-import { decodeEditorView, restoreEditorView } from '@shared/editorView.js';
+import { captureEditorView, decodeEditorView, encodeEditorView, restoreEditorView } from '@shared/editorView.js';
+import { createDeckNameField, type DeckNameField } from './deckNameField.js';
 import { AgentPanel } from '../editor/agentPanel.js';
 import { startPresenting } from './presentOverlay.js';
 import { rangeForSlideSelection } from '@shared/presentationRange.js';
@@ -54,6 +59,8 @@ import { trackVideoLoading } from '../player/videoLoadingProgress.js';
 import { DelayedOperationProgress } from '../editor/operationProgress.js';
 import { DesignWorkspace } from '../editor/designWorkspace.js';
 import { installResponsiveToolbar } from '../editor/responsiveToolbar.js';
+
+applyUiTheme();
 
 /**
  * Browser collaboration shell: the same canvas, rail, inspector, theme
@@ -134,16 +141,23 @@ interface ServerConfig {
     /** Participants connect their own local agents (headless server default). */
     mode?: 'local';
   };
-  /** Present when the server runs with --access: who the server says we are. */
-  access?: null | { user: string; name: string; admin: boolean };
+  /**
+   * Present when the server runs with --access: who the server says we are,
+   * and — asked with ?deck= — what we may do with this deck ('owner' covers
+   * the admin, and is what renaming takes).
+   */
+  access?: null | { user: string; name: string; admin: boolean; deckRole?: 'owner' | 'edit' | 'view' | null };
 }
 
 let serverConfig: ServerConfig = { hosted: false, deckId: null, urls: [], agentPanel: null, access: null };
 
-async function fetchServerConfig(): Promise<ServerConfig> {
+async function fetchServerConfig(deck?: string | null): Promise<ServerConfig> {
   try {
-    const response = await fetch('/api/config');
+    const response = await fetch(deck ? `/api/config?deck=${encodeURIComponent(deck)}` : '/api/config');
     if (response.ok) return await response.json() as ServerConfig;
+    // Refused for this deck (no access): the server-wide answer still says
+    // what kind of server this is; the socket will say the rest.
+    if (deck) return await fetchServerConfig(null);
   } catch {
     // Older server without /api/config; behave like the multi-deck server.
   }
@@ -255,6 +269,69 @@ cssEditor.onChange = () => {
 // compiler and the live theme buffer.
 const presence = new PresenceOverlay(canvas, store);
 rail.presenceForSlide = (slideId) => presence.peersOnSlide(slideId);
+const slideIndexOf = (slideId: string): number => store.get().deck.slides.findIndex((slide) => slide.id === slideId);
+const presenceBar = new PresenceBar(
+  (slideId) => {
+    const index = slideIndexOf(slideId);
+    return index >= 0 ? `slide ${index + 1}` : null;
+  },
+  (peer) => {
+    const index = peer.activeSlideId ? slideIndexOf(peer.activeSlideId) : -1;
+    if (index >= 0) store.selectSlide(index);
+  },
+);
+presence.onPeersChange = () => presenceBar.setPeers(presence.list());
+
+/* --- deck chat ---------------------------------------------------------------- */
+
+let chatSelf: { name: string; color: string } | null = null;
+const chatPanel = new ChatPanel(el('chat'), {
+  deckId,
+  send: (post) => bridge.sendChat(post),
+  self: () => chatSelf,
+  peers: () => presence.list().map((peer) => ({ name: peer.name, color: peer.color, agent: isAgentPeer(peer) })),
+  currentSlide: () => {
+    const { deck, slideIndex } = store.get();
+    const slide = deck.slides[slideIndex];
+    return slide ? { id: slide.id, number: slideIndex + 1 } : null;
+  },
+  slideNumber: (slideId) => {
+    const index = slideIndexOf(slideId);
+    return index >= 0 ? index + 1 : null;
+  },
+  slideOfComment: (commentId) => store.get().deck.slides.find((slide) =>
+    slide.comments?.some((comment) => comment.id === commentId)
+    || slide.elements.some((element) => element.comments?.some((comment) => comment.id === commentId)))?.id ?? null,
+  jumpTo: (slideId, elementId) => {
+    const index = slideIndexOf(slideId);
+    if (index < 0) return;
+    store.selectSlide(index);
+    if (elementId && store.get().deck.slides[index].elements.some((element) => element.id === elementId)) {
+      store.select([elementId]);
+    }
+  },
+  onUnreadChange: (unread, mentions) => setChatBadge(unread, mentions),
+});
+
+/** The Chat tab's unread count; accented when one of them mentions this person. */
+function setChatBadge(unread: number, mentions: number): void {
+  const tab = document.querySelector<HTMLButtonElement>('#side-tabs button[data-panel="chat"]');
+  if (!tab) return;
+  let badge = tab.querySelector<HTMLElement>('.chat-tab-badge');
+  if (unread === 0) {
+    badge?.remove();
+    tab.removeAttribute('aria-description');
+    return;
+  }
+  if (!badge) {
+    badge = document.createElement('span');
+    badge.className = 'chat-tab-badge';
+    tab.append(badge);
+  }
+  badge.textContent = unread > 99 ? '99+' : String(unread);
+  badge.classList.toggle('is-mention', mentions > 0);
+  tab.setAttribute('aria-description', `${unread} unread${mentions > 0 ? `, ${mentions} mentioning you` : ''}`);
+}
 
 wireCanvasInspector(canvas, inspector);
 
@@ -281,6 +358,8 @@ rail.onSlideActivate = () => {
 };
 document.addEventListener('keydown', (event) => {
   if (event.key !== 'Escape') return;
+  // Escape in the toolbar's name field cancels the rename, and only that.
+  if (deckNameField?.editing()) return;
   const escaped = designWorkspace.escape();
   if (escaped === 'theme') themePanel.dismiss();
   const dismissedThemeEditor = !escaped && themePanel.dismiss();
@@ -330,6 +409,9 @@ const bridge = new CollabBridge(wsUrl, undefined, {
     lastCursorKey = '';
     setIdSuffix(welcome.clientId.slice(0, 4));
     setCommentAuthor(welcome.self.name);
+    chatSelf = welcome.self;
+    chatPanel.setHistory(welcome.chat ?? []);
+    presenceBar.setSelf(welcome.self);
     connectionState = `connected as ${welcome.self.name}`;
     // The first welcome opens the document; every later one is a reconnect of
     // the same session, where the revision log and the selection must survive.
@@ -355,6 +437,7 @@ const bridge = new CollabBridge(wsUrl, undefined, {
     rail.refreshPresence();
   },
   onPeerCursor: (clientId, cursor) => presence.moveCursor(clientId, cursor),
+  onChat: (message) => chatPanel.receive(message),
   onPeerLeft: (clientId) => {
     presence.remove(clientId);
     rail.refreshPresence();
@@ -391,6 +474,13 @@ const bridge = new CollabBridge(wsUrl, undefined, {
     connectionState = 'session ended by the host';
     setStatusMessage('The host ended this collaboration.');
     connectionNotice.showEnded('The host ended this collaboration. All synced edits are saved on the host.');
+  },
+  // Somebody renamed the deck — possibly this tab, from the toolbar.
+  onMoved: (moved, unsent) => followDeck(moved.deckId, moved.title, unsent),
+  onUnavailable: (reason) => {
+    connected = false;
+    setStatusMessage(reason);
+    connectionNotice.showEnded(reason);
   },
 });
 
@@ -481,11 +571,19 @@ function publishPresence(): void {
   lastPresenceKey = key;
   bridge.sendPresence(state);
 }
+let chatDeck = store.get().deck;
+let chatSlideIndex = store.get().slideIndex;
 store.subscribe(() => {
   publishPresence();
+  presenceBar.refresh();
+  // Slide numbers in the chat follow the deck; skip the work on selection churn.
+  const { deck, slideIndex } = store.get();
+  if (deck !== chatDeck || slideIndex !== chatSlideIndex) {
+    chatDeck = deck;
+    chatSlideIndex = slideIndex;
+    chatPanel.refresh();
+  }
   syncSlideSelectionContext();
-  const title = document.querySelector<HTMLElement>('.toolbar-deck-title');
-  if (title) title.textContent = store.get().deck.title;
   renderStatus();
 });
 const inspectorRefresh = canvas.onTextEditModeChange;
@@ -610,6 +708,90 @@ async function exportWeb(): Promise<void> {
   setStatusMessage('Building the web export — the download starts when the server is done.');
 }
 
+/* --- renaming the open deck -------------------------------------------------- */
+
+let deckNameField: DeckNameField | null = null;
+
+/**
+ * Renaming is the deck owner's (or the admin's) call, and never a joiner's in
+ * a hosted session, where the desktop app owns the folder. The server checks
+ * the same rules; this only decides whether the name invites a click.
+ */
+function canRenameDeck(): boolean {
+  if (serverConfig.hosted) return false;
+  if (!serverConfig.access) return true;
+  return serverConfig.access.deckRole === 'owner';
+}
+
+/**
+ * Rename the open presentation: its folder and its title change together
+ * (the server keeps them one name). The deck's id is its folder path, so this
+ * moves the deck; the server tells every peer in the room — this tab included
+ * — where it went, and everyone follows (followDeck). Resolves once the
+ * server has done it; rejects with its reason otherwise.
+ */
+async function renameDeck(name: string): Promise<void> {
+  const body = await runOperation(`Renaming the presentation to “${name}”…`, async () => {
+    const response = await fetch(
+      `/api/decks/rename?deck=${encodeURIComponent(deckId!)}&name=${encodeURIComponent(name)}`,
+      { method: 'POST' },
+    );
+    const answer = await response.json().catch(() => null) as { id?: string; title?: string; error?: string } | null;
+    if (!response.ok || !answer?.id) throw new Error(answer?.error ?? `HTTP ${response.status}`);
+    return answer as { id: string; title?: string };
+  });
+  // The socket usually brings the news first; whichever arrives first wins.
+  followDeck(body.id, body.title ?? name, 0);
+}
+
+/** Carried across the reload to the renamed deck, for its status line. */
+const RENAMED_KEY = 'deckwerk.collab-renamed';
+let followingDeck = false;
+
+/**
+ * Go to the deck's new id. Every deck-scoped route, the socket, the agent
+ * panel and the asset URLs are keyed by the id this page loaded with, so the
+ * simplest correct move is the deck picker's: load the page again under the
+ * new one. The editor view (slide, selection) rides along in `?view=`, and
+ * `replace` keeps Back from returning to an id that is gone.
+ */
+function followDeck(nextId: string, title: string, unsent: number): void {
+  if (followingDeck) return;
+  if (nextId === deckId) {
+    // Only the title changed; that arrives as an ordinary edit.
+    setStatusMessage(`Renamed to “${title}”`);
+    return;
+  }
+  followingDeck = true;
+  bridge.close();
+  const params = new URLSearchParams(location.search);
+  params.set('deck', nextId);
+  params.set('view', encodeEditorView(captureEditorView(store)));
+  try {
+    sessionStorage.setItem(RENAMED_KEY, JSON.stringify({ deckId: nextId, title, unsent }));
+  } catch {
+    // Storage unavailable: the new page simply opens without the note.
+  }
+  location.replace(`${location.pathname}?${params.toString()}${location.hash}`);
+}
+
+/** The note followDeck left for this page, if it is the deck it renamed to. */
+function takeRenamedNote(): string | null {
+  try {
+    const raw = sessionStorage.getItem(RENAMED_KEY);
+    if (!raw) return null;
+    sessionStorage.removeItem(RENAMED_KEY);
+    const note = JSON.parse(raw) as { deckId?: string; title?: string; unsent?: number };
+    if (note.deckId !== deckId || typeof note.title !== 'string') return null;
+    const lost = note.unsent ?? 0;
+    return `Renamed to “${note.title}”`
+      + (lost === 1 ? ' — 1 change made during the rename could not be saved.' : '')
+      + (lost > 1 ? ` — ${lost} changes made during the rename could not be saved.` : '');
+  } catch {
+    return null;
+  }
+}
+
 function buildToolbar(): void {
   const bar = el('toolbar');
   bar.replaceChildren();
@@ -622,10 +804,13 @@ function buildToolbar(): void {
     line.setAttribute('aria-hidden', 'true');
     return line;
   };
-  const deckName = document.createElement('span');
-  deckName.className = 'bar-deck-name';
-  deckName.textContent = deckId;
-  left.append(createDeckWerkButton(), deckName, divider());
+  deckNameField = createDeckNameField({
+    deckId: deckId!,
+    editable: canRenameDeck(),
+    rename: renameDeck,
+    onError: (message) => setStatusMessage(`Rename failed: ${message}`),
+  });
+  left.append(createDeckWerkButton(), deckNameField.element, divider());
   const fileActions = document.createElement('span');
   fileActions.className = 'toolbar-expanded-file-actions';
   const compactFileEntries: ToolbarPickerEntry[] = [];
@@ -786,6 +971,8 @@ function buildToolbar(): void {
     compactSecondary.classList.add('toolbar-compact-secondary-action');
   }
   right.append(
+    presenceBar.element,
+    divider(),
     secondaryActions,
     ...(compactSecondary ? [compactSecondary] : []),
     createToolbarSplitButton(
@@ -805,7 +992,11 @@ const PANELS = [
   { id: 'themePanel', label: 'Design' },
   { id: 'timeline', label: 'Build' },
   { id: 'history', label: 'History' },
+  { id: 'chat', label: 'Chat' },
 ] as const;
+
+/** Tabs that stay open while several slides are selected: they are not about one slide. */
+const DECK_LEVEL_PANELS: ReadonlySet<string> = new Set(['themePanel', 'inspector', 'chat']);
 
 let activePanelId = 'inspector';
 
@@ -823,7 +1014,7 @@ function buildTabs(): void {
 }
 
 function showPanel(id: string): void {
-  if (store.get().slideSelection.size > 1 && id !== 'themePanel' && id !== 'inspector') return;
+  if (store.get().slideSelection.size > 1 && !DECK_LEVEL_PANELS.has(id)) return;
   activePanelId = id;
   for (const panel of PANELS) el(panel.id).hidden = panel.id !== id;
   for (const b of el('side-tabs').querySelectorAll('button')) {
@@ -841,11 +1032,9 @@ function syncSlideSelectionContext(): void {
   const count = store.get().slideSelection.size;
   const multiple = count > 1;
   for (const button of el('side-tabs').querySelectorAll<HTMLButtonElement>('button')) {
-    button.disabled = multiple
-      && button.dataset.panel !== 'themePanel'
-      && button.dataset.panel !== 'inspector';
+    button.disabled = multiple && !DECK_LEVEL_PANELS.has(button.dataset.panel ?? '');
   }
-  if (multiple && activePanelId !== 'themePanel' && activePanelId !== 'inspector') {
+  if (multiple && !DECK_LEVEL_PANELS.has(activePanelId)) {
     showPanel('themePanel');
   }
   themePanel.syncScope(count);
@@ -876,7 +1065,7 @@ function renderStatus(): void {
 
 // The toolbar depends on whether this is a hosted session; one round-trip
 // before first paint of the buttons keeps New/Open/Import from flashing in.
-void fetchServerConfig().then((config) => {
+void fetchServerConfig(deckId).then((config) => {
   serverConfig = config;
   if (config.agentPanel?.enabled && !agentPanel) {
     agentPanelBrowserApi = createAgentPanelApi(deckId!);
@@ -910,6 +1099,8 @@ void fetchServerConfig().then((config) => {
 buildTabs();
 syncSlideSelectionContext();
 renderStatus();
+const renamedNote = takeRenamedNote();
+if (renamedNote) setStatusMessage(renamedNote);
 
 // Console access for debugging and driving a session from devtools.
 Object.assign(window, { store, canvas, rail, bridge });

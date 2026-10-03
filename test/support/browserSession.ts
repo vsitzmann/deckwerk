@@ -850,6 +850,8 @@ export interface RunningBrowser {
 export async function launchBrowser(
   url: string,
   profileDir: string,
+  /** Extra Electron switches, e.g. `--inspect=<port>` for the main process. */
+  electronArgs: string[] = [],
 ): Promise<RunningBrowser> {
   const debugPort = await freePort();
   const child = spawn(electronBinary, [
@@ -857,6 +859,7 @@ export async function launchBrowser(
     url,
     String(debugPort),
     profileDir,
+    ...electronArgs,
   ], {
     cwd: process.cwd(),
     stdio: ['ignore', 'pipe', 'pipe'],

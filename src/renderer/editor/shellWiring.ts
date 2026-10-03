@@ -2,6 +2,7 @@ import type { SlideElement } from '@shared/deck.js';
 import { elementFollowsLayout, layoutGeometryFor, realignElementToLayout } from '@shared/layoutMasters.js';
 import { EditorCanvas } from './canvas.js';
 import { setCircularMask } from '@shared/mediaMask.js';
+import { classifyMediaName } from '@shared/media.js';
 import { mediaNaturalSize } from './mediaNatural.js';
 import { Inspector } from './inspector.js';
 import { SlideRail } from './slideRail.js';
@@ -10,7 +11,7 @@ import {
   copySelectionToClipboard,
   copySlidesToClipboard,
   cutSelectionToClipboard,
-  pasteImageFilesFromClipboard,
+  pasteMediaFilesFromClipboard,
   pasteFromClipboard,
   inAppClipboardToken,
   isInAppClipboardToken,
@@ -199,9 +200,9 @@ export function createClipboardActions(deps: ShellDeps): ClipboardActions {
     pasteAndReport(() => pasteFromClipboard(store, { kind: 'external-html', html, text }));
 
   const pasteClipboardFiles = async (files: File[]) => {
-    const paste = () => pasteImageFilesFromClipboard(store, files);
+    const paste = () => pasteMediaFilesFromClipboard(store, files);
     const pasted = deps.runOperation
-      ? await deps.runOperation('Uploading clipboard image', paste)
+      ? await deps.runOperation('Uploading clipboard media', paste)
       : await paste();
     if (pasted) setStatusMessage('Pasted 1 element.');
   };
@@ -275,12 +276,15 @@ export function bindEditorKeys(deps: ShellDeps, clipboard: ClipboardActions): vo
       void clipboard.pasteClipboardData?.(html, text);
       return;
     }
-    // Any image the importer accepts, not just a PNG screenshot: the paste
-    // handler below picks the first one it can name.
+    // Any image the importer accepts, not just a PNG screenshot, and any
+    // video or image copied in the file manager (Chromium hands those over
+    // as Files named after the original): the paste handler below picks the
+    // first one it can name.
     const files = [...(event.clipboardData?.items ?? [])]
-      .filter((item) => item.kind === 'file' && item.type.startsWith('image/'))
+      .filter((item) => item.kind === 'file')
       .map((item) => item.getAsFile())
-      .filter((file): file is File => file !== null);
+      .filter((file): file is File => file !== null
+        && (file.type.startsWith('image/') || classifyMediaName(file.name) !== null));
     if (files.length > 0) {
       event.preventDefault();
       void clipboard.pasteClipboardFiles?.(files);

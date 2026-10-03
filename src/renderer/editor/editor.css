@@ -156,14 +156,13 @@ button.primary {
 }
 
 /* The one style for a side-panel's block action ("Open Morph editor…",
-   "Add animation", "Edit mask", "Reset trim", …). Pair with `primary` for the
-   accent look: class="primary panel-action". */
+   "Add animation", "Edit mask", "Reset trim", …): a standard button laid out
+   as a full-width block. Panel actions never take the accent — `primary` is
+   kept for the toolbar's Present and a dialog's confirming action. */
 button.panel-action {
   display: block;
   width: 100%;
   margin: 10px 0;
-  padding: 6px 11px;
-  font-weight: 600;
 }
 
 /* The "+ Add effect" picker sits where a panel action would; give it the same
@@ -619,7 +618,11 @@ body.panel-resizing iframe { pointer-events: none; }
    even when the text is short or the slide background matches it. */
 .element.editing {
   outline: 2px solid var(--accent);
-  background: rgb(59 130 246 / 8%);
+  /* An inset shadow, not a background: Chromium copies an ancestor's
+     background onto text copied out of it, and a pasted run then carried the
+     editor's tint as a coloured slab behind its words. A shadow is paint the
+     copy ignores, and it lies over a filled box instead of replacing it. */
+  box-shadow: inset 0 0 0 100vmax rgb(59 130 246 / 8%);
 }
 
 .element.editing [contenteditable] {
@@ -2131,7 +2134,7 @@ input[type="range"] { accent-color: var(--accent); border: 0; background: transp
 }
 
 /* The element being typed into. */
-.element.editing { outline-color: var(--accent); background: var(--accent-soft); }
+.element.editing { outline-color: var(--accent); box-shadow: inset 0 0 0 100vmax var(--accent-soft); }
 
 /* Colour picker: theme palette and full RGBA controls open in one popover. */
 .field-color { flex-direction: row; align-items: center; gap: 8px; }
@@ -3371,7 +3374,7 @@ button.morph-object-hit.selected-source:hover:not(:disabled) {
    a place you browse, so it takes the window — a frame of overlay around a
    header, a scrolling list of rows in columns, and a footer of actions. */
 .workflow-dialog.deck-picker {
-  --deck-picker-columns: minmax(0, 1fr) 130px 110px 90px 190px 110px;
+  --deck-picker-columns: minmax(0, 1fr) 130px 110px 110px 90px 190px 110px;
   --deck-picker-gutter: 18px;
   width: calc(100vw - 48px);
   height: calc(100vh - 48px);
@@ -3687,8 +3690,13 @@ select.panel-action-select {
   color: var(--text);
   text-align: left;
 }
-.shape-menu-item:hover { background: var(--accent); color: #fff; border-color: transparent; }
-.shape-menu-item:hover svg { color: #fff; }
+/* `:not(:disabled)` matches the specificity of the generic button hover
+   rule, which otherwise wins the background and leaves white text on the
+   plain hover grey (unreadable in light mode). */
+.shape-menu-item:hover:not(:disabled) { background: var(--accent); color: #fff; border-color: transparent; }
+.shape-menu-item:hover:not(:disabled) svg { color: #fff; }
+.shape-menu-item[aria-checked]::after { content: ''; width: 1em; margin-left: auto; text-align: right; }
+.shape-menu-item[aria-checked="true"]::after { content: '✓'; }
 .shape-menu-item svg { flex: none; color: var(--muted); }
 
 .table-picker-menu {
@@ -4287,12 +4295,15 @@ select.panel-action-select {
 .toggle-segment:has(> input:indeterminate) { background: var(--accent-soft); color: var(--text); }
 .toggle-segment:has(> input:focus-visible) { outline: 2px solid var(--accent); outline-offset: -2px; }
 .toggle-segment > .toggle-segment-short { font: 10.5px var(--mono); letter-spacing: 0; text-transform: none; }
+/* The label's own span rule (muted grey) would otherwise win over the strip's
+   colour, leaving grey text on the accent fill. */
+.toggle-segment > .toggle-segment-short { color: inherit; }
 
 .media-mask-settings { margin-bottom: 4px; }
 .media-mask-settings .field-check { min-height: 26px; }
 .media-masking-options > .field-check { margin: 4px 0 0; }
 .mask-action-row { margin-top: 8px; }
-.mask-action-row .panel-action { margin: 0; font-weight: 500; }
+.mask-action-row .panel-action { margin: 0; }
 .mask-action-row .mask-reset-segment {
   border: 1px solid var(--line);
   border-left: 0;

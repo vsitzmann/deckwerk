@@ -91,6 +91,28 @@ export class LocalAgentRegistry {
     return this.linked(deckPath, participantId) ? `local-agent:${participantId}` : null;
   }
 
+  /**
+   * A deck folder was renamed. Everything here is keyed by its path, so carry
+   * each participant's activity log to the new one — the panel keeps its
+   * history — and drop what described the old path: the link (the bridge's
+   * socket to the old room is closing; a bridge that follows the rename
+   * attaches again) and the scratchpad, whose preview URLs name the old id.
+   */
+  relocate(fromPath: string, toPath: string, note: string): void {
+    const prefix = `${resolve(fromPath)}\u0000`;
+    for (const [k, agent] of [...this.agents]) {
+      if (!k.startsWith(prefix)) continue;
+      const participantId = k.slice(prefix.length);
+      this.agents.delete(k);
+      agent.link = null;
+      agent.busy = false;
+      agent.activity = null;
+      agent.scratchpad = null;
+      this.note(agent, 'system', note);
+      this.agents.set(key(toPath, participantId), agent);
+    }
+  }
+
   subscribe(listener: (state: AgentPanelState, participantId: string) => void): () => void {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);

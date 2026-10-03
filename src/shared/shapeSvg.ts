@@ -21,8 +21,10 @@ export function shapeSvg(el: Shape): string {
   const gradient = el.fillGradient && el.fill ? gradientDef(`fill-${el.id}`.replace(/[^a-zA-Z0-9_-]/g, '-'), el.fill, el.fillGradient) : null;
   const fill = gradient ? gradient.paint : el.fill ?? 'none';
   const stroke = el.stroke ?? 'none';
-  // Insets keep a centred stroke from being clipped at the element's edge.
-  const inset = el.strokeWidth / 2;
+  // Insets keep a centred stroke from being clipped at the element's edge. A
+  // shape with no stroke has nothing to keep inside, and insetting it anyway
+  // collapses a thin filled bar (an axis line, a rule) to nothing.
+  const inset = stroke === 'none' ? 0 : el.strokeWidth / 2;
   // Open strokes must not be flood-filled; closed shapes take their fill.
   const unfilled = el.shape === 'line' || el.shape === 'arrow';
   const paint = `fill="${unfilled ? 'none' : fill}" stroke="${stroke}"`
@@ -60,8 +62,8 @@ export function shapeSvg(el: Shape): string {
     }
     default:
       node = `<rect x="${inset}" y="${inset}"`
-        + ` width="${Math.max(0, el.w - el.strokeWidth)}"`
-        + ` height="${Math.max(0, el.h - el.strokeWidth)}"`
+        + ` width="${Math.max(0, el.w - inset * 2)}"`
+        + ` height="${Math.max(0, el.h - inset * 2)}"`
         + (el.radius ? ` rx="${el.radius}"` : '') + ` ${paint}/>`;
   }
 
