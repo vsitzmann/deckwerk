@@ -44,7 +44,8 @@ describe('Morph matching', () => {
   });
 
   it('keeps modal object hover transparent despite the global button hover', () => {
-    const css = readFileSync('src/renderer/editor/editor.css', 'utf8');
+    // Strip comments so a selector quoted in prose cannot pose as the rule.
+    const css = readFileSync('src/renderer/editor/editor.css', 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
     const globalHover = css.lastIndexOf('button:hover:not(:disabled)');
     const objectHover = css.lastIndexOf('button.morph-object-hit:hover:not(:disabled)');
     expect(objectHover).toBeGreaterThan(globalHover);
