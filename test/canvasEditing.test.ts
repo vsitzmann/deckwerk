@@ -153,6 +153,20 @@ function setup() {
   return { store, canvas, host };
 }
 
+/** A picture clear of setup()'s text and video, at 1200,300 400x300. */
+function imageElement() {
+  return {
+    id: 'image-1',
+    type: 'image' as const,
+    x: 1200, y: 300, w: 400, h: 300, rot: 0, z: 3, opacity: 1,
+    class: [], style: {},
+    src: 'assets/photo.png',
+    alt: '',
+    fit: 'cover' as const,
+    sourceBox: null,
+  };
+}
+
 /**
  * `bindEditorKeys` only reaches for `rail` on the `n` shortcut and `save` on
  * Cmd+S, so the keyboard tests can stub both and still drive the real handler.
@@ -1637,6 +1651,46 @@ describe('inline text editing', () => {
     expect(canvas.isPlaying('video-1')).toBe(true);
   });
 
+  it('crops a picture when it is double-clicked, and leaves the crop on the next', () => {
+    const { store, canvas, host } = setup();
+    store.commit((deck) => deck.slides[0].elements.push(imageElement()));
+    const stage = host.querySelector<HTMLElement>('.stage')!;
+    stage.getBoundingClientRect = () =>
+      ({ left: 0, top: 0, width: 1920, height: 1080 }) as DOMRect;
+    const dblclick = () => host.dispatchEvent(
+      new MouseEvent('dblclick', { clientX: 1300, clientY: 400, bubbles: true }),
+    );
+
+    dblclick();
+    expect(canvas.maskingElement()).toBe('image-1');
+    expect([...store.get().selection]).toEqual(['image-1']);
+    dblclick();
+    expect(canvas.maskingElement()).toBeNull();
+  });
+
+  it('crops a picture on a pointer double-click without a native dblclick (Safari)', () => {
+    const { store, canvas, host } = setup();
+    store.commit((deck) => deck.slides[0].elements.push(imageElement()));
+    const stage = host.querySelector<HTMLElement>('.stage')!;
+    stage.getBoundingClientRect = () =>
+      ({ left: 0, top: 0, width: 1920, height: 1080 }) as DOMRect;
+    const press = () => {
+      const at = { clientX: 1300, clientY: 400, bubbles: true, button: 0, pointerId: 1 };
+      host.dispatchEvent(new PointerEvent('pointerdown', at));
+      host.dispatchEvent(new PointerEvent('pointerup', at));
+    };
+
+    press();
+    expect(canvas.maskingElement()).toBeNull();
+    press();
+    expect(canvas.maskingElement()).toBe('image-1');
+    // Chromium also dispatches dblclick for the same pair; it must not leave.
+    host.dispatchEvent(
+      new MouseEvent('dblclick', { clientX: 1300, clientY: 400, bubbles: true }),
+    );
+    expect(canvas.maskingElement()).toBe('image-1');
+  });
+
   it('marks videos with a small editor-only corner badge', () => {
     const { host } = setup();
     const video = host.querySelector<HTMLElement>('[data-element-id="video-1"]')!;
@@ -2628,8 +2682,34 @@ describe('object creation and manipulation', () => {
     expect(text.html).toBe('New text');
     expect(text.class).toContain('placeholder');
     expect([...store.get().selection]).toEqual([text.id]);
-    // A new box fits its text rather than spilling out of itself.
-    expect(text.autoFit).toBe(true);
+    // A toolbar box is a label: it hugs its text instead of being a column.
+    expect(text.autoSize).toBe(true);
+    expect(text.autoFit).toBeUndefined();
+  });
+
+  it('turns a sized-to-text box into an ordinary one when a handle resizes it', () => {
+    const { store, host } = setupRow();
+    store.commit((deck) => {
+      const c = deck.slides[0].elements.find((el) => el.id === 'c')!;
+      if (c.type === 'text') c.autoSize = true;
+    });
+    store.select(['c']);
+    const handle = host.querySelector<HTMLElement>('.handle-e[data-element-id="c"]')!;
+    handle.dispatchEvent(new PointerEvent('pointerdown', {
+      clientX: 900, clientY: 550, bubbles: true, pointerId: 1, button: 0,
+    }));
+    host.dispatchEvent(new PointerEvent('pointermove', {
+      clientX: 1000, clientY: 550, bubbles: true, pointerId: 1, button: 0,
+    }));
+    host.dispatchEvent(new PointerEvent('pointerup', {
+      clientX: 1000, clientY: 550, bubbles: true, pointerId: 1, button: 0,
+    }));
+    const c = store.slide!.elements.find((el) => el.id === 'c')!;
+    expect(c.w).toBe(200);
+    expect(c.type === 'text' && c.autoSize).toBeFalsy();
+    store.undo();
+    const restored = store.slide!.elements.find((el) => el.id === 'c')!;
+    expect(restored.type === 'text' && restored.autoSize).toBe(true);
   });
 
   it('inserts a native table and chooses its size from the toolbar grid', () => {

@@ -938,6 +938,7 @@ export function elementFromNode(
     valign: valignFrom(node.dataset.valign),
     ...(contentStyle ? { contentStyle } : {}),
     ...(node.dataset.autofit !== undefined ? { autoFit: node.dataset.autofit !== 'false' } : {}),
+    ...(node.dataset.autoSize === 'true' ? { autoSize: true } : {}),
     ...(node.dataset.layoutSlot === 'title' || node.dataset.layoutSlot === 'body'
       ? {
         layoutPlaceholder: node.dataset.layoutSlot,
@@ -1081,6 +1082,7 @@ function elementToHtml(element: SlideElement, build?: TimelineEntry): string {
         + `${element.contentStyle && Object.keys(element.contentStyle).length > 0
           ? ` data-content-style="${escape(encodeURIComponent(JSON.stringify(element.contentStyle)))}"` : ''}`
         + `${element.autoFit ? ' data-autofit="true"' : ''}`
+        + `${element.autoSize ? ' data-auto-size="true"' : ''}`
         + `${element.table
           ? ` data-table="true" data-table-widths="${element.table.columnWidths.join(',')}" data-table-auto-height="${element.table.autoHeight}"`
           : ''}`

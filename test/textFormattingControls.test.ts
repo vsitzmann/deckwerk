@@ -210,6 +210,20 @@ describe('text formatting from the inspector controls', () => {
     document.body.replaceChildren();
   });
 
+  it('sizes a box to its text from the inspector, turning auto-fit off with it', () => {
+    const { store, inspectorHost } = setup([textElement('text-1', { autoFit: true })]);
+    const toggle = () => field(inspectorHost, 'Size box to text')
+      .querySelector<HTMLInputElement>('input[type="checkbox"]')!;
+    expect(toggle().checked).toBe(false);
+
+    toggle().click();
+    expect(store.slide!.elements[0]).toMatchObject({ autoSize: true, autoFit: false });
+    expect(toggle().checked).toBe(true);
+
+    toggle().click();
+    expect(store.slide!.elements[0]).not.toHaveProperty('autoSize');
+  });
+
   it('keeps the exhaustive formatting matrix synchronized with the shipped text and table controls', () => {
     const normal = setup([textElement('text-1', { html: '<p>First</p><p>Second</p>' })]);
     normal.canvas.beginTextEdit('text-1');
@@ -220,7 +234,7 @@ describe('text formatting from the inspector controls', () => {
       'Role', 'Font family', 'Font size', 'Font weight', 'Style', 'Colour',
     ]);
     expect(labels('.text-layout-options .field > span')).toEqual([
-      'Auto-fit text to box', 'Disable automatic line breaks', 'List',
+      'Size box to text', 'Auto-fit text to box', 'Disable automatic line breaks', 'List',
       'Align', 'Vertical', 'Paragraph spacing',
     ]);
     expect(labels('.text-format-buttons button')).toEqual(['B', 'I', 'U', 'x²', 'x₂']);

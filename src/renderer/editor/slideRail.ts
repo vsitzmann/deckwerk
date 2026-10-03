@@ -5,7 +5,7 @@ import { freezePreviewVideos, releasePreviewVideos } from '../player/previewPost
 import { renderSlide } from '../player/render.js';
 import { applyDeckThemeToNewSlide } from '@shared/themes.js';
 import { LAYOUT_LABELS_BY_ID } from './layoutPreview.js';
-import { applySlideLayout } from './slideLayouts.js';
+import { LAYOUT_LABELS, applySlideLayout, type SlideLayout } from './slideLayouts.js';
 import { newComment, openCommentsPopover, openCount } from './comments.js';
 import type { Deck, Slide } from '@shared/deck.js';
 import { sameSlideIgnoringNotes, type EditorStore } from './store.js';
@@ -19,6 +19,15 @@ import { sameSlideIgnoringNotes, type EditorStore } from './store.js';
 const THUMB_WIDTH = 168;
 /** Enough decoded thumbnails for the viewport plus generous scroll overscan. */
 const THUMB_CACHE_LIMIT = 40;
+
+interface MenuItem {
+  label: string;
+  action?: () => void;
+  /** A non-interactive section label rather than a command. */
+  heading?: boolean;
+  /** Present for a radio-style row; true draws its tick. */
+  checked?: boolean;
+}
 
 export interface RailPresence {
   name: string;
@@ -739,11 +748,24 @@ export class SlideRail {
     this.host.focus({ preventScroll: true });
 
     const hidden = Boolean(this.store.get().deck.slides[index]?.skipped);
-    const items: Array<{ label: string; action: () => void } | 'separator'> = [
+    // The layout rows mirror the Props tab's Preset picker. A tick marks the
+    // layout every targeted slide already wears; a mixed selection shows none.
+    const targeted = this.store.get().deck.slides
+      .filter((s) => this.store.get().slideSelection.has(s.id));
+    const layouts = new Set(targeted.map((s) => s.layout ?? 'freeform'));
+    const current = layouts.size === 1 ? [...layouts][0] : null;
+    const items: Array<MenuItem | 'separator'> = [
       { label: hidden ? 'Show slide' : 'Hide slide', action: () => this.toggleHidden() },
       'separator',
       { label: 'Add slide below', action: () => this.addSlide() },
       { label: 'Duplicate', action: () => this.duplicateSlide() },
+      'separator',
+      { label: 'Layout', heading: true },
+      ...LAYOUT_LABELS.map(([layout, label]): MenuItem => ({
+        label,
+        checked: layout === current,
+        action: () => this.applyLayout(layout, label),
+      })),
       'separator',
       { label: 'Delete', action: () => this.deleteSlide() },
     ];
@@ -757,11 +779,24 @@ export class SlideRail {
         menu.appendChild(hr);
         continue;
       }
+      if (item.heading) {
+        const heading = document.createElement('div');
+        heading.className = 'ctx-heading';
+        heading.textContent = item.label;
+        menu.appendChild(heading);
+        continue;
+      }
       const row = document.createElement('button');
       row.textContent = item.label;
+      if (item.checked !== undefined) {
+        row.classList.add('ctx-check');
+        row.setAttribute('role', 'menuitemradio');
+        row.setAttribute('aria-checked', String(item.checked));
+      }
+      const action = item.action;
       row.addEventListener('click', () => {
         menu.remove();
-        item.action();
+        action?.();
       });
       menu.appendChild(row);
     }
@@ -929,6 +964,16 @@ export class SlideRail {
         if (slide.comments.length === 0) delete slide.comments;
       }),
     });
+  }
+
+  /** Give every selected slide `layout`, as the Props tab's Preset picker does. */
+  applyLayout(layout: SlideLayout, label: string): void {
+    const selected = this.store.get().slideSelection;
+    this.store.commit((deck) => {
+      for (const slide of deck.slides) {
+        if (selected.has(slide.id)) applySlideLayout(slide, layout, deck.layoutMasters);
+      }
+    }, { label: `Apply ${label} layout` });
   }
 
   addSlide(): void {

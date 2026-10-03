@@ -14,12 +14,12 @@ export function insertText(store: EditorStore): TextEl {
   const created: TextEl = {
     type: 'text', id: makeId('text'),
     x: Math.round(deck.canvas.w * 0.1), y: Math.round(deck.canvas.h * 0.4),
-    w: Math.round(deck.canvas.w * 0.8), h: 160, rot: 0, z: nextZ(store),
-    opacity: 1, class: ['placeholder'], style: {}, html: 'New text', align: 'left', valign: 'middle',
-    // On by default: a box that silently spills its text past its own edges is
-    // never what someone typing into it wants. Auto-fit only ever shrinks, so
-    // the authored size still holds for text that already fits.
-    autoFit: true,
+    w: 400, h: 80, rot: 0, z: nextZ(store),
+    opacity: 1, class: ['placeholder'], style: {}, html: 'New text', align: 'left', valign: 'top',
+    // A box from the toolbar is usually a label — slides already come with a
+    // body box for prose — so it hugs its text and the canvas measures it to
+    // size. Dragging a handle turns it into an ordinary wrapping box.
+    autoSize: true,
   };
   store.commit((d) => d.slides[store.get().slideIndex].elements.push(created));
   store.select([created.id]);

@@ -93,6 +93,7 @@ const ELEMENT_PROPERTIES: Record<SlideElement['type'], PropertyDoc[]> = {
     { path: 'align', type: 'enum', values: ['left', 'center', 'right', 'justify'], description: 'Horizontal paragraph alignment.', example: 'right' },
     { path: 'valign', type: 'enum', values: ['top', 'middle', 'bottom'], description: 'Vertical alignment inside the box.', example: 'top' },
     { path: 'autoFit', type: 'boolean', description: 'Shrink text until it fits its box.', example: true, unset: 'Unset to use the default off state.' },
+    { path: 'autoSize', type: 'boolean', description: 'Keep the box exactly as big as its text (a label); lines break only where authored.', example: true, unset: 'Unset to make it an ordinary wrapping box.' },
     { path: 'noWrap', type: 'boolean', description: 'Break only where authored and fit long lines.', example: true, unset: 'Unset to restore normal wrapping.' },
     { path: 'noWrapMode', type: 'enum', values: ['shrink', 'condense'], description: 'How a no-wrap line is fitted.', example: 'shrink' },
     { path: 'paragraphSpacing', type: 'number >= 0', description: 'Gap in pixels between paragraphs and list items.', example: 12, unset: 'Unset to use theme spacing.' },

@@ -1,5 +1,5 @@
 import { openContextMenu } from './contextMenuPlacement.js';
-import type { Deck, Slide, SlideElement } from '@shared/deck.js';
+import type { Deck, Slide, SlideElement, TextEl } from '@shared/deck.js';
 import { type Rect, fitScale, makeId } from '@shared/geometry.js';
 
 type XY = { x: number; y: number };
@@ -802,8 +802,9 @@ export class EditorCanvas {
     selectWord: boolean;
   } | null = null;
   /**
-   * A video or web element whose second click of a double-click went down on
-   * it; the pointer-up toggles it unless the press became a drag. Safari does
+   * A video, web or image element whose second click of a double-click went
+   * down on it; the pointer-up toggles it (playback, the live page, or crop
+   * mode) unless the press became a drag. Safari does
    * not reliably dispatch `dblclick` on the canvas (the first click's selection
    * redraw and the host's pointer capture leave it no common target), so the
    * native event alone left double-click-to-play inert there.
@@ -1170,7 +1171,11 @@ export class EditorCanvas {
     }
   }
 
-  /** Keep native table frames tight around their laid-out rows. */
+  /**
+   * Keep content-sized frames tight around what they hold: native tables
+   * around their laid-out rows, and text boxes sized to their text around
+   * their text.
+   */
   private scheduleTableHeightSync(): void {
     if (this.tableHeightSyncPending) return;
     this.tableHeightSyncPending = true;
@@ -1180,7 +1185,16 @@ export class EditorCanvas {
       const slide = this.store.slide;
       if (!slide) return;
       const heights = new Map<string, number>();
+      const boxes = new Map<string, { x: number; w: number; h: number }>();
       for (const element of slide.elements) {
+        if (element.type === 'text' && element.autoSize && !element.table) {
+          const node = this.slideLayer.querySelector<HTMLElement>(
+            `[data-element-id="${CSS.escape(element.id)}"]`,
+          );
+          const box = node ? measureTextToSize(node, element) : null;
+          if (box) boxes.set(element.id, box);
+          continue;
+        }
         if (element.type !== 'text' || !element.table?.autoHeight || element.autoFit) continue;
         const table = this.slideLayer.querySelector<HTMLTableElement>(
           `[data-element-id="${CSS.escape(element.id)}"] .text-content > table`,
@@ -1188,14 +1202,16 @@ export class EditorCanvas {
         const height = Math.ceil(table?.offsetHeight ?? 0);
         if (height >= 8 && Math.abs(height - element.h) > 1) heights.set(element.id, height);
       }
-      if (heights.size === 0) return;
+      if (heights.size === 0 && boxes.size === 0) return;
       this.store.commit((deck) => {
         const current = deck.slides[this.store.get().slideIndex];
         for (const element of current?.elements ?? []) {
           const height = heights.get(element.id);
           if (height !== undefined) element.h = height;
+          const box = boxes.get(element.id);
+          if (box) Object.assign(element, box);
         }
-      }, { label: 'Fit table rows', measurement: true });
+      }, { label: 'Fit text box', measurement: true });
     });
   }
 
@@ -1980,6 +1996,9 @@ export class EditorCanvas {
     this.host.addEventListener('pointerup', (ev) => this.onPointerUp(ev));
     this.host.addEventListener('pointercancel', () => this.endDrag());
     this.host.addEventListener('dblclick', (ev) => this.onDoubleClick(ev));
+    // A web font that finishes loading after the slide was measured changes
+    // the size of every box sized to its contents.
+    document.fonts?.addEventListener?.('loadingdone', () => this.scheduleTableHeightSync());
     this.host.addEventListener('contextmenu', (ev) => this.onContextMenu(ev));
 
     // Modifier state changes do not cause pointermove, so mirror the gesture
@@ -2247,7 +2266,7 @@ export class EditorCanvas {
         ? { elementId: hit.id, clientX: ev.clientX, clientY: ev.clientY, selectWord: secondClick }
         : null;
       this.pendingMediaToggle = secondClick && !ev.shiftKey
-        && (hit.type === 'video' || hit.type === 'web')
+        && (hit.type === 'video' || hit.type === 'web' || hit.type === 'image')
         ? hit.id
         : null;
       if (!selection.has(hit.id)) {
@@ -2565,6 +2584,9 @@ export class EditorCanvas {
           el.y = Math.round(resized.y);
           el.w = Math.max(1, Math.round(resized.w));
           el.h = Math.max(1, Math.round(resized.h));
+          // A hand-sized box is an ordinary wrapping box from here on: the
+          // author just chose its width, which hugging the text would undo.
+          if (el.type === 'text' && el.autoSize) delete el.autoSize;
           // Resizing a cropped element scales the whole picture with its
           // window, so the crop composition is preserved — without this, a
           // resize silently re-crops instead of scaling.
@@ -2726,10 +2748,33 @@ export class EditorCanvas {
     }
   }
 
+  /**
+   * Grow or shrink a sized-to-text box with each keystroke. Only the DOM and
+   * the selection outline follow: the store learns the size from the
+   * measurement pass once the edit commits, so typing never interleaves
+   * geometry commits with the edit session's own.
+   */
+  private followTextSizeWhileEditing(node: HTMLElement, elementId: string): void {
+    const slide = this.store.slide;
+    const el = slide?.elements.find((candidate) => candidate.id === elementId);
+    if (!slide || el?.type !== 'text') return;
+    const box = measureTextToSize(node, el);
+    if (!box) return;
+    node.style.left = `${box.x}px`;
+    node.style.width = `${box.w}px`;
+    node.style.height = `${box.h}px`;
+    this.drawOverlay(
+      this.store.get().deck,
+      slide.elements.map((candidate) => (candidate.id === elementId ? { ...candidate, ...box } : candidate)),
+      this.store.get().selection,
+    );
+  }
+
   private toggleMedia(elementId: string): void {
     const el = this.store.slide?.elements.find((e) => e.id === elementId);
     if (el?.type === 'video') this.toggleVideo(elementId);
     else if (el?.type === 'web') this.toggleWebLive(elementId);
+    else if (el?.type === 'image') this.toggleMaskMode(elementId);
   }
 
   private endDrag(): void {
@@ -2836,7 +2881,7 @@ export class EditorCanvas {
 
   /**
    * Double-click means "get into" the thing under the cursor: edit a text box,
-   * play a video, open the trim window for nothing else.
+   * play a video, crop a picture (and double-click again to leave the crop).
    */
   private onDoubleClick(ev: PointerEvent | MouseEvent): void {
     // Once editing is active, native browser double-click selection owns this
@@ -2888,7 +2933,7 @@ export class EditorCanvas {
 
     if (hit.type === 'text' || hit.type === 'html') {
       this.beginTextEdit(hit.id);
-    } else if (hit.type === 'video' || hit.type === 'web') {
+    } else if (hit.type === 'video' || hit.type === 'web' || hit.type === 'image') {
       // Browsers that do dispatch dblclick (Chromium) already had the pair
       // toggled on its second pointer-up; toggling again would undo it.
       if (ev.timeStamp - this.mediaToggledAt <= DOUBLE_CLICK_MS) return;
@@ -3768,7 +3813,8 @@ export class EditorCanvas {
         // The space that ends a URL is the moment it becomes a link.
         linkifyTypedUrl();
       }
-      if (el.type === 'text' && (el.autoFit || el.noWrap)) scheduleAutoFit(node!);
+      if (el.type === 'text' && (el.autoFit || el.noWrap) && !el.autoSize) scheduleAutoFit(node!);
+      if (el.type === 'text' && el.autoSize) this.followTextSizeWhileEditing(node!, el.id);
       if (this.liveTextSync && !liveTimer) liveTimer = window.setTimeout(pushLive, 250);
 
       const inputType = typed?.inputType ?? '';
@@ -6736,6 +6782,51 @@ export function elementContainsPoint(
   }
   return x >= el.x && x <= el.x + el.w &&
     y >= el.y && y <= el.y + el.h;
+}
+
+/**
+ * The box a sized-to-text element should have, from its rendered node, or
+ * null when it already has it (within a pixel) or cannot be measured.
+ *
+ * The text is laid out at its natural width (it never soft-wraps, see
+ * type.css), and whatever separates the box from its text — the body's
+ * padding, borders — is carried over unchanged. The box stays put at the
+ * edge its alignment names and at its top.
+ */
+export function measureTextToSize(
+  node: HTMLElement,
+  el: TextEl,
+): { x: number; w: number; h: number } | null {
+  const body = node.querySelector<HTMLElement>('.text-body');
+  const content = node.querySelector<HTMLElement>('.text-content');
+  if (!body || !content || !node.isConnected) return null;
+  const boxW = node.offsetWidth;
+  const boxH = node.offsetHeight;
+  const bodyStyle = getComputedStyle(body);
+  const chromeX = boxW - content.offsetWidth;
+  const chromeY = (boxH - body.clientHeight)
+    + parseFloat(bodyStyle.paddingTop) + parseFloat(bodyStyle.paddingBottom);
+  const width = content.style.width;
+  content.style.width = 'max-content';
+  const rect = content.getBoundingClientRect();
+  const layoutW = content.offsetWidth;
+  const layoutH = content.offsetHeight;
+  const scale = node.getBoundingClientRect().width / (boxW || 1);
+  content.style.width = width;
+  // Bounding rects are in screen pixels (the canvas is zoomed) but keep the
+  // fraction offsetWidth rounds away; the box is in canvas pixels. Rotation
+  // skews that ratio, so a rotated box settles for the rounded layout size.
+  const unscaled = !el.rot && scale > 0 ? scale : null;
+  const naturalW = unscaled ? rect.width / unscaled : layoutW + 1;
+  const naturalH = unscaled ? rect.height / unscaled : layoutH;
+  if (naturalH < 1) return null;
+  const w = Math.max(8, Math.ceil(naturalW + chromeX));
+  const h = Math.max(8, Math.ceil(naturalH + chromeY));
+  if (Math.abs(w - el.w) <= 1 && Math.abs(h - el.h) <= 1) return null;
+  const x = el.align === 'center' ? Math.round(el.x + (el.w - w) / 2)
+    : el.align === 'right' ? el.x + el.w - w
+      : el.x;
+  return { x, w, h };
 }
 
 /** Whether a point is inside the visible crop window of a media element. */

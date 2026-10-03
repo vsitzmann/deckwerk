@@ -929,3 +929,49 @@ describe('a drag that reorders nothing', () => {
     expect(host.querySelectorAll('.drop-before, .drop-after')).toHaveLength(0);
   });
 });
+
+describe('changing layout from the slide context menu', () => {
+  beforeEach(() => document.body.replaceChildren());
+
+  const openMenu = (row: HTMLElement) => {
+    row.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true }));
+    return document.getElementById('ctx-menu')!;
+  };
+  const layoutRow = (menu: HTMLElement, label: string) =>
+    [...menu.querySelectorAll<HTMLButtonElement>('button.ctx-check')]
+      .find((row) => row.textContent === label)!;
+
+  it('lists every layout, ticks the current one, and applies a pick as one undo step', () => {
+    const { store, host } = setup();
+    host.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    expect(store.slide?.layout).toBe('standard');
+    const menu = openMenu(host.querySelectorAll<HTMLElement>('.rail-item')[1]);
+
+    expect(menu.querySelector('.ctx-heading')?.textContent).toBe('Layout');
+    expect([...menu.querySelectorAll('button.ctx-check')].map((row) => row.textContent))
+      .toEqual(['Freeform', 'Title + body', 'Title slide']);
+    expect(layoutRow(menu, 'Title + body').getAttribute('aria-checked')).toBe('true');
+    expect(layoutRow(menu, 'Title slide').getAttribute('aria-checked')).toBe('false');
+
+    layoutRow(menu, 'Title slide').click();
+    expect(document.getElementById('ctx-menu')).toBeNull();
+    expect(store.slide?.layout).toBe('title');
+    expect(store.get().deck.slides[0].layout ?? 'freeform').toBe('freeform');
+
+    store.undo();
+    expect(store.slide?.layout).toBe('standard');
+  });
+
+  it('applies the layout to every selected slide and ticks nothing for a mixed set', () => {
+    const { store, host } = setup();
+    store.commit((deck) => applySlideLayout(deck.slides[1], 'standard'));
+    const rows = () => host.querySelectorAll<HTMLElement>('.rail-item');
+    pickRow(rows()[0]);
+    pickRow(rows()[1], true);
+    const menu = openMenu(rows()[1]);
+    expect(menu.querySelectorAll('button.ctx-check[aria-checked="true"]')).toHaveLength(0);
+
+    layoutRow(menu, 'Title slide').click();
+    expect(store.get().deck.slides.map((slide) => slide.layout)).toEqual(['title', 'title']);
+  });
+});

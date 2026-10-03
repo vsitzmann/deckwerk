@@ -168,6 +168,15 @@ function buildOps(store: EditorStore, canvas: EditorCanvas, random: () => number
       }, { label: 'autofit' }),
     },
     {
+      name: 'toggle size to text',
+      run: () => store.updateSelected((el) => {
+        if (el.type === 'text') {
+          if (el.autoSize) delete el.autoSize;
+          else el.autoSize = true;
+        }
+      }, { label: 'size to text' }),
+    },
+    {
       name: 'toggle nowrap',
       run: () => store.updateSelected((el) => {
         if (el.type === 'text') {
@@ -384,6 +393,15 @@ function buildOps(store: EditorStore, canvas: EditorCanvas, random: () => number
     { name: 'undo', run: () => store.undo() },
     { name: 'redo', run: () => store.redo() },
     { name: 'refit auto text', run: () => canvas.refitAutoText() },
+    // Double-clicking a picture enters (or leaves) its crop.
+    {
+      name: 'double-click selected media',
+      run: () => {
+        const [id] = [...store.get().selection];
+        const el = store.slide?.elements.find((candidate) => candidate.id === id);
+        if (el?.type === 'image') canvas.toggleMaskMode(id);
+      },
+    },
   ];
 }
 

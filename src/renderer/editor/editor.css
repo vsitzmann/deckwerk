@@ -2463,6 +2463,19 @@ input[type="range"] { accent-color: var(--accent); border: 0; background: transp
 }
 #ctx-menu button:hover { background: var(--accent-soft); color: var(--accent); }
 .ctx-sep { border-top: 1px solid var(--line); margin: 4px 6px; }
+#ctx-menu .ctx-heading {
+  color: var(--muted);
+  font: 10px var(--mono);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 4px 10px 2px;
+}
+#ctx-menu button.ctx-check { padding-left: 24px; position: relative; }
+#ctx-menu button.ctx-check[aria-checked="true"]::before {
+  content: "✓";
+  position: absolute;
+  left: 9px;
+}
 
 /* Theme tab: visual palette and typography previews. */
 .theme-browser { display: block; }

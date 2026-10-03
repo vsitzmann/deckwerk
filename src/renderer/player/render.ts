@@ -346,6 +346,8 @@ export function applyTextRenderState(
 
   if (el.noWrap) node.dataset.noWrap = 'true';
   else delete node.dataset.noWrap;
+  if (el.autoSize) node.dataset.autoSize = 'true';
+  else delete node.dataset.autoSize;
   if (el.noWrap && el.noWrapMode === 'condense') node.dataset.fitMode = 'condense';
   else delete node.dataset.fitMode;
 
@@ -401,7 +403,9 @@ export function applyTextRenderState(
 
   // noWrap implies the fit: with soft wrapping off, shrinking is the only way
   // an overlong line stays inside the box.
-  if (el.autoFit || el.noWrap) {
+  // A box sized to its text has nothing to shrink into: the box follows the
+  // text instead.
+  if ((el.autoFit || el.noWrap) && !el.autoSize) {
     node.dataset.autoFit = 'true';
     scheduleAutoFit(node);
   } else {

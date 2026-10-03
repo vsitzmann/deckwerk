@@ -49,6 +49,15 @@
   word-break: normal;
 }
 
+/* A box sized to its text never soft-wraps: its width is the widest line.
+   Nothing clips either, so a renderer whose metrics differ by a hair spills a
+   sliver past the edge instead of hiding the last glyph. */
+.element-text[data-auto-size="true"] .text-body {
+  white-space: pre;
+  word-break: normal;
+  overflow: visible;
+}
+
 /* Empty imported Keynote text boxes are authoring affordances, not slide
    content. The editor makes them faintly visible again; presentations, web
    exports and authoring files must never show a literal "Text" placeholder. */

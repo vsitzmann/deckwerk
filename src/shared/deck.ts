@@ -128,6 +128,14 @@ const TextElement = BaseElement.extend({
   /** Shrink text as needed to keep it inside its box; never enlarge past its authored size. */
   autoFit: z.boolean().optional(),
   /**
+   * The box hugs its text: lines break only where the author wrote a break,
+   * and the editor keeps `w`/`h` at the laid-out size of the text, anchored
+   * at the edge its alignment names (left, centre or right) and at its top.
+   * A label rather than a column of prose. Resizing the box by hand turns it
+   * back into an ordinary wrapping box. Implies no auto-fit.
+   */
+  autoSize: z.boolean().optional(),
+  /**
    * A text object whose sole authored child is a table. Keeping the cell HTML
    * in the existing rich-text field preserves editing and formatting, while
    * this structured layout record makes the object behave like a native slide
