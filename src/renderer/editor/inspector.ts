@@ -1038,18 +1038,6 @@ export class Inspector {
     const numbers = document.createElement('div');
     numbers.className = 'compact-field-row';
     numbers.appendChild(numberField(
-      'X',
-      commonValue(shadows.map((shadow) => shadow.x)),
-      (value) => change((shadow) => { shadow.x = value; }, 'Move shadow'),
-      { unit: 'px' },
-    ));
-    numbers.appendChild(numberField(
-      'Y',
-      commonValue(shadows.map((shadow) => shadow.y)),
-      (value) => change((shadow) => { shadow.y = value; }, 'Move shadow'),
-      { unit: 'px' },
-    ));
-    numbers.appendChild(numberField(
       'BLUR',
       commonValue(shadows.map((shadow) => shadow.blur)),
       (value) => change((shadow) => { shadow.blur = Math.max(0, value); }, 'Change shadow blur'),
@@ -1057,8 +1045,10 @@ export class Inspector {
     ));
     section.content.appendChild(numbers);
 
-    // The same offset as a direction and a distance. Each object keeps its
-    // own other half, so turning a mixed selection does not also resize it.
+    // The offset, as a direction and a distance (as Keynote shows it; X/Y
+    // fields beside them would be a second control for the same value). Each
+    // object keeps its own other half, so turning a mixed selection does not
+    // also resize it.
     const polar = shadows.map(shadowPolar);
     const direction = document.createElement('div');
     direction.className = 'compact-field-row shadow-direction-row';

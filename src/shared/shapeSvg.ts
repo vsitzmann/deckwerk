@@ -101,6 +101,19 @@ function gradientDef(
   };
 }
 
+/**
+ * The same gradient as CSS, for a box that paints it as a background (a shape
+ * turned into a text box). The stored angle runs counter-clockwise from the
+ * right; CSS measures clockwise from the top, so 270 (top to bottom) is
+ * `180deg`. Horizontal and vertical runs match the SVG exactly; a diagonal on
+ * a non-square box differs slightly, since SVG measures it in the unit box.
+ */
+export function cssGradient(from: string, gradient: NonNullable<Shape['fillGradient']>): string {
+  if (gradient.kind === 'radial') return `radial-gradient(farthest-side, ${from}, ${gradient.to})`;
+  const angle = (((90 - (gradient.angle ?? 270)) % 360) + 360) % 360;
+  return `linear-gradient(${angle}deg, ${from}, ${gradient.to})`;
+}
+
 function arrowMarker(id: string, color: string): string {
   return `<defs><marker id="${id}" markerWidth="6" markerHeight="6" refX="5" refY="3"`
     + ` orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="${color}"/></marker></defs>`;

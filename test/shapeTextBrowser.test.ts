@@ -28,6 +28,8 @@ import { collabClientDir } from './support/collabClient.js';
 const DECK_ID = 'shape-text';
 const BOX_ID = 'label-box';
 const BOX = `#canvas [data-element-id="${BOX_ID}"]`;
+const GRADIENT_ID = 'gradient-box';
+const GRADIENT = `#canvas [data-element-id="${GRADIENT_ID}"]`;
 const PANEL = '#inspector';
 const SHOTS = process.env.DECKWERK_TEST_SHOTS ?? '';
 
@@ -65,6 +67,12 @@ describe.skipIf(!electronBinary)('typing into a rectangle', () => {
       id: BOX_ID, type: 'shape', x: 400, y: 300, w: 640, h: 360, rot: 0, z: 1,
       opacity: 1, class: [], style: {}, shape: 'rect', fill: '#dbe4ff', stroke: '#3f55b5',
       strokeWidth: 4, radius: 24, path: null, pathSize: null, arrowStart: false, arrowEnd: false,
+    } as never);
+    deck.slides[0].elements.push({
+      id: GRADIENT_ID, type: 'shape', x: 1160, y: 700, w: 600, h: 300, rot: 0, z: 2,
+      opacity: 1, class: [], style: {}, shape: 'rect', fill: '#dbe4ff', stroke: null,
+      strokeWidth: 2, radius: 0, path: null, pathSize: null, arrowStart: false, arrowEnd: false,
+      fillGradient: { to: '#ec6b14', angle: 270, kind: 'linear' },
     } as never);
     await saveDeck(deckDir, deck);
     await writeFile(join(deckDir, 'theme.css'), [
@@ -144,5 +152,21 @@ describe.skipIf(!electronBinary)('typing into a rectangle', () => {
       `Boolean(document.querySelector('${PANEL} .box-shadow-options'))`),
       'a filled box also offers a box shadow').toBe(true);
     await shot('props');
+
+    // A gradient rectangle keeps its gradient when typed into.
+    await editor.key('Escape', 27);
+    await editor.doubleClick(GRADIENT, 'the gradient rectangle');
+    await eventually(async () => editor!.evaluate<boolean>(
+      `document.querySelector('${GRADIENT} .text-content')?.isContentEditable === true`),
+      'double-clicking the gradient rectangle did not open it for typing');
+    await editor.typeKeys('Ramp');
+    await wait(700);
+    const live = await fetch(`http://127.0.0.1:${server!.port}/api/deck?deck=${DECK_ID}`);
+    const ramp = ((await live.json()) as Deck).slides[0].elements.find((candidate) => candidate.id === GRADIENT_ID)!;
+    expect(ramp.type, 'the gradient rectangle became a text box').toBe('text');
+    expect(ramp).not.toHaveProperty('fillGradient');
+    expect(ramp.style['background-image']).toBe('linear-gradient(180deg, #dbe4ff, #ec6b14)');
+    expect(await editor.evaluate<string>(`getComputedStyle(document.querySelector('${GRADIENT}')).backgroundImage`))
+      .toBe('linear-gradient(rgb(219, 228, 255), rgb(236, 107, 20))');
   });
 });

@@ -1,6 +1,7 @@
 import type { ShapeEl, TextEl } from './deck.js';
 import { cssMediaBorder, cssMediaRadius } from './nativeCss.js';
 import { setBoxShadow, setShapeShadow, shapeShadow } from './shapeShadow.js';
+import { cssGradient } from './shapeSvg.js';
 
 /**
  * Text inside a box.
@@ -26,7 +27,7 @@ const BOX_PADDING = '12px 20px';
 /** The text box that looks like `shape` and is ready to be typed into. */
 export function shapeToTextBox(shape: ShapeEl): TextEl {
   const {
-    type: _type, shape: kind, fill, stroke, strokeWidth, radius,
+    type: _type, shape: kind, fill, fillGradient, stroke, strokeWidth, radius,
     path: _path, pathSize: _pathSize, arrowStart: _arrowStart, arrowEnd: _arrowEnd,
     control: _control,
     ...base
@@ -37,6 +38,8 @@ export function shapeToTextBox(shape: ShapeEl): TextEl {
   setShapeShadow(style, null);
   if (shadow) setBoxShadow(style, shadow);
   setTextBoxFill(style, fill);
+  // A gradient fill becomes the box's background image, over the flat `fill`.
+  if (fill && fillGradient) style['background-image'] = cssGradient(fill, fillGradient);
   setTextBoxBorder(style, stroke && strokeWidth > 0 ? { color: stroke, width: strokeWidth } : null);
   if (kind === 'ellipse') style['border-radius'] = '50%';
   else setTextBoxRadius(style, radius);
@@ -94,6 +97,11 @@ export function hasTextBox(style: Style): boolean {
 
 export function setTextBoxFill(style: Style, color: string | null): void {
   if (solidColor(style.background)) delete style.background;
+  // Picking a flat fill replaces a gradient carried over from a shape; left in
+  // place, it would paint over the colour just chosen.
+  // Gradient *text* (the image clipped to the glyphs) is the letters' paint, not the box's.
+  const clipped = /text/i.test(style['background-clip'] ?? style['-webkit-background-clip'] ?? '');
+  if (!clipped && /gradient\(/i.test(style['background-image'] ?? '')) delete style['background-image'];
   if (color) style['background-color'] = color;
   else delete style['background-color'];
 }

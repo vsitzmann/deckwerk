@@ -72,6 +72,34 @@ describe('typing into a shape turns it into a text box that looks the same', () 
   });
 });
 
+describe('a gradient shape typed into', () => {
+  it('keeps its gradient as the box background and leaves no shape field behind', () => {
+    const linear = shapeToTextBox(shape({ fillGradient: { to: '#ec6b14', angle: 270, kind: 'linear' } }));
+    expect(linear.style).toMatchObject({
+      'background-color': '#dbe4ff',
+      'background-image': 'linear-gradient(180deg, #dbe4ff, #ec6b14)',
+    });
+    expect(linear).not.toHaveProperty('fillGradient');
+    expect(shapeToTextBox(shape({ fillGradient: { to: '#000', angle: 0, kind: 'linear' } })).style['background-image'])
+      .toBe('linear-gradient(90deg, #dbe4ff, #000)');
+    expect(shapeToTextBox(shape({ fillGradient: { to: '#000', angle: 270, kind: 'radial' } })).style['background-image'])
+      .toBe('radial-gradient(farthest-side, #dbe4ff, #000)');
+  });
+
+  it('gives way to a flat fill picked afterwards, but never touches gradient text', () => {
+    const box = shapeToTextBox(shape({ fillGradient: { to: '#ec6b14', angle: 270, kind: 'linear' } }));
+    setTextBoxFill(box.style, '#ffffff');
+    expect(box.style['background-image']).toBeUndefined();
+    expect(box.style['background-color']).toBe('#ffffff');
+
+    const glyphs: Record<string, string> = {
+      'background-image': 'linear-gradient(red, blue)', 'background-clip': 'text',
+    };
+    setTextBoxFill(glyphs, '#ffffff');
+    expect(glyphs['background-image']).toBe('linear-gradient(red, blue)');
+  });
+});
+
 describe('a text box fill, border and radius', () => {
   it('reads what an HTML import stores and rewrites it cleanly', () => {
     const style: Record<string, string> = {
