@@ -108,7 +108,7 @@ export class Cdp {
       this.pending.set(id, {
         resolve: (value) => {
           clearTimeout(timer);
-          if (trace) console.error(`[cdp ${trace}] #${id} <- ${method} ${Date.now() - sent}ms`);
+          if (trace) console.error(`[cdp ${trace}] #${id} <- ${method} ${Date.now() - sent}ms ${method === "Runtime.evaluate" ? JSON.stringify(value?.result?.value ?? null).slice(0, 80) : ""}`);
           resolve(value);
         },
         reject: (error) => {

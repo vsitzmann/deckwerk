@@ -190,6 +190,15 @@ describe.skipIf(!electronBinary)('web element in the browser editor and presenta
       'the presentation never showed the live frame', (pe) => pe === 'auto'));
 
     // The frame is a separate target (opaque origin): read it through its own session.
+    {
+      const all = await (await fetch(`http://127.0.0.1:${browser!.debugPort}/json/list`)).json() as any[];
+      for (const t of all.filter((c) => c.url.includes('probe.html'))) {
+        const c = await Cdp.connect(t.webSocketDebuggerUrl);
+        console.error('[probe-target]', t.id, t.parentId, t.type, await c.evaluate('document.getElementById("status").textContent'));
+        c.close();
+      }
+      console.error('[all-targets]', JSON.stringify(all.map((t) => [t.type, t.id, t.parentId, t.url.slice(0, 80)])));
+    }
     const pageTarget = await step('27: findTarget(browser!.debugPort, (candidate) => candidate.url.i', async () => findTarget(browser!.debugPort,
       (candidate) => candidate.url.includes('assets/web/probe.html'), browser!.log));
     const page = await step('28: Cdp.connect(pageTarget.webSocketDebuggerUrl!)', async () => Cdp.connect(pageTarget.webSocketDebuggerUrl!));
