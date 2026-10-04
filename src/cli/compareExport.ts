@@ -1,12 +1,12 @@
 import { spawn } from 'node:child_process';
-import { mkdtemp, writeFile } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { Deck } from '@shared/deck.js';
 import { exportDeck } from '../main/exportDeck.js';
-import { headlessElectronArgs } from './electronDisplay.js';
+import { electronFailure, headlessElectronArgs } from './electronDisplay.js';
 
 /**
  * Compare the authoring file against the Player, in pixels.
@@ -45,6 +45,15 @@ export async function compareExportToPlayer(
   request: CompareRequest,
 ): Promise<ExportComparison[]> {
   const work = await mkdtemp(join(tmpdir(), 'slide-compare-'));
+  try {
+    return await compareInBundle(request, work);
+  } finally {
+    // The deck's whole web export, media and all: scratch, not output.
+    await rm(work, { recursive: true, force: true });
+  }
+}
+
+async function compareInBundle(request: CompareRequest, work: string): Promise<ExportComparison[]> {
   const bundleDir = join(work, 'bundle');
   await exportDeck(request.deckDir, request.deck, bundleDir);
 
@@ -85,7 +94,7 @@ function runElectron(script: string, jobPath: string): Promise<string> {
     child.on('error', reject);
     child.on('close', (code) => {
       if (code === 0) resolvePromise(out);
-      else reject(new Error(err.trim() || `comparison failed with exit code ${code}`));
+      else reject(electronFailure(err, `comparison failed with exit code ${code}`));
     });
   });
 }

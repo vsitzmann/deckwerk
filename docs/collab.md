@@ -97,6 +97,40 @@ tailscale address is among them). Collaborators open the URL in a browser and
 pick a presentation; `?name=Alice` sets the display name, otherwise the client
 asks once and the server falls back to `Guest n`.
 
+### Running under systemd
+
+A standing server is best run as a hardened systemd service: its own user,
+`ProtectHome`, `ProtectSystem=strict`, `NoNewPrivileges`, a syscall filter.
+One thing in that hardening has to give. The server lays out every page an
+agent saves, renders every PNG `./deck render` asks for and runs every
+`./deck web check` in headless Chromium, and Chromium refuses to run without
+its own sandbox — which on Linux lives in user, pid and net namespaces and
+needs chroot(2) and capset(2) to enter them. `RestrictNamespaces=yes` and a
+filter that denies `@privileged` and `@mount` forbid all of that. Pages and
+sockets still work, so such a server looks healthy until an agent's first
+save.
+
+[`packaging/linux/deckwerk-collab-chromium-sandbox.conf`](../packaging/linux/deckwerk-collab-chromium-sandbox.conf)
+is the drop-in that allows exactly those and nothing more:
+
+```bash
+sudo install -D -m 0644 packaging/linux/deckwerk-collab-chromium-sandbox.conf \
+  /etc/systemd/system/deckwerk-collab.service.d/chromium-sandbox.conf
+sudo systemctl daemon-reload && sudo systemctl restart deckwerk-collab
+```
+
+(A root-owned setuid `chrome-sandbox` is no way round it: `NoNewPrivileges`
+ignores setuid bits. Turning Chromium's sandbox off instead would leave
+collaborators' pages rendering with nothing between them and the server's
+decks.)
+
+A server whose browser cannot start says so: in its log at startup, in the
+warning a bridge prints the moment it connects (also shown in the person's
+Agent panel), and in every failed save. `test/agentCollaborationSandbox.test.ts`
+runs the agent workflow under this policy, and — on a machine where
+`deckwerk-collab.service` is installed — under the unit systemd actually
+resolved.
+
 ### Folders
 
 Decks can live in folders under the root, nested up to 8 levels deep. A folder

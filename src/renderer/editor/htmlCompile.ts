@@ -164,7 +164,7 @@ export async function authoredHtmlSync(
     deck,
     slides,
     scope,
-    options.after ?? deck.slides[deck.slides.length - 1]?.id ?? null,
+    options.after === undefined ? deck.slides[deck.slides.length - 1]?.id ?? null : options.after,
   );
   // A file that asks for nothing at all — no slides of its own and none to
   // delete — is a save to sit out, not an error to put in front of the user.

@@ -1,14 +1,14 @@
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { createRequire } from 'node:module';
-import { copyFile, mkdir, readFile, stat, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { Deck } from '@shared/deck.js';
 import { exportDeck } from '../main/exportDeck.js';
 import { tempDir } from './agentCli.js';
-import { headlessElectronArgs } from './electronDisplay.js';
+import { electronFailure, headlessElectronArgs } from './electronDisplay.js';
 
 /**
  * Optional PNGs of slides, captured from the shared presentation renderer.
@@ -52,12 +52,18 @@ export interface RenderResult {
 }
 
 export async function renderSlidesToPng(request: RenderRequest): Promise<RenderResult> {
-  let bundleDir = request.bundleDir;
-  if (!bundleDir) {
-    bundleDir = await tempDir('slide-agent-bundle-');
-    await exportDeck(request.deckDir, request.deck, bundleDir);
+  // A bundle made here is the deck's whole web export, media and all; it is
+  // this render's scratch and goes once the captures are written.
+  const ownBundle = request.bundleDir ? null : await tempDir('slide-agent-bundle-');
+  try {
+    if (ownBundle) await exportDeck(request.deckDir, request.deck, ownBundle);
+    return await captureSlides(request, request.bundleDir ?? ownBundle!);
+  } finally {
+    if (ownBundle) await rm(ownBundle, { recursive: true, force: true });
   }
+}
 
+async function captureSlides(request: RenderRequest, bundleDir: string): Promise<RenderResult> {
   // The job file lives with the captures, never in a caller's bundle: a web
   // export handed in here is the folder the author is about to publish.
   await mkdir(request.outDir, { recursive: true });
@@ -148,7 +154,12 @@ export async function checkWebPage(request: {
     settleMs: 800,
   }), 'utf8');
   const script = fileURLToPath(new URL('../../scripts/check-web-page.cjs', import.meta.url));
-  const checked = JSON.parse(await runElectron(script, jobPath)) as WebPageCheck;
+  let checked: WebPageCheck;
+  try {
+    checked = JSON.parse(await runElectron(script, jobPath)) as WebPageCheck;
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
   await writeFile(cachedJson, JSON.stringify({ ...checked, screenshot: null }), 'utf8');
   if (request.screenshot) await copyFile(cachedPng, request.screenshot);
   return {
@@ -212,7 +223,7 @@ function runElectron(script: string, jobPath: string): Promise<string> {
       settled = true;
       clearTimeout(timer);
       if (code === 0 && out.trim()) resolvePromise(out);
-      else reject(new Error(err.trim() || `Slide capture failed with exit code ${code}`));
+      else reject(electronFailure(err, `Slide capture failed with exit code ${code}`));
     });
   });
 }

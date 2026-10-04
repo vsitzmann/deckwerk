@@ -1,6 +1,7 @@
 import { resolve } from 'node:path';
 import { startCollabServer, defaultClientDir } from '../src/server/collabServer.js';
 import { LocalAgentRegistry } from '../src/server/localAgents.js';
+import { headlessBrowserProblem } from '../src/cli/compileHtml.js';
 
 /**
  * Collaborative editing server:
@@ -82,6 +83,14 @@ process.stdout.write(`${JSON.stringify({
 })}\n`);
 if (!clientDir) {
   process.stderr.write('note: dist/collab not found — API/WS only (use the vite dev client)\n');
+}
+// Pages and sockets work without the headless browser, so a server that cannot
+// start it looked healthy until an agent's first save failed. Say so up front,
+// where whoever runs the server will look (the journal, under systemd).
+if (localAgents) {
+  void headlessBrowserProblem().then((problem) => {
+    if (problem) process.stderr.write(`warning: agents cannot sync, render or check pages on this server: ${problem}\n`);
+  });
 }
 
 const stop = () => {

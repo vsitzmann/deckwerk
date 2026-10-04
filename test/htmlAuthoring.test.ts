@@ -54,11 +54,11 @@ describe('HTML authoring files', () => {
 </section>`), 'utf8');
 
     const { transaction } = await htmlEditTransaction(dir, deck, exported.path);
-    const next = applyAgentTransaction(deck, transaction);
+    const next = applyAgentTransaction(deck, transaction!);
     expect(next.slides.map((slide) => slide.id))
       .toEqual(['new-slide', 'slide-1', 'closing']);
     expect(next.slides[0].elements[0]).toMatchObject({ type: 'text', html: 'Made in HTML' });
-    expect(transaction.label).toBe('Added 1 slide · Updated 1 slide · Removed 1 slide · Reordered slides');
+    expect(transaction!.label).toBe('Added 1 slide · Updated 1 slide · Removed 1 slide · Reordered slides');
   }, 60_000);
 
   it('uses the document intent as the History label', async () => {
@@ -74,7 +74,7 @@ describe('HTML authoring files', () => {
     await writeFile(exported.path, authored, 'utf8');
 
     expect(htmlChangeLabel(authored)).toBe('Tighten the opening argument');
-    expect((await htmlEditTransaction(dir, deck, exported.path)).transaction.label)
+    expect((await htmlEditTransaction(dir, deck, exported.path)).transaction!.label)
       .toBe('Tighten the opening argument');
   }, 60_000);
 });

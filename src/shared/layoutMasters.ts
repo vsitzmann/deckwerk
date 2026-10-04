@@ -234,6 +234,34 @@ export function syncSlideWithLayoutMaster(
   }
 }
 
+/**
+ * An existing slide coming back from an authoring page in the layout it
+ * already has.
+ *
+ * Such a page is an export: every box sits where the slide had it and is
+ * styled the way it was. Putting the slide "on" its layout again
+ * (`syncSlideWithLayoutMaster`) moved placeholders the author had placed,
+ * stripped the formatting they chose, turned imported text boxes into body
+ * prompts and added prompts the slide never had — on a page nobody touched.
+ * Only a placeholder the page newly adds (`data-layout-slot`, under an id the
+ * slide did not have) is the master's to place and style.
+ */
+export function placeNewPlaceholders(
+  slide: Slide,
+  layout: FixedLayout,
+  master: LayoutMaster,
+  previous: Slide,
+): void {
+  slide.layout = layout;
+  const known = new Set(previous.elements.map((element) => element.id));
+  for (const source of master.elements) {
+    if (source.type !== 'text' || !source.layoutPlaceholder) continue;
+    const target = slide.elements.find((element): element is TextEl => element.type === 'text'
+      && !known.has(element.id) && element.layoutPlaceholder === source.layoutPlaceholder);
+    if (target) copyPlaceholderPresentation(target, source, true);
+  }
+}
+
 /** The layout slot a text box stands in, by its placeholder record or its role class. */
 export function layoutSlotOf(element: SlideElement): 'title' | 'body' | null {
   if (element.type !== 'text') return null;

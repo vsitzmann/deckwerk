@@ -36,7 +36,9 @@ The loop:
                                           export slides as an editable page
   # edit edit/<file>.html and save it — the bridge syncs it and stamps ids back
   apply     --html <file> [--after <id|number>] [--label <text>]
-                                          sync a page now and print what changed
+                                          sync a page now and print what changed;
+                                          new slides go after that slide (0 puts
+                                          them first), else at the end
 
 Saving and apply are two ways to request the same sync. For the fastest path,
 either save and let the bridge watch it, or run apply immediately after writing
@@ -109,12 +111,32 @@ async function api(path, params = {}, init = {}) {
     fail(`Could not reach ${session().origin}: ${error.message}. Is the bridge still connected?`);
   }
   const type = response.headers.get('content-type') ?? '';
-  const body = type.includes('application/json') ? await response.json() : await response.text();
+  const text = await response.text();
+  let body = text;
+  if (type.includes('application/json')) {
+    try {
+      body = JSON.parse(text);
+    } catch {
+      // Labelled JSON but not: keep the text, which is what explains it.
+    }
+  }
   if (!response.ok) {
     const message = typeof body === 'object' && body && body.error ? body.error : String(body).slice(0, 300);
     fail(`${path} failed (${response.status}): ${message}`, response.status === 409 ? EXIT_CONFLICT : EXIT_ERROR);
   }
   return body;
+}
+
+/** What the server said about a failed request, JSON `{ error }` or plain text. */
+async function explanation(response) {
+  const text = await response.text().catch(() => '');
+  try {
+    const body = JSON.parse(text);
+    if (body && typeof body.error === 'string') return body.error;
+  } catch {
+    // Not JSON: a proxy or an older server. The text is the explanation.
+  }
+  return text.trim().slice(0, 600) || 'no explanation from the server';
 }
 
 function fail(message, code = EXIT_ERROR) {
@@ -262,8 +284,10 @@ async function main(argv) {
       mkdirSync(dir, { recursive: true });
       const images = [];
       for (const entry of wanted) {
-        const response = await fetch(apiUrl('/api/render-slide.png', { slideId: entry.id }));
-        if (!response.ok) fail(`render of slide ${entry.index} failed (${response.status})`);
+        const response = await fetch(apiUrl('/api/render-slide.png', { slideId: entry.id }), {
+          headers: { 'x-deckwerk-bridge': '1' },
+        });
+        if (!response.ok) fail(`render of slide ${entry.index} failed (${response.status}): ${await explanation(response)}`);
         const path = join(dir, `slide-${String(entry.index).padStart(2, '0')}.png`);
         writeFileSync(path, Buffer.from(await response.arrayBuffer()));
         images.push({ slide: entry.index, slideId: entry.id, path });

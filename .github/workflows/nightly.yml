@@ -55,6 +55,11 @@ jobs:
           # ever being run; the two bugs its fixed seed finds are fixed.
           - name: Exhaustive list-editing fuzz
             script: test:lists:exhaustive
+          # Agents through every door — CLI, desktop editor, hosted mirror —
+          # with a person editing alongside: the fixed seed plus tonight's,
+          # walked far longer than the per-push gate walks them.
+          - name: Agent collaboration fuzz
+            script: test:agents:fuzz
           # test:interactions:exhaustive is deliberately absent: the suite
           # skips itself under CI_NO_WINDOW_MANAGER, so on this runner the
           # step ran nothing while looking like coverage. Bring it back with a

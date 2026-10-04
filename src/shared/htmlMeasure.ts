@@ -57,7 +57,14 @@ export function authoringPageHtml(input: AuthoringPage): string {
     // only the inline declarations and silently dropped the rest. Nor may the
     // deck theme be imported after a standalone page's <style> blocks, which
     // would change the design before we even start converting it.
-    const exported = linkedTheme && /\bdata-element-id\s*=/.test(structured);
+    // A slide with no objects exports with no `data-element-id` at all; the
+    // `data-canvas` every exported section carries says "deck page" then, or
+    // the theme's computed background was frozen into the empty slide. (Not
+    // the scope marker: a `new` page is stamped with one after its first
+    // save, and must not change modes between its first compile and its
+    // second.)
+    const exported = linkedTheme
+      && (/\bdata-element-id\s*=/.test(structured) || /<section\b[^>]*\sdata-canvas\s*=/i.test(structured));
     return withKatex(exported ? themed : markIndependentDocument(themed));
   }
   // Same order as the player: structural defaults, then the semantic type
@@ -315,6 +322,54 @@ export function measureSlides(doc: Document): MeasuredSlide[] {
     tbody: 'table-row-group', tfoot: 'table-footer-group',
   };
 
+  /**
+   * Put a text box's markup back the way its author wrote it: finds the
+   * maths in `root` now and returns the step that replaces it, in place.
+   *
+   * The page renders its maths before anything is measured, so equations get
+   * their real geometry. KaTeX's output is two parallel trees (accessible
+   * MathML and painted HTML) inside a span auto-render made for it: stored as
+   * the text, the player carries and paints both, and the equation can never
+   * again be edited as TeX — which is what an agent's untouched export did to
+   * every formula it carried. Each formula goes back to the `$…$` / `$$…$$` it
+   * was rendered from (KaTeX keeps the source in an annotation), and a dollar
+   * the author escaped, `\$`, which renders as a plain `$`, is escaped again:
+   * left bare, the next render pairs it with another dollar.
+   */
+  const authoredMathIn = (root: HTMLElement): (() => void) => {
+    const tex = (node: Element): string | null =>
+      node.querySelector('annotation[encoding="application/x-tex"]')?.textContent ?? null;
+    // Found now, replaced when asked: a caller may strip classes in between.
+    const displays = [...root.querySelectorAll('.katex-display')];
+    const inlines = [...root.querySelectorAll('.katex')].filter((math) => !math.closest('.katex-display'));
+    const dollars = [...root.querySelectorAll('[data-deckwerk-escaped-dollar]')];
+    const replace = (math: Element, source: string): void => {
+      const wrapper = math.parentElement;
+      const generated = wrapper !== null && wrapper !== root && wrapper.tagName === 'SPAN'
+        && wrapper.attributes.length === 0 && wrapper.childNodes.length === 1;
+      (generated ? wrapper : math).replaceWith(root.ownerDocument.createTextNode(source));
+    };
+    return () => {
+      for (const display of displays) {
+        const source = tex(display);
+        if (source !== null) replace(display, `$$${source}$$`);
+      }
+      for (const inline of inlines) {
+        const source = tex(inline);
+        if (source !== null) replace(inline, `$${source}$`);
+      }
+      for (const dollar of dollars) dollar.replaceWith(root.ownerDocument.createTextNode('\\$'));
+      root.normalize();
+    };
+  };
+
+  /** A node's markup with its maths and escaped dollars as authored. */
+  const authoredMarkup = (node: HTMLElement): string => {
+    const clone = node.cloneNode(true) as HTMLElement;
+    authoredMathIn(clone)();
+    return clone.innerHTML;
+  };
+
   const independentTextHtml = (node: HTMLElement): string => {
     const authoredTex = (root: Element): string | null =>
       root.querySelector('annotation[encoding="application/x-tex"]')?.textContent ?? null;
@@ -334,9 +389,7 @@ export function measureSlides(doc: Document): MeasuredSlide[] {
         ? `$$${tex}$$` : `$${tex}$`;
     }
     const clone = node.cloneNode(true) as HTMLElement;
-    const displayMath = [...clone.querySelectorAll<HTMLElement>('.katex-display')];
-    const inlineMath = [...clone.querySelectorAll<HTMLElement>('.katex')]
-      .filter((math) => !math.closest('.katex-display'));
+    const restoreMath = authoredMathIn(clone);
     const originals = [node, ...node.querySelectorAll<HTMLElement>('*')];
     const copies = [clone, ...clone.querySelectorAll<HTMLElement>('*')];
     copies.forEach((copy, index) => {
@@ -357,14 +410,7 @@ export function measureSlides(doc: Document): MeasuredSlide[] {
         copy.style.setProperty(property, value);
       }
     });
-    for (const display of displayMath) {
-      const tex = authoredTex(display);
-      if (tex !== null) display.replaceWith(clone.ownerDocument.createTextNode(`$$${tex}$$`));
-    }
-    for (const math of inlineMath) {
-      const tex = authoredTex(math);
-      if (tex !== null) math.replaceWith(clone.ownerDocument.createTextNode(`$${tex}$`));
-    }
+    restoreMath();
     return clone.innerHTML;
   };
 
@@ -1120,7 +1166,12 @@ export function measureSlides(doc: Document): MeasuredSlide[] {
         ? { w: (node as HTMLImageElement).naturalWidth, h: (node as HTMLImageElement).naturalHeight }
         : { w: (node as HTMLVideoElement).videoWidth, h: (node as HTMLVideoElement).videoHeight };
       const fit = style.objectFit;
-      const position = (style.objectPosition || '50% 50%').trim();
+      // A deck picture coming back from its export is framed by what it
+      // stores; an `object-position` its theme class adds is the theme's to
+      // keep applying, not a crop to freeze into it.
+      const position = (!independent && node.dataset.elementId !== undefined
+        ? inlineDeclarations(node)['object-position'] ?? '50% 50%'
+        : style.objectPosition || '50% 50%').trim();
       const circular = /^\s*50%/.test(kept['border-radius'] ?? '');
       // Only a *deliberate* framing is worth freezing: a plain centred cover
       // is reproduced exactly by the deck's own `fit`, and keeping it implicit
@@ -1226,6 +1277,13 @@ export function measureSlides(doc: Document): MeasuredSlide[] {
       // that it lays out identically; the deck stores only what is inside
       // them. Hand-authored markup has no such wrapper and is read whole.
       html: verbatim ? (() => {
+        // An HTML region exported from the deck: the export wrapped the
+        // stored markup in a positioned box of its own. That box is the
+        // object, not part of its markup — kept, it nested the region one
+        // wrapper deeper on every round trip.
+        if (!independent && node.dataset.element === 'html' && node.dataset.elementId !== undefined) {
+          return node.innerHTML;
+        }
         const clone = node.cloneNode(true) as HTMLElement;
         // A fallback is rendered inside an element-sized shadow root. Its
         // authored absolute position belongs to the original page and must
@@ -1240,8 +1298,9 @@ export function measureSlides(doc: Document): MeasuredSlide[] {
         return clone.outerHTML;
       })()
         : (node.querySelector(':scope > .text-body > [data-text-content]')
-          ? (node.querySelector(':scope > .text-body > [data-text-content]') as HTMLElement).innerHTML
-          : independent ? independentTextHtml(node) : node.innerHTML),
+          ? authoredMarkup(node.querySelector(':scope > .text-body > [data-text-content]') as HTMLElement)
+          : independent ? independentTextHtml(node) : authoredMarkup(node)),
+      preformatted: !verbatim && node.querySelector(':scope > .text-body > [data-text-content]') !== null,
       attrs: {
         src: node.getAttribute('src') ?? undefined,
         alt: node.getAttribute('alt') ?? undefined,
@@ -1249,9 +1308,12 @@ export function measureSlides(doc: Document): MeasuredSlide[] {
         objectFit: style.objectFit || undefined,
         objectPosition: style.objectPosition || undefined,
         textAlign: style.textAlign || undefined,
-        loop: node.hasAttribute('loop') || undefined,
-        muted: node.hasAttribute('muted') || undefined,
-        autoplay: node.hasAttribute('autoplay') || undefined,
+        // Absent means "the deck's default" (all three on: a slide video
+        // normally plays itself) — unless the export said "false", which it
+        // does for a deck video that has the flag off.
+        loop: node.hasAttribute('loop') || (node.dataset.loop === 'false' ? false : undefined),
+        muted: node.hasAttribute('muted') || (node.dataset.muted === 'false' ? false : undefined),
+        autoplay: node.hasAttribute('autoplay') || (node.dataset.autoplay === 'false' ? false : undefined),
         controls: node.hasAttribute('controls') || undefined,
       },
       verbatim,
@@ -1480,7 +1542,12 @@ export function measureSlides(doc: Document): MeasuredSlide[] {
       // HTML collapses whitespace; the deck renders text with pre-wrap. So
       // normalise here, where it still affects the measurement, rather than
       // shipping the author's source indentation into the slide as newlines.
-      if (typeOf(node) === 'text' && !/^(pre|code)$/.test(node.tagName.toLowerCase())) {
+      // A text box exported from the deck is the exception: it is already
+      // the deck's own text inside the player's pre-wrap wrapper, so its
+      // newlines are line breaks the slide shows, and a trailing space is
+      // part of what it holds.
+      if (typeOf(node) === 'text' && !/^(pre|code)$/.test(node.tagName.toLowerCase())
+        && !node.querySelector(':scope > .text-body > [data-text-content]')) {
         const collapsed = node.innerHTML.replace(/\s+/g, ' ').trim();
         if (collapsed !== node.innerHTML) node.innerHTML = collapsed;
       }
@@ -1682,7 +1749,16 @@ export function measureTextOverflows(doc: Document): TextOverflow[] {
       // sizes ignore; the fit records its scale so width can be judged as painted.
       const scaleX = Number.parseFloat(content.dataset.fittedScaleX ?? '1') || 1;
       const x = Math.round((content.scrollWidth * scaleX - body.clientWidth) * 10) / 10;
-      const y = Math.round((content.scrollHeight - body.clientHeight) * 10) / 10;
+      // A box that clips (auto-fit, no-wrap) loses whatever its content's
+      // scroll size exceeds — the same test auto-fit fits to. One that does
+      // not still paints the ascenders and descenders a tight line-height
+      // hangs past its lines, so only the lines themselves count there: read
+      // by scroll size, every title set `line-height: 1` reported a few pixels
+      // of "clipping" and an agent went to fix text that was fine. (No layout,
+      // as in jsdom, means no line height to read.)
+      const clips = view.getComputedStyle(body).overflowY !== 'visible';
+      const height = clips ? content.scrollHeight : content.offsetHeight || content.scrollHeight;
+      const y = Math.round((height - body.clientHeight) * 10) / 10;
       // One pixel of grace, not auto-fit's half: scroll and client sizes are
       // integer-quantised, and the fitted size is rounded to a tenth of a
       // pixel after a fit that itself tolerates half a pixel — so a correctly

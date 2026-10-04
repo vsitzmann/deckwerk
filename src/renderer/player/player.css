@@ -35,6 +35,11 @@
 .element {
   position: absolute;
   box-sizing: border-box;
+  /* An object's box is its geometry. A margin a theme class gives it (theme.css
+     styles objects by class) moved it off the place its numbers say, and the
+     next HTML round trip stored that place — so the margin was applied again,
+     and again. The export page resets it the same way. */
+  margin: 0 !important;
 }
 
 .element img,

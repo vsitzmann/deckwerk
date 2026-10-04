@@ -60,7 +60,7 @@ export async function htmlEditTransaction(
   deck: Deck,
   htmlPath: string,
   options: HtmlEditOptions = {},
-): Promise<{ transaction: AgentTransaction; slides: Slide[]; warnings: string[] }> {
+): Promise<{ transaction: AgentTransaction | null; slides: Slide[]; warnings: string[] }> {
   const authored = await readFile(htmlPath, 'utf8');
   const scope = htmlSlideScope(authored);
   const { slides, warnings } = await compileHtmlToSlides({ deckDir, deck, htmlPath });
@@ -72,11 +72,12 @@ export async function htmlEditTransaction(
     deck,
     slides,
     scope,
-    options.after ?? deck.slides[deck.slides.length - 1]?.id ?? null,
+    options.after === undefined ? deck.slides[deck.slides.length - 1]?.id ?? null : options.after,
   );
-  if (operations.length === 0) {
-    throw new Error(`${basename(htmlPath)} compiles to what the deck already holds.`);
-  }
+  // An untouched export compiles to what the deck already holds. That is a
+  // sync with nothing to do — the same answer the editor and a hosted mirror
+  // give — not an error.
+  if (operations.length === 0) return { transaction: null, slides, warnings };
   return {
     transaction: {
       version: AGENT_PROTOCOL_VERSION,

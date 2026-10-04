@@ -402,9 +402,9 @@ describe('compiling a saved authoring file in the editor', () => {
     const afterFirst = applyAgentTransaction(deck, first.transaction!);
     expect(afterFirst.slides.map((slide) => slide.id)).toEqual(['slide-1', 'added']);
 
+    // Saved again unchanged, it governs both slides and asks for nothing.
     const second = await authoredHtmlTransaction(afterFirst, file, theme);
-    const afterSecond = applyAgentTransaction(afterFirst, second.transaction!);
-    expect(afterSecond.slides.map((slide) => slide.id)).toEqual(['slide-1', 'added']);
+    expect(second.transaction).toBeNull();
   });
 
   it('deletes the exported range when its sections are removed from the file', async () => {
@@ -450,15 +450,17 @@ describe('compiling a saved authoring file in the editor', () => {
   it('leaves the deck\'s shape alone when the file still holds the same slides', async () => {
     const deck = emptyDeck();
     deck.slides.push({ ...structuredClone(deck.slides[0]), id: 'closing' });
-    const { transaction } = await authoredHtmlTransaction(deck, {
-      path: 'edit/slide-1-closing.html',
-      contents: slidesToHtml(deck.slides, deck.canvas),
-    }, theme);
+    const contents = slidesToHtml(deck.slides, deck.canvas);
+    // Saved untouched, the page compiles to what the deck holds: there is
+    // nothing to replace, and a replacement would be History noise.
+    expect((await authoredHtmlTransaction(deck, { path: 'edit/slide-1-closing.html', contents }, theme)).transaction)
+      .toBeNull();
 
-    // Content is replaced — that is the point of a save — but nothing is
-    // inserted, deleted or moved, so slides keep their places.
-    expect(transaction?.operations.map((operation) => operation.op))
-      .toEqual(['replaceSlide', 'replaceSlide']);
+    // Edited, its slides are replaced — that is the point of a save — but
+    // nothing is inserted, deleted or moved, so slides keep their places.
+    const edited = contents.replace('data-slide-id="closing"', 'data-slide-id="closing" data-name="Renamed"');
+    const { transaction } = await authoredHtmlTransaction(deck, { path: 'edit/slide-1-closing.html', contents: edited }, theme);
+    expect(transaction?.operations.map((operation) => operation.op)).toEqual(['replaceSlide']);
   });
 });
 

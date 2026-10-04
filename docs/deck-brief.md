@@ -57,6 +57,7 @@ slide beside a normal title. No network access while presenting.
 ## 3. Put it in the deck
 
     slide-agent apply . --html drafts/slide.html --after 8    # insert after slide 8
+    slide-agent apply . --html drafts/slide.html --after 0    # insert as the first slide
     slide-agent apply . --html drafts/slide.html              # append
 
 The first apply stamps `data-slide-id` into your file; applying it again

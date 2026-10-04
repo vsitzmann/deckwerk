@@ -46,6 +46,7 @@ import { CollabSession } from './collabSession.js';
 import { readZip, writeZip, type ZipEntry, type ZipFile } from './zip.js';
 import {
   compileHtmlToSlides,
+  headlessBrowserProblem,
   measureBuiltTextOverflows,
   renderHtmlDraftPng,
 } from '../cli/compileHtml.js';
@@ -56,6 +57,8 @@ import {
   htmlSyncHistoryLabel,
   htmlSyncOperations,
   htmlSyncSummary,
+  insertionAnchor,
+  slidesFromMeasured,
   slidesToHtml,
 } from '../shared/htmlSlides.js';
 import { PLAYER_TYPE_CSS } from '../shared/playerTypeCss.js';
@@ -63,7 +66,7 @@ import { authoringPageHtml, type TextOverflow } from '../shared/htmlMeasure.js';
 import { deckRevision } from '../main/agentRuntime.js';
 import { applyAgentTransaction, validateDeckIntegrity, type AgentOperation } from '../shared/agent.js';
 import { NativeEditRequestSchema, applyNativeEdits, nativeEditContract } from '../shared/nativeEdits.js';
-import { SlideSchema, type Deck, type Slide, type SlideElement } from '../shared/deck.js';
+import { type Deck, type Slide, type SlideElement } from '../shared/deck.js';
 import { classifyMediaName } from '../shared/media.js';
 import { deckOutline } from '../shared/deckDigest.js';
 import type { AgentPanelState } from '../shared/ipc.js';
@@ -927,10 +930,33 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
 
   const httpServer = createServer((request, response) => {
     void handleHttp(request, response).catch((error) => {
+      const text = `server error: ${error instanceof Error ? error.message : String(error)}`;
+      // Every API client reads `{ error }`; a plain-text body was dropped by
+      // the bridge's JSON parse, so an agent saw only "sync failed (500)".
+      if (request.url?.startsWith('/api/') && !response.headersSent) {
+        respondJson(response, 500, { error: text });
+        return;
+      }
       if (!response.headersSent) response.writeHead(500, { 'content-type': 'text/plain' });
-      response.end(`server error: ${String(error)}`);
+      response.end(text);
     });
   });
+
+  /**
+   * Whether this server's headless browser starts, probed once and kept. An
+   * environment that cannot start it stays that way until someone changes it
+   * and restarts the server, so only a failure is ever probed again, and not
+   * more than once a minute.
+   */
+  let browserProbe: { at: number; problem: Promise<string | null>; failed: boolean } | null = null;
+  const browserProblem = (): Promise<string | null> => {
+    if (!browserProbe || (browserProbe.failed && Date.now() - browserProbe.at > 60_000)) {
+      const probe = { at: Date.now(), problem: headlessBrowserProblem(), failed: false };
+      void probe.problem.then((problem) => { probe.failed = problem !== null; });
+      browserProbe = probe;
+    }
+    return browserProbe.problem;
+  };
 
   /**
    * Compile authored HTML the way every HTML route does — sanitised, measured
@@ -945,7 +971,12 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
     requestedTarget: HttpHtmlDraft['target'] | undefined,
     agentSessionParam: string | null,
     startedAt: number,
-  ): Promise<{ draft: HttpHtmlDraft; preview: HtmlDraftPreview; body: Record<string, unknown> } | { error: string }> {
+  ): Promise<{
+    draft: HttpHtmlDraft;
+    preview: HtmlDraftPreview;
+    body: Record<string, unknown>;
+    compiled: Awaited<ReturnType<typeof compileHtmlToSlides>>;
+  } | { error: string }> {
     const sanitized = await sanitizeServerHtml(html, room.session.dir);
     const sanitizedAt = Date.now();
     const temp = await mkdtemp(join(tmpdir(), 'slide-http-preview-'));
@@ -1077,7 +1108,7 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
           importedContactSheetUrl: preview.importedContactSheetUrl,
         });
       }
-      return { draft, preview, body: {
+      return { draft, preview, compiled, body: {
         workflow,
         blockingIssues: workflow.blockingIssues,
         nextAction: workflow.nextAction,
@@ -1978,6 +2009,16 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
       return;
     }
 
+    // Whether this server can compile, render and check pages at all. The
+    // bridge asks as it connects, so an agent and the person's Agent panel
+    // learn that the server is broken before the first save, not from it.
+    if (path === '/api/agent-mirror/health' && request.method === 'GET') {
+      if (!localAgents) return respondJson(response, 404, { error: 'local agents are not enabled' });
+      const problem = await browserProblem();
+      respondJson(response, 200, { browser: problem ? { ok: false, error: problem } : { ok: true } });
+      return;
+    }
+
     // The agent CLI's authoring verbs, over HTTP, for a mirror that has no CLI
     // installed: an editable export of named slides, a blank page that can
     // only add, and the structural check. Slides are named by id or 1-based
@@ -2190,54 +2231,53 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
       const room = await getRoom(deckParam);
       const deck = room.session.deck;
       const scope = htmlSlideScope(html);
-      const afterRef = url.searchParams.get('after');
+      // New slides go last unless `--after` names a slide (id or 1-based
+      // number); `--after 0` puts them first.
+      const afterRef = url.searchParams.get('after')?.trim();
       let after: string | null = deck.slides.at(-1)?.id ?? null;
       if (afterRef) {
-        const anchor = slidesByRef(deck, afterRef);
-        if ('error' in anchor) return respondJson(response, 404, { error: anchor.error });
-        after = anchor.slides[0]?.id ?? after;
+        const anchor = insertionAnchor(deck, afterRef);
+        if (anchor === undefined) return respondJson(response, 404, { error: `no slide ${afterRef}` });
+        after = anchor;
       }
       const target: HttpHtmlDraft['target'] = scope
         ? { mode: 'replace', slideIds: scope }
         : { mode: 'insert', afterSlideId: after };
       const compiledDraft = await compileHtmlDraft(deckParam, room, html, target, agentSessionParam, startedAt);
       if ('error' in compiledDraft) return respondJson(response, 400, { error: compiledDraft.error });
-      if (deckRevision(room.session.deck) !== compiledDraft.draft.revision) {
-        return respondJson(response, 409, { error: 'the deck changed during the compile; save again' });
+      // People keep editing while a page compiles, and that is fine: the
+      // browser's layout depends only on the page, the theme and the canvas.
+      // What does depend on the rest of the deck — the ids new slides and
+      // objects are minted, the layout masters — is worked out again below
+      // against the deck as it is now, with nothing awaited between that and
+      // the apply. Answering 409 instead (and only for edits that happened to
+      // land after the compile) made a busy session drop an agent's saves.
+      const themeNow = await loadTheme(room.session.dir, room.session.deck.theme);
+      const live = room.session.deck;
+      if (themeNow !== compiledDraft.compiled.theme
+        || live.canvas.w !== deck.canvas.w || live.canvas.h !== deck.canvas.h) {
+        return respondJson(response, 409, {
+          error: 'the theme or the canvas changed while this page compiled, so its layout is stale; save it again',
+        });
       }
+      if (afterRef) {
+        const anchor = insertionAnchor(live, afterRef);
+        if (anchor === undefined) return respondJson(response, 404, { error: `no slide ${afterRef}` });
+        after = anchor;
+      } else {
+        after = live.slides.at(-1)?.id ?? null;
+      }
+      // Review state the page cannot carry (notes, skip, comments, non-appear
+      // builds) and dropping replacements that change nothing are both
+      // htmlSyncOperations' job, shared with the desktop editor and the CLI.
       let operations: AgentOperation[];
       try {
-        operations = htmlSyncOperations(room.session.deck, compiledDraft.draft.slides, scope, after);
+        compiledDraft.draft.slides = slidesFromMeasured(live, compiledDraft.compiled.measured);
+        compiledDraft.draft.revision = deckRevision(live);
+        operations = htmlSyncOperations(live, compiledDraft.draft.slides, scope, after);
       } catch (error) {
         return respondJson(response, 400, { error: String(error instanceof Error ? error.message : error) });
       }
-      // A compiled page knows nothing of review state: comments people left
-      // on the slide or its objects, and whether the slide is skipped, live
-      // only in the deck. Carry them over so an HTML save never loses a task.
-      for (const op of operations) {
-        if (op.op !== 'replaceSlide') continue;
-        const previous = room.session.deck.slides.find((slide) => slide.id === op.slideId);
-        if (!previous) continue;
-        const slide = structuredClone(op.slide);
-        if (previous.comments?.length) slide.comments = previous.comments;
-        if (previous.skipped) slide.skipped = previous.skipped;
-        if (!slide.notes && previous.notes) slide.notes = previous.notes;
-        const previousElements = new Map(previous.elements.map((element) => [element.id, element]));
-        slide.elements = slide.elements.map((element) => {
-          const before = previousElements.get(element.id);
-          return before?.comments?.length && !element.comments?.length
-            ? { ...element, comments: before.comments }
-            : element;
-        });
-        op.slide = slide;
-      }
-      // Re-saving an export unchanged (or exporting into edit/ in the first
-      // place) compiles to the slides the deck already holds. Replacing a
-      // slide with itself would still be a transaction in everyone's History,
-      // so identical replacements are dropped before anything is applied.
-      const current = new Map(room.session.deck.slides.map((slide) => [slide.id, JSON.stringify(SlideSchema.parse(slide))]));
-      operations = operations.filter((op) => !(op.op === 'replaceSlide'
-        && current.get(op.slideId) === JSON.stringify(SlideSchema.parse(op.slide))));
       const label = url.searchParams.get('label')?.trim().slice(0, 200)
         || htmlChangeLabel(html)
         || htmlSyncHistoryLabel(operations);

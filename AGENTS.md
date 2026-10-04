@@ -28,6 +28,33 @@ hash, with every window hidden. Never point a test at the checkout's `out/`
 directory — that is whatever was last built by hand — and never leave a suite
 skipping itself when a build is missing.
 
+### Agent collaboration suites
+
+Three suites guard the loop agents work in — export a page, edit it, save it —
+through all three doors it has: `slide-agent` beside a closed deck, the live
+desktop editor's `edit/` watcher, and a hosted session (the bundled
+`deckwerk-connect.mjs` the server hands out, run as a collaborator runs it,
+with `./deck` and a person editing over the WebSocket). They share
+`test/support/agentWorkspace.ts`.
+
+- `test/agentCollaboration.test.ts` — the regression suite: what a page lands,
+  what it must leave alone (notes, skips, comments, non-appear builds and
+  build order, maths as TeX, line breaks, video flags, layouts, regions), an
+  untouched export re-saving as no change on the fixture and on every deck in
+  `decks/`, `--after 0`, races with a collaborator.
+- `test/agentCollaborationSandbox.test.ts` — the hosted server under the
+  production systemd sandbox (`packaging/linux/deckwerk-collab-chromium-sandbox.conf`),
+  and on a machine that runs `deckwerk-collab.service`, under the unit systemd
+  actually resolved.
+- `test/agentCollaborationFuzz.test.ts` — a seeded walk of agent and person
+  moves against a model of the deck (`AGENT_FUZZ_SEEDS`, `AGENT_FUZZ_STEPS`,
+  `AGENT_FUZZ_BACKENDS`; `npm run test:agents:fuzz` walks it long, as the
+  nightly does with a rotated seed).
+
+A change to that loop — the export, the compile, the sync, the bridge, `./deck`
+— adds its case to the regression suite and, if it is a new move, to the fuzz
+alphabet, in the same PR.
+
 ## UI consistency
 
 Every new UI element must match the rest of the application. Reuse the shared
@@ -144,7 +171,8 @@ destroyed. Decide which you are doing *before* you open an editor:
 browser-openable skeleton as an export — the canvas box, `theme.css`, the type
 rules, the `<base>` — but with no slide ids and no scope marker, so nothing in
 the deck is at risk however you edit it. `--count <n>` gives you n starter
-sections. `apply --after <slideId>` places them somewhere other than the end.
+sections. `apply --after <slide>` (an id or a number) places them somewhere
+other than the end, and `apply --after 0` makes them the first slides.
 
 **Never copy an export to author new slides.** This is the mistake that bites:
 an export carries a `slide-editor-scope` marker in its `<head>` recording the

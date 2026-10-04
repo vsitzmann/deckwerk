@@ -74,6 +74,11 @@ const SERIAL_BY_NATURE = [
   // processes. Under a fully parallel unit run those events can be starved
   // long enough for the file bridge to miss its response deadline.
   'test/localAgentBridge.test.ts',
+  // The same, plus the desktop app, the downloaded bridge in a process of its
+  // own and transient systemd units for the production sandbox.
+  'test/agentCollaboration.test.ts',
+  'test/agentCollaborationSandbox.test.ts',
+  'test/agentCollaborationFuzz.test.ts',
   // Real ffmpeg, Python importer, media-probe, and network pipelines. Their
   // assertions are functional, not performance budgets; run them alone so a
   // busy parallel worker pool cannot turn startup latency into a false red.

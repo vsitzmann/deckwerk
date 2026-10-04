@@ -1,3 +1,4 @@
+import { JSDOM } from 'jsdom';
 import { existsSync } from 'node:fs';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -113,6 +114,19 @@ describe('web bridge', () => {
     expect(injectWebBridgeRuntime(once)).toBe(once);
     // A bare fragment still gets it, at the top.
     expect(injectWebBridgeRuntime('<div>hi</div>').startsWith('<script ')).toBe(true);
+  });
+
+  it('keeps the doctype first on a page that leaves out <html> and <head>', () => {
+    // Both tags are optional in HTML; the doctype is not, and anything before
+    // it puts the page in quirks mode. `web check` then reported "no
+    // <!doctype html>" for a page that had one, and `web add` staged it so.
+    const page = '<!-- chart -->\n<!DOCTYPE html><meta charset="utf-8"><button>Go</button>';
+    const injected = injectWebBridgeRuntime(page);
+    expect(injected.startsWith('<!-- chart -->\n<!DOCTYPE html>')).toBe(true);
+    expect(injected.indexOf(WEB_BRIDGE_MARKER)).toBeGreaterThan(injected.indexOf('<!DOCTYPE html>'));
+    expect(injected.indexOf(WEB_BRIDGE_MARKER)).toBeLessThan(injected.indexOf('<button>'));
+    expect(new JSDOM(injected).window.document.compatMode).toBe('CSS1Compat');
+    expect(new JSDOM(`<script></script>${page}`).window.document.compatMode).toBe('BackCompat');
   });
 
   it('recognises only well-formed actions from a page', () => {

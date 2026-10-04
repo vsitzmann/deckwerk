@@ -16,7 +16,7 @@ import {
 import { PLAYER_TYPE_CSS } from '@shared/playerTypeCss.js';
 import { slidesFromMeasured, slidesToHtml, type MeasuredSlide } from '@shared/htmlSlides.js';
 import { loadTheme } from '../main/deckStore.js';
-import { headlessElectronArgs } from './electronDisplay.js';
+import { electronFailure, headlessElectronArgs } from './electronDisplay.js';
 
 /**
  * Compile authored HTML into deck slides with the editor closed.
@@ -40,32 +40,55 @@ export interface CompiledHtml {
   slides: Slide[];
   /** Inline style the browser silently dropped; see `MeasuredSlide.warnings`. */
   warnings: string[];
+  /**
+   * What the browser measured, before any of it met the deck. The layout
+   * depends only on the page, the theme and the canvas; ids and layout
+   * masters come from the deck. So a deck that moved on while the page
+   * compiled needs `slidesFromMeasured` again, not another browser.
+   */
+  measured: MeasuredSlide[];
+  /** The stylesheet the page was measured against. */
+  theme: string;
 }
 
 export async function compileHtmlToSlides(request: CompileRequest): Promise<CompiledHtml> {
   const authored = await readFile(request.htmlPath, 'utf8');
-  const work = await mkdtemp(join(tmpdir(), 'slide-agent-compile-'));
-  const pagePath = join(work, 'page.html');
-
   const theme = await loadTheme(request.deckDir, request.deck.theme);
-  await writeFile(
-    pagePath,
-    authoringPageHtml({
-      authored,
-      typeCss: PLAYER_TYPE_CSS,
+  // Every temporary page is removed again: left behind, each compile kept a
+  // copy of the page — and each measurement a copy of everything measured,
+  // tens of megabytes for a large deck — in the temp folder for good.
+  return withWorkDir('slide-agent-compile-', async (work) => {
+    const pagePath = join(work, 'page.html');
+    await writeFile(
+      pagePath,
+      authoringPageHtml({
+        authored,
+        typeCss: PLAYER_TYPE_CSS,
+        theme,
+        themeHref: request.deck.theme,
+        canvas: request.deck.canvas,
+        base: pathToFileURL(`${request.deckDir}/`).href,
+      }),
+      'utf8',
+    );
+    const [measured] = await runPages([pagePath], request.deck.canvas) as MeasuredSlide[][];
+    return {
+      slides: slidesFromMeasured(request.deck, measured),
+      warnings: measured.flatMap((slide) => slide.warnings ?? []),
+      measured,
       theme,
-      themeHref: request.deck.theme,
-      canvas: request.deck.canvas,
-      base: pathToFileURL(`${request.deckDir}/`).href,
-    }),
-    'utf8',
-  );
+    };
+  });
+}
 
-  const [measured] = await runPages([pagePath], request.deck.canvas) as MeasuredSlide[][];
-  return {
-    slides: slidesFromMeasured(request.deck, measured),
-    warnings: measured.flatMap((slide) => slide.warnings ?? []),
-  };
+/** Run `work` in a fresh temporary folder that is gone again afterwards, however it ends. */
+async function withWorkDir<T>(prefix: string, work: (dir: string) => Promise<T>): Promise<T> {
+  const dir = await mkdtemp(join(tmpdir(), prefix));
+  try {
+    return await work(dir);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 }
 
 /**
@@ -84,21 +107,22 @@ export async function measureBuiltTextOverflows(
   slides: Slide[],
 ): Promise<TextOverflow[]> {
   if (slides.length === 0) return [];
-  const work = await mkdtemp(join(tmpdir(), 'slide-agent-overflow-'));
-  const pagePath = join(work, 'built.html');
-  await writeFile(
-    pagePath,
-    slidesToHtml(slides, deck.canvas, {
-      typeCss: PLAYER_TYPE_CSS,
-      // The page sits in a temp folder, so assets and theme.css resolve
-      // against the deck itself.
-      base: pathToFileURL(`${deckDir}/`).href,
-      theme: deck.theme,
-    }),
-    'utf8',
-  );
-  const [overflows] = await runPages([pagePath], deck.canvas, measureTextOverflowsSource());
-  return overflows as TextOverflow[];
+  return withWorkDir('slide-agent-overflow-', async (work) => {
+    const pagePath = join(work, 'built.html');
+    await writeFile(
+      pagePath,
+      slidesToHtml(slides, deck.canvas, {
+        typeCss: PLAYER_TYPE_CSS,
+        // The page sits in a temp folder, so assets and theme.css resolve
+        // against the deck itself.
+        base: pathToFileURL(`${deckDir}/`).href,
+        theme: deck.theme,
+      }),
+      'utf8',
+    );
+    const [overflows] = await runPages([pagePath], deck.canvas, measureTextOverflowsSource());
+    return overflows as TextOverflow[];
+  });
 }
 
 /**
@@ -130,6 +154,28 @@ export async function measureSavedPages(
   script?: string,
 ): Promise<unknown[]> {
   return runPages(pagePaths, canvas, script);
+}
+
+/**
+ * Whether the headless browser behind compiling and rendering starts here:
+ * null when it does, otherwise why not, in words an admin can act on.
+ *
+ * A server whose browser cannot start serves its pages and its WebSocket
+ * perfectly well, so nothing looked wrong until the first agent save failed.
+ * This is the same launch every compile makes, on a page with nothing in it.
+ */
+export async function headlessBrowserProblem(): Promise<string | null> {
+  const work = await mkdtemp(join(tmpdir(), 'slide-agent-probe-'));
+  try {
+    const page = join(work, 'probe.html');
+    await writeFile(page, '<!doctype html><title>probe</title><p>ok</p>', 'utf8');
+    const [result] = await runPages([page], { w: 64, h: 36 }, 'document.querySelector("p")?.textContent ?? null');
+    return result === 'ok' ? null : 'the headless browser started but could not lay out a page';
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error);
+  } finally {
+    await rm(work, { recursive: true, force: true });
+  }
 }
 
 export interface HtmlDraftRenderAssets {
@@ -305,15 +351,16 @@ async function runPages(
       electronModule.BrowserWindow,
     );
   }
-  const work = await mkdtemp(join(tmpdir(), 'slide-agent-measure-'));
-  const outPath = join(work, 'measured.json');
-  const jobPath = join(work, 'job.json');
-  // The walk travels with the job: the runner is a bundler-less Electron
-  // script, so handing it the source is what keeps one implementation shared
-  // with the live renderer.
-  await writeFile(jobPath, JSON.stringify({ pages, outPath, canvas, script }), 'utf8');
-  await runElectron(compilerScript(), jobPath);
-  return (JSON.parse(await readFile(outPath, 'utf8')) as { results: unknown[] }).results;
+  return withWorkDir('slide-agent-measure-', async (work) => {
+    const outPath = join(work, 'measured.json');
+    const jobPath = join(work, 'job.json');
+    // The walk travels with the job: the runner is a bundler-less Electron
+    // script, so handing it the source is what keeps one implementation shared
+    // with the live renderer.
+    await writeFile(jobPath, JSON.stringify({ pages, outPath, canvas, script }), 'utf8');
+    await runElectron(compilerScript(), jobPath);
+    return (JSON.parse(await readFile(outPath, 'utf8')) as { results: unknown[] }).results;
+  });
 }
 
 async function runPagesInCurrentElectron(
@@ -376,7 +423,7 @@ function runElectron(script: string, jobPath: string): Promise<string> {
     child.on('close', (code) => {
       clearTimeout(timer);
       if (code === 0) resolvePromise(out);
-      else reject(new Error(err.trim() || `HTML compile failed with exit code ${code}`));
+      else reject(electronFailure(err, `HTML compile failed with exit code ${code}`));
     });
   });
 }

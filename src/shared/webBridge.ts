@@ -102,6 +102,14 @@ export function injectWebBridgeRuntime(html: string): string {
     const at = htmlTag.index + htmlTag[0].length;
     return `${html.slice(0, at)}\n<head>${tag}</head>${html.slice(at)}`;
   }
+  // `<html>` and `<head>` are optional, the doctype is not: anything ahead of
+  // it puts the page in quirks mode, so a bare `<!doctype html><button>` page
+  // was staged — and checked — laid out by the wrong rules.
+  const doctype = /^(?:\s|<!--[\s\S]*?-->)*<!doctype\b[^>]*>/i.exec(html);
+  if (doctype) {
+    const at = doctype.index + doctype[0].length;
+    return `${html.slice(0, at)}\n${tag}${html.slice(at)}`;
+  }
   return `${tag}\n${html}`;
 }
 

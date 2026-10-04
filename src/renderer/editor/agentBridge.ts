@@ -87,7 +87,8 @@ export class AgentBridge {
       try {
         if (!this.options.syncHtml) throw new Error('This editor cannot compile authoring files');
         const outcome = await this.options.syncHtml({
-          path: request.path, contents: request.contents, after: request.after ?? null, label: request.label,
+          // Undefined appends; null is an explicit "before the first slide".
+          path: request.path, contents: request.contents, after: request.after, label: request.label,
         });
         this.options.respond({
           version: AGENT_PROTOCOL_VERSION,
