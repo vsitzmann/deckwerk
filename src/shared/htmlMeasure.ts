@@ -1699,6 +1699,7 @@ export function measureSlides(doc: Document): MeasuredSlide[] {
       ...(root.dataset.morphDuration !== undefined
         ? { morphDuration: Number(root.dataset.morphDuration) }
         : {}),
+      ...(root.dataset.base !== undefined ? { base: root.dataset.base, baseIds: root.dataset.baseIds } : {}),
       nodes,
       warnings,
     };

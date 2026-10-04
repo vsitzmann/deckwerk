@@ -78,6 +78,9 @@ export interface MeasuredSlide {
   layout?: string;
   /** With `layout`: the section set its own background inline. */
   ownBackground?: boolean;
+  /** `data-base` / `data-base-ids`: what the export recorded (`pageStampOf`). */
+  base?: string;
+  baseIds?: string;
   nodes: MeasuredNode[];
   /**
    * Inline style the browser silently refused: a segment with no colon, or a
@@ -522,6 +525,8 @@ export function htmlSyncOperations(
   slides: Slide[],
   scope: string[] | null,
   after: string | null,
+  /** What the page's slides were when it was exported (`pageBases`), if it says. */
+  bases: Map<string, SlideBase> = new Map(),
 ): AgentOperation[] {
   const existingIds = new Set(deck.slides.map((slide) => slide.id));
   const authoredIds = slides.map((slide) => slide.id);
@@ -542,7 +547,7 @@ export function htmlSyncOperations(
   const previousSlides = new Map(deck.slides.map((slide) => [slide.id, slide]));
   const replace = (slide: Slide, into: AgentOperation[]): void => {
     const previous = previousSlides.get(slide.id)!;
-    const next = carrySlideState(previous, slide);
+    const next = carrySlideState(previous, slide, bases.get(slide.id));
     if (!sameSlideContent(previous, next)) into.push({ op: 'replaceSlide', slideId: slide.id, slide: next });
   };
 
@@ -628,8 +633,13 @@ export function htmlSyncOperations(
  * its review threads. Whatever the page cannot express comes from the slide it
  * replaces.
  */
-export function carrySlideState(previous: Slide, compiled: Slide): Slide {
-  const next = structuredClone(compiled);
+export function carrySlideState(previous: Slide, compiled: Slide, base?: SlideBase): Slide {
+  // Somebody else changed this slide after the page was exported: merge
+  // object by object rather than let the page's stale copy undo their work.
+  const concurrent = base !== undefined && slideBase(previous).slide !== base.slide
+    ? mergedWithConcurrentEdits(previous, compiled, base)
+    : null;
+  const next = structuredClone(concurrent?.slide ?? compiled);
   if (!next.notes && previous.notes) next.notes = previous.notes;
   if (next.skipped === undefined && previous.skipped !== undefined) next.skipped = previous.skipped;
   if (!next.comments?.length && previous.comments?.length) next.comments = structuredClone(previous.comments);
@@ -641,8 +651,65 @@ export function carrySlideState(previous: Slide, compiled: Slide): Slide {
     next.layoutBackgroundInherited = previous.layoutBackgroundInherited;
   }
   next.elements = reconciledElements(previous, next.elements);
-  next.timeline = mergedTimeline(previous, next);
+  next.timeline = mergedTimeline(previous, next, concurrent?.theirBuilds);
   return next;
+}
+
+/**
+ * A page saved over a slide somebody changed since it was exported.
+ *
+ * Replacing the slide with the page undid their work wholesale: a person
+ * rewords a heading while their agent tightens the body from an export a
+ * minute old, the agent saves, and the heading is back as it was. The export
+ * recorded what each object was (`slideBase`), so the save can tell who
+ * changed what: an object the page left as exported but somebody changed
+ * since keeps their version; one the page changed takes the page's, theirs
+ * or not (the later edit wins, as anywhere in a session); one deleted since
+ * stays deleted; one added since stays; one the page removed goes. The
+ * slide's own properties merge the same way.
+ */
+function mergedWithConcurrentEdits(
+  current: Slide,
+  page: Slide,
+  base: SlideBase,
+): { slide: Slide; theirBuilds: Set<string> } {
+  const theirs = new Map(current.elements.map((element) => [element.id, element]));
+  const onPage = new Set(page.elements.map((element) => element.id));
+  const exported = new Set(base.ids);
+  const theirBuilds = new Set<string>();
+  const elements: SlideElement[] = [];
+  for (const element of page.elements) {
+    const was = base.elements.get(element.id);
+    const now = theirs.get(element.id);
+    if (was && !now) continue;
+    // Left as exported here, changed by somebody since: theirs stands.
+    if (was && now && matchesBase(page, element, was) && !matchesBase(current, now, was)) {
+      elements.push(structuredClone(now));
+      theirBuilds.add(now.id);
+      continue;
+    }
+    elements.push(element);
+  }
+  for (const element of current.elements) {
+    if (onPage.has(element.id) || exported.has(element.id)) continue;
+    elements.push(structuredClone(element));
+    theirBuilds.add(element.id);
+  }
+  const slide: Slide = { ...page, elements };
+  if (propsFingerprint(current) !== base.props && propsFingerprint(page) === base.props) {
+    for (const key of SLIDE_PROPS) {
+      if (current[key] === undefined) delete slide[key];
+      else (slide as Record<string, unknown>)[key] = structuredClone(current[key]);
+    }
+  }
+  return { slide, theirBuilds };
+}
+
+/** Whether an object on `slide` is still what the export recorded. */
+function matchesBase(slide: Slide, element: SlideElement, base: ElementBase): boolean {
+  return elementFingerprint(element, buildSpec(slide, element.id)) === base.content
+    && (['x', 'y', 'w', 'h', 'rot'] as const).every((key, index) =>
+      Math.abs(element[key] - base.box[index]) <= GEOMETRY_TOLERANCE);
 }
 
 /**
@@ -744,10 +811,12 @@ function sortedJson(value: unknown): string | undefined {
  * still on it. Builds the page adds follow the existing ones, in document
  * order.
  */
-function mergedTimeline(previous: Slide, compiled: Slide): TimelineEntry[] {
+function mergedTimeline(previous: Slide, compiled: Slide, theirs = new Set<string>()): TimelineEntry[] {
   const present = new Set(compiled.elements.map((element) => element.id));
   const authored = new Map<string, TimelineEntry>();
   for (const entry of compiled.timeline) {
+    // An object kept as somebody else left it keeps the builds they gave it.
+    if (theirs.has(entry.action.target)) continue;
     if (entry.action.type === 'appear' && !authored.has(entry.action.target)) authored.set(entry.action.target, entry);
   }
   const claimed = new Set<string>();
@@ -757,7 +826,7 @@ function mergedTimeline(previous: Slide, compiled: Slide): TimelineEntry[] {
     if (!present.has(target)) continue;
     const page = entry.action.type === 'appear' ? authored.get(target) : undefined;
     // The page took the build off this object.
-    if (entry.action.type === 'appear' && !page) continue;
+    if (entry.action.type === 'appear' && !page && !theirs.has(target)) continue;
     if (page && !claimed.has(target)) {
       claimed.add(target);
       const kept = page.trigger.on === entry.trigger.on && entry.trigger.ref && present.has(entry.trigger.ref)
@@ -773,10 +842,177 @@ function mergedTimeline(previous: Slide, compiled: Slide): TimelineEntry[] {
   }
   const ids = new Set(merged.map((entry) => entry.id));
   for (const entry of compiled.timeline) {
+    if (theirs.has(entry.action.target)) continue;
     if (entry.action.type === 'appear' && claimed.has(entry.action.target)) continue;
     merged.push({ ...entry, id: uniqueId(entry.id, ids) });
   }
   return merged;
+}
+
+/* --- what a page was exported from ---------------------------------------- */
+
+/** What an export recorded about one object: its content, and its box exactly. */
+export interface ElementBase {
+  content: string;
+  /** x, y, w, h, rot — compared with the measuring slack, never hashed. */
+  box: number[];
+}
+
+/**
+ * What an export recorded about one slide, so that a save can tell the edits
+ * its page makes from edits somebody else made meanwhile. Short fingerprints,
+ * written into the page as `data-base` attributes — not the slide itself,
+ * which would double the size of every export an agent reads.
+ */
+export interface SlideBase {
+  /** Everything a page can say about the slide. */
+  slide: string;
+  /** The slide's own properties (name, background, layout, Morph). */
+  props: string;
+  /** Every object the slide held. */
+  ids: string[];
+  elements: Map<string, ElementBase>;
+}
+
+const SLIDE_PROPS = ['name', 'background', 'layout', 'morphFromPrevious', 'morphDuration'] as const;
+
+export function slideBase(slide: Slide): SlideBase {
+  const elements = new Map(slide.elements.map((element) => [element.id, {
+    content: elementFingerprint(element, buildSpec(slide, element.id)),
+    box: [element.x, element.y, element.w, element.h, element.rot],
+  }]));
+  const props = propsFingerprint(slide);
+  const ranked = [...slide.elements]
+    .map((element, index) => ({ element, index }))
+    .sort((a, b) => a.element.z - b.element.z || a.index - b.index)
+    .map(({ element }) => `${element.id}:${elements.get(element.id)!.content}@${elements.get(element.id)!.box.join(',')}`);
+  return {
+    slide: fingerprint(`${props}|${ranked.join('|')}|${sortedJson(slide.timeline)}`),
+    props,
+    ids: slide.elements.map((element) => element.id),
+    elements,
+  };
+}
+
+function propsFingerprint(slide: Slide): string {
+  return fingerprint(sortedJson(Object.fromEntries(SLIDE_PROPS
+    .map((key) => [key, slide[key] === false ? undefined : slide[key]])))!);
+}
+
+/**
+ * An object's content as a page states it: not its box (compared with slack
+ * instead), z, comments or what its markup never carries; `false` and `null`
+ * as good as absent; and its appearance build, which the page states too.
+ */
+function elementFingerprint(element: SlideElement, build: string): string {
+  const form: Record<string, unknown> = { ...element, build };
+  for (const key of ['x', 'y', 'w', 'h', 'rot', 'z', 'comments', 'layoutMasterId', 'css', 'sandboxed']) delete form[key];
+  for (const [key, value] of Object.entries(form)) if (value === false || value === null) delete form[key];
+  return fingerprint(sortedJson(form)!);
+}
+
+/** An object's first appearance, as `data-build` states it. */
+function buildSpec(slide: Slide, elementId: string): string {
+  const entry = slide.timeline.find((candidate) => candidate.action.type === 'appear' && candidate.action.target === elementId);
+  return entry ? `${entry.trigger.on}+${entry.trigger.delay}@${entry.trigger.ref ?? ''}` : '';
+}
+
+/** cyrb53: a quick 53-bit string hash, the same in Node and in any browser. */
+function fingerprint(text: string): string {
+  let h1 = 0xdeadbeef;
+  let h2 = 0x41c6ce57;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text.charCodeAt(i);
+    h1 = Math.imul(h1 ^ ch, 2654435761);
+    h2 = Math.imul(h2 ^ ch, 1597334677);
+  }
+  h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+  h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+  return (4294967296 * (2097151 & h2) + (h1 >>> 0)).toString(36);
+}
+
+/** The `data-base` attributes an export writes, per slide and per object. */
+export interface PageStamp {
+  [slideId: string]: { slide: string; ids: string; elements: Record<string, string> };
+}
+
+export function pageStampOf(slides: Slide[]): PageStamp {
+  const stamp: PageStamp = {};
+  for (const slide of slides) {
+    const base = slideBase(slide);
+    stamp[slide.id] = {
+      slide: `${base.slide}.${base.props}`,
+      ids: JSON.stringify(base.ids),
+      elements: Object.fromEntries([...base.elements].map(([id, element]) =>
+        [id, `${element.content}@${element.box.join(',')}`])),
+    };
+  }
+  return stamp;
+}
+
+/** What a compiled page says its slides were when it was exported. */
+export function pageBases(measured: MeasuredSlide[]): Map<string, SlideBase> {
+  const bases = new Map<string, SlideBase>();
+  for (const slide of measured) {
+    const [whole, props] = (slide.base ?? '').split('.');
+    if (!slide.id || !whole || !props) continue;
+    let ids: string[] = [];
+    try {
+      const parsed: unknown = JSON.parse(slide.baseIds ?? '[]');
+      if (Array.isArray(parsed)) ids = parsed.filter((id): id is string => typeof id === 'string');
+    } catch {
+      continue;
+    }
+    const elements = new Map<string, ElementBase>();
+    for (const node of slide.nodes) {
+      const match = /^([^@]+)@(.+)$/.exec(node.dataset.base ?? '');
+      const box = match?.[2].split(',').map(Number);
+      if (!node.elementId || !match || !box || box.length !== 5 || box.some((value) => !Number.isFinite(value))) continue;
+      elements.set(node.elementId, { content: match[1], box });
+    }
+    bases.set(slide.id, { slide: whole, props, ids, elements });
+  }
+  return bases;
+}
+
+/**
+ * Bring a page's `data-base` attributes up to what the page itself now says
+ * (`pageStampOf` of its compiled slides).
+ *
+ * The next save of the same page must be compared with what this one said,
+ * not with the original export — or the agent's own earlier save reads as
+ * somebody else's edit. And not with the deck either: where this save kept a
+ * person's newer version of an object, the page still holds the old one, and
+ * stamped with theirs it would read as the agent's edit and undo it.
+ */
+export function stampPage(html: string, stamp: PageStamp): string {
+  const elementBases = new Map<string, string>();
+  for (const entry of Object.values(stamp)) {
+    for (const [id, base] of Object.entries(entry.elements)) elementBases.set(id, base);
+  }
+  const bodyAt = Math.max(0, html.search(/<body[\s>]/i));
+  const body = html.slice(bodyAt).replace(/<[a-zA-Z][^>]*>/g, (tag) => {
+    const slideId = attributeValue(tag, 'data-slide-id');
+    if (slideId !== null && /^<section\b/i.test(tag) && stamp[slideId]) {
+      return withAttribute(withAttribute(tag, 'data-base', stamp[slideId].slide), 'data-base-ids', stamp[slideId].ids);
+    }
+    const elementId = attributeValue(tag, 'data-element-id');
+    if (elementId !== null && elementBases.has(elementId)) return withAttribute(tag, 'data-base', elementBases.get(elementId)!);
+    return tag;
+  });
+  return html.slice(0, bodyAt) + body;
+}
+
+function attributeValue(tag: string, name: string): string | null {
+  const match = new RegExp(`\\s${name}\\s*=\\s*"([^"]*)"`, 'i').exec(tag);
+  return match ? decodeHtmlAttribute(match[1]) : null;
+}
+
+function withAttribute(tag: string, name: string, value: string): string {
+  const attribute = `${name}="${escape(value)}"`;
+  const existing = new RegExp(`\\s${name}\\s*=\\s*"[^"]*"`, 'i');
+  if (existing.test(tag)) return tag.replace(existing, () => ` ${attribute}`);
+  return tag.replace(/\s*(\/?)>$/, (_end, slash: string) => ` ${attribute}${slash ? ' /' : ''}>`);
 }
 
 /**
@@ -911,11 +1147,19 @@ export function slidesFromMeasured(deck: Deck, measured: MeasuredSlide[]): Slide
     used.delete(existing.id);
     for (const element of existing.elements) used.delete(element.id);
   }
+  // Freed, but not free to mint: a new section earlier in the page than a
+  // slide it replaces was handed that slide's id, and the page then named one
+  // slide twice. Ids the page carries are reserved for the objects carrying them.
+  const reserved = new Set(measured.flatMap((slide) => [
+    ...(slide.id ? [slide.id] : []),
+    ...slide.nodes.flatMap((node) => (node.elementId ? [node.elementId] : [])),
+  ]));
 
   return measured.map((slide, index) => {
     const built = slideFromMeasured(slide, {
-      slideId: slide.id ?? nextSlideId(used, index),
+      slideId: slide.id ?? nextSlideId(used, index, reserved),
       usedIds: used,
+      reservedIds: reserved,
     });
     const layout = slide.layout;
     if (layout === undefined) return built;
@@ -946,22 +1190,25 @@ const FIXED_LAYOUTS: FixedLayout[] = ['freeform', 'standard', 'title'];
 /** A page the author must fix, as opposed to a compiler that failed. */
 export class HtmlAuthoringError extends Error {}
 
-function nextSlideId(used: Set<string>, index: number): string {
+function nextSlideId(used: Set<string>, index: number, reserved: Set<string> = new Set()): string {
   let candidate = `slide-${used.size + index + 1}`;
-  for (let n = 1; used.has(candidate); n++) candidate = `slide-${used.size + index + 1}-${n}`;
+  for (let n = 1; used.has(candidate) || reserved.has(candidate); n++) candidate = `slide-${used.size + index + 1}-${n}`;
+  used.add(candidate);
   return candidate;
 }
 
 /** Turn one measured slide into a deck slide, ids minted where absent. */
 export function slideFromMeasured(
   measured: MeasuredSlide,
-  opts: { slideId: string; usedIds: Set<string> },
+  opts: { slideId: string; usedIds: Set<string>; reservedIds?: Set<string> },
 ): Slide {
   const timeline: TimelineEntry[] = [];
   const elements: SlideElement[] = [];
 
   measured.nodes.forEach((node, index) => {
-    const id = uniqueId(node.elementId ?? `${opts.slideId}-${node.tag}-${index + 1}`, opts.usedIds);
+    const id = node.elementId
+      ? uniqueId(node.elementId, opts.usedIds)
+      : uniqueId(`${opts.slideId}-${node.tag}-${index + 1}`, opts.usedIds, opts.reservedIds);
     const element = elementFromNode(node, id, index + 1);
     if (!element) return;
     elements.push(element);
@@ -1262,9 +1509,12 @@ export function slideToHtml(slide: Slide, canvas: { w: number; h: number }): str
     if (entry.action.type === 'appear' && !builds.has(entry.action.target)) builds.set(entry.action.target, entry);
   }
 
+  // What this slide is now, so a save of the page can tell its own edits
+  // from edits somebody else makes meanwhile.
+  const stamp = pageStampOf([slide])[slide.id];
   const body = [...slide.elements]
     .sort((a, b) => a.z - b.z)
-    .map((element) => elementToHtml(element, builds.get(element.id)))
+    .map((element) => elementToHtml(element, builds.get(element.id), stamp.elements[element.id]))
     .join('\n');
 
   // Both halves, and as separate declarations rather than the `background`
@@ -1281,6 +1531,7 @@ export function slideToHtml(slide: Slide, canvas: { w: number; h: number }): str
   const background = declarations ? ` ${styleAttr(declarations)}` : '';
   return `<section class="slide" data-slide-id="${escape(slide.id)}"`
     + ` data-canvas="${canvas.w}x${canvas.h}"`
+    + ` data-base="${stamp.slide}" data-base-ids="${escape(stamp.ids)}"`
     + (slide.name ? ` data-name="${escape(slide.name)}"` : '')
     + (slide.layout ? ` data-layout="${slide.layout}"` : '')
     + (slide.morphFromPrevious ? ' data-morph-from-previous="true"' : '')
@@ -1288,7 +1539,7 @@ export function slideToHtml(slide: Slide, canvas: { w: number; h: number }): str
     + `${background}>\n${body}\n</section>\n`;
 }
 
-function elementToHtml(element: SlideElement, build?: TimelineEntry): string {
+function elementToHtml(element: SlideElement, build?: TimelineEntry, base?: string): string {
   const position = `position:absolute; left:${element.x}px; top:${element.y}px;`
     + ` width:${element.w}px; height:${element.h}px;`
     + (element.rot ? ` transform:rotate(${element.rot}deg);` : '')
@@ -1308,6 +1559,7 @@ function elementToHtml(element: SlideElement, build?: TimelineEntry): string {
     element.lineageId !== undefined
       ? `data-lineage-id="${escape(element.lineageId ?? '')}"` : '',
     element.layoutMasterId ? `data-layout-master-id="${escape(element.layoutMasterId)}"` : '',
+    base ? `data-base="${escape(base)}"` : '',
     build ? `data-build="${build.trigger.on}${build.trigger.delay ? `+${build.trigger.delay}` : ''}"` : '',
     build?.trigger.ref ? `data-build-ref="${escape(build.trigger.ref)}"` : '',
     element.type === 'text' && element.layoutPlaceholder
@@ -1737,10 +1989,10 @@ function boxAttr(box: { x: number; y: number; w: number; h: number }): string {
   return `${box.x},${box.y},${box.w},${box.h}`;
 }
 
-export function uniqueId(preferred: string, used: Set<string>): string {
+export function uniqueId(preferred: string, used: Set<string>, reserved?: Set<string>): string {
   const base = preferred.replace(/[^a-zA-Z0-9._-]+/g, '-').replace(/^-+|-+$/g, '') || 'element';
   let id = base;
-  for (let n = 2; used.has(id); n++) id = `${base}-${n}`;
+  for (let n = 2; used.has(id) || reserved?.has(id); n++) id = `${base}-${n}`;
   used.add(id);
   return id;
 }

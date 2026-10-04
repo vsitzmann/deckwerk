@@ -28,7 +28,7 @@ import { applyOpsLenient } from '@shared/collabApply.js';
 import { parseDeck, type Deck, type Slide } from '@shared/deck.js';
 import { diffDecks } from '@shared/deckDiff.js';
 import { renameRetiredFields } from '@shared/fieldAliases.js';
-import { adoptAuthoredIds, describeHtmlSync } from '@shared/htmlSlides.js';
+import { adoptAuthoredIds, describeHtmlSync, stampPage, type PageStamp } from '@shared/htmlSlides.js';
 import { SPEAKER_NOTES_FILE, applySpeakerNotes, serializeSpeakerNotes } from '@shared/speakerNotes.js';
 import { AGENT_GUIDE_FILE, AGENT_GUIDE_MARKER, renderAgentGuide } from '../main/agentGuide.js';
 import { agentRuntimePaths, atomicJson, deckRevision } from '../main/agentRuntime.js';
@@ -155,6 +155,7 @@ interface SyncResponse {
   slides?: Array<{ id: string; elements: Array<{ id: string; type: string; box: unknown }> }>;
   overflows?: unknown[];
   warnings?: string[];
+  stamp?: PageStamp;
   error?: string;
   message?: string;
 }
@@ -692,14 +693,17 @@ export function connectAgentBridge(options: ConnectOptions): AgentBridge {
       : `${file}: no change`);
     // Stamp the assigned ids back so the next save replaces rather than
     // inserts — unless the author saved again meanwhile.
+    // The fingerprints too: the next save is compared with what the deck
+    // holds now, not with what the page was first exported from.
     let stamped = authored;
     const current = await readFile(path, 'utf8').catch(() => null);
     if (current === authored && result.slides) {
-      const adopted = adoptAuthoredIds(authored, result.slides as unknown as Slide[]);
-      if (adopted) {
-        stamped = adopted;
-        lastWrittenHtml.set(path, adopted);
-        await writeFile(path, adopted, 'utf8');
+      const adopted = adoptAuthoredIds(authored, result.slides as unknown as Slide[]) ?? authored;
+      const based = result.stamp ? stampPage(adopted, result.stamp) : adopted;
+      if (based !== authored) {
+        stamped = based;
+        lastWrittenHtml.set(path, based);
+        await writeFile(path, based, 'utf8');
       }
     }
     lastSync.set(path, { contents: stamped, result });

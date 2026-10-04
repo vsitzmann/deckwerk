@@ -6,6 +6,7 @@ import {
   htmlChangeLabel,
   htmlSlideScope,
   slideFromMeasured,
+  slidesFromMeasured,
   slideToHtml,
   slidesToHtml,
   type MeasuredNode,
@@ -411,6 +412,32 @@ describe('measured nodes become deck objects', () => {
     expect(ids).not.toContain('results-h1-2');
     // Paint order follows document order.
     expect(slide.elements.map((element) => element.z)).toEqual([1, 2, 3]);
+  });
+
+  it('never mints a new slide an id the same page already gives an existing slide', () => {
+    // The ids of the slides a page replaces are freed so they can keep them;
+    // minting from the freed set handed a new section the id of a slide in
+    // the very same page, and the save was refused as naming one slide twice.
+    // (Found by the agent collaboration fuzz.)
+    const deck = parseDeck({
+      version: 1,
+      slides: [
+        { id: 'elsewhere' },
+        { id: 'slide-2', elements: [{ id: 'kept', type: 'text', x: 0, y: 0, w: 10, h: 10, html: 'a' }] },
+      ],
+    });
+    const blank = { name: '', notes: '', background: { color: null, image: null }, morphFromPrevious: false };
+    // The new section comes first, so it is minted before slide-2 is reached.
+    const slides = slidesFromMeasured(deck, [
+      { ...blank, id: null, nodes: [node({ tag: 'h1' })] },
+      { ...blank, id: 'slide-2', nodes: [node({ elementId: 'kept' })] },
+    ]);
+    const ids = slides.map((slide) => slide.id);
+    expect(ids[1]).toBe('slide-2');
+    expect(new Set(ids).size).toBe(2);
+    const elementIds = slides.flatMap((slide) => slide.elements.map((element) => element.id));
+    expect(elementIds).toContain('kept');
+    expect(new Set(elementIds).size).toBe(elementIds.length);
   });
 });
 

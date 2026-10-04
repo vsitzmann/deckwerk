@@ -8,8 +8,10 @@ import {
   htmlSlideScope,
   htmlSyncHistoryLabel,
   htmlSyncOperations,
+  pageBases,
   renderAuthoredMath,
   slidesFromMeasured,
+  type SlideBase,
 } from '@shared/htmlSlides.js';
 import { PLAYER_TYPE_CSS } from '@shared/playerTypeCss.js';
 import { browserDeckRevision } from './agentBridge.js';
@@ -35,6 +37,8 @@ export interface CompiledAuthoredHtml {
   /** Inline style the browser silently dropped; see `MeasuredSlide.warnings`. */
   warnings: string[];
   sanitization: HtmlSanitizationReport;
+  /** What the page says its slides were when it was exported (`pageBases`). */
+  bases: Map<string, SlideBase>;
 }
 
 /** Lay authored markup out at canvas size and report it as ordinary slides. */
@@ -93,6 +97,7 @@ export async function compileAuthoredHtml(
     return {
       slides: slidesFromMeasured(deck, measured),
       warnings: measured.flatMap((slide) => slide.warnings ?? []),
+      bases: pageBases(measured),
       sanitization: sanitized.report,
     };
   } finally {
@@ -156,7 +161,7 @@ export async function authoredHtmlSync(
   options: { after?: string | null; label?: string } = {},
 ): Promise<{ transaction: AgentTransaction | null; slides: Slide[]; warnings: string[] }> {
   const scope = htmlSlideScope(file.contents);
-  const { slides, warnings } = await compileAuthoredHtml(deck, file.contents, theme);
+  const { slides, warnings, bases } = await compileAuthoredHtml(deck, file.contents, theme);
   if (slides.length === 0 && scope === null) {
     throw new Error(`No slides found in ${fileName(file.path)}`);
   }
@@ -165,6 +170,7 @@ export async function authoredHtmlSync(
     slides,
     scope,
     options.after === undefined ? deck.slides[deck.slides.length - 1]?.id ?? null : options.after,
+    bases,
   );
   // A file that asks for nothing at all — no slides of its own and none to
   // delete — is a save to sit out, not an error to put in front of the user.

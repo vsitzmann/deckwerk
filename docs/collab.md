@@ -411,6 +411,13 @@ exposed for console driving.
   idempotent. Slide-level properties (name, background, layout, timeline)
   travel separately from elements, so renaming a slide never stomps a
   concurrent element edit on it.
+- An agent's saved page replaces the slides it holds, but not blindly: the
+  export fingerprints every slide and object (`data-base`), so a save over a
+  slide somebody changed since the export merges object by object — what the
+  page left alone keeps their edit, what it changed takes the page's, their
+  additions stay and their deletions win (`carrySlideState` in
+  `src/shared/htmlSlides.ts`). The same holds for the desktop editor's
+  watcher and an offline `slide-agent apply`.
 - Undo is op-based and selective: Cmd+Z inverts *your* last edit against the
   *current* deck and broadcasts it as an ordinary transaction. It never
   reverts other people's work; if a peer deleted what you were about to

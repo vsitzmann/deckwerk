@@ -152,6 +152,12 @@ Two rules about the file itself:
   replaces those slides rather than inserting them a second time — and it means
   dropping a section (its id now recorded) deletes that slide on the next save.
   Re-read the file after a sync rather than editing a stale copy of it.
+- **Leave `data-base` alone.** Each exported section and object records what
+  it was when exported (a short fingerprint). If somebody edits one of those
+  slides while you work, your save merges instead of undoing them: objects you
+  left alone keep their edits, objects you changed take yours, anything they
+  added stays and anything they deleted stays deleted. A section or object you
+  write yourself needs no `data-base`.
 
 If `apply` times out, **do not apply again**: the editor may still land the
 change. Check `slide-agent context` for the outline first — the id write-back

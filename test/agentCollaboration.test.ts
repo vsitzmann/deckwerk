@@ -99,6 +99,25 @@ function plainText(slide: Slide): string {
   return slide.elements.map((element) => (element.type === 'text' ? element.html : '')).join(' ');
 }
 
+/**
+ * A person changing one slide, through the product: over the session's
+ * WebSocket when hosted, as a second writer's transaction otherwise.
+ */
+async function personEdits(workspace: AgentWorkspace, slideId: string, change: (slide: Slide) => void): Promise<void> {
+  if (workspace.human) {
+    await workspace.human.edit('A person edits', (deck) => change(slideById(deck, slideId)));
+    return;
+  }
+  const slide = structuredClone(slideById(await workspace.deck(), slideId));
+  change(slide);
+  const file = join(workspace.dir, `person-${Date.now()}.json`);
+  await writeFile(file, JSON.stringify({
+    version: 1, label: 'A person edits', operations: [{ op: 'replaceSlide', slideId, slide }],
+  }), 'utf8');
+  const result = await workspace.run('transaction', 'apply', '.', file);
+  expect(result.code, `${result.stdout}\n${result.stderr}`).toBe(0);
+}
+
 const sections = (page: string): string[] =>
   [...page.matchAll(/<section\b[^>]*>[\s\S]*?<\/section>/g)].map((match) => match[0]);
 const withSections = (page: string, blocks: string[]): string =>
@@ -222,6 +241,48 @@ for (const kind of BACKENDS) describe.skipIf(!electronBinary)(`an agent working 
     for (const slide of before.slides.filter((candidate) => candidate.id !== 'closing')) {
       expect(slideById(deck, slide.id), slide.id).toEqual(slide);
     }
+  });
+
+  it('keeps what a person changed on a slide after the agent exported it', async () => {
+    const workspace = await open(kind);
+    const page = await exportPage(workspace, 'review,media');
+    // Meanwhile a person rewords the heading, adds a line, renames the slide
+    // and deletes the picture on the next one…
+    await personEdits(workspace, 'review', (slide) => {
+      slide.name = 'Renamed by a person';
+      const heading = slide.elements.find((element) => element.id === 'review-heading')!;
+      if (heading.type === 'text') heading.html = 'Review heading, by a person';
+      slide.elements.push({
+        id: 'person-note', type: 'text', x: 120, y: 700, w: 900, h: 80, rot: 0, z: 30, opacity: 1,
+        class: ['role-caption'], style: {}, html: 'Added by a person', align: 'left', valign: 'top',
+      } as never);
+    });
+    await personEdits(workspace, 'media', (slide) => {
+      slide.elements = slide.elements.filter((element) => element.id !== 'media-picture');
+    });
+    // …while the agent, from its page exported before all that, rewrites the body.
+    await workspace.write('work.html', page.replace('Review body text', 'Review body, by the agent'));
+    landed(await apply(workspace, 'work.html'), workspace);
+    let deck = await workspace.deck();
+    let review = slideById(deck, 'review');
+    expect(plainText(review)).toContain('Review heading, by a person');
+    expect(plainText(review)).toContain('Review body, by the agent');
+    expect(plainText(review)).toContain('Added by a person');
+    expect(review.name).toBe('Renamed by a person');
+    expect(slideById(deck, 'media').elements.map((element) => element.id)).not.toContain('media-picture');
+    expect(review.elements.find((element) => element.id === 'review-body')?.comments).toHaveLength(1);
+
+    // Saving the same page again, edited further, compares with what that
+    // save left — not with the old export — so nothing of the person's is
+    // taken for the agent's to undo.
+    await workspace.write('work.html', (await workspace.read('work.html')).replace('Review body, by the agent', 'Review body, by the agent again'));
+    landed(await apply(workspace, 'work.html'), workspace);
+    deck = await workspace.deck();
+    review = slideById(deck, 'review');
+    expect(plainText(review)).toContain('Review body, by the agent again');
+    expect(plainText(review)).toContain('Review heading, by a person');
+    expect(plainText(review)).toContain('Added by a person');
+    expect(validateDeckIntegrity(deck)).toEqual([]);
   });
 
   it('deletes and reorders exactly the slides the page governs', async () => {

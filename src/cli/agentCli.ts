@@ -43,7 +43,7 @@ import {
   waitForAgentResponse,
   writeAgentRequest,
 } from '../main/agentRuntime.js';
-import { adoptAuthoredIds, htmlSyncSummary, insertionAnchor } from '@shared/htmlSlides.js';
+import { adoptAuthoredIds, htmlSyncSummary, insertionAnchor, pageStampOf, stampPage, type PageStamp } from '@shared/htmlSlides.js';
 import { DECK_FILE, importAsset, importWebPage, loadDeck } from '../main/deckStore.js';
 import { injectWebBridgeRuntime } from '@shared/webBridge.js';
 import { measureBuiltTextOverflows } from './compileHtml.js';
@@ -397,7 +397,7 @@ async function applyCommand(argv: string[], io: CliIo): Promise<number> {
     }, 180_000);
     const outcome = (response.payload ?? {}) as Partial<{
       changes: { replaced: string[]; inserted: string[]; deleted: string[]; moved: number };
-      slides: unknown; warnings: string[]; message: string;
+      slides: unknown; warnings: string[]; message: string; stamp: PageStamp;
     }>;
     const changes = outcome.changes;
     io.out(json({
@@ -416,15 +416,18 @@ async function applyCommand(argv: string[], io: CliIo): Promise<number> {
     }));
     if (response.status === 'conflict') return EXIT_CONFLICT;
     if (response.status === 'error') return EXIT_ERROR;
-    // The editor stamps ids only into files under edit/. Anything else (a
-    // drafts/ page) is stamped here, or applying it again would insert the
-    // slide a second time. A file the editor already stamped no longer
-    // matches what was sent, so this never overwrites its write.
-    if (Array.isArray(outcome.slides)) {
+    // The editor stamps files under edit/ itself. Anything else (a drafts/
+    // page) is stamped here, or applying it again would insert the slide a
+    // second time. Never a file in edit/: the editor's watcher would take
+    // this process's write for a save and compile the page again, later and
+    // against whatever the deck has become by then.
+    const inEditDir = dirname(filePath) === join(deckDir, 'edit');
+    if (Array.isArray(outcome.slides) && !inEditDir) {
       const authored = await readFile(filePath, 'utf8');
       if (authored === authoredBefore) {
-        const adopted = adoptAuthoredIds(authored, outcome.slides as Slide[]);
-        if (adopted) await writeFile(filePath, adopted, 'utf8');
+        const adopted = adoptAuthoredIds(authored, outcome.slides as Slide[]) ?? authored;
+        const stamped = outcome.stamp ? stampPage(adopted, outcome.stamp) : adopted;
+        if (stamped !== authored) await writeFile(filePath, stamped, 'utf8');
       }
     }
     return EXIT_OK;
@@ -462,22 +465,21 @@ async function applyCommand(argv: string[], io: CliIo): Promise<number> {
     // apply reports success while the page laid out without the declaration.
     ...(warnings.length > 0 ? { warnings } : {}),
   };
-  if (!transaction) {
-    io.out(json({ status: 'applied', revision: deckRevision(deck), applied: false, live: false, ...report }));
-    return EXIT_OK;
-  }
-
-  const code = await applyTransaction(deckDir, transaction, io, report);
+  const code = transaction
+    ? await applyTransaction(deckDir, transaction, io, report)
+    : (io.out(json({ status: 'applied', revision: deckRevision(deck), applied: false, live: false, ...report })), EXIT_OK);
 
   // Stamp the assigned ids back into the file so applying it again replaces
   // these slides instead of inserting them a second time. Skipped if the file
   // changed while the compile ran — stamping ids onto contents that were not
   // compiled would misattribute them.
+  // The fingerprints too: the next save of the page is compared with what
+  // it says now, not with what it was exported from.
   if (code === EXIT_OK) {
     const authored = await readFile(filePath, 'utf8');
     if (authored === authoredBefore) {
-      const adopted = adoptAuthoredIds(authored, slides);
-      if (adopted) await writeFile(filePath, adopted, 'utf8');
+      const stamped = stampPage(adoptAuthoredIds(authored, slides) ?? authored, pageStampOf(slides));
+      if (stamped !== authored) await writeFile(filePath, stamped, 'utf8');
     }
   }
   return code;

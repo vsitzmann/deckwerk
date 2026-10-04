@@ -9,6 +9,7 @@ import {
   type ComputedSlideScene,
 } from '@shared/agent.js';
 import type { Deck, Slide, SlideElement } from '@shared/deck.js';
+import type { PageStamp } from '@shared/htmlSlides.js';
 import { fitAutoText, renderSlide } from '../player/render.js';
 import { sameSlideIgnoringNotes, type EditorStore } from './store.js';
 
@@ -34,6 +35,8 @@ export interface HtmlSyncOutcome {
   slides: Array<{ id: string; elements: Array<{ id: string; type: string; box: { x: number; y: number; w: number; h: number } }> }>;
   warnings: string[];
   message: string;
+  /** What the page's slides now are, for stamping into the page (`stampPage`). */
+  stamp?: PageStamp;
 }
 
 /** Publishes the editor's live, computed selection through the file-backed main-process bridge. */

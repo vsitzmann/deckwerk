@@ -221,6 +221,18 @@ class Walk {
     const doc = dom.window.document;
     const sections = [...doc.querySelectorAll('body > section')];
     const edits: string[] = [];
+    // Sometimes a person edits one of these slides after the export: the page
+    // the agent goes on to edit is then stale, and the save must merge.
+    const stale = this.chance(0.35) ? await this.personMeanwhile(scope) : null;
+    if (stale) edits.push(stale.what);
+    const removed = new Set<string>();
+    // What each object's markup was, so "touched" means changed on balance:
+    // a build toggled on and off again is no edit, and the merge agrees.
+    // (Attribute order aside: a parser that removes and re-adds an attribute moves it.)
+    const markupOf = (object: Element) => [...object.attributes].map((attr) => `${attr.name}=${attr.value}`)
+      .sort().join(' ') + object.innerHTML;
+    const exportedMarkup = new Map([...doc.querySelectorAll('[data-element-id]')]
+      .map((object) => [object.getAttribute('data-element-id')!, markupOf(object)]));
     const added: Array<{ section: Element; markers: string[] }> = [];
     const markersOf = (id: string) => this.slides.get(id)!.markers;
     for (const section of sections) {
@@ -249,6 +261,7 @@ class Walk {
             }
           }
           object.remove();
+          removed.add(object.getAttribute('data-element-id') ?? '');
           edits.push(`remove an object from ${id}`);
         } else if (op === 'restyle' && texts.length > 0) {
           const text = this.pick(texts).closest('[data-element-id]') as HTMLElement | null;
@@ -296,6 +309,9 @@ class Walk {
       added.push({ section, markers: fresh.markers });
       edits.push('add a slide');
     }
+    const touched = new Set([...doc.querySelectorAll('[data-element-id]')]
+      .filter((object) => exportedMarkup.get(object.getAttribute('data-element-id')!) !== markupOf(object))
+      .map((object) => object.getAttribute('data-element-id')!));
     const file = `work-${++this.pages}.html`;
     const page = dom.serialize();
     const kept = [...body.querySelectorAll(':scope > section')].map((section) => section.getAttribute('data-slide-id'));
@@ -320,6 +336,7 @@ class Walk {
       this.expect(changes.inserted.length === added.length, `expected ${added.length} inserted, got ${JSON.stringify(changes)}`);
       this.expect(changes.replaced.every((id) => scope.includes(id)), `replaced a slide outside the page: ${JSON.stringify(changes)}`);
       authored = (reply.json.slides as Array<{ id: string }>).map((slide) => slide.id);
+      if (process.env.AGENT_FUZZ_TRACE === '1') this.log(`  reply ${JSON.stringify(changes)} slides [${authored}] note ${reply.json.note ?? ''}`);
     }
     // The page's slides take the range's place, in the page's order.
     for (const id of deleted) {
@@ -335,6 +352,22 @@ class Walk {
     outside.splice(at, 0, ...authored);
     this.order.splice(0, this.order.length, ...outside);
     this.lastPage = file;
+    // The person's rewording stands where the agent left that object alone;
+    // where the agent changed the object too, the agent's later save wins.
+    if (stale?.rewrite && this.slides.has(stale.slideId)) {
+      const { slideId, elementId, before, after } = stale.rewrite;
+      this.log(`  (${before} -> ${after} in ${elementId}; agent touched [${[...touched]}], removed [${[...removed]}])`);
+      const model = this.slides.get(slideId)!;
+      if (removed.has(elementId)) {
+        model.markers.delete(after);
+        this.gone.add(after);
+      } else if (touched.has(elementId)) {
+        model.markers.delete(after);
+        this.gone.add(after);
+        model.markers.add(before);
+        this.gone.delete(before);
+      }
+    }
     // Whatever landed, the page now names exactly the slides it governs.
     const stamped = sectionIds(await this.ws.read(file));
     this.expect(stamped.join() === authored.join(), `the page is stamped [${stamped}], the deck has [${authored}]`);
@@ -454,6 +487,54 @@ class Walk {
     }
     model.notes = notes;
     model.skipped = skipped;
+  }
+
+  /**
+   * A person edits one of the slides the agent just exported: rewords a phrase
+   * (which object it was in is tracked, for the merge) or adds a line.
+   */
+  async personMeanwhile(scope: string[]): Promise<{
+    what: string;
+    slideId: string;
+    rewrite?: { slideId: string; elementId: string; before: string; after: string };
+  } | null> {
+    const slideId = this.pick(scope);
+    const model = this.slides.get(slideId)!;
+    const deck = await this.ws.deck();
+    const slide = deck.slides.find((candidate) => candidate.id === slideId)!;
+    const holder = slide.elements.find((element) => element.type === 'text'
+      && [...model.markers].some((marker) => element.html.includes(marker)));
+    const change = async (mutate: (target: Slide) => void) => {
+      const hosted = this.ws.kind === 'hosted' ? (this.ws as HostedWorkspace).human : null;
+      if (hosted) {
+        await hosted.edit('A person edits', (live) => mutate(live.slides.find((candidate) => candidate.id === slideId)!));
+      } else {
+        const next = structuredClone(slide);
+        mutate(next);
+        await this.transaction('A person edits', [{ op: 'replaceSlide', slideId, slide: next }]);
+      }
+    };
+    if (holder && holder.type === 'text' && this.chance(0.6)) {
+      const before = [...model.markers].find((marker) => holder.html.includes(marker))!;
+      const after = this.token();
+      await change((target) => {
+        const element = target.elements.find((candidate) => candidate.id === holder.id);
+        if (element?.type === 'text') element.html = element.html.replace(before, after);
+      });
+      model.markers.delete(before);
+      model.markers.add(after);
+      this.gone.add(before);
+      return { what: `meanwhile a person rewords ${holder.id}`, slideId, rewrite: { slideId, elementId: holder.id, before, after } };
+    }
+    const token = this.token();
+    await change((target) => {
+      target.elements.push({
+        id: `person-line-${token}`, type: 'text', x: 200, y: 900, w: 1000, h: 80, rot: 0, z: 50, opacity: 1,
+        class: ['role-caption'], style: {}, html: this.phrase(token), align: 'left', valign: 'top',
+      } as never);
+    });
+    model.markers.add(token);
+    return { what: `meanwhile a person adds a line to ${slideId}`, slideId };
   }
 
   /** The agent edits a page while a person edits a slide outside it, the edit landing mid-compile. */
@@ -589,6 +670,10 @@ for (const kind of BACKENDS) {
             await walk.check();
           } catch (error) {
             const message = error instanceof Error ? error.message : String(error);
+            if (process.env.AGENT_FUZZ_KEEP) {
+              const { cp } = await import('node:fs/promises');
+              await cp(ws.dir, process.env.AGENT_FUZZ_KEEP, { recursive: true }).catch(() => undefined);
+            }
             throw new Error(`seed ${seed}, step ${step} (${walk.trail.at(-1)}): ${message}\n\nsteps:\n`
               + walk.trail.map((line, index) => `  ${index + 1}. ${line}`).join('\n')
               + `\n\nreplay: AGENT_FUZZ_SEEDS=${seed} AGENT_FUZZ_BACKENDS=${kind} AGENT_FUZZ_STEPS=${step}`

@@ -10,7 +10,7 @@ import { emptyDeck } from '@shared/deck.js';
 import type { AgentSessionConnection, AuthoredHtmlFile, PresentationImportResult } from '@shared/ipc.js';
 import { captureEditorView, decodeEditorView, restoreEditorView } from '@shared/editorView.js';
 import { setIdSuffix } from '@shared/geometry.js';
-import { adoptAuthoredIds, describeHtmlSync, htmlSyncSummary } from '@shared/htmlSlides.js';
+import { adoptAuthoredIds, describeHtmlSync, htmlSyncSummary, pageStampOf, stampPage } from '@shared/htmlSlides.js';
 import { rangeForSlideSelection } from '@shared/presentationRange.js';
 import {
   themeById,
@@ -338,6 +338,7 @@ function applyHtmlEdit(
           const warned = warnings.length === 0 ? ''
             : ` — ${warnings.length} style warning${warnings.length === 1 ? '' : 's'}: ${warnings[0]}`;
           const summarise = (message: string, operations: typeof transaction extends null ? never : NonNullable<typeof transaction>['operations'] | []): HtmlSyncOutcome => ({
+            stamp: pageStampOf(slides),
             changes: htmlSyncSummary(operations),
             slides: slides.map((slide) => ({
               id: slide.id,
@@ -354,8 +355,10 @@ function applyHtmlEdit(
           store.replaceWithHistory(applyAgentTransaction(deck, transaction), transaction.label);
           await save();
           // Stamp the ids this compile assigned back into the file, so saving it
-          // again replaces these slides rather than inserting them a second time.
-          const adopted = adoptAuthoredIds(file.contents, slides);
+          // again replaces these slides rather than inserting them a second time
+          // — and what the page now says, which its next save is compared with.
+          const stampedPage = stampPage(adoptAuthoredIds(file.contents, slides) ?? file.contents, pageStampOf(slides));
+          const adopted = stampedPage === file.contents ? null : stampedPage;
           if (adopted) {
             operation.update(`Writing assigned slide ids to ${name}`);
             // Main only writes inside edit/; a file elsewhere (an agent's

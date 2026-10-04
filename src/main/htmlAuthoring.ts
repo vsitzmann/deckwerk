@@ -7,6 +7,7 @@ import {
   htmlSlideScope,
   htmlSyncHistoryLabel,
   htmlSyncOperations,
+  pageBases,
   slidesToHtml,
 } from '@shared/htmlSlides.js';
 import { PLAYER_TYPE_CSS } from '@shared/playerTypeCss.js';
@@ -63,7 +64,7 @@ export async function htmlEditTransaction(
 ): Promise<{ transaction: AgentTransaction | null; slides: Slide[]; warnings: string[] }> {
   const authored = await readFile(htmlPath, 'utf8');
   const scope = htmlSlideScope(authored);
-  const { slides, warnings } = await compileHtmlToSlides({ deckDir, deck, htmlPath });
+  const { slides, warnings, measured } = await compileHtmlToSlides({ deckDir, deck, htmlPath });
   if (slides.length === 0 && scope === null) {
     throw new Error(`No slides found in ${basename(htmlPath)}.`
       + ' Wrap each slide in <section class="slide" data-slide-id="…">.');
@@ -73,6 +74,7 @@ export async function htmlEditTransaction(
     slides,
     scope,
     options.after === undefined ? deck.slides[deck.slides.length - 1]?.id ?? null : options.after,
+    pageBases(measured),
   );
   // An untouched export compiles to what the deck already holds. That is a
   // sync with nothing to do — the same answer the editor and a hosted mirror

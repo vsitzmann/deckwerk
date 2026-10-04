@@ -58,6 +58,8 @@ import {
   htmlSyncOperations,
   htmlSyncSummary,
   insertionAnchor,
+  pageBases,
+  pageStampOf,
   slidesFromMeasured,
   slidesToHtml,
 } from '../shared/htmlSlides.js';
@@ -2274,7 +2276,8 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
       try {
         compiledDraft.draft.slides = slidesFromMeasured(live, compiledDraft.compiled.measured);
         compiledDraft.draft.revision = deckRevision(live);
-        operations = htmlSyncOperations(live, compiledDraft.draft.slides, scope, after);
+        operations = htmlSyncOperations(live, compiledDraft.draft.slides, scope, after,
+          pageBases(compiledDraft.compiled.measured));
       } catch (error) {
         return respondJson(response, 400, { error: String(error instanceof Error ? error.message : error) });
       }
@@ -2313,6 +2316,9 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
           })),
         })),
         overflows: compiledDraft.draft.report.overflows ?? [],
+        // What the page now says its slides are, for the bridge to stamp into
+        // it: the next save of the same page is compared with this.
+        stamp: pageStampOf(compiledDraft.draft.slides),
         ...(Array.isArray(compiledDraft.draft.report.warnings) && (compiledDraft.draft.report.warnings as unknown[]).length > 0
           ? { warnings: compiledDraft.draft.report.warnings }
           : {}),
