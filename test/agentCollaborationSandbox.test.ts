@@ -3,7 +3,7 @@ import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { electronBinary } from './support/browserSession.js';
 import { hostedWorkspace, sectionIds, until, type HostedWorkspace } from './support/agentWorkspace.js';
-import { canSandbox, installedUnitSandbox, PRODUCTION_SANDBOX } from './support/collabServerProcess.js';
+import { canSandbox, chromiumSandboxesHere, installedUnitSandbox, PRODUCTION_SANDBOX } from './support/collabServerProcess.js';
 
 /**
  * Agent collaboration on a server sandboxed the way production runs it.
@@ -29,6 +29,9 @@ const BROKEN_SANDBOX = [
 ];
 
 const sandboxable = Boolean(electronBinary) && canSandbox();
+// The production policy leaves Chromium's sandbox to user namespaces; a host
+// that forbids those to ordinary processes (GitHub's runners) cannot run it.
+const hostSandboxes = sandboxable && chromiumSandboxesHere(electronBinary!);
 const installed = installedUnitSandbox();
 
 let hosted: HostedWorkspace | null = null;
@@ -44,7 +47,7 @@ async function addSlide(workspace: HostedWorkspace, title: string) {
 }
 
 describe.skipIf(!sandboxable)('agent collaboration under the production sandbox', { timeout: 240_000 }, () => {
-  it('saves, renders and checks pages on a server sandboxed as deckwerk-collab must be', async () => {
+  it.skipIf(!hostSandboxes)('saves, renders and checks pages on a server sandboxed as deckwerk-collab must be', async () => {
     hosted = await hostedWorkspace({ sandbox: PRODUCTION_SANDBOX });
     expect(hosted.serverProcess?.sandboxed).toBe(true);
     const applied = await addSlide(hosted, 'Made under the sandbox');

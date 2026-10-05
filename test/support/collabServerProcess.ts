@@ -1,5 +1,6 @@
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { join, resolve } from 'node:path';
 
@@ -79,6 +80,47 @@ export function installedUnitSandbox(): string[] | null {
 }
 
 const REPO = resolve(import.meta.dirname, '..', '..');
+
+let hostSandboxes: boolean | undefined;
+
+/**
+ * Whether Chromium can sandbox itself here with `NoNewPrivileges` and nothing
+ * else — that is, whether this host lets an ordinary process create user
+ * namespaces, which is what the production policy relies on.
+ *
+ * GitHub's Ubuntu runners do not (AppArmor restricts unprivileged user
+ * namespaces), and CI's setuid chrome-sandbox is ignored under
+ * NoNewPrivileges, so there the policy cannot be tested at all. That is a
+ * fact about the runner, not a regression in DeckWerk.
+ */
+export function chromiumSandboxesHere(electron: string): boolean {
+  if (hostSandboxes === undefined) {
+    const dir = mkdtempSync(join(tmpdir(), 'chromium-sandbox-probe-'));
+    const probe = join(dir, 'probe.cjs');
+    writeFileSync(probe, [
+      "const { app, BrowserWindow } = require('electron');",
+      'app.disableHardwareAcceleration();',
+      'app.whenReady().then(async () => {',
+      "  const win = new BrowserWindow({ show: false, webPreferences: { offscreen: true } });",
+      "  await win.loadURL('data:text/html,<p>ok</p>');",
+      "  process.stdout.write(await win.webContents.executeJavaScript('document.body.textContent'));",
+      '  app.exit(0);',
+      '});',
+    ].join('\n'));
+    try {
+      const out = execFileSync('systemd-run', [
+        '--user', '--pipe', '--wait', '--quiet', '--collect', '-p', 'NoNewPrivileges=yes',
+        electron, probe, '--ozone-platform=headless',
+      ], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 60_000 });
+      hostSandboxes = out.includes('ok');
+    } catch {
+      hostSandboxes = false;
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+  return hostSandboxes;
+}
 
 export interface CollabServerProcess {
   port: number;
