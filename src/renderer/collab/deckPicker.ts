@@ -432,15 +432,8 @@ export function showDeckPicker(opts: {
         else reopen(folder);
       })().catch((error) => opts.onStatus(`Rename failed: ${error instanceof Error ? error.message : error}`));
     });
-    const remove = rowButton('Delete…', 'Delete this folder (only when it is empty)', () => {
-      if (!window.confirm(`Delete the folder “${entry.name}”?`)) return;
-      void (async () => {
-        const response = await fetch(`/api/folders?path=${encodeURIComponent(entry.path)}`, { method: 'DELETE' });
-        const body = await response.json() as { error?: string };
-        if (!response.ok) throw new Error(body.error ?? `delete failed (${response.status})`);
-        opts.onStatus(`Deleted the folder “${entry.name}”`);
-        reopen(folder);
-      })().catch((error) => opts.onStatus(`Delete failed: ${error instanceof Error ? error.message : error}`));
+    const remove = rowButton('Delete…', 'Move this folder and everything in it to the trash', () => {
+      moveToTrash(entry.path, `the folder “${entry.name}” and everything in it`, opts.onStatus, () => reopen(folder));
     });
     return rowGroup(row, [rename, remove]);
   };
@@ -467,7 +460,20 @@ export function showDeckPicker(opts: {
     });
     // Without --access the server has no owners, so everything is yours to
     // manage — the same rule the folder rows already follow.
-    if (!(deck.canManage ?? !opts.access)) return rowGroup(row, []);
+    // Deleting only moves the deck to the trash, so anyone who may edit it may.
+    const remove = rowButton('Delete…', 'Move this presentation to the trash', () => {
+      moveToTrash(deck.id, `“${deck.title}”`, opts.onStatus, () => {
+        if (deck.id === current) {
+          // The open deck is gone from here: back to the bare picker.
+          const params = new URLSearchParams(location.search);
+          params.delete('deck');
+          location.search = params.toString();
+        }
+        else reopen(folder);
+      });
+    });
+    const mayEdit = !opts.access || deck.role === 'owner' || deck.role === 'edit';
+    if (!(deck.canManage ?? !opts.access)) return rowGroup(row, mayEdit ? [remove] : []);
     const rename = rowButton('Rename…', 'Give this presentation another name', () => {
       const name = (window.prompt('New name for this presentation?', deck.title) ?? '').trim();
       if (!name || name === deck.title) return;
@@ -493,7 +499,7 @@ export function showDeckPicker(opts: {
       'Change who can open this presentation',
       () => showShareDialog(deck.id, opts.onStatus, () => reopen(folder)),
     );
-    return rowGroup(row, [rename, move, share]);
+    return rowGroup(row, [rename, move, share, remove]);
   };
 
   const renderTrail = (folders: FolderEntry[]) => {
@@ -598,6 +604,11 @@ export function showDeckPicker(opts: {
     }),
   );
 
+  actions.append(makeButton('Trash…', () => {
+    overlay.remove();
+    showTrashDialog(opts.onStatus, () => showDeckPicker({ ...opts, folder }));
+  }));
+
   // Progress has to be shown inside the dialog: the toolbar's status line is
   // behind this overlay, so reporting an upload there reads as nothing
   // happening at all. It goes to both — the picker reloads the page when an
@@ -652,6 +663,127 @@ export function showDeckPicker(opts: {
   overlay.append(box);
   document.body.append(overlay);
   // Focusable so the Escape handler above hears the key without a click first.
+  box.tabIndex = -1;
+  box.focus();
+}
+
+/**
+ * Ask, then move a deck or folder to the server's trash. Nothing is deleted:
+ * the Trash… dialog lists it afterwards, and it can be put back from there.
+ */
+function moveToTrash(path: string, what: string, onStatus: (text: string) => void, done: () => void): void {
+  if (!window.confirm(`Delete ${what}?\n\nIt moves to the Trash, where it stays and can be restored.`)) return;
+  void (async () => {
+    const response = await fetch(`/api/trash?path=${encodeURIComponent(path)}`, { method: 'POST' });
+    const body = await response.json() as { error?: string };
+    if (!response.ok) throw new Error(body.error ?? `delete failed (${response.status})`);
+    onStatus(`Moved ${what} to the trash`);
+    done();
+  })().catch((error) => onStatus(`Delete failed: ${error instanceof Error ? error.message : error}`));
+}
+
+interface TrashEntry {
+  id: string;
+  originalPath: string;
+  kind: 'deck' | 'folder';
+  name: string;
+  title?: string;
+  deletedAt: string;
+  deletedBy: string;
+  canRestore: boolean;
+}
+
+/** What is in the trash that this person could see before it was deleted. */
+function showTrashDialog(onStatus: (text: string) => void, back: () => void): void {
+  const overlay = document.createElement('div');
+  overlay.className = 'workflow-overlay';
+  const box = document.createElement('div');
+  box.className = 'workflow-dialog deck-picker';
+  const title = document.createElement('h2');
+  title.textContent = 'Trash';
+  const note = document.createElement('div');
+  note.className = 'deck-picker-trail';
+  note.textContent = 'Deleted presentations and folders stay here. Restore puts one back where it was.';
+  const head = document.createElement('div');
+  head.className = 'deck-picker-head';
+  head.append(title, note);
+  const columns = document.createElement('div');
+  columns.className = 'deck-picker-columns';
+  columns.append(rowGroup(pickerRow('div', 'Name', ['Kind', 'Deleted', 'Was in', '', 'Deleted by', '']), []));
+  const list = document.createElement('div');
+  list.className = 'deck-picker-list';
+  list.textContent = 'Loading…';
+
+  const close = () => overlay.remove();
+  const load = () => {
+    void (async () => {
+      const response = await fetch('/api/trash');
+      if (!response.ok) throw new Error(`listing failed (${response.status})`);
+      const entries = await response.json() as TrashEntry[];
+      list.replaceChildren();
+      if (entries.length === 0) {
+        const empty = document.createElement('div');
+        empty.className = 'deck-picker-group';
+        empty.textContent = 'The trash is empty.';
+        list.append(empty);
+        return;
+      }
+      for (const entry of entries) {
+        const parent = entry.originalPath.includes('/')
+          ? entry.originalPath.slice(0, entry.originalPath.lastIndexOf('/'))
+          : 'All presentations';
+        const row = pickerRow('div', entry.title ?? entry.name, [
+          entry.kind === 'deck' ? 'presentation' : 'folder',
+          entry.deletedAt ? editedAgo(entry.deletedAt) : '',
+          parent,
+          '',
+          entry.deletedBy,
+          '',
+        ]);
+        if (entry.deletedAt) row.children[2]?.setAttribute('title', new Date(entry.deletedAt).toLocaleString());
+        row.children[3]?.setAttribute('title', entry.originalPath);
+        if (entry.kind === 'folder') row.classList.add('deck-picker-folder');
+        const buttons: HTMLElement[] = [];
+        if (entry.canRestore) {
+          buttons.push(rowButton('Restore', `Put this back at “${entry.originalPath}”`, () => {
+            void (async () => {
+              const restored = await fetch(`/api/trash/restore?id=${encodeURIComponent(entry.id)}`, { method: 'POST' });
+              const body = await restored.json() as { error?: string };
+              if (!restored.ok) throw new Error(body.error ?? `restore failed (${restored.status})`);
+              onStatus(`Restored “${entry.title ?? entry.name}”`);
+              load();
+            })().catch((error) => onStatus(`Restore failed: ${error instanceof Error ? error.message : error}`));
+          }));
+        }
+        list.append(rowGroup(row, buttons));
+      }
+    })().catch(() => {
+      list.textContent = 'Could not reach the server.';
+    });
+  };
+  load();
+
+  const actions = document.createElement('div');
+  actions.className = 'workflow-actions';
+  const backButton = document.createElement('button');
+  backButton.textContent = 'Back to presentations';
+  backButton.addEventListener('click', () => {
+    close();
+    back();
+  });
+  actions.append(backButton);
+  const foot = document.createElement('div');
+  foot.className = 'deck-picker-foot';
+  foot.append(actions);
+  box.append(head, columns, list, foot);
+  overlay.append(box);
+  overlay.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') {
+      close();
+      back();
+    }
+  });
+  document.body.append(overlay);
   box.tabIndex = -1;
   box.focus();
 }

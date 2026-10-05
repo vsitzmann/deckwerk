@@ -4,7 +4,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import { lookup } from 'node:dns/promises';
 import { createReadStream, createWriteStream, existsSync, statSync } from 'node:fs';
 import { pipeline } from 'node:stream/promises';
-import { mkdir, mkdtemp, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, readFile, rename, rm, rmdir, stat, writeFile } from 'node:fs/promises';
 import { createHash, randomUUID } from 'node:crypto';
 import { networkInterfaces, tmpdir } from 'node:os';
 import { basename, dirname, extname, join, normalize, resolve } from 'node:path';
@@ -753,6 +753,97 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
   async function deckWritable(identity: Identity | null, deckId: string): Promise<boolean> {
     const role = await deckRoleOf(identity, deckId);
     return role === 'owner' || role === 'edit';
+  }
+
+  /**
+   * The trash. Deleting from the picker never removes anything: the deck or
+   * folder is renamed into `<root>/.trash/<entry>/item`, with a `trash.json`
+   * beside it saying where it came from, when, and who moved it. The item's
+   * own sidecars (access.json, folder.json, and those of everything inside)
+   * travel with it, so who may see a trashed item is computed from exactly
+   * the rules that applied before it was trashed. `.trash` is a dot-name, so
+   * splitDeckPath refuses it: no listing walks into it and no route opens it.
+   */
+  const TRASH_DIR = join(rootDir, '.trash');
+  const TRASH_ENTRY_ID = /^[0-9A-Za-z-]{8,80}$/;
+
+  interface TrashMeta {
+    originalPath: string;
+    kind: 'deck' | 'folder';
+    name: string;
+    title?: string;
+    deletedAt: string;
+    deletedBy: string;
+  }
+
+  /**
+   * Whether this person could see a deck or folder at `dir` (live or trashed),
+   * and whether they could edit every deck in it. Same rules as the listing:
+   * a deck by its sidecar, a folder when it is theirs or holds something they
+   * could see.
+   */
+  async function treeAccess(
+    dir: string,
+    identity: Identity | null,
+    depth = 0,
+  ): Promise<{ visible: boolean; editable: boolean }> {
+    if (!accessControl || !identity) return { visible: true, editable: true };
+    if (isDeckDir(dir)) {
+      const role = deckRoleFor(identity.login, await readDeckAccess(dir, accessControl), accessControl);
+      return { visible: role !== null, editable: role === 'owner' || role === 'edit' };
+    }
+    const owner = await readFolderOwner(dir, accessControl);
+    const isAdmin = identity.login === accessControl.admin;
+    let visible = isAdmin || owner === identity.login;
+    let editable = isAdmin || owner === identity.login;
+    if (depth >= MAX_FOLDER_DEPTH) return { visible, editable };
+    let entries;
+    try {
+      entries = await readdir(dir, { withFileTypes: true });
+    } catch {
+      return { visible, editable };
+    }
+    for (const entry of entries) {
+      if (!entry.isDirectory() || entry.name.startsWith('.')) continue;
+      const inside = await treeAccess(join(dir, entry.name), identity, depth + 1);
+      if (inside.visible) visible = true;
+      if (!inside.editable) editable = false;
+    }
+    return { visible, editable };
+  }
+
+  async function readTrashMeta(entryDir: string): Promise<TrashMeta | null> {
+    try {
+      const raw = JSON.parse(await readFile(join(entryDir, 'trash.json'), 'utf8')) as Partial<TrashMeta>;
+      if (typeof raw.originalPath !== 'string' || (raw.kind !== 'deck' && raw.kind !== 'folder')) return null;
+      return {
+        originalPath: raw.originalPath,
+        kind: raw.kind,
+        name: typeof raw.name === 'string' ? raw.name : raw.originalPath,
+        title: typeof raw.title === 'string' ? raw.title : undefined,
+        deletedAt: typeof raw.deletedAt === 'string' ? raw.deletedAt : '',
+        deletedBy: typeof raw.deletedBy === 'string' ? raw.deletedBy : '',
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  /** Close every room at or under `target` so its session writes and lets go. */
+  async function drainRooms(target: string): Promise<boolean> {
+    const inside = [...rooms.keys()].filter((id) => id === target || id.startsWith(`${target}/`));
+    if (inside.some((id) => (rooms.get(id)?.peers.size ?? 0) > 0 || relocations.has(id))) return false;
+    for (const id of inside) {
+      const room = rooms.get(id);
+      if (room) {
+        room.relocating = true;
+        await room.session.flush();
+        await room.session.close();
+        rooms.delete(id);
+      }
+      forgetDeckState(id);
+    }
+    return true;
   }
 
   async function getRoom(deckId: string): Promise<Room> {
@@ -1546,6 +1637,129 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
 
     // Rename a folder. Every deck inside it is filed under its path, so all
     // of their ids change at once — which is why none of them may be open.
+    if (hostedDeckId && (path === '/api/trash' || path === '/api/trash/restore')) {
+      return respondJson(response, 403, { error: 'this session hosts a single shared presentation' });
+    }
+
+    // The trash: what this person could see before it was trashed, newest first.
+    if (path === '/api/trash' && request.method === 'GET') {
+      let entries: string[] = [];
+      try {
+        entries = (await readdir(TRASH_DIR, { withFileTypes: true }))
+          .filter((entry) => entry.isDirectory() && TRASH_ENTRY_ID.test(entry.name))
+          .map((entry) => entry.name);
+      } catch {
+        // No trash yet.
+      }
+      const listed = [];
+      for (const id of entries) {
+        const entryDir = join(TRASH_DIR, id);
+        const meta = await readTrashMeta(entryDir);
+        if (!meta || !existsSync(join(entryDir, 'item'))) continue;
+        const access = await treeAccess(join(entryDir, 'item'), identity);
+        if (!access.visible) continue;
+        listed.push({ id, ...meta, canRestore: access.editable });
+      }
+      listed.sort((a, b) => b.deletedAt.localeCompare(a.deletedAt));
+      respondJson(response, 200, listed);
+      return;
+    }
+
+    // Move a deck or folder into the trash. Needs write access to all of it.
+    if (path === '/api/trash' && request.method === 'POST') {
+      const target = url.searchParams.get('path') ?? '';
+      if (!splitDeckPath(target)) return respondJson(response, 400, { error: 'missing or invalid path' });
+      let dir: string;
+      try {
+        dir = folderDirOf(target);
+      } catch {
+        return respondJson(response, 400, { error: 'missing or invalid path' });
+      }
+      if (!existsSync(dir)) return respondJson(response, 404, { error: 'no such presentation or folder' });
+      const kind = isDeckDir(dir) ? 'deck' : 'folder';
+      // A deck's own subdirectories (assets/, edit/) are not things to trash.
+      const segments = target.split('/');
+      for (let depth = 1; depth < segments.length; depth++) {
+        if (isDeckDir(folderDirOf(segments.slice(0, depth).join('/')))) {
+          return respondJson(response, 404, { error: 'no such presentation or folder' });
+        }
+      }
+      const access = await treeAccess(dir, identity);
+      if (!access.visible) return respondJson(response, 404, { error: 'no such presentation or folder' });
+      if (!access.editable) {
+        return respondJson(response, 403, {
+          error: kind === 'deck'
+            ? 'you can only view this presentation, so you cannot delete it'
+            : 'you need to own this folder and be able to edit everything in it to delete it',
+        });
+      }
+      if (!(await drainRooms(target))) {
+        return respondJson(response, 409, { error: 'somebody has this open — close it everywhere before deleting it' });
+      }
+      let title: string | undefined;
+      if (kind === 'deck') {
+        try {
+          title = (JSON.parse(await readFile(join(dir, 'deck.json'), 'utf8')) as { title?: string }).title;
+        } catch {
+          // The folder name will do.
+        }
+      }
+      const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+      const id = `${stamp}-${randomUUID().slice(0, 8)}`;
+      const entryDir = join(TRASH_DIR, id);
+      await mkdir(entryDir, { recursive: true });
+      const meta: TrashMeta = {
+        originalPath: target,
+        kind,
+        name: segments[segments.length - 1],
+        ...(title ? { title } : {}),
+        deletedAt: new Date().toISOString(),
+        deletedBy: identity?.login ?? 'local',
+      };
+      await writeFile(join(entryDir, 'trash.json'), `${JSON.stringify(meta, null, 2)}\n`, 'utf8');
+      await rename(dir, join(entryDir, 'item'));
+      respondJson(response, 200, { id, ...meta });
+      return;
+    }
+
+    // Put a trashed item back where it was. Same permission as deleting it.
+    if (path === '/api/trash/restore' && request.method === 'POST') {
+      const id = url.searchParams.get('id') ?? '';
+      if (!TRASH_ENTRY_ID.test(id)) return respondJson(response, 400, { error: 'invalid trash id' });
+      const entryDir = join(TRASH_DIR, id);
+      const meta = await readTrashMeta(entryDir);
+      const item = join(entryDir, 'item');
+      if (!meta || !existsSync(item)) return respondJson(response, 404, { error: 'no such item in the trash' });
+      const access = await treeAccess(item, identity);
+      if (!access.visible) return respondJson(response, 404, { error: 'no such item in the trash' });
+      if (!access.editable) return respondJson(response, 403, { error: 'you cannot restore this item' });
+      const segments = splitDeckPath(meta.originalPath);
+      if (!segments) return respondJson(response, 400, { error: 'the original path is invalid' });
+      const to = folderDirOf(meta.originalPath);
+      if (existsSync(to)) {
+        return respondJson(response, 409, { error: `"${meta.originalPath}" exists again — rename or move that first` });
+      }
+      const created: string[] = [];
+      for (let depth = 1; depth < segments.length; depth++) {
+        const step = segments.slice(0, depth).join('/');
+        const stepDir = folderDirOf(step);
+        if (!existsSync(stepDir)) created.push(step);
+        else if (isDeckDir(stepDir)) {
+          return respondJson(response, 409, { error: `"${step}" is now a presentation, not a folder` });
+        }
+      }
+      if (created.length > 0) await mkdir(dirname(to), { recursive: true });
+      if (accessControl && identity) {
+        for (const step of created) await writeFolderOwner(folderDirOf(step), identity.login);
+      }
+      await rename(item, to);
+      // Only the now-empty entry and its note go; the item itself is back.
+      await rm(join(entryDir, 'trash.json'), { force: true });
+      await rmdir(entryDir).catch(() => undefined);
+      respondJson(response, 200, { path: meta.originalPath, kind: meta.kind });
+      return;
+    }
+
     if (path === '/api/folders/rename' && request.method === 'POST') {
       const target = sanitizeFolderPath(url.searchParams.get('path') ?? '');
       if (!target) return respondJson(response, 400, { error: 'missing or invalid folder path' });
@@ -4000,6 +4214,9 @@ function splitDeckPath(value: string): string[] | null {
   if (segments.length > MAX_PATH_SEGMENTS) return null;
   for (const segment of segments) {
     if (!segment || segment === '.' || segment === '..') return null;
+    // Dot-names are never decks or folders: `.trash/` lives at the root and
+    // must not be listed, opened, or addressed by any path-taking route.
+    if (segment.startsWith('.')) return null;
     if (segment !== segment.trim()) return null;
   }
   return segments;
