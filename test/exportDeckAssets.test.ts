@@ -59,6 +59,44 @@ describe.skipIf(webExportUnavailableReason() !== null)('web export asset copying
     expect(await readdir(join(out, 'assets'))).toEqual([]);
   });
 
+  // docs/deck-brief.md tells authors to carry a webfont as `assets/fonts/*.woff2`
+  // declared with `@font-face` in theme.css. No slide names those files, so an
+  // export that collects only what slides reference shipped a theme.css whose
+  // fonts were missing: the player, `render` and `preview` all fell back to
+  // the browser's default serif.
+  it('copies the files theme.css refers to, fonts included', async () => {
+    const { dir, out } = await deckWithImage('assets/figures/plot.png');
+    await mkdir(join(dir, 'assets', 'figures'), { recursive: true });
+    await mkdir(join(dir, 'assets', 'fonts'), { recursive: true });
+    await writeFile(join(dir, 'assets', 'figures', 'plot.png'), Buffer.from([1, 2, 3]));
+    await writeFile(join(dir, 'assets', 'fonts', 'serif.woff2'), Buffer.from([4, 5, 6]));
+    await writeFile(join(dir, 'assets', 'paper.png'), Buffer.from([7, 8, 9]));
+    await writeFile(join(dir, 'theme.css'), [
+      '@font-face { font-family: "Serif"; src: url("assets/fonts/serif.woff2") format("woff2"); }',
+      ".slide { background: url(assets/paper.png); font-family: 'Serif', serif; }",
+    ].join('\n'), 'utf8');
+    const deck = JSON.parse(await readFile(join(dir, 'deck.json'), 'utf8'));
+
+    await exportDeck(dir, deck, out);
+    expect(await readFile(join(out, 'assets', 'fonts', 'serif.woff2'))).toEqual(Buffer.from([4, 5, 6]));
+    expect(await readFile(join(out, 'assets', 'paper.png'))).toEqual(Buffer.from([7, 8, 9]));
+    expect(existsSync(join(out, 'assets', 'figures', 'plot.png'))).toBe(true);
+  });
+
+  it('keeps theme.css inside the deck boundary too', async () => {
+    const { root, dir, out } = await deckWithImage('assets/figures/plot.png');
+    await writeFile(join(root, 'secret.woff2'), Buffer.from([9, 9, 9]));
+    await mkdir(join(dir, 'assets', 'fonts'), { recursive: true });
+    await symlink(join(root, 'secret.woff2'), join(dir, 'assets', 'fonts', 'escape.woff2'));
+    await writeFile(join(dir, 'theme.css'),
+      '@font-face { font-family: "X"; src: url("assets/fonts/escape.woff2"); }', 'utf8');
+    const deck = JSON.parse(await readFile(join(dir, 'deck.json'), 'utf8'));
+
+    await exportDeck(dir, deck, out);
+    expect(existsSync(join(out, 'assets', 'fonts', 'escape.woff2'))).toBe(false);
+    expect(existsSync(join(out, 'player.js'))).toBe(true);
+  });
+
   it('refuses a lexical escape as before', async () => {
     const { root, dir, out } = await deckWithImage('../secret.png');
     await writeFile(join(root, 'secret.png'), Buffer.from([9, 9, 9]));

@@ -128,11 +128,15 @@ export async function exportDeck(
     ? { ...deck, slides: deck.slides.filter((slide) => !slide.skipped) }
     : deck;
   const wanted = referencedAssets(exported);
+  // theme.css names files no slide does: a webfont's `@font-face`, a paper
+  // texture. It ships as written, so those go across under their own names.
+  const theme = await loadTheme(deckDir, deck.theme);
+  const themeAssets = themeReferencedAssets(theme);
 
   // Progress is weighted by bytes: a 120 MB screen recording is most of the
   // wait, and a bar that ticked once per file would sit still for minutes on
   // it and then race through fifty small figures.
-  const sources = await measureSources(deckDir, wanted);
+  const sources = await measureSources(deckDir, new Set([...wanted, ...themeAssets]));
   const mediaBytes = [...sources.values()].reduce((sum, s) => sum + s.bytes, 0);
   // Five fixed steps share a nominal weight so an asset-free deck still moves.
   const fixedWeight = Math.max(1, mediaBytes / 20);
@@ -159,13 +163,12 @@ export async function exportDeck(
   doneWeight += fixedWeight;
 
   report(`Writing ${deck.theme}`);
-  const theme = await loadTheme(deckDir, deck.theme);
   await writeFile(join(outDir, 'theme.css'), theme, 'utf8');
   doneWeight += fixedWeight;
 
   // The folder exists even when every reference turned out to be unusable, so
   // a reader of the export sees "no assets" rather than "no assets folder".
-  if (wanted.size > 0) await mkdir(join(outDir, 'assets'), { recursive: true });
+  if (wanted.size > 0 || themeAssets.size > 0) await mkdir(join(outDir, 'assets'), { recursive: true });
   const renamed = new Map<string, string>();
   const trimmed = new Map<string, number>();
   let exportedBytes = 0;
@@ -194,6 +197,20 @@ export async function exportDeck(
     if (outcome.trimmedFrom !== undefined) trimmed.set(rel, outcome.trimmedFrom);
   });
   await runPool(jobs, Math.max(1, options.concurrency ?? 2));
+
+  // Byte for byte, and only what a slide's copy did not already put there
+  // unchanged: a re-encoded picture leaves its original name free, and the
+  // theme still points at that name.
+  for (const rel of themeAssets) {
+    const source = sources.get(rel);
+    const to = source ? join(outDir, source.within) : null;
+    if (!source || !to || existsSync(to)) continue;
+    report(`Copying ${rel}`);
+    await mkdir(dirname(to), { recursive: true });
+    await copyFileStreamed(source.path, to);
+    doneWeight += source.bytes;
+    exportedBytes += source.bytes;
+  }
 
   report('Writing index.html');
   const rewritten = renamed.size > 0 || trimmed.size > 0
@@ -480,15 +497,24 @@ export function referencedAssets(deck: Deck): Set<string> {
 }
 
 /** Assets referenced only by an isolated HTML region still belong in exports. */
+/** The deck files theme.css refers to with `url(assets/…)`. */
+export function themeReferencedAssets(css: string): Set<string> {
+  const wanted = new Set<string>();
+  for (const match of css.matchAll(CSS_ASSET_URL)) wanted.add(match[1]);
+  return wanted;
+}
+
 function collectFallbackAssets(source: string, wanted: Set<string>): void {
   for (const pattern of HTML_ASSET_PATTERNS) {
     for (const match of source.matchAll(pattern)) wanted.add(match[1]);
   }
 }
 
+const CSS_ASSET_URL = /url\(\s*["']?(assets\/[^"')#?]+)(?:[?#][^"')]*)?["']?\s*\)/gi;
+
 const HTML_ASSET_PATTERNS = [
   /\b(?:src|poster)\s*=\s*["'](assets\/[^"'#?]+)(?:[?#][^"']*)?["']/gi,
-  /url\(\s*["']?(assets\/[^"')#?]+)(?:[?#][^"')]*)?["']?\s*\)/gi,
+  CSS_ASSET_URL,
 ];
 
 /**
