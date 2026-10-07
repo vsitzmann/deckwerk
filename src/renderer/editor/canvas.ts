@@ -26,7 +26,8 @@ import { openSlideLinkInNewTab, slideLinkFromEvent } from '../player/links.js';
 import { expandTimeline } from '@shared/timeline.js';
 import {
   BASELINE_RUN_FONT_SIZE, isRelativeFontSize, restoreKatexSourceHtml,
-  sanitizePastedTextHtml, stripLayoutDeclarations,
+  pastedHtmlHasMedia, sanitizePastedTextHtml, stripLayoutDeclarations, stripTextMediaPayloads,
+  textOnlyPastedHtml,
 } from '@shared/htmlSafety.js';
 import { isBaselineFormat, type BaselineFormat, type InlineTextFormat } from './textFormatting.js';
 import { classifyMediaName, isPendingSrc, makePendingSrc, mediaFileName, pendingToken } from '@shared/media.js';
@@ -473,6 +474,10 @@ function authoredTextHtml(body: HTMLElement): string {
   // differently across commits, and every spurious byte of difference becomes
   // a phantom "Edit text" undo entry.
   clone.querySelectorAll('[class=""]').forEach((node) => node.removeAttribute('class'));
+  // Media bytes never live in text html, whatever put them in the DOM: a
+  // drop, an execCommand, a paste path that missed them. A pasted 10 MB data:
+  // video once made a slide title's html 13.5 MB of deck.json.
+  stripTextMediaPayloads(clone);
   return normalizeParagraphHtml(clone.innerHTML);
 }
 
@@ -3468,6 +3473,29 @@ export class EditorCanvas {
       scheduleIdleSeal();
     };
 
+    /**
+     * A clipboard that carries pictures or video alongside its text (a web
+     * page, a chat message, another editor) pastes only its text here. The
+     * browser's own paste would put the media inside the text -- as a
+     * `data:` URI, bytes and all -- where no control can reach it and every
+     * collaborator downloads it with each edit of the box.
+     */
+    const pasteTextWithoutMedia = (event: ClipboardEvent, pasted: string, plainText: string) => {
+      event.preventDefault();
+      const html = textOnlyPastedHtml(pasted);
+      const template = document.createElement('template');
+      template.innerHTML = html;
+      if ((template.content.textContent ?? '').trim()) {
+        document.execCommand('insertHTML', false, html);
+      } else if (plainText.trim()) {
+        document.execCommand('insertText', false, plainText);
+      }
+      repairPastedMarkup();
+      this.textSelectionRange = this.activeTextRange(body)?.cloneRange() ?? null;
+      sealTextChunk();
+      this.notice('Pasted text only: pictures and video are not placed inside a text box.');
+    };
+
     const onPaste = (event: ClipboardEvent) => {
       const pasted = event.clipboardData?.getData('text/html') ?? '';
       const plainText = event.clipboardData?.getData('text/plain') ?? '';
@@ -3499,7 +3527,10 @@ export class EditorCanvas {
 
       const tableData = pastedTableData(pasted, plainText);
       const safeTable = tableData?.html ?? null;
-      if (!safeTable || !tableData) return;
+      if (!safeTable || !tableData) {
+        if (pasted && pastedHtmlHasMedia(pasted)) pasteTextWithoutMedia(event, pasted, plainText);
+        return;
+      }
       const template = document.createElement('template');
       template.innerHTML = safeTable;
       const table = template.content.querySelector('table')!;

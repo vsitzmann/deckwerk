@@ -242,6 +242,115 @@ function stripRunBackgrounds(root: DocumentFragment): void {
   }
 }
 
+/**
+ * The longest `data:` URI an image inside text html may keep -- room for an
+ * inline icon or emoji, not for a photograph or a video.
+ *
+ * Text html is stored in deck.json and resent to every collaborator on every
+ * edit of its box. A clipboard holding `<img src="data:video/mp4;base64,...">`
+ * (10 MB) once landed in a slide title's html and made the deck 13.5 MB;
+ * every collaborator's editor crawled. Real media belongs in a media element,
+ * whose bytes live in `assets/`.
+ */
+export const INLINE_TEXT_DATA_URI_LIMIT = 64 * 1024;
+
+/** Elements whose only job is to show media, removed whole when their source is refused. */
+const TEXT_MEDIA_ELEMENTS = new Set([
+  'img', 'video', 'audio', 'source', 'track', 'picture', 'object', 'embed', 'image', 'iframe',
+]);
+const TEXT_MEDIA_URL_ATTRIBUTES = ['src', 'href', 'xlink:href', 'poster', 'srcset', 'data', 'background'];
+
+/** A `data:` URI that may not live in text html: not an image, or too large. */
+function refusedTextDataUri(uri: string): boolean {
+  const mime = /^data:([^;,]*)/i.exec(uri)?.[1]?.trim().toLowerCase() ?? '';
+  return !mime.startsWith('image/') || uri.length > INLINE_TEXT_DATA_URI_LIMIT;
+}
+
+/** Whether a value holds any refused `data:` URI (srcset and url() can hold several). */
+function refusesAnyDataUri(value: string): boolean {
+  if (!/data:/i.test(value)) return false;
+  // A URI runs to the next quote, bracket or whitespace (base64 has none).
+  const uris = value.match(/data:[^\s'")]*/gi) ?? [];
+  return uris.some(refusedTextDataUri);
+}
+
+/**
+ * Remove media bytes from text html, in place: any `data:` URI that is not an
+ * image, or is an image over `INLINE_TEXT_DATA_URI_LIMIT`, in a source
+ * attribute, a `srcset` or a style `url()`. An element that exists only to
+ * show that media (`img`, `video`, SVG `image`, ...) goes with it; anything
+ * else just loses the attribute or declaration. Small inline images, links,
+ * KaTeX, lists and tables are untouched. Returns whether anything changed.
+ *
+ * This is the backstop under every way text html is produced -- paste, drop,
+ * execCommand, a remote edit adopted into the DOM -- so it stays cheap on
+ * ordinary text: it only looks closer at markup that mentions `data:`.
+ */
+export function stripTextMediaPayloads(root: ParentNode): boolean {
+  let changed = false;
+  for (const node of [...root.querySelectorAll<Element>('*')]) {
+    // Already gone with a removed ancestor.
+    if (!node.parentNode) continue;
+    const tag = node.localName.toLowerCase();
+    let removed = false;
+    for (const name of TEXT_MEDIA_URL_ATTRIBUTES) {
+      const value = node.getAttribute(name);
+      if (value === null || !refusesAnyDataUri(value)) continue;
+      changed = true;
+      if (TEXT_MEDIA_ELEMENTS.has(tag) && name !== 'poster') {
+        node.remove();
+        removed = true;
+        break;
+      }
+      node.removeAttribute(name);
+    }
+    if (removed) continue;
+    const style = node.getAttribute('style');
+    if (style === null || !refusesAnyDataUri(style)) continue;
+    changed = true;
+    const declarations = (node as HTMLElement).style;
+    if (declarations) {
+      for (let index = declarations.length - 1; index >= 0; index -= 1) {
+        const property = declarations.item(index);
+        if (refusesAnyDataUri(declarations.getPropertyValue(property))) declarations.removeProperty(property);
+      }
+    }
+    // A declaration the CSS parser could not take apart goes with the attribute.
+    const left = node.getAttribute('style') ?? '';
+    if (!left.trim() || refusesAnyDataUri(left)) node.removeAttribute('style');
+  }
+  return changed;
+}
+
+/** What counts as media on a clipboard about to be pasted into text. */
+const PASTED_MEDIA = 'img, video, audio, picture, object, embed, image';
+
+/**
+ * Whether clipboard markup carries media (an image, video, audio, an embed,
+ * an SVG `<image>`) beside -- or instead of -- its text. KaTeX's render tree
+ * draws some glyphs with inline SVG; that is maths, not media, and it is
+ * recovered as TeX before anything is looked at.
+ */
+export function pastedHtmlHasMedia(html: string): boolean {
+  if (!/<(?:img|video|audio|picture|object|embed|image)\b/i.test(html)) return false;
+  const template = document.createElement('template');
+  template.innerHTML = restoreKatexSourceHtml(html);
+  return template.content.querySelector(PASTED_MEDIA) !== null;
+}
+
+/**
+ * Clipboard markup reduced to what a text box takes when the clipboard also
+ * carried media: the sanitized text -- runs, links, lists, tables, maths --
+ * with every picture, video, embed and drawing left out.
+ */
+export function textOnlyPastedHtml(html: string): string {
+  const template = document.createElement('template');
+  template.innerHTML = sanitizePastedTextHtml(html);
+  template.content.querySelectorAll(`${PASTED_MEDIA}, source, track, svg, canvas, iframe`)
+    .forEach((node) => node.remove());
+  return template.innerHTML;
+}
+
 export function sanitizePastedTextHtml(html: string): string {
   const template = document.createElement('template');
   // Copying rendered maths from the canvas puts KaTeX's generated render tree
@@ -325,5 +434,7 @@ export function sanitizePastedTextHtml(html: string): string {
       if (node.tagName === 'IMG') node.remove();
     }
   }
+  // Inline image bytes are kept above; media bytes are not.
+  stripTextMediaPayloads(root);
   return template.innerHTML;
 }

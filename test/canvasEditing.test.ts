@@ -353,6 +353,27 @@ describe('inline text editing', () => {
     expect(bodyOf(host, 'text-1').querySelector('.katex-display')).not.toBeNull();
   });
 
+  it('never stores data: media in a text element, whatever put it in the DOM', () => {
+    // The backstop under every input path (paste, drop, execCommand): a
+    // 10 MB data: video pasted into a title once made deck.json 13.5 MB.
+    const { store, canvas, host } = setup();
+    store.select(['text-1']);
+    canvas.beginTextEdit('text-1');
+    const body = bodyOf(host, 'text-1');
+    const video = `data:video/mp4;base64,${'A'.repeat(200_000)}`;
+    body.innerHTML = `<p>Title<img src="${video}"><video src="${video}"></video></p>`;
+    // Not a paste: no paste repair runs, only the commit.
+    body.dispatchEvent(new InputEvent('input', { inputType: 'insertHTML', bubbles: true }));
+    body.dispatchEvent(new FocusEvent('blur'));
+
+    const saved = store.slide!.elements.find((element) => element.id === 'text-1')!;
+    expect(saved.type).toBe('text');
+    if (saved.type !== 'text') return;
+    expect(saved.html).not.toContain('data:');
+    expect(saved.html.length).toBeLessThan(1_000);
+    expect(saved.html).toContain('Title');
+  });
+
   it('heals generated KaTeX already persisted by an old paste on edit entry', () => {
     const { store, canvas, host } = setup();
     store.select(['text-1']);

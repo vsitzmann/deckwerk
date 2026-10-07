@@ -3,7 +3,8 @@ import { describe, expect, it } from 'vitest';
 import { emptyDeck } from '../src/shared/deck.js';
 import { authoringPageHtml, measureSlides } from '../src/shared/htmlMeasure.js';
 import {
-  isRelativeFontSize, sanitizeAuthoredHtml, sanitizePastedTextHtml,
+  INLINE_TEXT_DATA_URI_LIMIT, isRelativeFontSize, pastedHtmlHasMedia, sanitizeAuthoredHtml,
+  sanitizePastedTextHtml, stripTextMediaPayloads, textOnlyPastedHtml,
 } from '../src/shared/htmlSafety.js';
 import { slidesFromMeasured, type MeasuredSlide } from '../src/shared/htmlSlides.js';
 
@@ -147,6 +148,74 @@ describe('sanitizePastedTextHtml', () => {
     const html = sanitizePastedTextHtml('x<sup style="font-size: 12px">1</sup>');
     expect(html).toContain('font-size: 12px');
     expect(html).not.toContain('0.7em');
+  });
+});
+
+describe('media payloads in text html', () => {
+  // A 10 MB `<img src="data:video/mp4;base64,…">` from a clipboard landed in a
+  // slide title's html, made deck.json 13.5 MB and every collaborator's editor
+  // crawl. Text html may carry small inline images; it never carries media
+  // bytes.
+  const video = `data:video/mp4;base64,${'A'.repeat(4096)}`;
+  const bigImage = `data:image/png;base64,${'A'.repeat(INLINE_TEXT_DATA_URI_LIMIT + 1)}`;
+  const smallImage = 'data:image/png;base64,iVBORw0KGgo=';
+
+  it('drops data: media of any non-image type from pasted text', () => {
+    const html = sanitizePastedTextHtml(`<p>before<img src="${video}">after</p>`
+      + `<p><video src="${video}"><source src="${video}">fallback</video></p>`
+      + `<p><audio src="data:audio/mpeg;base64,AAAA"></audio>x</p>`);
+    expect(html).not.toContain('data:');
+    expect(html).not.toMatch(/<img|<video|<source|<audio/);
+    expect(html).toContain('before');
+    expect(html).toContain('after');
+  });
+
+  it('drops data: images over the inline size bound, keeping small ones', () => {
+    const html = sanitizePastedTextHtml(`<p>a<img src="${bigImage}">b<img src="${smallImage}">c</p>`);
+    expect(html).not.toContain(bigImage);
+    expect(html).toContain(smallImage);
+  });
+
+  it('drops oversized data: payloads in SVG images, srcset and style urls', () => {
+    const html = sanitizePastedTextHtml(
+      `<p>a<svg viewBox="0 0 10 10"><image href="${bigImage}"></image><rect width="4" height="4"></rect></svg>`
+      + `<img srcset="${bigImage} 2x" src="${smallImage}">`
+      + `<span style="color: red; background-image: url(${bigImage})">b</span></p>`,
+    );
+    expect(html).not.toContain(bigImage);
+    expect(html).toContain('<rect');
+    expect(html).toContain('color: red');
+  });
+
+  it('strips a live subtree in place and reports whether it changed anything', () => {
+    const root = document.createElement('div');
+    root.innerHTML = `<p>keep <a href="https://x.test">link</a> $E=mc^2$</p><p>x<img src="${video}">y</p>`;
+    expect(stripTextMediaPayloads(root)).toBe(true);
+    expect(root.innerHTML).toBe('<p>keep <a href="https://x.test">link</a> $E=mc^2$</p><p>xy</p>');
+    expect(stripTextMediaPayloads(root)).toBe(false);
+  });
+
+  it('recognises media on a clipboard, but not KaTeX\'s own SVG', () => {
+    expect(pastedHtmlHasMedia(`<meta charset="utf-8"><img src="${video}">`)).toBe(true);
+    expect(pastedHtmlHasMedia('<p>t<picture><img src="a.png"></picture></p>')).toBe(true);
+    expect(pastedHtmlHasMedia('<p>t<video></video></p>')).toBe(true);
+    expect(pastedHtmlHasMedia(`<svg><image href="${smallImage}"></image></svg>`)).toBe(true);
+    expect(pastedHtmlHasMedia('<ul><li>plain <b>rich</b> text</li></ul><table><tr><td>1</td></tr></table>')).toBe(false);
+    const annotation = '<annotation encoding="application/x-tex">\\sqrt{x}</annotation>';
+    const katex = `<span class="katex"><span class="katex-mathml"><math><semantics><mrow></mrow>${annotation}`
+      + '</semantics></math></span><span class="katex-html"><svg><path d="M0 0"></path></svg></span></span>';
+    expect(pastedHtmlHasMedia(`<p>${katex}</p>`)).toBe(false);
+  });
+
+  it('pastes only the text of a clipboard that carries media', () => {
+    const html = textOnlyPastedHtml(
+      `<p>Title <b>bold</b><img src="${smallImage}"><a href="https://x.test">link</a></p>`
+      + `<ul><li>one<video src="${video}"></video></li></ul><svg><image href="${smallImage}"></image></svg>`,
+    );
+    expect(html).not.toMatch(/<img|<video|<svg|<image|data:/);
+    expect(html).toContain('font-weight: 700');
+    expect(html).toContain('href="https://x.test"');
+    expect(html).toContain('<li>one</li>');
   });
 });
 
