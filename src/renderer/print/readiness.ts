@@ -1,5 +1,6 @@
 import type { Slide } from '@shared/deck.js';
 import type { SlideState } from '@shared/timeline.js';
+import { whenWebElementReady } from '../player/render.js';
 
 const eventOrTimeout = (target: EventTarget, event: string, timeout = 5_000): Promise<void> =>
   new Promise((resolve) => {
@@ -150,6 +151,10 @@ export async function waitForPdfPage(
   // least the wait means a slow plugin cannot also cost the page its images.
   await Promise.all([...page.querySelectorAll<HTMLEmbedElement>('embed')].map((embed) =>
     Promise.race([eventOrTimeout(embed, 'load'), eventOrTimeout(embed, 'error')])));
+  // A live web page stays hidden (under its poster) until it is ready, and
+  // reveals itself on its own clock; print it once it has, or once its reveal
+  // timeout has shown it as it is.
+  await Promise.all([...page.querySelectorAll('.web-body')].map(whenWebElementReady));
   await Promise.all([...page.querySelectorAll<HTMLVideoElement>('video')].map(async (video) => {
     const id = video.closest<HTMLElement>('[data-element-id]')?.dataset.elementId;
     const element = slide.elements.find((candidate) => candidate.id === id);

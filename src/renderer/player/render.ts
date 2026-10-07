@@ -10,7 +10,7 @@ import { prepareSlideLinks } from './links.js';
 import { quadraticPath, shapeSvg } from '@shared/shapeSvg.js';
 import { isMediaBorderPaint, typedPropertyOwnsCss } from '@shared/nativeCss.js';
 import { applyTableColumnWidths } from '@shared/paragraphs.js';
-import { isEmbeddableWebSrc } from '@shared/webBridge.js';
+import { isEmbeddableWebSrc, webReadinessAction } from '@shared/webBridge.js';
 import renderMathInElement from 'katex/contrib/auto-render';
 import 'katex/dist/katex.min.css';
 
@@ -811,6 +811,10 @@ function renderBody(el: SlideElement, opts: RenderOptions): HTMLElement | SVGEle
  * Morph and layout previews) show the poster when there is one and otherwise
  * an inert frame — inert so the editor's own pointer handling keeps working
  * over it. The live frame only exists where the deck is being presented.
+ *
+ * A live frame is hidden until its page is ready (see `revealWhenReady`), with
+ * the poster laid over it meanwhile: a page that lays itself out from script
+ * otherwise flashes its raw, unpositioned state the moment the slide appears.
  */
 function renderWeb(
   el: Extract<SlideElement, { type: 'web' }>,
@@ -863,7 +867,112 @@ function renderWeb(
   // author wants clicks on the page to advance the deck instead.
   frame.style.pointerEvents = preview || !el.interactive ? 'none' : 'auto';
   box.appendChild(frame);
+  if (!preview) revealWhenReady(box, frame, el.poster ? opts.resolveSrc(el.poster) : null, el.title);
   return box;
+}
+
+/**
+ * How long a live web page may stay hidden waiting to be ready. A page that
+ * never finishes loading (a stalled request inside it) or never releases a
+ * `deckwerk.ready(promise)` is shown anyway after this — as it is.
+ */
+export const WEB_REVEAL_TIMEOUT_MS = 5_000;
+
+/** Settles once a live web element is showing its page (see `revealWhenReady`). */
+const webReady = new WeakMap<Element, Promise<void>>();
+
+/**
+ * Resolves once the live web element rendered as `box` (its `.web-body`)
+ * shows its page — readied or timed out. Print readiness waits on this so a
+ * PDF page is not captured with the frame still hidden. Anything that is not
+ * a live web box resolves at once.
+ */
+export function whenWebElementReady(box: Element): Promise<void> {
+  return webReady.get(box) ?? Promise.resolve();
+}
+
+/**
+ * Keep a live frame hidden until its page is ready to be seen.
+ *
+ * Ready is the frame's `load` plus two animation frames, so whatever the
+ * page's load handlers lay out has been painted. A page can ask for longer
+ * through the bridge runtime: `deckwerk.ready(promise)` posts `hold-ready`
+ * while the page's scripts first run (before `load`) and `ready` when the
+ * promise settles. Pages without the runtime, or that never call it, get the
+ * default. Until then the poster, if there is one, covers the frame; the
+ * frame itself is `visibility: hidden`, which still loads and runs it. A
+ * timeout shows the page however far it got.
+ */
+function revealWhenReady(
+  box: HTMLElement,
+  frame: HTMLIFrameElement,
+  posterSrc: string | null,
+  title: string,
+): void {
+  box.style.position = 'relative';
+  box.dataset.webReady = 'false';
+  frame.style.visibility = 'hidden';
+  let poster: HTMLImageElement | null = null;
+  if (posterSrc) {
+    poster = document.createElement('img');
+    poster.className = 'web-poster';
+    poster.src = posterSrc;
+    poster.alt = title;
+    poster.setAttribute('aria-hidden', 'true');
+    poster.draggable = false;
+    Object.assign(poster.style, {
+      position: 'absolute', inset: '0', width: '100%', height: '100%',
+      objectFit: 'contain', display: 'block', pointerEvents: 'none',
+    });
+    box.appendChild(poster);
+  }
+
+  let held = false;
+  let loaded = false;
+  let painted = false;
+  let released = false;
+  let revealed = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let resolveReady!: () => void;
+  webReady.set(box, new Promise<void>((resolve) => { resolveReady = resolve; }));
+  const nextFrame = (callback: () => void): void => {
+    if (typeof requestAnimationFrame === 'function') requestAnimationFrame(() => callback());
+    else setTimeout(callback, 16);
+  };
+
+  const reveal = (): void => {
+    if (revealed) return;
+    revealed = true;
+    clearTimeout(timer);
+    window.removeEventListener('message', onMessage);
+    frame.style.visibility = '';
+    poster?.remove();
+    box.dataset.webReady = 'true';
+    resolveReady();
+  };
+  const settle = (): void => {
+    if (painted && (!held || released)) reveal();
+  };
+  const onMessage = (event: MessageEvent): void => {
+    if (event.source === null || event.source !== frame.contentWindow) return;
+    const action = webReadinessAction(event.data);
+    if (action === 'hold-ready') held = true;
+    else if (action === 'ready') {
+      released = true;
+      settle();
+    }
+  };
+  window.addEventListener('message', onMessage);
+  frame.addEventListener('load', () => {
+    // A frame re-inserted into the document loads again; only the first counts.
+    if (loaded) return;
+    loaded = true;
+    nextFrame(() => nextFrame(() => {
+      painted = true;
+      settle();
+    }));
+  });
+  timer = setTimeout(reveal, WEB_REVEAL_TIMEOUT_MS);
 }
 
 /**

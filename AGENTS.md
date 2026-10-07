@@ -346,6 +346,15 @@ What the page can and cannot do:
   the deck's builds. Navigation keys the page leaves unhandled are forwarded to
   the deck, so a focused page never traps the presenter; a page that wants the
   arrows calls `preventDefault`.
+- While presenting, the page stays hidden — its poster shows in its place —
+  until it has loaded and painted, so nobody sees it half-built. A page that
+  lays itself out from script after `load` (once `document.fonts.ready`
+  resolves, say) should call `deckwerk.ready(promise)` from its top-level
+  script, with the promise of that work:
+  `deckwerk.ready(document.fonts.ready.then(layout))`. The deck then waits for
+  the promise too. Either way a page is shown after 5 seconds, ready or not.
+  Pages staged before `ready()` existed carry an older runtime without it;
+  guard with `if (deckwerk.ready)` or re-stage the page with `web add`.
 - Nothing inside is a slide object: no inspector restyling, Morph, auto-fit or
   overflow checks. When the *content* could be ordinary slides, make ordinary
   slides — they stay editable and the design stays consistent.
