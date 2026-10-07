@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { existsSync } from 'node:fs';
-import { writeFile } from 'node:fs/promises';
+import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { JSDOM } from 'jsdom';
 import { validateDeckIntegrity } from '../src/shared/agent.js';
@@ -34,7 +34,9 @@ import {
  * people do in a session: notes, comments, skipping a slide, rewriting a
  * phrase, adding and deleting slides — on a hosted deck over the WebSocket,
  * sometimes while the agent's page is compiling; beside a local deck through
- * the same CLI transactions any second writer would use.
+ * the same CLI transactions any second writer would use. In a hosted mirror
+ * the agent also rewrites deck.json from a copy it read before a person's
+ * edit, which must land only the agent's own change.
  *
  * A model of the deck — its slide order, the phrases each slide must and must
  * not hold, the notes, skips and comments people gave it — is checked after
@@ -557,6 +559,63 @@ class Walk {
     this.slides.set(changes.inserted[0], { markers: new Set(fresh.markers), notes: '', skipped: false, comments: 0 });
   }
 
+  /**
+   * The agent (or a script of its) rewrites the mirror's deck.json from a
+   * copy it read before a person changed the deck — the mirror already shows
+   * the person's change when the stale copy lands. Only the agent's own edit
+   * may travel: the person's slide and notes stay.
+   */
+  async rewriteDeckJson(): Promise<void> {
+    const hosted = this.ws as HostedWorkspace;
+    const path = join(hosted.dir, 'deck.json');
+    const stale = JSON.parse(await readFile(path, 'utf8')) as Deck;
+    const holders = stale.slides.flatMap((slide) => slide.elements
+      .filter((element) => element.type === 'text'
+        && [...(this.slides.get(slide.id)?.markers ?? [])].some((marker) => element.html.includes(marker)))
+      .map((element) => ({ slide, element })));
+    if (holders.length === 0) return this.addPage();
+    const { slide, element } = this.pick(holders);
+    const model = this.slides.get(slide.id)!;
+    // Meanwhile a person adds a slide or writes notes, and the mirror shows it.
+    if (this.chance(0.5)) {
+      const token = this.token();
+      const fresh = `person-${token}`;
+      this.log(`deck.json read; a person adds slide ${fresh}`);
+      await hosted.human.edit('Add a slide', (deck) => {
+        deck.slides.push({
+          id: fresh, name: '', notes: '', background: { color: null, image: null }, timeline: [],
+          elements: [{
+            id: `${fresh}-text`, type: 'text', x: 120, y: 120, w: 1200, h: 120, rot: 0, z: 1, opacity: 1,
+            class: ['role-title'], style: {}, html: this.phrase(token), align: 'left', valign: 'top',
+          } as never],
+        });
+      });
+      this.order.push(fresh);
+      this.slides.set(fresh, { markers: new Set([token]), notes: '', skipped: false, comments: 0 });
+      await until(async () => (await hosted.mirrorDeck()).slides.some((candidate) => candidate.id === fresh),
+        'the person\'s slide to reach the mirror', 20_000);
+    } else {
+      const id = this.pick(this.order);
+      const notes = `Notes ${this.token()}`;
+      this.log(`deck.json read; a person writes notes on ${id}`);
+      await hosted.human.edit('Edit notes', (deck) => { deck.slides.find((candidate) => candidate.id === id)!.notes = notes; });
+      this.slides.get(id)!.notes = notes;
+      await until(async () => (await hosted.mirrorDeck()).slides.find((candidate) => candidate.id === id)?.notes === notes,
+        'the person\'s notes to reach the mirror', 20_000);
+    }
+    const old = [...model.markers].find((marker) => element.type === 'text' && element.html.includes(marker))!;
+    const token = this.token();
+    if (element.type === 'text') element.html = element.html.replace(old, token);
+    this.log(`  the agent writes its stale deck.json back, ${old} -> ${token} on ${slide.id}`);
+    await writeFile(path, `${JSON.stringify(stale, null, 2)}\n`, 'utf8');
+    await until(async () => (await this.ws.deck()).slides.some((candidate) => candidate.id === slide.id
+      && candidate.elements.some((object) => object.type === 'text' && object.html.includes(token))),
+    'the agent\'s deck.json edit to reach the server', 20_000);
+    model.markers.delete(old);
+    this.gone.add(old);
+    model.markers.add(token);
+  }
+
   /* --- plumbing ------------------------------------------------------------- */
 
   apply(file: string, flags: string[] = []): Promise<CommandResult> {
@@ -644,7 +703,7 @@ function diffDecks(left: Deck, right: Deck): string {
 const MOVES: Record<WorkspaceKind, Array<[keyof Walk & string, number]>> = {
   offline: [['addPage', 4], ['editPage', 6], ['resaveUntouched', 2], ['reapply', 1], ['human', 3]],
   desktop: [['addPage', 4], ['editPage', 6], ['resaveUntouched', 2], ['reapply', 1], ['human', 3]],
-  hosted: [['addPage', 4], ['editPage', 6], ['resaveUntouched', 2], ['reapply', 1], ['human', 3], ['raceAPerson', 2]],
+  hosted: [['addPage', 4], ['editPage', 6], ['resaveUntouched', 2], ['reapply', 1], ['human', 3], ['raceAPerson', 2], ['rewriteDeckJson', 2]],
 };
 
 let ws: AgentWorkspace | null = null;

@@ -446,6 +446,7 @@ my-talk/
                editor on every open unless its marker line has been removed
   edit/        watched HTML authoring files
   assets/      media, referenced by deck-relative path
+  history.jsonl  hosted decks only: the collaboration server's edit log (below)
 ```
 
 - **Save `edit/*.html` → the editor syncs that slide range into the deck**
@@ -466,6 +467,46 @@ my-talk/
 - Do not edit inside the `/* >>> slide-editor theme (generated) */ … */`
   block in `theme.css` — installing a theme replaces it wholesale. Everything
   outside it is yours. Agent transactions do not touch the theme at all.
+
+### The edit log (hosted decks)
+
+A deck a collaboration server hosts gets `history.jsonl` beside `deck.json`
+(src/shared/editHistory.ts, written by src/server/editLog.ts): one JSON line
+per change the server accepted, so that when something vanishes there is a
+record of who or what removed it, and the removed content itself. Each line
+has the time, the session `seq` (restarting when the server reopens the deck),
+`kind` (`txn`, or `replace` for a deck.json written on disk behind the
+server), the `label`, the `author` (the display name the room saw; on an
+access-controlled server the `login` it was admitted under; the peer's
+`clientId`; `agent` for a bridge or the HTTP agent API; `via`
+`socket`/`http`/`disk`/`server`; `agentFor`, the participant a bridge speaks
+for), counts per operation type, and what happened: ids of slides inserted,
+moved and changed, ids of objects inserted and replaced, and every **deleted
+slide or object in full** (a slide with its 1-based number and title). Content
+of replacements is not logged — only ids. A transaction whose every operation
+was skipped is marked `noop`. Example (slide JSON shortened):
+
+```json
+{"ts":"2026-10-07T15:42:10.512Z","seq":212,"kind":"txn","label":"Update deck.json","author":{"name":"Vincent · agent","login":"sitzmann@mit.edu","clientId":"3f0c9a2e-…","agent":true,"via":"socket","agentFor":"participant-…"},"txnId":"agent-…","ops":{"deleteSlide":1,"setSlideProperties":1},"slides":{"deleted":[{"id":"slide-41","number":12,"title":"Results","slide":{"id":"slide-41","name":"Results","elements":[…]}}],"changed":["slide-7"]},"slideCount":40}
+```
+
+Lines are queued and appended in batches off the transaction path, flushed
+when the session flushes or closes; past 20 MB the file rotates to
+`history.1.jsonl`. It belongs to the server: it moves and goes to the trash
+with its folder, but it is never mirrored to a `slide-agent connect` folder,
+never served through the mirror routes, left out of the deck's zip download
+and of a desktop Save As copy, and dropped from an uploaded archive. Read it
+with `slide-agent history [deck] [--deleted] [--slide <id>] [--limit n]
+[--full]` on the machine that hosts the deck; a deleted slide's `slide` is
+exactly what an `insertSlides` transaction needs to put it back.
+
+The bridge (`slide-agent connect`) also treats a `deck.json` or `notes.md`
+written in its mirror as a three-way merge: the edit is the difference from
+the version the bridge wrote that it differs from least, and only that is
+sent, so a script that rewrites the file from a stale copy no longer reverts
+what collaborators did since. Its own writes are serialised and recognised by
+content hash and file signature, so a watcher event never mistakes a write in
+flight for an edit.
 
 ## Getting this guide, from a deck folder
 
@@ -515,6 +556,7 @@ Diagnostics go to stderr. Exit codes are `0` ok, `1` error,
 | `chat [deck] --wait [--since <id>] [--timeout <s>]` | Blocks until a person writes `@agent`, then prints that message |
 | `say [deck] <text> [--slide <id\|number>]` | Posts to the chat as the agent |
 | `transaction apply <deck> <file.json>` | One atomic, named change |
+| `history [deck] [--deleted] [--slide <id>] [--limit <n>] [--full]` | A hosted deck's edit log: who changed what, when; `--deleted` with the full JSON of what was removed |
 
 The deck argument defaults to the current directory.
 

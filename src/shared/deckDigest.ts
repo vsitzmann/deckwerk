@@ -190,7 +190,7 @@ function pickRole(roles: RoleUsage[], candidates: string[]): RoleUsage | undefin
 }
 
 /** The slide's headline: an explicit title role if there is one, else the top text. */
-function slideTitle(slide: Slide): string {
+export function slideTitle(slide: Slide): string {
   const texts = slide.elements.filter((element): element is Extract<SlideElement, { type: 'text' }> =>
     element.type === 'text');
   const titled = texts.find((element) => element.class.some((name) => TITLE_CLASSES.includes(name)));

@@ -67,7 +67,7 @@ To delete or reorder slides, `slide-agent inspect . --html --slide 8,9 >
 edit/work.html`, then remove or reorder the `<section>`s there and save.
 
 Check `changes` in apply's output: a `deleted` entry you did not intend
-means stop and undo in the editor.
+means stop and undo in the editor; on a hosted deck, `slide-agent history . --deleted` lists who deleted what, in full.
 
 ## 4. Check and iterate
 

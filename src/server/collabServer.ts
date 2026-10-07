@@ -43,6 +43,7 @@ import {
   type ChatRef,
 } from '../shared/chat.js';
 import { CollabSession } from './collabSession.js';
+import { HISTORY_FILES, type EditAuthor } from '../shared/editHistory.js';
 import { readZip, writeZip, type ZipEntry, type ZipFile } from './zip.js';
 import {
   compileHtmlToSlides,
@@ -72,7 +73,7 @@ import { type Deck, type Slide, type SlideElement } from '../shared/deck.js';
 import { classifyMediaName } from '../shared/media.js';
 import { deckOutline } from '../shared/deckDigest.js';
 import type { AgentPanelState } from '../shared/ipc.js';
-import type { LocalAgentRegistry } from './localAgents.js';
+import type { LocalAgentLink, LocalAgentRegistry } from './localAgents.js';
 import { planHtmlReplacement } from './htmlReplacement.js';
 import { MirrorThemeRequestSchema, mirrorThemeAction, type MirrorThemeRequest } from './mirrorTheme.js';
 import { htmlDraftWorkflow, type HtmlDraftWorkflow } from './htmlDraftWorkflow.js';
@@ -155,6 +156,39 @@ interface Peer {
   /** Set when this peer is a local agent bridge: whose agent it is. */
   agentFor: string | null;
 }
+
+/** The edit log's author for a transaction a WebSocket peer sent. */
+function peerAuthor(peer: Peer, clientId: string): EditAuthor {
+  return {
+    name: peer.state.name,
+    ...(peer.identity ? { login: peer.identity.login } : {}),
+    clientId,
+    agent: Boolean(peer.agentFor || peer.state.agent),
+    via: 'socket',
+    ...(peer.agentFor ? { agentFor: peer.agentFor } : {}),
+  };
+}
+
+type AgentAuthorship = Pick<EditAuthor, 'name' | 'clientId' | 'agentFor'>;
+
+/** The edit log's author for a change an HTTP route made: an agent's, or a person's. */
+function httpAuthor(identity: Identity | null, agent: AgentAuthorship | null): EditAuthor {
+  return {
+    name: agent?.name ?? identity?.name ?? 'unknown',
+    ...(identity ? { login: identity.login } : {}),
+    ...(agent?.clientId ? { clientId: agent.clientId } : {}),
+    agent: Boolean(agent),
+    via: 'http',
+    ...(agent?.agentFor ? { agentFor: agent.agentFor } : {}),
+  };
+}
+
+/**
+ * Files the server keeps beside a deck for itself: who may see it, its
+ * chats, its edit log. Never mirrored to an agent's folder, never served
+ * through the mirror routes, never taken from an uploaded archive.
+ */
+const SERVER_SIDECARS: ReadonlySet<string> = new Set(['agent-chats.json', 'access.json', CHAT_FILE, ...HISTORY_FILES]);
 
 /** One hosted deck: its authoritative session plus the peers editing it. */
 interface Room {
@@ -901,11 +935,27 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
   const send = (peer: Peer, message: ServerMessage) => {
     if (peer.socket.readyState === peer.socket.OPEN) peer.socket.send(JSON.stringify(message));
   };
+  /**
+   * One message to every greeted peer. Serialised once, however many peers
+   * there are: a whole-deck message for a large deck is megabytes of JSON,
+   * and stringifying it per peer held the event loop for each of them.
+   * (permessage-deflate still compresses per socket — each connection has
+   * its own compression context, which ws offers no way to share.)
+   */
   const broadcast = (room: Room, message: ServerMessage, except?: string) => {
+    let data: string | null = null;
     for (const [id, peer] of room.peers) {
-      if (id !== except && peer.greeted) send(peer, message);
+      if (id === except || !peer.greeted || peer.socket.readyState !== peer.socket.OPEN) continue;
+      data ??= JSON.stringify(message);
+      peer.socket.send(data);
     }
   };
+  /** An agent behind an HTTP route, for the edit log: a linked bridge, or the server's agent. */
+  const agentAuthor = (bridge: LocalAgentLink | null, participant: string | null): AgentAuthorship => ({
+    name: bridge?.name ?? sharedAgent?.name ?? 'Agent',
+    ...(bridge && bridge.clientId !== 'http' ? { clientId: bridge.clientId } : {}),
+    ...(participant ? { agentFor: participant } : {}),
+  });
   const publishAgentPresence = (room: Room, slideId: string): void => {
     if (!agentMode && !sharedAgent) return;
     room.agentPresence = {
@@ -1909,10 +1959,12 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
       if (id === deckParam && live && live.peers.size > 0 && !live.relocating) {
         if (live.session.deck.title !== name) {
           const ops: AgentOperation[] = [{ op: 'updateDeck', title: name }];
-          const applied = live.session.applyOps(ops);
+          const txnId = `rename-${randomUUID()}`;
+          const label = `Rename to “${name}”`;
+          const applied = live.session.applyOps(ops, { label, txnId, author: httpAuthor(identity, null) });
           broadcast(live, {
-            kind: 'txn', seq: applied.seq, txnId: `rename-${randomUUID()}`,
-            byClientId: '', label: `Rename to “${name}”`, ops,
+            kind: 'txn', seq: applied.seq, txnId,
+            byClientId: '', label, ops,
           });
         }
         respondJson(response, 200, { id, title: name });
@@ -2122,7 +2174,9 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
         return respondJson(response, 404, { error: 'no such deck' });
       }
       await rooms.get(deckParam)?.session.flush();
-      const files = await collectDeckFiles(deckDir);
+      // The edit log stays on the server: it names everyone who edited the
+      // deck and keeps what they deleted, and an import drops it anyway.
+      const files = (await collectDeckFiles(deckDir)).filter((file) => !HISTORY_FILES.includes(file.name));
       response.writeHead(200, {
         'content-type': 'application/zip',
         'cache-control': 'no-store',
@@ -2332,11 +2386,14 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
         } catch (error) {
           return respondJson(response, 400, { error: String(error instanceof Error ? error.message : error) });
         }
-        const applied = room.session.applyOps(result.operations);
-        revision = deckRevision(applied.deck);
         const bridge = agentSessionParam ? localAgents.linked(room.session.dir, agentSessionParam) : null;
+        const txnId = `agent-theme-${randomUUID()}`;
+        const applied = room.session.applyOps(result.operations, {
+          label, txnId, author: httpAuthor(identity, agentAuthor(bridge, agentSessionParam)),
+        });
+        revision = deckRevision(applied.deck);
         broadcast(room, {
-          kind: 'txn', seq: applied.seq, txnId: `agent-theme-${randomUUID()}`,
+          kind: 'txn', seq: applied.seq, txnId,
           byClientId: bridge && bridge.clientId !== 'http' ? bridge.clientId : 'agent-http',
           label, ops: result.operations,
           agentChatId: agentChatId(deckParam, agentSessionParam) ?? undefined,
@@ -2507,11 +2564,14 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
         } catch (error) {
           return respondJson(response, 400, { error: String(error instanceof Error ? error.message : error) });
         }
-        const applied = room.session.applyOps(operations);
-        revision = deckRevision(applied.deck);
         const bridge = agentSessionParam ? localAgents.linked(room.session.dir, agentSessionParam) : null;
+        const txnId = `agent-sync-${randomUUID()}`;
+        const applied = room.session.applyOps(operations, {
+          label, txnId, author: httpAuthor(identity, agentAuthor(bridge, agentSessionParam)),
+        });
+        revision = deckRevision(applied.deck);
         broadcast(room, {
-          kind: 'txn', seq: applied.seq, txnId: `agent-sync-${randomUUID()}`,
+          kind: 'txn', seq: applied.seq, txnId,
           byClientId: bridge && bridge.clientId !== 'http' ? bridge.clientId : 'agent-http',
           label, ops: operations,
           agentChatId: agentChatId(deckParam, agentSessionParam) ?? undefined,
@@ -2952,12 +3012,15 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
         return respondJson(response, 409, { error: 'draft no longer reproduces the previewed deck', current });
       }
       const label = payload.label?.trim().slice(0, 200) || 'Agent: edit presentation properties';
-      const applied = room.session.applyOps(draft.operations);
+      const txnId = `agent-http-${randomUUID()}`;
+      const applied = room.session.applyOps(draft.operations, {
+        label, txnId, author: httpAuthor(identity, agentAuthor(null, agentSessionParam)),
+      });
       if (applied.skipped.length > 0) {
         return respondJson(response, 409, { error: 'native edit could not apply atomically', skipped: applied.skipped });
       }
       broadcast(room, {
-        kind: 'txn', seq: applied.seq, txnId: `agent-http-${randomUUID()}`,
+        kind: 'txn', seq: applied.seq, txnId,
         byClientId: 'agent-http', label, ops: draft.operations,
         agentChatId: agentChatId(deckParam, agentSessionParam) ?? undefined,
       });
@@ -3007,10 +3070,14 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
       const operation: AgentOperation = 'elements' in owner
         ? { op: 'replaceSlide', slideId: slide.id, slide: next as typeof slide }
         : { op: 'replaceElement', slideId: slide.id, elementId: owner.id, element: next as typeof owner };
-      const applied = room.session.applyOps([operation]);
+      const commentLabel = `The Agent added a comment${body.slideId ? ` to slide ${body.slideId}` : ''}: ${body.text.trim().slice(0, 160)}`;
+      const applied = room.session.applyOps([operation], {
+        label: commentLabel,
+        author: httpAuthor(identity, agentAuthor(agentSessionParam ? localAgents?.linked(room.session.dir, agentSessionParam) ?? null : null, agentSessionParam)),
+      });
       broadcast(room, {
         kind: 'deck', seq: applied.seq, deck: applied.deck, reason: 'agent-edit',
-        label: `The Agent added a comment${body.slideId ? ` to slide ${body.slideId}` : ''}: ${body.text.trim().slice(0, 160)}`,
+        label: commentLabel,
         agentChatId: agentChatId(deckParam, agentSessionParam) ?? undefined,
       });
       if (localAgents && agentSessionParam) {
@@ -3045,10 +3112,14 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
         if (operation) break;
       }
       if (!operation) return respondJson(response, 404, { error: 'no such comment' });
-      const applied = room.session.applyOps([operation]);
+      const resolveLabel = `The Agent marked comment ${body.commentId} ${body.resolved ?? true ? 'resolved' : 'unresolved'}.`;
+      const applied = room.session.applyOps([operation], {
+        label: resolveLabel,
+        author: httpAuthor(identity, agentAuthor(agentSessionParam ? localAgents?.linked(room.session.dir, agentSessionParam) ?? null : null, agentSessionParam)),
+      });
       broadcast(room, {
         kind: 'deck', seq: applied.seq, deck: applied.deck, reason: 'agent-edit',
-        label: `The Agent marked comment ${body.commentId} ${body.resolved ?? true ? 'resolved' : 'unresolved'}.`,
+        label: resolveLabel,
         agentChatId: agentChatId(deckParam, agentSessionParam) ?? undefined,
       });
       respondJson(response, 200, { ok: true, resolved: body.resolved ?? true });
@@ -3218,14 +3289,17 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
         appliedIds.push(...plan.appliedSlideIds);
       }
       const label = payload.label?.trim().slice(0, 200) || 'Agent: apply HTML slides';
-      const applied = room.session.applyOps(operations);
+      const txnId = `agent-http-${randomUUID()}`;
+      const applied = room.session.applyOps(operations, {
+        label, txnId, author: httpAuthor(identity, agentAuthor(null, agentSessionParam)),
+      });
       // This is a collaboration transaction, not an anonymous external deck
       // replacement. Broadcasting the actual operations and label lets every
       // editor record a distinct, restorable History revision.
       broadcast(room, {
         kind: 'txn',
         seq: applied.seq,
-        txnId: `agent-http-${randomUUID()}`,
+        txnId,
         byClientId: 'agent-http',
         label,
         ops: operations,
@@ -3515,7 +3589,9 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
       switch (message.kind) {
         case 'txn': {
           try {
-            const applied = room.session.applyOps(message.ops);
+            const applied = room.session.applyOps(message.ops, {
+              label: message.label, txnId: message.txnId, author: peerAuthor(peer, clientId),
+            });
             broadcast(room, {
               kind: 'txn',
               seq: applied.seq,
@@ -4326,7 +4402,7 @@ async function collectMirrorFiles(deckDir: string, themeFile: string): Promise<M
   // The mirror generates its own brief and helper; the deck's desktop-facing
   // AGENTS.md would send an agent looking for a CLI it does not have.
   const skip = new Set([
-    'deck.json', 'notes.md', 'agent-chats.json', 'access.json', CHAT_FILE, 'edit', themeFile,
+    'deck.json', 'notes.md', ...SERVER_SIDECARS, 'edit', themeFile,
     'AGENTS.md', 'CLAUDE.md', 'deck',
   ]);
   const files: MirrorFileEntry[] = [];
@@ -4387,6 +4463,7 @@ function mirrorPath(raw: string | null): string | null {
     return null;
   }
   if (segments.includes('edit') || raw.includes('\\')) return null;
+  if (segments.length === 1 && SERVER_SIDECARS.has(segments[0])) return null;
   return segments.join('/');
 }
 
@@ -4425,7 +4502,9 @@ function deckArchiveEntries(entries: ZipEntry[]): ZipEntry[] {
     // themselves ownership of a deck by editing a file in a zip.
     if (segments.some((part) => part.startsWith('.'))) return false;
     if (segments[0] === '__MACOSX') return false;
-    return file.name !== ACCESS_FILE && file.name !== FOLDER_FILE;
+    // Nor is an edit log somebody else's server kept: it would claim edits
+    // this server never saw.
+    return file.name !== ACCESS_FILE && file.name !== FOLDER_FILE && !HISTORY_FILES.includes(file.name);
   });
   if (!deckFiles.some((file) => file.name === 'deck.json')) {
     throw new Error('the archive holds no deck.json — is it a DeckWerk deck archive?');
