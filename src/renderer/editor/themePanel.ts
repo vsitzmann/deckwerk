@@ -156,6 +156,25 @@ export function createThemePanel(deps: ThemePanelDeps): ThemePanel {
   let hadMultipleSlidesSelected = false;
   /** A theme edit in progress; nothing lands on the deck until Done. */
   let draft: { style: ThemeStyle; base: ThemePreset } | null = null;
+  /**
+   * The last Apply-theme dry run and what it was computed from. The dry run
+   * clones and restyles the whole deck, and the store emits on every
+   * selection change and every collaborator's transaction: it reruns only
+   * when something it reads has changed.
+   */
+  let changesMemo: {
+    deck: Deck;
+    key: string;
+    result: { boxes: number; backgrounds: number } | null;
+  } | null = null;
+  /**
+   * False while the readout is off screen (another sidebar tab is showing).
+   * The dry run then waits until it scrolls or tabs back into view. Null
+   * until an IntersectionObserver reports, and always where there is none:
+   * the readout then stays live, as before.
+   */
+  let readoutVisible: boolean | null = null;
+  let readoutStale = false;
 
   function currentTheme(): ThemePreset | null {
     const deck = store.get().deck;
@@ -333,8 +352,33 @@ export function createThemePanel(deps: ThemePanelDeps): ThemePanel {
     return { deck: clone, ids: scopeSlideIds() };
   }
 
-  /** What Apply theme would change, counted off a dry run. */
+  /** Everything besides the deck that the Apply-theme dry run reads. */
+  function themeChangesKey(theme: ThemePreset): string {
+    const { slideIndex, slideSelection, selection } = store.get();
+    const scope = themeAdoption.scope;
+    return JSON.stringify([
+      theme,
+      themeAdoption,
+      scope === 'deck' ? null : slideIndex,
+      scope === 'slides' ? [...slideSelection] : null,
+      scope === 'selection' ? [...selection].sort() : null,
+      cssEditor.getValue(),
+    ]);
+  }
+
+  /** What Apply theme would change, counted off a dry run (memoised). */
   function themeChanges(): { boxes: number; backgrounds: number } | null {
+    const theme = currentTheme();
+    if (!theme) return null;
+    const deck = store.get().deck;
+    const key = themeChangesKey(theme);
+    if (changesMemo && changesMemo.deck === deck && changesMemo.key === key) return changesMemo.result;
+    const result = computeThemeChanges();
+    changesMemo = { deck, key, result };
+    return result;
+  }
+
+  function computeThemeChanges(): { boxes: number; backgrounds: number } | null {
     const run = adoptOnClone();
     if (!run) return null;
     const before = store.get().deck;
@@ -362,9 +406,14 @@ export function createThemePanel(deps: ThemePanelDeps): ThemePanel {
 
   function renderReadouts(): void {
     const { slideSelection } = store.get();
+    if (themeApplyButton) themeApplyButton.textContent = applyButtonLabel();
+    if (readoutVisible === false) {
+      readoutStale = true;
+      return;
+    }
+    readoutStale = false;
     if (themeReadout && themeApplyButton) {
       const changes = themeChanges();
-      themeApplyButton.textContent = applyButtonLabel();
       // The readout is advice, not a gate: an apply with nothing visible to
       // restyle still installs the theme as the deck's defaults.
       themeApplyButton.disabled = !changes;
@@ -647,6 +696,20 @@ export function createThemePanel(deps: ThemePanelDeps): ThemePanel {
     });
     themeApplyButton.addEventListener('mouseleave', clearPreview);
     applyAction.append(themeApplyButton);
+    if (typeof IntersectionObserver !== 'undefined') {
+      // The readout and the button it enables: live while either shows.
+      const showing = new Set<Element>();
+      const observer = new IntersectionObserver((entries) => {
+        for (const entry of entries) {
+          if (entry.isIntersecting) showing.add(entry.target);
+          else showing.delete(entry.target);
+        }
+        readoutVisible = showing.size > 0;
+        if (readoutVisible && readoutStale) renderReadouts();
+      });
+      observer.observe(themeReadout);
+      observer.observe(themeApplyButton);
+    }
 
     const applySection = panelSection('Apply theme', 'theme-apply-section');
     applySection.append(controls, themeReadout, applyAction);

@@ -12,8 +12,8 @@ import type { AgentOperation } from './agent.js';
  * collab undo layer relies on that.
  *
  * Fast path: EditorStore.commit preserves object identity for untouched
- * slides (shareUnchangedSlides), so identical references are skipped without
- * a stringify.
+ * slides and elements (reshareDeck), as applyOpsLenient does for whatever no
+ * op touched, so identical references are skipped without a stringify.
  */
 export function diffDecks(prev: Deck, next: Deck): AgentOperation[] {
   const ops: AgentOperation[] = [];
@@ -52,7 +52,7 @@ function diffDeckProps(prev: Deck, next: Deck): AgentOperation | null {
     }
   }
   for (const key of ['canvas', 'themeStyle', 'themeSelection', 'themeHistory', 'customThemes', 'layoutMasters'] as const) {
-    if (JSON.stringify(prev[key]) !== JSON.stringify(next[key])) {
+    if (prev[key] !== next[key] && JSON.stringify(prev[key]) !== JSON.stringify(next[key])) {
       op[key] = structuredClone(next[key]);
       changed = true;
     }

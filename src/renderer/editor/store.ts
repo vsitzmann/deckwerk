@@ -1,5 +1,7 @@
 import type { Deck, Slide, SlideElement } from '@shared/deck.js';
-import { parseDeck } from '@shared/deck.js';
+import { DeckSchema, SlideSchema, parseDeck } from '@shared/deck.js';
+import { renameRetiredFields } from '@shared/fieldAliases.js';
+import { cloneJson, jsonEqual } from '@shared/jsonData.js';
 import { applyAgentOperations, type AgentOperation } from '@shared/agent.js';
 import { diffDecks } from '@shared/deckDiff.js';
 import { applyOpsLenient } from '@shared/collabApply.js';
@@ -79,6 +81,8 @@ interface UndoItem {
 }
 
 const HISTORY_LIMIT = 200;
+/** Rows trimmed off a full history log per fold into its base (see historyBaseLag). */
+const HISTORY_FOLD_BATCH = 50;
 
 export class EditorStore {
   /**
@@ -100,8 +104,17 @@ export class EditorStore {
   private undoStack: UndoItem[] = [];
   private redoStack: UndoItem[] = [];
   private historyLog: DeckHistoryItem[] = [];
-  /** Materialized state represented by historyLog[0]. */
+  /** Materialized state of historyLog[0], once `historyBaseLag` is applied. */
   private historyBase: Deck | null = null;
+  /**
+   * Operations of rows trimmed off the front of a full log, not yet folded
+   * into `historyBase`. A fold is a whole-deck apply (parse, clone,
+   * validate); paying it for every new row once the log is full made every
+   * collaborator's transaction O(deck) again, so trims are folded in batches
+   * and whenever the base is read out.
+   */
+  private historyBaseLag: AgentOperation[] = [];
+  private historyBaseLagRows = 0;
   /** One materialized cache for diffing the next history entry. */
   private historyTipDeck: Deck | null = null;
   /** The history row represented by `state.deck`, or null for an unrecorded state. */
@@ -112,6 +125,19 @@ export class EditorStore {
   /** Coalesces a drag into one undo entry instead of one per mousemove. */
   private txnBase: Deck | null = null;
   private txnLabel = 'Move or resize objects';
+  /**
+   * Incoming remote slide object → the store's equal, normalised slide.
+   *
+   * The collab bridge advances its shadow copy-on-write, so a slide nobody
+   * touched arrives as the same object transaction after transaction. Once
+   * one has been parsed and found equal to (or adopted as) a store slide, it
+   * never needs looking at again. Keyed by identity, never by content: both
+   * sides are immutable (applyOpsLenient never mutates its input, and store
+   * states are never mutated in place — undo and history already hold them).
+   */
+  private remoteSlides = new WeakMap<Slide, Slide>();
+  /** The same memo for deck properties: the last incoming set and its parse. */
+  private remoteProps: { from: Omit<Deck, 'slides'>; to: Omit<Deck, 'slides'> } | null = null;
 
   constructor(deck: Deck, dir: string | null = null) {
     this.state = {
@@ -165,6 +191,8 @@ export class EditorStore {
     this.undoStack = [];
     this.redoStack = [];
     const persisted = opts.history;
+    this.historyBaseLag = [];
+    this.historyBaseLagRows = 0;
     try {
       this.historyBase = persisted?.base ? parseDeck(persisted.base) : null;
       this.historyLog = (persisted?.entries ?? []).slice(-HISTORY_LIMIT).map((item) => ({
@@ -249,7 +277,7 @@ export class EditorStore {
     opts: RemoteHistoryOptions = {},
   ): void {
     const anchor = this.cursorAnchor();
-    let next = parseDeck(deck);
+    let next = this.adoptRemoteDeck(deck);
     // Server acknowledgements normally contain the optimistic state already
     // on screen. Recording them again creates duplicate/misattributed rows and
     // makes the apparent current revision depend on network timing.
@@ -264,9 +292,10 @@ export class EditorStore {
     if (this.txnBase) {
       const inFlight = diffDecks(this.txnBase, this.state.deck);
       this.txnBase = next;
-      if (inFlight.length > 0) next = applyOpsLenient(next, inFlight).deck;
+      if (inFlight.length > 0) {
+        next = reshareDeck(this.state.deck, applyOpsLenient(next, inFlight).deck);
+      }
     }
-    shareUnchangedSlides(this.state.deck, next);
     this.state = { ...this.state, deck: next };
     this.restoreCursor(anchor);
     // Live typing arrives as a stream of same-label transactions; folding them
@@ -297,10 +326,9 @@ export class EditorStore {
    */
   resyncRemote(deck: Deck, dir: string): void {
     const anchor = this.cursorAnchor();
-    const next = parseDeck(deck);
+    const next = this.adoptRemoteDeck(deck);
     this.undoStack = [];
     this.redoStack = [];
-    shareUnchangedSlides(this.state.deck, next);
     this.state = { ...this.state, dir, deck: next, dirty: false };
     this.currentHistoryId = null;
     this.restoreCursor(anchor);
@@ -312,6 +340,56 @@ export class EditorStore {
     };
     this.emitHistory();
     this.emit();
+  }
+
+  /**
+   * A deck decided elsewhere, normalised as `parseDeck` would and reconciled
+   * with the current state (see `reshareDeck`), in time proportional to what
+   * differs from the current state rather than to the deck.
+   *
+   * Slides already in the current state, and remote slide objects met before,
+   * are taken as they are; only slides new to this store are parsed. The
+   * result never mutates `incoming`.
+   */
+  private adoptRemoteDeck(incoming: Deck): Deck {
+    const current = this.state.deck;
+    if (incoming === current) return current;
+    const raw = incoming as unknown as Record<string, unknown> | null;
+    // Not a parsed deck (a legacy file shape, or something malformed): the
+    // whole-deck parse is the only correct normalisation, and its error the
+    // right message.
+    if (!raw || typeof raw !== 'object' || !Array.isArray(raw.slides)
+      || Object.prototype.hasOwnProperty.call(raw, 'morphDuration')) {
+      return reshareDeck(current, parseDeck(incoming));
+    }
+    const inState = new Set(current.slides);
+    const currentById = new Map(current.slides.map((slide) => [slide.id, slide]));
+    const slides = incoming.slides.map((slide) => {
+      if (inState.has(slide)) return slide;
+      const known = this.remoteSlides.get(slide);
+      if (known) return known;
+      const parsed = SlideSchema.parse(renameRetiredFields(slide));
+      const before = currentById.get(parsed.id);
+      const adopted = before ? reshareSlide(before, parsed) : parsed;
+      this.remoteSlides.set(slide, adopted);
+      return adopted;
+    });
+    // Deck properties, likewise: as they are when they are the current
+    // state's, as adopted last time when they are the same objects as last
+    // time, parsed otherwise.
+    const { slides: _incomingSlides, ...props } = incoming;
+    const { slides: _currentSlides, ...currentProps } = current;
+    let adoptedProps: Omit<Deck, 'slides'>;
+    if (sameValues(props, currentProps)) {
+      adoptedProps = props;
+    } else if (this.remoteProps && sameValues(props, this.remoteProps.from)) {
+      adoptedProps = this.remoteProps.to;
+    } else {
+      const { slides: _none, ...parsed } = DeckSchema.parse(renameRetiredFields({ ...props, slides: [] }));
+      adoptedProps = parsed;
+      this.remoteProps = { from: props, to: parsed };
+    }
+    return reshareDeck(current, { ...adoptedProps, slides });
   }
 
   /** The slide the user is looking at, named by id rather than by position. */
@@ -349,10 +427,13 @@ export class EditorStore {
     } = {},
   ): void {
     const previous = this.state.deck;
-    const next = structuredClone(previous) as Deck;
-    fn(next);
-    shareUnchangedSlides(previous, next);
-    this.finishCommit(previous, next, opts);
+    // A deep copy that shares strings (immutable, so safe), then identity
+    // restored for everything the mutation left alone: O(deck structure), not
+    // O(deck bytes) — a deck holding a 10 MB inline image used to clone and
+    // stringify all of it on every live-typing push.
+    const draft = cloneJson(previous);
+    fn(draft);
+    this.finishCommit(previous, reshareDeck(previous, draft), opts);
   }
 
   private finishCommit(
@@ -502,6 +583,7 @@ export class EditorStore {
   }
 
   persistedHistory(): DeckHistoryDocument {
+    this.foldHistoryBase();
     return {
       version: 2,
       base: this.historyBase,
@@ -824,6 +906,8 @@ export class EditorStore {
         // Coalescing the base row replaces its materialized state; it can never
         // carry operations because there is no preceding revision.
         this.historyBase = this.state.deck;
+        this.historyBaseLag = [];
+        this.historyBaseLagRows = 0;
         last.operations = [];
       } else if (previousTip) {
         last.operations.push(...incoming);
@@ -837,7 +921,11 @@ export class EditorStore {
       return;
     }
     const operations = incoming;
-    if (this.historyLog.length === 0) this.historyBase = this.state.deck;
+    if (this.historyLog.length === 0) {
+      this.historyBase = this.state.deck;
+      this.historyBaseLag = [];
+      this.historyBaseLagRows = 0;
+    }
     this.historyLog.push({
       id: this.nextHistoryId++,
       label,
@@ -852,22 +940,34 @@ export class EditorStore {
     if (this.historyLog.length > HISTORY_LIMIT) {
       const nextBase = this.historyLog[1];
       if (this.historyBase && nextBase) {
-        this.historyBase = applyAgentOperations(this.historyBase, nextBase.operations);
+        this.historyBaseLag.push(...nextBase.operations);
+        this.historyBaseLagRows += 1;
         nextBase.operations = [];
       }
       this.historyLog.shift();
+      if (this.historyBaseLagRows >= HISTORY_FOLD_BATCH) this.foldHistoryBase();
     }
     this.currentHistoryId = this.historyLog[this.historyLog.length - 1]?.id ?? null;
     this.emitHistory();
     this.onHistoryChange?.();
   }
 
+  /** Apply trimmed rows' operations to the history base (see historyBaseLag). */
+  private foldHistoryBase(): void {
+    if (this.historyBase && this.historyBaseLag.length > 0) {
+      this.historyBase = applyAgentOperations(this.historyBase, this.historyBaseLag);
+    }
+    this.historyBaseLag = [];
+    this.historyBaseLagRows = 0;
+  }
+
   /** Materialize one persisted revision with a single clone/apply boundary. */
   private materializeHistoryIndex(index: number): Deck | null {
     if (!this.historyBase || index < 0 || index >= this.historyLog.length) return null;
-    const operations = this.historyLog
-      .slice(1, index + 1)
-      .flatMap((entry) => entry.operations);
+    const operations = [
+      ...this.historyBaseLag,
+      ...this.historyLog.slice(1, index + 1).flatMap((entry) => entry.operations),
+    ];
     return operations.length > 0
       ? applyAgentOperations(this.historyBase, operations)
       : this.historyBase;
@@ -875,7 +975,16 @@ export class EditorStore {
 }
 
 function sameDeck(left: Deck, right: Deck): boolean {
-  return left === right || JSON.stringify(left) === JSON.stringify(right);
+  return left === right || jsonEqual(left, right);
+}
+
+/** Whether two objects hold the same keys with identical (===) values. */
+function sameValues(left: object, right: object): boolean {
+  const a = left as Record<string, unknown>;
+  const b = right as Record<string, unknown>;
+  const keys = Object.keys(a);
+  return keys.length === Object.keys(b).length
+    && keys.every((key) => Object.prototype.hasOwnProperty.call(b, key) && a[key] === b[key]);
 }
 
 /**
@@ -885,8 +994,7 @@ function sameDeck(left: Deck, right: Deck): boolean {
  * change worth rebuilding for.
  */
 export function sameSlideIgnoringNotes(left: Slide, right: Slide): boolean {
-  if (left === right) return true;
-  return JSON.stringify({ ...left, notes: '' }) === JSON.stringify({ ...right, notes: '' });
+  return left === right || jsonEqual(left, right, ['notes']);
 }
 
 /** Whether two decks differ in nothing but their slides' speaker notes. */
@@ -896,7 +1004,7 @@ export function sameDeckIgnoringNotes(left: Deck, right: Deck): boolean {
   for (let i = 0; i < left.slides.length; i++) {
     if (!sameSlideIgnoringNotes(left.slides[i], right.slides[i])) return false;
   }
-  return JSON.stringify({ ...left, slides: null }) === JSON.stringify({ ...right, slides: null });
+  return jsonEqual(left, right, ['slides']);
 }
 
 /** A stable signature of what a run of operations touches, for coalescing. */
@@ -912,21 +1020,64 @@ function operationTargets(operations: AgentOperation[]): string {
 }
 
 /**
- * Restore object identity for slides an edit did not touch.
+ * Restore object identity for whatever an edit did not touch.
  *
- * `commit` deliberately gives mutation callbacks a fully independent clone,
- * but the canvas and slide rail use slide identity to retain expensive DOM and
+ * `commit` deliberately gives mutation callbacks a fully independent copy,
+ * and a remote deck arrives as objects the store has not seen, but the
+ * canvas and slide rail use slide identity to retain expensive DOM and
  * decoded media. Without this reconciliation, changing one layout in a large
  * imported deck rebuilds every thumbnail and can exhaust the renderer.
+ *
+ * Returns `next` with identity restored from `previous` wherever content
+ * agrees: a slide equal to the previous slide of the same id becomes that
+ * object; in a slide that did change, each unchanged element (by id) becomes
+ * the previous element; deck properties likewise. `next` itself is never
+ * mutated — a copy is made only where something is re-shared — so it may be
+ * a deck another owner holds (the collab bridge's shadow).
+ *
+ * Comparisons short-circuit on identity at every level, so reconciling two
+ * decks that already share most slides costs only what differs.
  */
-export function shareUnchangedSlides(previous: Deck, next: Deck): void {
+export function reshareDeck(previous: Deck, next: Deck): Deck {
+  if (previous === next) return next;
   const byId = new Map(previous.slides.map((slide) => [slide.id, slide]));
+  let slides: Slide[] | null = null;
   for (let i = 0; i < next.slides.length; i++) {
-    const candidate = byId.get(next.slides[i].id);
-    if (candidate && JSON.stringify(candidate) === JSON.stringify(next.slides[i])) {
-      next.slides[i] = candidate;
-    }
+    const slide = next.slides[i];
+    const before = byId.get(slide.id);
+    if (!before || before === slide) continue;
+    const shared = reshareSlide(before, slide);
+    if (shared === slide) continue;
+    slides ??= next.slides.slice();
+    slides[i] = shared;
   }
+  let props: Record<string, unknown> | null = null;
+  const after = next as unknown as Record<string, unknown>;
+  const prior = previous as unknown as Record<string, unknown>;
+  for (const key of Object.keys(after)) {
+    if (key === 'slides') continue;
+    const value = after[key];
+    if (value === prior[key] || typeof value !== 'object' || value === null) continue;
+    if (!jsonEqual(value, prior[key])) continue;
+    props ??= {};
+    props[key] = prior[key];
+  }
+  if (!slides && !props) return next;
+  return { ...next, ...props, slides: slides ?? next.slides } as Deck;
+}
+
+function reshareSlide(before: Slide, slide: Slide): Slide {
+  if (before === slide || jsonEqual(before, slide)) return before;
+  const byId = new Map(before.elements.map((element) => [element.id, element]));
+  let elements: SlideElement[] | null = null;
+  for (let i = 0; i < slide.elements.length; i++) {
+    const element = slide.elements[i];
+    const prior = byId.get(element.id);
+    if (!prior || prior === element || !jsonEqual(prior, element)) continue;
+    elements ??= slide.elements.slice();
+    elements[i] = prior;
+  }
+  return elements ? { ...slide, elements } : slide;
 }
 
 /**

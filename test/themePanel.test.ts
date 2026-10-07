@@ -482,4 +482,78 @@ describe('the theme editor’s type scale', () => {
     expect(JSON.stringify(store.get().deck)).toBe(before);
     expect(store.canUndo()).toBe(false);
   });
+
+});
+
+describe('Apply-theme dry runs', () => {
+  beforeEach(() => document.body.replaceChildren());
+
+  it('reruns the Apply-theme dry run only when the deck or what it reads changes, and only on screen', () => {
+    const deck = emptyDeck('Dry runs');
+    deck.slides = [0, 1, 2].map((i) => ({
+      ...structuredClone(deck.slides[0]),
+      id: `slide-${i}`,
+      elements: [{
+        id: `text-${i}`, type: 'text', x: 0, y: 0, w: 100, h: 40, rot: 0, z: 0, opacity: 1,
+        class: ['role-body'], style: {}, html: 'Hello', align: 'left',
+      } as never],
+    }));
+    const store = new EditorStore(deck, '/tmp/theme-panel');
+    // A theme dry run is the panel's only whole-deck structuredClone.
+    const clones = () => cloneSpy.mock.calls.filter(([value]) => value === store.get().deck).length;
+    const cloneSpy = vi.spyOn(globalThis, 'structuredClone');
+    let observe: IntersectionObserverCallback = () => {};
+    const original = globalThis.IntersectionObserver;
+    globalThis.IntersectionObserver = class {
+      constructor(callback: IntersectionObserverCallback) { observe = callback; }
+      observe(): void {}
+      unobserve(): void {}
+      disconnect(): void {}
+    } as unknown as typeof IntersectionObserver;
+    try {
+      const panel = createThemePanel({
+        store,
+        cssEditor: { getValue: () => '', setValue: vi.fn() } as unknown as CssEditor,
+        save: vi.fn(),
+        setStatusMessage: vi.fn(),
+        saveThemeCss: vi.fn(),
+      });
+      document.body.appendChild(panel.element);
+      const readout = panel.element.querySelector('.theme-readout')!;
+      const show = (visible: boolean) => observe(
+        [readout, panel.element.querySelector('.theme-apply-action button')!]
+          .map((target) => ({ target, isIntersecting: visible })) as unknown as IntersectionObserverEntry[],
+        {} as IntersectionObserver,
+      );
+      show(true);
+      cloneSpy.mockClear();
+      const scope = panel.element.querySelector<HTMLSelectElement>('.theme-adoption-controls select')!;
+      scope.value = 'deck';
+      scope.dispatchEvent(new Event('change'));
+      const afterScope = clones();
+      expect(afterScope).toBeLessThanOrEqual(1);
+
+      // Selection-only emits with the deck scope: nothing the dry run reads.
+      store.select(['text-0']);
+      store.selectSlide(1);
+      store.select(['text-1']);
+      expect(clones()).toBe(afterScope);
+
+      // A deck change reruns it…
+      store.commit((d) => { d.slides[0].elements[0].x = 5; }, { label: 'Nudge' });
+      expect(clones()).toBe(1);
+
+      // …but not while the panel is on another tab; it catches up on return.
+      show(false);
+      store.commit((d) => { d.slides[0].elements[0].x = 6; }, { label: 'Nudge' });
+      store.commit((d) => { d.slides[0].elements[0].x = 7; }, { label: 'Nudge' });
+      expect(clones()).toBe(0);
+      show(true);
+      expect(clones()).toBe(1);
+      expect(readout.textContent).not.toBe('');
+    } finally {
+      globalThis.IntersectionObserver = original;
+      cloneSpy.mockRestore();
+    }
+  });
 });
