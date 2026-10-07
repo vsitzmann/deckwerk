@@ -54,6 +54,7 @@ import { htmlEditTransaction } from '../main/htmlAuthoring.js';
 import { checkWebPage, renderSlidesToPng } from './renderSlides.js';
 import { runConnectCommand } from './agentConnect.js';
 import { ChatUsageError, listChat, postChat, resolveChatTarget, waitForMention } from './chatClient.js';
+import { HISTORY_FILE, HISTORY_ROTATED_FILE, parseEditHistory, type EditHistoryEntry } from '@shared/editHistory.js';
 
 /**
  * `slide-agent` — the filesystem-first agent interface.
@@ -191,6 +192,12 @@ Everything else:
                                           post to the chat as the agent
   transaction apply <deck> <file.json>    JSON fallback, for tooling with no
                                           browser — not how slides are authored
+  history   [deck] [--deleted] [--slide <id>] [--limit <n>] [--full]
+                                          a hosted deck's edit log (history.jsonl,
+                                          kept by the collaboration server): who
+                                          changed what, when. --deleted lists only
+                                          changes that removed slides or objects,
+                                          with their full JSON, to put them back
 
 Adding slides vs. changing them: 'new' writes a page that can only add, while
 'inspect --html' creates authoring HTML that governs the slides it names — do
@@ -249,6 +256,8 @@ export async function runAgentCli(argv: string[], io: CliIo): Promise<number> {
         return await transactionCommand(rest, io);
       case 'connect':
         return await connectCommand(rest, io);
+      case 'history':
+        return await historyCommand(rest, io);
       case 'help':
       case '--help':
       case undefined:
@@ -1538,6 +1547,53 @@ function authoredScenes(
 ): ComputedSlideScene[] {
   return deck.slides.map((slide, index) =>
     authoredScene(deck, slide, index, selectedSlideIds, selectedElementIds, activeSlideId));
+}
+
+/**
+ * The edit log a collaboration server keeps beside a hosted deck, read from
+ * the deck folder on that machine: newest last. Deleted slides carry their
+ * full JSON with --deleted or --full, and their number and title otherwise.
+ */
+async function historyCommand(argv: string[], io: CliIo): Promise<number> {
+  const { flags, options, positional } = parseFlags(argv, ['limit']);
+  ensureKnownFlags('history', flags, ['deleted', 'slide', 'full']);
+  ensurePositionals('history', positional, 1);
+  const deckDir = resolveDeckDir(positional[0], io);
+  const limit = options.has('limit') ? Number.parseInt(options.get('limit')!, 10) : 50;
+  if (!Number.isFinite(limit) || limit < 1) throw new UsageError('--limit takes a positive number');
+  const slideIds = new Set([...flags].filter((flag) => flag.startsWith('slide='))
+    .flatMap((flag) => flag.slice('slide='.length).split(',')).map((id) => id.trim()).filter(Boolean));
+  const deletedOnly = flags.has('deleted');
+  const full = flags.has('full') || deletedOnly;
+
+  let text = '';
+  for (const name of [HISTORY_ROTATED_FILE, HISTORY_FILE]) {
+    text += await readFile(join(deckDir, name), 'utf8').catch(() => '');
+  }
+  const touches = (entry: EditHistoryEntry, id: string): boolean => Boolean(
+    entry.slides?.inserted?.includes(id) || entry.slides?.moved?.includes(id) || entry.slides?.changed?.includes(id)
+    || entry.slides?.deleted?.some((slide) => slide.id === id)
+    || entry.elements?.deleted?.some((element) => element.slideId === id));
+  const entries = parseEditHistory(text)
+    .filter((entry) => !deletedOnly || Boolean(entry.slides?.deleted?.length || entry.elements?.deleted?.length))
+    .filter((entry) => slideIds.size === 0 || [...slideIds].some((id) => touches(entry, id)));
+  const shown = entries.slice(-limit).map((entry) => (full ? entry : {
+    ...entry,
+    ...(entry.slides?.deleted ? {
+      slides: { ...entry.slides, deleted: entry.slides.deleted.map(({ slide: _slide, ...rest }) => rest) },
+    } : {}),
+    ...(entry.elements?.deleted ? {
+      elements: { ...entry.elements, deleted: entry.elements.deleted.map(({ element: _element, ...rest }) => rest) },
+    } : {}),
+  }));
+  io.out(json({
+    file: join(deckDir, HISTORY_FILE),
+    total: entries.length,
+    shown: shown.length,
+    ...(text ? {} : { note: 'No edit log here. A collaboration server writes history.jsonl beside a deck it hosts.' }),
+    entries: shown,
+  }));
+  return EXIT_OK;
 }
 
 /** A caller mistake, reported as usage rather than as a failure of the tool. */

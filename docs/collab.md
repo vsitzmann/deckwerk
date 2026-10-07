@@ -77,6 +77,17 @@ on the canvas, elements with comments show a bubble at their top-right
 corner, and right-click → "Add comment…" starts a thread on any object.
 Comments from a collab session carry the author's display name.
 
+## The edit log
+
+The server appends one line per accepted change to `history.jsonl` in the
+deck folder: when, who (display name, tailnet login with `--access`, client
+id, whether an agent sent it), the label, counts per operation, and the full
+JSON of every slide or object the change deleted, so nothing that vanishes
+is unrecoverable. Replacements are logged by id only. It rotates to
+`history.1.jsonl` at 20 MB, travels with the folder on rename and trash, and
+is never mirrored, served or downloaded. `slide-agent history <deck folder>
+--deleted` reads it; the format is described in `AGENTS.md`.
+
 ## Running a standalone server
 
 Build the browser client once (rebuild after pulling client changes):

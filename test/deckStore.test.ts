@@ -69,6 +69,24 @@ describe('deck folder persistence', () => {
     expect(await readFile(join(source, 'assets', 'figure.svg'), 'utf8')).toBe('<svg/>');
   });
 
+  it('leaves a collaboration server\'s edit log behind on Save As', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'deck-save-as-history-'));
+    cleanup.push(root);
+    const source = join(root, 'Original');
+    const target = join(root, 'Copy');
+    await createDeck(source);
+    await writeFile(join(source, 'history.jsonl'), '{"seq":1}\n', 'utf8');
+    await writeFile(join(source, 'history.1.jsonl'), '{"seq":0}\n', 'utf8');
+    await writeFile(join(source, 'assets', 'history.jsonl'), 'an asset that happens to share the name', 'utf8');
+
+    await copyDeck(source, target);
+
+    await expect(access(join(target, 'history.jsonl'))).rejects.toThrow();
+    await expect(access(join(target, 'history.1.jsonl'))).rejects.toThrow();
+    expect(await readFile(join(target, 'assets', 'history.jsonl'), 'utf8')).toBe('an asset that happens to share the name');
+    expect(await readFile(join(source, 'history.jsonl'), 'utf8')).toBe('{"seq":1}\n');
+  });
+
   it('refuses to overwrite an existing destination', async () => {
     const root = await mkdtemp(join(tmpdir(), 'deck-save-as-existing-'));
     cleanup.push(root);

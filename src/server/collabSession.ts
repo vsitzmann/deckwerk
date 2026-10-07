@@ -4,10 +4,21 @@ import { loadDeck, saveDeck, loadTheme, saveTheme, serializeDeck } from '../main
 import { validateDeckIntegrity, type AgentOperation } from '../shared/agent.js';
 import { applyOpsLenient } from '../shared/collabApply.js';
 import type { Deck } from '../shared/deck.js';
+import { summarizeChange, summarizeReplacement, type EditAuthor } from '../shared/editHistory.js';
 import { ChatLog } from './chatLog.js';
+import { EditLog } from './editLog.js';
 
 const SAVE_DEBOUNCE_MS = 800;
 const WATCH_DEBOUNCE_MS = 200;
+
+/** Who made a change and what they called it, for the edit log. */
+export interface EditMeta {
+  label: string;
+  author: EditAuthor;
+  txnId?: string;
+}
+
+const UNATTRIBUTED: EditMeta = { label: '', author: { name: 'unknown', agent: false, via: 'server' } };
 
 export interface AppliedTxn {
   seq: number;
@@ -58,6 +69,8 @@ export class CollabSession {
      * session — but it is never part of `deck`, `seq` or any transaction.
      */
     readonly chat: ChatLog,
+    /** Who changed what, beside deck.json (see shared/editHistory.ts). Also never part of `deck`. */
+    readonly history: EditLog,
     public seq = 0,
   ) {}
 
@@ -65,7 +78,7 @@ export class CollabSession {
     const deck = await loadDeck(dir);
     const themeCss = await loadTheme(dir, deck.theme);
     const chat = await ChatLog.load(dir);
-    return new CollabSession(dir, deck, themeCss, chat);
+    return new CollabSession(dir, deck, themeCss, chat, new EditLog(dir));
   }
 
   /**
@@ -73,8 +86,11 @@ export class CollabSession {
    * sequence number and must be broadcast: the sender confirms its pending
    * entry by seeing its own txnId come back, and replaying skipped ops is
    * idempotent by construction.
+   *
+   * Every accepted transaction is also a line in the edit log, attributed to
+   * `meta` — written later, off this path.
    */
-  applyOps(ops: AgentOperation[]): AppliedTxn {
+  applyOps(ops: AgentOperation[], meta: EditMeta = UNATTRIBUTED): AppliedTxn {
     if (this.closed) throw new Error('this presentation was closed (renamed or moved) — reopen it');
     const { deck: next, skipped } = applyOpsLenient(this.deck, ops);
     const errors = validateDeckIntegrity(next);
@@ -83,9 +99,21 @@ export class CollabSession {
       // corrupt deck become authoritative.
       throw new Error(errors.join('\n'));
     }
+    const before = this.deck;
     this.deck = next;
     this.seq += 1;
     if (skipped.length < ops.length) this.schedulePersist();
+    if (ops.length > 0) {
+      this.history.append({
+        ts: new Date().toISOString(),
+        seq: this.seq,
+        kind: 'txn',
+        label: meta.label,
+        author: meta.author,
+        ...(meta.txnId ? { txnId: meta.txnId } : {}),
+        ...summarizeChange(before, next, ops, skipped),
+      });
+    }
     return { seq: this.seq, deck: next, skipped };
   }
 
@@ -132,6 +160,7 @@ export class CollabSession {
       await this.persist();
     }
     await this.chat.flush();
+    await this.history.flush();
   }
 
   async close(): Promise<void> {
@@ -142,6 +171,7 @@ export class CollabSession {
     this.closed = true;
     await this.chat.close();
     await this.flush();
+    await this.history.close();
   }
 
   /**
@@ -154,6 +184,7 @@ export class CollabSession {
     this.closed = true;
     // Closing the log writes nothing new; it only stops appends and wakes waiters.
     void this.chat.close();
+    this.history.discard();
     if (this.saveTimer) clearTimeout(this.saveTimer);
     this.saveTimer = null;
   }
@@ -194,8 +225,17 @@ export class CollabSession {
       // the app is the worse direction.)
       if (this.saveTimer) return;
       const deck = await loadDeck(this.dir);
+      const before = this.deck;
       this.deck = deck;
       this.seq += 1;
+      this.history.append({
+        ts: new Date().toISOString(),
+        seq: this.seq,
+        kind: 'replace',
+        label: 'deck.json changed on disk',
+        author: { name: 'deck.json on disk', agent: false, via: 'disk' },
+        ...summarizeReplacement(before, deck),
+      });
       this.events?.onExternalDeck(deck, this.seq);
     } catch {
       // Half-written JSON mid-save; the next event will retry.

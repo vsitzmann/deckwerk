@@ -21,6 +21,7 @@ import { renameRetiredFields } from '../../src/shared/fieldAliases.js';
 import { startCollabServer, type RunningCollabServer } from '../../src/server/collabServer.js';
 import { LocalAgentRegistry } from '../../src/server/localAgents.js';
 import { runAgentCli } from '../../src/cli/agentCli.js';
+import { connectAgentBridge, type AgentBridge, type BridgeTestHooks } from '../../src/cli/agentConnect.js';
 import { Cdp, findTarget, stopBrowser, wait } from './browserSession.js';
 import { sharedBuild } from './collabClient.js';
 import { startCollabServerProcess, type CollabServerProcess } from './collabServerProcess.js';
@@ -467,6 +468,12 @@ export interface HostedOptions {
   deck?: Deck;
   /** Run the server under the production sandbox, in a process of its own. */
   sandbox?: string[] | 'production';
+  /**
+   * Run the bridge in this process from source, with these hooks into its
+   * writes, instead of the bundle the server hands out — for races a test
+   * has to stage step by step.
+   */
+  bridgeHooks?: BridgeTestHooks;
 }
 
 export interface HostedWorkspace extends AgentWorkspace {
@@ -514,26 +521,54 @@ export async function hostedWorkspace(options: HostedOptions = {}): Promise<Host
   const human = new HumanPeer(port, deckId, 'Vincent', PARTICIPANT);
   await human.open();
 
-  // `curl -fsSL <origin>/deckwerk-connect.mjs -o deckwerk-connect.mjs && node …`
-  const download = await fetch(`${origin}/deckwerk-connect.mjs`);
-  if (!download.ok) throw new Error(`the server does not serve the bridge (${download.status})`);
-  const bridgeFile = join(root, 'deckwerk-connect.mjs');
-  await writeFile(bridgeFile, Buffer.from(await download.arrayBuffer()));
   // Its runtime sidecar goes where this test can clean it up, not ~/.deckwerk.
   const stateDir = join(root, 'state');
   await mkdir(stateDir, { recursive: true });
-  const bridge: ChildProcess = spawn(process.execPath, [
-    bridgeFile, `${origin}/?deck=${deckId}&agent=${PARTICIPANT}`, '--dir', mirror, '--no-agent', '--name', 'Test agent',
-  ], { cwd: root, stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, DECKWERK_STATE_DIR: stateDir } });
   let bridgeOutput = '';
-  bridge.stdout?.on('data', (chunk) => { bridgeOutput += String(chunk); });
-  bridge.stderr?.on('data', (chunk) => { bridgeOutput += String(chunk); });
   let bridgeExited = false;
-  bridge.once('exit', () => { bridgeExited = true; });
-  await until(async () => {
-    if (bridgeExited) throw new Error(`the bridge exited:\n${bridgeOutput}`);
-    return bridgeOutput.includes('Bridge running');
-  }, 'the bridge to mirror the deck', 90_000);
+  let stopBridge: () => Promise<void>;
+  if (options.bridgeHooks) {
+    const previousState = process.env.DECKWERK_STATE_DIR;
+    process.env.DECKWERK_STATE_DIR = stateDir;
+    let inProcessBridge: AgentBridge;
+    try {
+      inProcessBridge = connectAgentBridge({
+        url: `${origin}/?deck=${deckId}&agent=${PARTICIPANT}`,
+        dir: mirror,
+        name: 'Test agent',
+        hooks: options.bridgeHooks,
+        io: { out: (text) => { bridgeOutput += text; }, err: (text) => { bridgeOutput += `${text}\n`; }, cwd: root },
+      });
+    } finally {
+      if (previousState === undefined) delete process.env.DECKWERK_STATE_DIR;
+      else process.env.DECKWERK_STATE_DIR = previousState;
+    }
+    await inProcessBridge.ready;
+    stopBridge = () => inProcessBridge.close();
+  } else {
+    // `curl -fsSL <origin>/deckwerk-connect.mjs -o deckwerk-connect.mjs && node …`
+    const download = await fetch(`${origin}/deckwerk-connect.mjs`);
+    if (!download.ok) throw new Error(`the server does not serve the bridge (${download.status})`);
+    const bridgeFile = join(root, 'deckwerk-connect.mjs');
+    await writeFile(bridgeFile, Buffer.from(await download.arrayBuffer()));
+    const bridge: ChildProcess = spawn(process.execPath, [
+      bridgeFile, `${origin}/?deck=${deckId}&agent=${PARTICIPANT}`, '--dir', mirror, '--no-agent', '--name', 'Test agent',
+    ], { cwd: root, stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, DECKWERK_STATE_DIR: stateDir } });
+    bridge.stdout?.on('data', (chunk) => { bridgeOutput += String(chunk); });
+    bridge.stderr?.on('data', (chunk) => { bridgeOutput += String(chunk); });
+    bridge.once('exit', () => { bridgeExited = true; });
+    await until(async () => {
+      if (bridgeExited) throw new Error(`the bridge exited:\n${bridgeOutput}`);
+      return bridgeOutput.includes('Bridge running');
+    }, 'the bridge to mirror the deck', 90_000);
+    stopBridge = async () => {
+      if (bridgeExited) return;
+      const exited = new Promise((resolvePromise) => bridge.once('exit', resolvePromise));
+      bridge.kill('SIGINT');
+      await Promise.race([exited, wait(5_000)]);
+      if (!bridgeExited) bridge.kill('SIGKILL');
+    };
+  }
 
   const bridgeLogPath = join(mirror, '.deckwerk-bridge.log');
   const bridgeLog = async () => readFile(bridgeLogPath, 'utf8').catch(() => '');
@@ -585,12 +620,7 @@ export async function hostedWorkspace(options: HostedOptions = {}): Promise<Host
       serverProcess ? `--- server\n${serverProcess.stderr()}` : '',
     ].join('\n'),
     close: async () => {
-      if (!bridgeExited) {
-        const exited = new Promise((resolvePromise) => bridge.once('exit', resolvePromise));
-        bridge.kill('SIGINT');
-        await Promise.race([exited, wait(5_000)]);
-        if (!bridgeExited) bridge.kill('SIGKILL');
-      }
+      await stopBridge();
       human.close();
       await inProcess?.close();
       await serverProcess?.close();

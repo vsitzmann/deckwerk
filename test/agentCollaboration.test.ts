@@ -430,6 +430,86 @@ describe.skipIf(!electronBinary)('a hosted session', { timeout: 240_000 }, () =>
     expect((await hosted.run('docs')).stdout).toContain('This folder is a live mirror');
   });
 
+  it('merges a deck.json an agent rewrote from a stale copy, keeping the slide a collaborator added meanwhile', async () => {
+    hosted = await hostedWorkspace();
+    // The agent (or its script) reads deck.json and goes off to work on it…
+    const stale = JSON.parse(await readFile(join(hosted.dir, 'deck.json'), 'utf8')) as Deck;
+    // …a person adds a slide, and the mirror shows it…
+    await hosted.human.edit('Add a slide', (deck) => { deck.slides.push(personSlide('added-by-person', 'Added by a person')); });
+    await until(async () => (await hosted.mirrorDeck()).slides.some((slide) => slide.id === 'added-by-person'),
+      'the person\'s slide to reach the mirror');
+    // …and the agent writes its copy back with its one change.
+    slideById(stale, 'closing').name = 'Renamed by the agent';
+    await writeFile(join(hosted.dir, 'deck.json'), `${JSON.stringify(stale, null, 2)}\n`, 'utf8');
+
+    await until(async () => slideById(await hosted.deck(), 'closing').name === 'Renamed by the agent',
+      'the agent\'s change to reach the server', 20_000);
+    const deck = await hosted.deck();
+    expect(deck.slides.map((slide) => slide.id)).toContain('added-by-person');
+    expect(hosted.human.deck.slides.map((slide) => slide.id)).toContain('added-by-person');
+    // The mirror converges on the merge, the person's slide included.
+    await until(async () => sameDeck(await hosted.mirrorDeck(), deck), 'the mirror to converge', 20_000);
+  });
+
+  it('merges a notes.md an agent rewrote from a stale copy, keeping notes a collaborator wrote meanwhile', async () => {
+    hosted = await hostedWorkspace();
+    const stale = await readFile(join(hosted.dir, 'notes.md'), 'utf8');
+    await hosted.human.edit('Add a slide with notes', (deck) => {
+      deck.slides.push({ ...personSlide('noted-by-person', 'Noted'), notes: 'The person\'s own notes.' });
+      slideById(deck, 'closing').notes = 'Closing notes, by a person.';
+    });
+    await until(async () => (await readFile(join(hosted.dir, 'notes.md'), 'utf8')).includes('The person\'s own notes.'),
+      'the person\'s notes to reach the mirror');
+    await writeFile(join(hosted.dir, 'notes.md'), stale.replace('Say this slowly.', 'Say this slowly, by the agent.'), 'utf8');
+
+    await until(async () => slideById(await hosted.deck(), 'review').notes === 'Say this slowly, by the agent.',
+      'the agent\'s notes to reach the server', 20_000);
+    const deck = await hosted.deck();
+    expect(slideById(deck, 'noted-by-person').notes).toBe('The person\'s own notes.');
+    expect(slideById(deck, 'closing').notes).toBe('Closing notes, by a person.');
+  });
+
+  it('reads deck.json mid-write as its own echo and sends nothing back', async () => {
+    // The bridge writes the mirror's deck.json beside it and renames it into
+    // place. Hold the second of two such writes open — as a 13 MB deck does —
+    // so the watcher event from the first fires while it is in flight.
+    let entered!: () => void;
+    const firstEntered = new Promise<void>((resolvePromise) => { entered = resolvePromise; });
+    let sawSecond!: () => void;
+    const secondEntered = new Promise<void>((resolvePromise) => { sawSecond = resolvePromise; });
+    const pause = (ms: number) => new Promise((resolvePromise) => setTimeout(resolvePromise, ms));
+    hosted = await hostedWorkspace({
+      bridgeHooks: {
+        beforeReplace: async (file, contents) => {
+          if (file !== 'deck.json') return;
+          if (contents.includes('"race-second"')) {
+            sawSecond();
+            await pause(1_500);
+          } else if (contents.includes('"race-first"')) {
+            entered();
+            // Released as soon as the second write is under way (or, when the
+            // bridge rightly waits for this one first, after a while).
+            await Promise.race([secondEntered, pause(1_500)]);
+          }
+        },
+      },
+    });
+    const human = hosted.human;
+    await human.edit('Add the first slide', (deck) => { deck.slides.push(personSlide('race-first', 'First')); });
+    await firstEntered;
+    await human.edit('Add the second slide', (deck) => { deck.slides.push(personSlide('race-second', 'Second')); });
+    await until(async () => {
+      const mirrored = (await hosted.mirrorDeck()).slides.map((slide) => slide.id);
+      return mirrored.includes('race-first') && mirrored.includes('race-second');
+    }, 'both slides to reach the mirror', 20_000);
+    // Long enough for a watcher event, its debounce and a round trip.
+    await pause(1_500);
+    expect(human.transactions.map((txn) => txn.label)).not.toContain('Update deck.json');
+    const ids = (await hosted.deck()).slides.map((slide) => slide.id);
+    expect(ids).toContain('race-first');
+    expect(ids).toContain('race-second');
+  });
+
   it('carries the agent\'s theme, notes and new media to the server', async () => {
     hosted = await hostedWorkspace();
     const theme = `${await readFile(join(hosted.dir, 'theme.css'), 'utf8')}\n.role-body { letter-spacing: 0.01em; }\n`;
@@ -478,6 +558,17 @@ describe.skipIf(!electronBinary)('the decks this repository ships', { timeout: 2
     });
   }
 });
+
+/** A one-line slide, as a person adds it in the browser. */
+function personSlide(id: string, text: string): Slide {
+  return {
+    id, name: '', notes: '', background: { color: null, image: null }, timeline: [],
+    elements: [{
+      id: `${id}-title`, type: 'text', x: 120, y: 120, w: 1200, h: 120, rot: 0, z: 1, opacity: 1,
+      class: ['role-title'], style: {}, html: text, align: 'left', valign: 'top',
+    } as never],
+  };
+}
 
 /** Two decks that say the same thing, slide by slide and in the same order. */
 function sameDeck(left: Deck, right: Deck): boolean {
