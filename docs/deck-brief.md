@@ -49,10 +49,10 @@ Use any HTML and CSS: flex/grid, `<img>`, `object-fit`, `border-radius`,
 Iterate in a browser, e.g. `chromium --headless --screenshot=/tmp/s.png
 --window-size=1920,1080 drafts/slide.html`. Nothing here involves DeckWerk.
 
-For something that needs JavaScript (a live chart, a demo), write it as its
-own self-contained page, then `slide-agent web add . chart.html --size
-1680x620` and paste the `<div data-element="web" …>` it prints into your
-slide beside a normal title. No network access while presenting.
+For something that needs JavaScript (a live chart, a demo), write it as its own
+self-contained page, then `slide-agent web add . chart.html --size 1680x620` and
+paste the `<div data-element="web" …>` it prints beside a normal title. No network
+while presenting. If a script lays the page out after load, call `deckwerk.ready(promise)` so the deck waits for it.
 
 ## 3. Put it in the deck
 

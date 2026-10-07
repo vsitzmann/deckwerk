@@ -178,7 +178,7 @@ export function createClipboardActions(deps: ShellDeps): ClipboardActions {
   const cutToClipboard = async () => {
     const copied = await copyToClipboard('Cut');
     if (copied === 'elements') store.deleteSelection();
-    else if (copied === 'slides') rail.deleteSlide();
+    else if (copied === 'slides') rail.deleteSlide({ verb: 'Cut' });
   };
 
   const pasteAndReport = async (paste: () => ReturnType<typeof pasteFromClipboard>) => {

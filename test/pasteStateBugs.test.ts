@@ -584,6 +584,42 @@ describe.skipIf(!electronBinary)('paste pipeline state bugs', () => {
     // rewrites the markup the first paste produced.
     expect(firstRegionAfter, 'the second paste rewrote the first pasted region').toBe(firstRegion);
   });
+
+  it('H9: media on the clipboard never lands inside the text, as markup or as data: bytes', { timeout: 120_000 }, async () => {
+    // A clipboard carrying `<img src="data:video/mp4;base64,…">` (10 MB) once
+    // ended up in a slide title's html: deck.json grew to 13.5 MB and every
+    // collaborator's editor crawled. Text-edit paste falls through to the
+    // native contenteditable paste, and nothing on the commit path stripped
+    // data: media from text html.
+    await resetBox('<p>Existing start</p>');
+    await enterEditing(cdp!, CONTENT);
+    await caretAtEndOfBlockWith('Existing start');
+    const video = `data:video/mp4;base64,${'AAAAIGZ0eXBpc29t'.repeat(20_000)}`;
+    await pasteAndWaitFor(
+      {
+        name: 'data-video-in-img',
+        html: `<meta charset="utf-8"><span>before</span><img src="${video}"><span>after</span>`,
+        text: 'before after',
+        expected: ['before', 'after'],
+      },
+      'after',
+    );
+    const live = await cdp!.evaluate<{ media: number; bytes: number }>(`(() => {
+      const body = document.querySelector('${CONTENT}');
+      return { media: body.querySelectorAll('img, video, audio, picture, svg').length, bytes: body.innerHTML.length };
+    })()`);
+    // BUG: the pasted <img src="data:video/mp4…"> stays in the live text.
+    expect(live.media, 'pasted media landed inside the text').toBe(0);
+    expect(live.bytes, 'the pasted data: bytes landed inside the text').toBeLessThan(5_000);
+    expect(await cdp!.evaluate<string>(`document.getElementById('status')?.textContent ?? ''`))
+      .toMatch(/not placed inside a text box/);
+
+    await commitByEscape();
+    const html = await committedHtml();
+    expect(html, 'the committed text html carries data: media').not.toContain('data:');
+    expect(html).toContain('before');
+    expect(html).toContain('after');
+  });
 });
 
 describe.skipIf(electronBinary)('paste pipeline state bugs (skipped)', () => {

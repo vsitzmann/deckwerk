@@ -6,6 +6,7 @@ import {
   LIST,
   MOD,
   PARA,
+  SHIFT,
   elementSelector,
   startCrossSession,
   type CrossSession,
@@ -22,7 +23,8 @@ import {
  * mid-typing, Escape and empty-canvas clicks mid-edit, shift-click
  * multi-select, marquee drags, rail hops mid-edit, double-clicking the image,
  * Cmd+B mid-word, undo/redo at random points, Backspace with an element
- * selection, and Cmd+A in both contexts.
+ * selection, Cmd+A in both contexts, and Backspace on a multi-slide rail
+ * selection (which must ask first; cancelled, or confirmed and undone).
  *
  * After EVERY step five oracles run: the whole-editor invariant set from
  * selectionSession, keystroke routing via per-step nonce strings, an element
@@ -138,7 +140,7 @@ type OpName =
   | 'click' | 'shift-click' | 'double-click text' | 'double-click image then text'
   | 'type nonce' | 'bold mid-word' | 'escape' | 'click empty' | 'marquee'
   | 'rail hop' | 'undo' | 'redo' | 'undo round-trip' | 'delete selection'
-  | 'cmd+a' | 'click with stray hover';
+  | 'cmd+a' | 'click with stray hover' | 'rail multi-delete';
 
 interface Violation { seed: number; step: number; op: OpName; oracle: string; detail: string }
 
@@ -389,6 +391,7 @@ function chooseOp(next: () => number, pre: CrossState): OpName {
   add('undo round-trip', 1);
   if (pre.editing === null && pre.selection.length > 0) add('delete selection', 2);
   add('cmd+a', 1);
+  add('rail multi-delete', 1);
   return pick(next, ops);
 }
 
@@ -546,6 +549,58 @@ async function performOp(
     case 'cmd+a':
       await session.chord('a', 'KeyA', 65, MOD, pre.editing !== null ? ['selectAll'] : undefined);
       return 'same';
+    case 'rail multi-delete': {
+      // Select both slides in the rail with real clicks, then a deletion key.
+      // More than one slide must never go without a confirmation: Escape
+      // keeps everything (and gives the rail its focus back); Return deletes,
+      // and one undo restores exactly what was there.
+      const snapshot = () => session.cdp.evaluate<string>(
+        `JSON.stringify(window.store.get().deck.slides.map((slide) => [slide.id, slide.elements.map((el) => el.id)]))`);
+      const dialogOpen = () => session.cdp.evaluate<boolean>(
+        `Boolean(document.querySelector('.workflow-dialog[role="alertdialog"]'))`);
+      await session.clickRail(pre.slideIndex);
+      await session.cdp.clickModified(`.rail-item[data-index="${pre.slideIndex === 0 ? 1 : 0}"]`,
+        SHIFT, 'shift-click the other rail slide');
+      await wait(120);
+      const before = await snapshot();
+      const selected = await session.cdp.evaluate<number>('window.store.get().slideSelection.size');
+      if (selected < 2) {
+        flag('routing', `shift-clicking the other rail slide selected ${selected} slide(s)`);
+        return 'same';
+      }
+      if (next() < 0.5) await session.key('Backspace', 8);
+      else await session.key('Delete', 46);
+      await wait(150);
+      if (await snapshot() !== before) {
+        flag('census', 'a deletion key on a multi-slide rail selection deleted without asking');
+        return 'resync';
+      }
+      if (!await dialogOpen()) {
+        flag('census', 'a deletion key on a multi-slide rail selection asked nothing');
+        return 'same';
+      }
+      if (next() < 0.7) {
+        await session.key('Escape', 27);
+        await wait(120);
+        if (await dialogOpen()) flag('routing', 'Escape left the slide-delete confirmation open');
+        if (!await session.cdp.evaluate<boolean>(
+          `document.getElementById('rail')?.contains(document.activeElement) === true`)) {
+          flag('routing', 'cancelling the slide-delete confirmation did not return focus to the rail');
+        }
+        if (await snapshot() !== before) flag('census', 'cancelling the confirmation still deleted slides');
+        return 'same';
+      }
+      await session.key('Enter', 13);
+      await wait(250);
+      const slides = await session.cdp.evaluate<number>('window.store.get().deck.slides.length');
+      if (slides !== 1) flag('census', `confirming deletion of the whole deck left ${slides} slides, not one blank slide`);
+      await session.chord('z', 'KeyZ', 90, MOD);
+      await wait(300);
+      if (await snapshot() !== before) {
+        flag('undoRoundTrip', `undo after the confirmed slide deletion did not restore the deck: ${await snapshot()}`);
+      }
+      return 'same';
+    }
   }
 }
 

@@ -23,6 +23,24 @@ export type WebBridgeAction =
   /** A presenting key the page did not use itself, forwarded so the deck still navigates. */
   | { source: typeof WEB_BRIDGE_SOURCE; action: 'key'; key: string };
 
+/**
+ * Page → deck: readiness, apart from the navigation actions above.
+ *
+ * A live frame stays hidden (under its poster, when it has one) until the
+ * page has loaded and painted. A page that lays itself out from script after
+ * that — once `document.fonts.ready` resolves, say — sends `hold-ready` while
+ * its scripts first run and `ready` when it is laid out; the deck keeps the
+ * page hidden in between (never longer than its reveal timeout).
+ */
+export type WebReadinessAction = 'hold-ready' | 'ready';
+
+export function webReadinessAction(data: unknown): WebReadinessAction | null {
+  if (!data || typeof data !== 'object') return null;
+  const message = data as { source?: unknown; action?: unknown };
+  if (message.source !== WEB_BRIDGE_SOURCE) return null;
+  return message.action === 'hold-ready' || message.action === 'ready' ? message.action : null;
+}
+
 export function isWebBridgeAction(data: unknown): data is WebBridgeAction {
   if (!data || typeof data !== 'object') return false;
   const message = data as { source?: unknown; action?: unknown; key?: unknown };
@@ -51,6 +69,8 @@ export const WEB_BRIDGE_MARKER = 'data-deckwerk-bridge';
  *   deckwerk.onInactive(fn) when the deck leaves the slide
  *   deckwerk.onStep(fn)     fn({ step, steps }) on each build step
  *   deckwerk.next() / deckwerk.prev()
+ *   deckwerk.ready(promise) keep the page hidden until `promise` settles;
+ *                           call it while the page's scripts first run
  *
  * and forwards navigation keys the page leaves unhandled, so a focused page
  * never traps the presenter on one slide.
@@ -66,7 +86,13 @@ window.deckwerk={
   onInactive:function(f){handlers.inactive.push(f);},
   onStep:function(f){handlers.step.push(f);},
   next:function(){post({action:'next'});},
-  prev:function(){post({action:'prev'});}
+  prev:function(){post({action:'prev'});},
+  ready:function(p){
+    if(!p||typeof p.then!=='function'){post({action:'ready'});return;}
+    post({action:'hold-ready'});
+    var done=function(){post({action:'ready'});};
+    p.then(done,done);
+  }
 };
 window.addEventListener('message',function(e){
   var d=e.data;if(!d||d.source!==SRC||!d.event)return;

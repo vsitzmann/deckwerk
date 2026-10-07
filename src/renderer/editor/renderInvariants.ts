@@ -203,6 +203,8 @@ function normalize(node: HTMLElement): HTMLElement {
   const walk = (el: Element): void => {
     if (autoFitting && el.classList.contains('text-content')) {
       (el as HTMLElement).style.removeProperty('font-size');
+      // The fit pass records what it measured beside the size it wrote.
+      el.removeAttribute('data-fitted-font-size');
     }
     for (const name of [...el.getAttributeNames()]) {
       if (IGNORED_ATTRIBUTES.has(name)) el.removeAttribute(name);
