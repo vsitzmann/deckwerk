@@ -3367,6 +3367,8 @@ button.morph-object-hit.selected-source:hover:not(:disabled) {
 }
 
 .paste-theme-dialog { width: min(620px, calc(100vw - 48px)); }
+.confirm-dialog { width: min(440px, calc(100vw - 48px)); }
+.confirm-dialog-description { margin: 0; color: var(--text); line-height: 1.5; }
 .paste-theme-description { margin: 0; color: var(--text); }
 .paste-theme-detail { margin: 0; color: var(--muted); line-height: 1.6; }
 .paste-theme-actions { flex-wrap: wrap; }

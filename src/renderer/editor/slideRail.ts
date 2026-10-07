@@ -9,6 +9,7 @@ import { LAYOUT_LABELS, applySlideLayout, type SlideLayout } from './slideLayout
 import { newComment, openCommentsPopover, openCount } from './comments.js';
 import type { Deck, Slide } from '@shared/deck.js';
 import { sameSlideIgnoringNotes, type EditorStore } from './store.js';
+import { showConfirmDialog } from './confirmDialog.js';
 
 /**
  * The slide list. Text-first rather than thumbnail-first: rendering live
@@ -27,6 +28,27 @@ interface MenuItem {
   heading?: boolean;
   /** Present for a radio-style row; true draws its tick. */
   checked?: boolean;
+}
+
+/**
+ * 1-based slide numbers as a reader says them: runs collapse to ranges, so
+ * [3, 4, 5, 8] reads "3–5, 8".
+ */
+export function slideNumbersLabel(indices: readonly number[]): string {
+  const sorted = [...new Set(indices)].sort((a, b) => a - b);
+  const parts: string[] = [];
+  for (let at = 0; at < sorted.length;) {
+    let end = at;
+    while (end + 1 < sorted.length && sorted[end + 1] === sorted[end] + 1) end += 1;
+    parts.push(end === at ? `${sorted[at] + 1}` : `${sorted[at] + 1}–${sorted[end] + 1}`);
+    at = end + 1;
+  }
+  return parts.join(', ');
+}
+
+function undoShortcutLabel(): string {
+  const platform = typeof navigator === 'undefined' ? '' : navigator.platform ?? '';
+  return /Mac|iPhone|iPad/i.test(platform) ? '⌘Z' : 'Ctrl+Z';
 }
 
 export interface RailPresence {
@@ -94,6 +116,10 @@ export class SlideRail {
   presenceForSlide?: (slideId: string) => RailPresence[];
   /** Runs for an explicit thumbnail pick, including the already-active slide. */
   onSlideActivate?: (slideIndex: number) => void;
+  /** The shell's status bar: what a slide command just did. */
+  onStatus?: (message: string) => void;
+  /** A keyboard deletion waiting on its confirmation dialog. */
+  private confirmingDelete = false;
 
   constructor(host: HTMLElement, store: EditorStore) {
     this.host = host;
@@ -825,7 +851,7 @@ export class SlideRail {
         // cannot also delete a selected canvas object.
         e.preventDefault();
         e.stopPropagation();
-        this.deleteSlide();
+        void this.deleteSlidesFromKeyboard();
         return;
       }
       if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
@@ -1056,11 +1082,12 @@ export class SlideRail {
    * selection covering the whole deck deletes all of it and lands on one
    * fresh blank slide, rather than silently refusing the keystroke.
    */
-  deleteSlide(): void {
+  deleteSlide(options: { ids?: ReadonlySet<string>; verb?: string } = {}): void {
     const { deck, slideIndex, slideSelection } = this.store.get();
+    const chosen = options.ids ?? slideSelection;
     const doomed = deck.slides
       .map((slide, index) => ({ slide, index }))
-      .filter(({ slide }) => slideSelection.has(slide.id));
+      .filter(({ slide }) => chosen.has(slide.id));
     if (doomed.length === 0) return;
     // Nothing to gain from swapping the last slide for another empty one.
     if (deck.slides.length === 1) return;
@@ -1083,6 +1110,47 @@ export class SlideRail {
       applyDeckThemeToNewSlide(d, 0);
     }, { label: doomed.length === 1 ? 'Delete slide' : `Delete ${doomed.length} slides` });
     this.store.selectSlide(wholeDeck ? 0 : Math.max(0, first - 1));
+    const numbers = slideNumbersLabel(doomed.map(({ index }) => index));
+    const one = doomed.length === 1;
+    this.onStatus?.(`${options.verb ?? 'Deleted'} slide${one ? '' : 's'} ${numbers}. `
+      + `Undo (${undoShortcutLabel()}) restores ${one ? 'it' : 'them'}.`);
+  }
+
+  /**
+   * Backspace/Delete with the rail focused. Focus stays on the rail after a
+   * thumbnail is clicked, so a deletion key meant for text lands here, and a
+   * multi-slide selection once vanished from a shared deck that way. More
+   * than one slide therefore asks first; a single slide goes at once, as it
+   * always has (and undo brings it back). The confirmation names exactly the
+   * slides selected when the key was pressed, so a remote edit while the
+   * dialog is open cannot widen what is deleted.
+   */
+  async deleteSlidesFromKeyboard(): Promise<void> {
+    if (this.confirmingDelete) return;
+    const { deck, slideSelection } = this.store.get();
+    const doomed = deck.slides
+      .map((slide, index) => ({ slide, index }))
+      .filter(({ slide }) => slideSelection.has(slide.id));
+    if (doomed.length <= 1) {
+      this.deleteSlide();
+      return;
+    }
+    const ids = new Set(doomed.map(({ slide }) => slide.id));
+    const count = doomed.length;
+    const numbers = slideNumbersLabel(doomed.map(({ index }) => index));
+    this.confirmingDelete = true;
+    try {
+      const confirmed = await showConfirmDialog({
+        title: `Delete ${count} slides?`,
+        description: `Slides ${numbers} are selected. Undo (${undoShortcutLabel()}) brings them back.`,
+        confirmLabel: `Delete ${count} slides`,
+        destructive: true,
+        returnFocus: this.host,
+      });
+      if (confirmed) this.deleteSlide({ ids });
+    } finally {
+      this.confirmingDelete = false;
+    }
   }
 }
 

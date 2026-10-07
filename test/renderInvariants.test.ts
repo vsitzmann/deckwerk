@@ -120,6 +120,21 @@ describe('canvas render invariant', () => {
     })).toEqual([]);
   });
 
+  it('treats an auto-fit text body\'s fitted size as a measurement, not a model value', () => {
+    // A fit pass stamps `data-fitted-font-size` beside the font size it
+    // writes; a fresh, unmeasured render has neither. Found by the rail
+    // multi-delete fuzz op: the blank slide a whole-deck delete leaves has
+    // auto-fitting placeholders, and the next in-place patch reported them.
+    const { store, canvas, slideLayer } = setup([{ ...textElement(), autoFit: true } as SlideElement]);
+    const content = slideLayer.querySelector<HTMLElement>('[data-element-id="text-1"] .text-content')!;
+    content.style.fontSize = '92px';
+    content.dataset.fittedFontSize = '92';
+    store.commit((deck) => { deck.slides[0].elements[0].x += 10; }, { label: 'edit' });
+    canvas.render();
+    expect(findRenderDivergences(slideLayer, store.get().deck.slides[0], (src) => src).map(formatDivergence))
+      .toEqual([]);
+  });
+
   it('holds after a vertical alignment change', () => {
     expect(divergencesAfter([textElement()], (slide) => {
       firstOf(slide, 'text').valign = 'top';
