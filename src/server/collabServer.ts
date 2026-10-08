@@ -4,7 +4,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import { lookup } from 'node:dns/promises';
 import { createReadStream, createWriteStream, existsSync, statSync } from 'node:fs';
 import { pipeline } from 'node:stream/promises';
-import { mkdir, mkdtemp, readdir, readFile, rename, rm, rmdir, stat, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, mkdtemp, readdir, readFile, rename, rm, rmdir, stat, writeFile } from 'node:fs/promises';
 import { createHash, randomUUID } from 'node:crypto';
 import { networkInterfaces, tmpdir } from 'node:os';
 import { basename, dirname, extname, join, normalize, resolve } from 'node:path';
@@ -321,6 +321,13 @@ export interface CollabServerOptions {
    * than CPU. An object configures the store (a test's own cache directory).
    */
   mediaRenditions?: boolean | RenditionOptions;
+  /**
+   * Keep every Keynote and PowerPoint upload, successful or not, for this
+   * many days under `<rootDir>/.uploads/`, so a bad import can be debugged
+   * against the file that produced it. Off (0) unless set: the hosted server
+   * turns it on, a desktop app sharing one deck has no imports to keep.
+   */
+  keepUploadsDays?: number;
 }
 
 export interface RunningCollabServer {
@@ -798,6 +805,50 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
    * the rules that applied before it was trashed. `.trash` is a dot-name, so
    * splitDeckPath refuses it: no listing walks into it and no route opens it.
    */
+  /**
+   * Uploaded Keynote and PowerPoint files, kept for options.keepUploadsDays.
+   * One folder per upload: the file under the name it was imported as, and
+   * upload.json saying which deck it became, who sent it and whether the
+   * import worked. A dot-name like .trash, so no listing or route reaches it.
+   */
+  const UPLOADS_DIR = join(rootDir, '.uploads');
+  const keepUploadsDays = Math.max(0, options.keepUploadsDays ?? 0);
+
+  async function keepUpload(file: string, meta: Record<string, unknown>): Promise<void> {
+    if (keepUploadsDays <= 0) return;
+    try {
+      const at = new Date();
+      const slug = String(meta.deck).replace(/[^0-9A-Za-z._-]+/g, '-').slice(0, 80);
+      const entry = join(UPLOADS_DIR, `${at.toISOString().replace(/[:.]/g, '-')}-${slug}`);
+      await mkdir(entry, { recursive: true });
+      await copyFile(file, join(entry, basename(file)));
+      await writeFile(join(entry, 'upload.json'), `${JSON.stringify({ ...meta, at: at.toISOString() }, null, 2)}\n`);
+    } catch (error) {
+      process.stderr.write(`could not keep upload ${basename(file)}: ${String(error)}\n`);
+    }
+    await pruneUploads();
+  }
+
+  async function pruneUploads(): Promise<void> {
+    if (keepUploadsDays <= 0) return;
+    const cutoff = Date.now() - keepUploadsDays * 24 * 60 * 60 * 1000;
+    let entries: string[];
+    try {
+      entries = await readdir(UPLOADS_DIR);
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      const path = join(UPLOADS_DIR, entry);
+      try {
+        if ((await stat(path)).mtimeMs < cutoff) await rm(path, { recursive: true, force: true });
+      } catch {
+        // Gone already, or unreadable: the next prune tries again.
+      }
+    }
+  }
+  void pruneUploads();
+
   const TRASH_DIR = join(rootDir, '.trash');
   const TRASH_ENTRY_ID = /^[0-9A-Za-z-]{8,80}$/;
 
@@ -2028,18 +2079,21 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
       if (existsSync(dir)) return respondJson(response, 409, { error: `deck "${id}" already exists` });
       const body = await readBody(request);
       const tmp = await mkdtemp(join(tmpdir(), 'collab-import-'));
+      const sourceFile = join(tmp, `${name}${importRoute.extension}`);
+      const upload = { deck: id, file: basename(sourceFile), bytes: body.length, by: identity?.login ?? null };
       try {
-        const sourceFile = join(tmp, `${name}${importRoute.extension}`);
         await writeFile(sourceFile, body);
         const report = await importRoute.run(sourceFile, dir);
         await writeImportedDeckAccess(dir);
+        await keepUpload(sourceFile, { ...upload, ok: true });
         respondJson(response, 200, { id, report });
       } catch (error) {
         await rm(dir, { recursive: true, force: true });
         const message = String(error instanceof Error ? error.message : error);
-        // The person only sees this in their browser and the upload is gone
-        // afterwards; keep it in the journal so a failed import can be debugged.
+        // The person only sees this in their browser; keep it in the journal
+        // (and the file in .uploads/, when kept) so the failure can be debugged.
         process.stderr.write(`import of "${id}"${importRoute.extension} (${body.length} bytes) failed: ${message}\n`);
+        await keepUpload(sourceFile, { ...upload, ok: false, error: message });
         respondJson(response, 400, { error: message });
       } finally {
         await rm(tmp, { recursive: true, force: true });
