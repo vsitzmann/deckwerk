@@ -83,6 +83,27 @@ interface VideoWarmTarget {
   start: number;
 }
 
+/** Paint a text can change without moving a single glyph. */
+const TEXT_PAINT = new Set(['color', 'background', 'background-color', 'filter', 'opacity', 'text-shadow',
+  'border-color', 'box-shadow', 'text-decoration-color', '-webkit-text-stroke-color']);
+
+/**
+ * Everything about a text that decides where its glyphs land: its box size,
+ * alignment, classes and every style but paint, and its markup with colour
+ * declarations taken out. Two texts with the same layout overlay exactly.
+ */
+function textLayout(element: Extract<SlideElement, { type: 'text' }>): string {
+  const style = Object.entries(element.style).filter(([key]) => !TEXT_PAINT.has(key)).sort();
+  // A colour run is a span whose only style is its colour: without the
+  // colour it is no span at all, so recolouring a word is not a relayout.
+  const html = element.html
+    .replace(/(^|[;"'\s])(?:background-)?color\s*:[^;"']*;?/gi, '$1')
+    .replace(/\sstyle="\s*"/g, '')
+    .replace(/<span>|<\/span>/g, '');
+  return JSON.stringify([Math.round(element.w), Math.round(element.h), element.align, element.valign,
+    element.class, style, html]);
+}
+
 export class Player {
   private deck: Deck;
   private container: HTMLElement;
@@ -284,8 +305,13 @@ export class Player {
     this.goTo(target);
   }
 
-  goToSlide(index: number): void {
-    this.goTo({ slide: index, step: 0 });
+  /**
+   * Open a slide at its first step. A presentation passes `play` — starting
+   * the show, Home, the presenter's "go to slide" — so builds set to run on
+   * arriving at the slide run, as they do when the talk advances onto it.
+   */
+  goToSlide(index: number, opts: { play?: boolean } = {}): void {
+    this.goTo({ slide: index, step: 0 }, opts);
   }
 
   /**
@@ -1005,10 +1031,12 @@ export class Player {
       const drawn = svg?.querySelector<SVGElement>(':scope > :is(rect, ellipse, line, path)');
       if (changed && drawn?.animate) {
         drawn.animate([{ ...start, easing }, end], { duration, fill: 'none' });
-        // The arrowhead is painted from the stroke colour in its own marker.
-        const head = svg?.querySelector<SVGElement>('marker path');
-        if (head?.animate && start.stroke !== end.stroke) {
-          head.animate([{ fill: start.stroke, easing }, { fill: end.stroke }], { duration, fill: 'none' });
+        // Heads and a curve's round ends are filled with the stroke colour:
+        // a line's heads are paths of their own, a drawn path's sit in a marker.
+        if (start.stroke !== end.stroke) {
+          for (const head of svg?.querySelectorAll<SVGElement>(':scope > path.arrowhead, :scope > circle, marker path') ?? []) {
+            head.animate?.([{ fill: start.stroke, easing }, { fill: end.stroke }], { duration, fill: 'none' });
+          }
         }
       }
       if (filterChanged && node.animate) {
@@ -1038,11 +1066,15 @@ export class Player {
     node.after(ghost);
     // Text that changed its words is a different title in the same place:
     // dissolving one through the other shows both, overlapping, for most of
-    // the transition. It moves as one object and swaps at the midpoint.
+    // the transition. So is text laid out differently (another alignment,
+    // size, face or box): the copy, laid in the target's box, sits beside
+    // the target rather than over it. Either moves as one object and swaps
+    // at the midpoint; only a change of paint dissolves.
     const words = (element: SlideElement): string | null => (element.type === 'text'
       ? element.html.replace(/<[^>]*>/g, ' ').replace(/&nbsp;/g, ' ').replace(/\s+/g, ' ').trim()
       : null);
-    const swap = from.type === 'text' && to.type === 'text' && words(from) !== words(to);
+    const swap = from.type === 'text' && to.type === 'text'
+      && (words(from) !== words(to) || textLayout(from) !== textLayout(to));
     const animation = ghost.animate(
       motion(swap ? [String(from.opacity), String(from.opacity)] : [String(from.opacity), '0']),
       { duration, easing: 'linear', fill: 'forwards' },
@@ -1082,8 +1114,10 @@ export class Player {
   private playEntries(slide: Slide, entries: ExpandedEntry[], state: SlideState): void {
     let cumulativeDelay = 0;
     // An animated build takes time, and "after previous" means after it has
-    // finished, as in Keynote: the next one waits out its duration too.
-    let previousRunsFor = 0;
+    // finished, as in Keynote: the next one waits until everything started
+    // so far has ended — a slow dissolve is not over just because something
+    // instant ran with it.
+    let latestEnd = 0;
     for (const entry of entries) {
       const run = () => this.runEntry(slide, entry, state);
 
@@ -1097,12 +1131,12 @@ export class Player {
 
       // `click` opens the step and `afterPrev` chains from the previous entry;
       // `withPrev` fires alongside it, so only the chaining forms accumulate.
-      if (entry.trigger.on === 'afterPrev') cumulativeDelay += previousRunsFor + entry.trigger.delay;
+      if (entry.trigger.on === 'afterPrev') cumulativeDelay = latestEnd + entry.trigger.delay;
       else if (entry.trigger.on === 'withPrev') {
         // keep cumulativeDelay as-is: fire together with the previous action
       } else cumulativeDelay = entry.trigger.delay;
       const effect = buildEffect(entry, slide);
-      previousRunsFor = effect ? effectDuration(entry, effect) : 0;
+      latestEnd = Math.max(latestEnd, cumulativeDelay + (effect ? effectDuration(entry, effect) : 0));
 
       if (cumulativeDelay > 0) this.later(run, cumulativeDelay);
       else run();

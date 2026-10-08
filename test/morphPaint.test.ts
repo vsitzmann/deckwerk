@@ -123,4 +123,36 @@ describe('blending paint across the transition', () => {
     expect(stepAt(swapOn(ghost).keyframes)).toEqual(['1', '0']);
     expect(stepAt(swapOn(target).keyframes)).toEqual(['0', '1']);
   });
+
+  // A centred black title Morphing to a smaller, red, left-aligned one: the
+  // copy laid in the target's box kept its centring, so two titles showed
+  // side by side, ~20px apart, for most of the transition.
+  it('swaps text laid out differently at the midpoint, and dissolves one that only changed colour', () => {
+    const stepAt = (frames: Keyframe[]) => frames.filter((frame) => frame.offset === 0.5).map((frame) => frame.opacity);
+    const swapped = (host: HTMLElement) => {
+      const target = host.querySelector<HTMLElement>('[data-element-id="t2"]')!;
+      const ghost = target.nextElementSibling as HTMLElement;
+      return calls.some((call) => call.target === ghost && stepAt(call.keyframes).length === 2);
+    };
+    const realigned = present(morphDeck(
+      [title('t', 'Results', { morphId: 'title', align: 'center', style: { 'font-size': '110px', color: '#000000' } })],
+      [title('t2', 'Results', { morphId: 'title', align: 'left', style: { 'font-size': '48px', color: '#ff0000' } })],
+    ));
+    expect(swapped(realigned)).toBe(true);
+    document.body.replaceChildren();
+    const recoloured = present(morphDeck(
+      [title('t', 'Results', { morphId: 'title', align: 'center', style: { color: '#000000' } })],
+      [title('t2', 'Results', { morphId: 'title', align: 'center', style: { color: '#ff0000' } })],
+    ));
+    expect(swapped(recoloured)).toBe(false);
+  });
+
+  it('turns the heads of a recoloured arrow with its stroke', () => {
+    const arrow = (id: string, stroke: string, over: Partial<SlideElement> = {}) =>
+      box(id, '', { shape: 'arrow', fill: null, stroke, strokeWidth: 6, h: 20, arrowEnd: true, ...over });
+    present(morphDeck([arrow('a', '#111111')], [arrow('a2', '#dd0000', { lineageId: 'a' })]));
+    const head = calls.find((call) => call.target.getAttribute('class') === 'arrowhead');
+    expect(head?.keyframes[0]).toMatchObject({ fill: '#111111' });
+    expect(head?.keyframes[1]).toMatchObject({ fill: '#dd0000' });
+  });
 });

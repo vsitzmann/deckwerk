@@ -248,7 +248,9 @@ function mountAudience(): void {
     resolveSrc,
     onCursor: publishState,
   });
-  player.goTo({ slide: firstUnskipped(deck.slides, openAt.slide), step: openAt.step });
+  // Opening on a slide's first step plays what runs on arriving there, as
+  // starting the show does; opening mid-slide resolves to that step.
+  player.goTo({ slide: firstUnskipped(deck.slides, openAt.slide), step: openAt.step }, { play: openAt.step === 0 });
   readiness.painting();
   // A Speaker View opened before this surface had its deck is sitting blank;
   // announcing lets it ask for a seed, and it answers our own blank case too.
@@ -262,7 +264,7 @@ function mountAudience(): void {
     onExit: exitPresentation,
     onNext: advance,
     onPrev: retreat,
-    onHome: () => player?.goToSlide(range?.start ?? 0),
+    onHome: () => player?.goToSlide(range?.start ?? 0, { play: true }),
   });
   goFullscreen();
   window.focus();
@@ -438,7 +440,7 @@ bus?.subscribe((message) => {
   else if (command.type === 'goTo') {
     player.goToSlide(range
       ? Math.min(Math.max(command.slide, range.start), range.end)
-      : command.slide);
+      : command.slide, { play: true });
   } else if (command.type === 'exit') {
     if (embedded) window.parent.postMessage({ type: 'present-exit' }, location.origin);
     else window.close();

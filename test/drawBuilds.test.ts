@@ -355,6 +355,25 @@ describe('dissolve in and out', () => {
     expect(hidden('caption')).toBe(false);
   });
 
+  // "After previous" waits for everything started so far: an instant build
+  // that runs with a slow dissolve does not end the dissolve.
+  it('waits out a dissolve that something instant ran with', () => {
+    const deck = emptyDeck('Dissolve');
+    deck.slides[0].elements.push(text('title'), text('subtitle'), text('caption'));
+    deck.slides[0].timeline.push(
+      entry('t-1', 'title', { action: { type: 'appear', target: 'title', value: 'dissolve', duration: 1000 } }),
+      entry('t-2', 'subtitle', { trigger: { on: 'withPrev', ref: null, delay: 0 } }),
+      entry('t-3', 'caption', { trigger: { on: 'afterPrev', ref: null, delay: 0 } }),
+    );
+    const { player, hidden } = mount(deck);
+    player.next();
+    expect(hidden('subtitle')).toBe(false);
+    vi.advanceTimersByTime(900);
+    expect(hidden('caption')).toBe(true);
+    vi.advanceTimersByTime(150);
+    expect(hidden('caption')).toBe(false);
+  });
+
   it('round-trips through authoring HTML', () => {
     const deck = emptyDeck('Dissolve');
     deck.slides[0].elements.push(text('title'));
@@ -419,6 +438,18 @@ describe('builds that run on arriving at a slide', () => {
     const { player, hidden } = mount(twoSlides());
     player.goToSlide(1);
     expect(hidden('now')).toBe(false);
+    expect(hidden('later')).toBe(false);
+  });
+
+  // Starting the show on a slide, Home, and the presenter's "go to slide"
+  // open it the way advancing does, as Keynote plays the first slide's
+  // automatic builds when the show starts.
+  it('plays them when a presentation opens the slide', () => {
+    const { player, hidden } = mount(twoSlides());
+    player.goToSlide(1, { play: true });
+    expect(hidden('now')).toBe(false);
+    expect(hidden('later')).toBe(true);
+    vi.advanceTimersByTime(1600);
     expect(hidden('later')).toBe(false);
   });
 });

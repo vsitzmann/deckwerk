@@ -85,13 +85,13 @@ function start(nextSession: DeckSession): void {
       }
     }
   }
-  player.goToSlide(first);
+  player.goToSlide(first, { play: true });
 
   bindPresentKeys(window, player, {
     onExit: () => window.close(),
     onNext: advance,
     onPrev: retreat,
-    onHome: () => player?.goToSlide(range?.start ?? 0),
+    onHome: () => player?.goToSlide(range?.start ?? 0, { play: true }),
   });
 
   // Advance on click rather than pointer-down so Chromium can first complete a
@@ -131,7 +131,7 @@ window.api.onPresentCommand((command: PresentationCommand) => {
     const target = range
       ? Math.min(Math.max(command.slide, range.start), range.end)
       : command.slide;
-    player.goToSlide(target);
+    player.goToSlide(target, { play: true });
   }
   else if (command.type === 'toggleBlank') player.toggleBlank();
 });
