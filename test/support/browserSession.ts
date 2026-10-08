@@ -698,21 +698,7 @@ export class Cdp {
       };
     })()`);
     if ('error' in points) throw new Error(`cannot select ${label}: ${points.error}`);
-    await this.call('Input.dispatchMouseEvent', {
-      type: 'mouseMoved', x: points.start.x, y: points.start.y, button: 'none', buttons: 0,
-    });
-    await this.call('Input.dispatchMouseEvent', {
-      type: 'mousePressed', x: points.start.x, y: points.start.y,
-      button: 'left', buttons: 1, clickCount: 1,
-    });
-    await this.call('Input.dispatchMouseEvent', {
-      type: 'mouseMoved', x: points.end.x, y: points.end.y,
-      button: 'left', buttons: 1,
-    });
-    await this.call('Input.dispatchMouseEvent', {
-      type: 'mouseReleased', x: points.end.x, y: points.end.y,
-      button: 'left', buttons: 0, clickCount: 1,
-    });
+    await this.sweepSelect(points.start, points.end, label);
   }
 
   /** Select the first rendered word with a real pointer drag. */
@@ -743,21 +729,74 @@ export class Cdp {
       return { error: 'node has no rendered word' };
     })()`);
     if ('error' in points) throw new Error(`cannot select ${label}: ${points.error}`);
+    await this.sweepSelect(points.start, points.end, label);
+  }
+
+  /**
+   * Press at `start`, move to `end` and release: the drag that selects text.
+   *
+   * A press on text that is already selected does not start a new selection:
+   * it picks the selected text up for drag-and-drop, under a person's mouse
+   * and under CDP alike. That is never what these helpers mean, and under CDP
+   * it can be worse than a wrong selection. On Linux the drag becomes a native
+   * drag-and-drop session that waits for the pointer's own release; when the
+   * synthetic release lost the race to it (a slow CI runner), every later
+   * mouse and key event went to the stuck drag instead of the page, and each
+   * case after it failed with "the text box did not enter editing" (paste
+   * fuzz, nightly 2026-10-06; a select-all or a double-clicked word ahead of
+   * the sweep is enough). A person clicks into the selected text first, which
+   * clears it, and so does this. If the gesture still starts a drag-and-drop
+   * it is reported here, by name, not as whatever fails next.
+   */
+  private async sweepSelect(
+    start: { x: number; y: number },
+    end: { x: number; y: number },
+    label: string,
+  ): Promise<void> {
+    const pressOnSelection = `(() => {
+      const selection = window.getSelection();
+      if (!selection || selection.rangeCount === 0 || selection.isCollapsed) return false;
+      const x = ${JSON.stringify(start.x)};
+      const y = ${JSON.stringify(start.y)};
+      return [...selection.getRangeAt(0).getClientRects()].some((rect) =>
+        x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom);
+    })()`;
+    if (await this.evaluate<boolean>(pressOnSelection)) {
+      await this.mouse('mouseMoved', start.x, start.y, 0);
+      await this.mouse('mousePressed', start.x, start.y, 1);
+      await this.mouse('mouseReleased', start.x, start.y, 1);
+      if (await this.evaluate<boolean>(pressOnSelection)) {
+        throw new Error(`cannot select ${label}: clicking the selected text did not clear the selection`);
+      }
+    }
+    await this.evaluate(`(() => {
+      window.__sweepDragStarts = 0;
+      window.__sweepCountDragStart ??= () => { window.__sweepDragStarts += 1; };
+      window.addEventListener('dragstart', window.__sweepCountDragStart, true);
+      return true;
+    })()`);
     await this.call('Input.dispatchMouseEvent', {
-      type: 'mouseMoved', x: points.start.x, y: points.start.y, button: 'none', buttons: 0,
+      type: 'mouseMoved', x: start.x, y: start.y, button: 'none', buttons: 0,
     });
     await this.call('Input.dispatchMouseEvent', {
-      type: 'mousePressed', x: points.start.x, y: points.start.y,
+      type: 'mousePressed', x: start.x, y: start.y,
       button: 'left', buttons: 1, clickCount: 1,
     });
     await this.call('Input.dispatchMouseEvent', {
-      type: 'mouseMoved', x: points.end.x, y: points.end.y,
+      type: 'mouseMoved', x: end.x, y: end.y,
       button: 'left', buttons: 1,
     });
     await this.call('Input.dispatchMouseEvent', {
-      type: 'mouseReleased', x: points.end.x, y: points.end.y,
+      type: 'mouseReleased', x: end.x, y: end.y,
       button: 'left', buttons: 0, clickCount: 1,
     });
+    const dragStarts = await this.evaluate<number>(`(() => {
+      window.removeEventListener('dragstart', window.__sweepCountDragStart, true);
+      return window.__sweepDragStarts;
+    })()`);
+    if (dragStarts > 0) {
+      throw new Error(`selecting ${label} started a drag-and-drop of the selected text instead`);
+    }
   }
 
   /**

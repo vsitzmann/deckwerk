@@ -43,9 +43,7 @@ jobs:
           node-version: 22
           cache: npm
       - name: Install system dependencies (Electron + ffmpeg)
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y xvfb ffmpeg libnss3 libgtk-3-0 libasound2t64
+        uses: ./.github/actions/electron-system-deps
       - run: npm ci
       - name: Configure Electron's SUID sandbox helper
         run: |
@@ -69,9 +67,7 @@ jobs:
           node-version: 22
           cache: npm
       - name: Install system dependencies (Electron + ffmpeg)
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y xvfb ffmpeg libnss3 libgtk-3-0 libasound2t64
+        uses: ./.github/actions/electron-system-deps
       - run: npm ci
       - name: Configure Electron's SUID sandbox helper
         run: |

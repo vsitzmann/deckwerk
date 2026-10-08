@@ -1,0 +1,86 @@
+name: Electron system dependencies
+description: >
+  xvfb, ffmpeg and the shared libraries Electron needs, installed from a .deb
+  cache keyed on the runner image, so a slow Ubuntu mirror cannot eat a job's
+  whole time budget.
+
+# Why a cache: on 2026-10-07 the runner's Azure Ubuntu mirror served 60 kB/s,
+# `apt-get install` took 29 minutes, and the browser job hit its 30-minute
+# limit before running a single test. The packages apt has to fetch are the
+# same for every run on a given runner image, so they are downloaded once per
+# image version and replayed with dpkg after that. A miss still goes to the
+# network, but with a hard time limit per attempt and a second attempt that
+# skips the Azure mirror.
+
+runs:
+  using: composite
+  steps:
+    - name: Cache key
+      id: key
+      shell: bash
+      env:
+        PACKAGES: xvfb ffmpeg libnss3 libgtk-3-0 libasound2t64
+      run: |
+        echo "packages=$PACKAGES" >> "$GITHUB_OUTPUT"
+        list=$(printf '%s' "$PACKAGES" | sha256sum | cut -c1-12)
+        echo "key=apt-debs-v1-${ImageOS:-unknown}-${ImageVersion:-unknown}-$list" >> "$GITHUB_OUTPUT"
+
+    - name: Restore the .deb cache
+      id: restore
+      uses: actions/cache/restore@v4
+      with:
+        path: ~/apt-debs
+        key: ${{ steps.key.outputs.key }}
+
+    - name: Install
+      id: install
+      shell: bash
+      env:
+        PACKAGES: ${{ steps.key.outputs.packages }}
+        CACHE_HIT: ${{ steps.restore.outputs.cache-hit }}
+      run: |
+        set -uo pipefail
+        debs="$HOME/apt-debs"
+        mkdir -p "$debs/partial"
+
+        if [ "$CACHE_HIT" = "true" ] && compgen -G "$debs/*.deb" > /dev/null; then
+          if sudo dpkg -i "$debs"/*.deb; then
+            echo "Installed $(ls "$debs"/*.deb | wc -l) packages from the cache"
+            echo "fetched=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "::warning::Cached packages did not install cleanly; falling back to apt"
+          sudo apt-get install -f -y || true
+        fi
+
+        for attempt in 1 2; do
+          if [ "$attempt" = 2 ] && [ -f /etc/apt/apt-mirrors.txt ]; then
+            # Second try without the Azure mirror (the list may carry priority
+            # tags, so reordering it would not be enough): the remaining
+            # entries are the canonical archive and security mirrors.
+            echo "::warning::apt attempt 1 failed or was too slow; retrying without the Azure mirror"
+            grep -v 'azure' /etc/apt/apt-mirrors.txt > /tmp/apt-mirrors.txt || true
+            [ -s /tmp/apt-mirrors.txt ] || echo 'http://archive.ubuntu.com/ubuntu/' > /tmp/apt-mirrors.txt
+            sudo cp /tmp/apt-mirrors.txt /etc/apt/apt-mirrors.txt
+          fi
+          if timeout 240 sudo apt-get update -o Acquire::Retries=3 \
+            && timeout 480 sudo apt-get install -y -o Acquire::Retries=3 \
+                 -o Dir::Cache::Archives="$debs" $PACKAGES; then
+            sudo chown -R "$(id -u):$(id -g)" "$debs"
+            rm -rf "$debs/partial" "$debs/lock"
+            echo "fetched=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+        done
+        echo "::error::Could not install $PACKAGES from any Ubuntu mirror within the time limits"
+        exit 1
+
+    - name: Save the .deb cache
+      # Saved right away rather than in a post step, so a red test run (these
+      # jobs are advisory and often red) still leaves the cache for the next.
+      if: steps.install.outputs.fetched == 'true'
+      uses: actions/cache/save@v4
+      continue-on-error: true
+      with:
+        path: ~/apt-debs
+        key: ${{ steps.key.outputs.key }}

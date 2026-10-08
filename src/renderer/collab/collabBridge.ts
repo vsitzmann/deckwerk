@@ -216,10 +216,11 @@ export class CollabBridge {
       }
       this.redoStack = [];
     }
+    const ops = withTextBases(prev, forward);
     const txnId = makeId('txn');
-    this.pending.push({ txnId, label, ops: forward });
+    this.pending.push({ txnId, label, ops });
     this.hooks.onCleanChange(false);
-    this.send({ kind: 'txn', txnId, baseSeq: this.seq, label, ops: forward });
+    this.send({ kind: 'txn', txnId, baseSeq: this.seq, label, ops });
   };
 
   undo(currentDeck: Deck): void {
@@ -424,6 +425,27 @@ export class CollabBridge {
       }
     }
   }
+}
+
+/**
+ * Stamp every replacement of a text-bearing element with the html it was
+ * edited from, so the server — and every replica replaying the same stream —
+ * merges it with a collaborator's concurrent typing in that box instead of
+ * overwriting it (collabApply, textMerge.ts). Live text sync streams whole
+ * boxes; two people typing in one box cross pushes constantly.
+ *
+ * Only what goes on the wire (and the pending replay of it) carries the base.
+ * Undo and redo entries stay plain replacements.
+ */
+function withTextBases(prev: Deck, ops: AgentOperation[]): AgentOperation[] {
+  return ops.map((op) => {
+    if (op.op !== 'replaceElement' || !('html' in op.element)) return op;
+    const before = prev.slides
+      .find((slide) => slide.id === op.slideId)
+      ?.elements.find((element) => element.id === op.elementId);
+    if (!before || !('html' in before) || typeof before.html !== 'string') return op;
+    return { ...op, baseHtml: before.html };
+  });
 }
 
 /** Turn a terse API label plus structural operations into readable provenance. */

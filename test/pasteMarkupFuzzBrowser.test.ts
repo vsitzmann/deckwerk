@@ -10,6 +10,7 @@ import {
   electronBinary,
   eventually,
   findTarget,
+  installEditingTrace,
   launchBrowser,
   stopBrowser,
   wait,
@@ -18,6 +19,7 @@ import {
 import { collabClientDir } from './support/collabClient.js';
 import { extraFuzzSeeds } from './support/fuzzSeeds.js';
 import {
+  chooseListStyle,
   contentText,
   deckSnapshotEventually,
   describeOperation,
@@ -39,7 +41,6 @@ import {
   SEAL_MS,
   selectionProblems,
   settledDeckSnapshot,
-  tagListField,
   TARGET_FIXTURES,
   normalizeText,
   type PasteCase,
@@ -166,6 +167,8 @@ describe.skipIf(!electronBinary)('pasted markup survives being edited', () => {
       document.getElementById('status')?.textContent?.includes('connected as Paste Fuzz') === true
       && Boolean(document.querySelector('${PASTE_CONTENT}'))
     )`), 'the paste-fuzz browser did not finish connecting');
+    // So a "did not enter editing" report carries the events that led to it.
+    await installEditingTrace(editor);
     await editor.click('#side-tabs button[data-panel="inspector"]', 'Props tab');
 
     console.log(`running ${CASES.length} paste cases (${EXTRA_SEEDS.length} extra seed(s): `
@@ -182,6 +185,11 @@ describe.skipIf(!electronBinary)('pasted markup survives being edited', () => {
     const failures: string[] = [];
     for (const testCase of CASES) {
       if (only && !`${testCase.payload.name} → ${testCase.target}`.includes(only)) continue;
+      // PASTE_FUZZ_PROGRESS=1 names each case as it starts, so a failure that
+      // took the fixture down can be traced to the case that did it.
+      if (process.env.PASTE_FUZZ_PROGRESS === '1') {
+        console.log(`[paste-fuzz] case ${testCase.payload.name} → ${testCase.target}`);
+      }
       try {
         await runPasteCase(editor, server.port, testCase);
       } catch (error) {
@@ -477,8 +485,7 @@ async function applyOperation(cdp: Cdp, operation: PasteOperation): Promise<void
   switch (operation.kind) {
     case 'list': {
       await cdp.chord('a', 'KeyA', 65, MOD, ['selectAll']);
-      const field = await tagListField(cdp);
-      await cdp.choose(field, operation.style, `list ${operation.style}`);
+      await chooseListStyle(cdp, operation.style);
       return;
     }
     case 'inline': {

@@ -28,10 +28,10 @@ import { applyOpsLenient } from '@shared/collabApply.js';
 import { parseDeck, type Deck, type Slide } from '@shared/deck.js';
 import { diffDecks } from '@shared/deckDiff.js';
 import { renameRetiredFields } from '@shared/fieldAliases.js';
-import { adoptAuthoredIds, describeHtmlSync, stampPage, type PageStamp } from '@shared/htmlSlides.js';
+import { adoptAuthoredIds, describeHtmlSync, insertionAnchor, stampPage, type PageStamp } from '@shared/htmlSlides.js';
 import { SPEAKER_NOTES_FILE, applySpeakerNotes, serializeSpeakerNotes } from '@shared/speakerNotes.js';
 import { AGENT_GUIDE_FILE, AGENT_GUIDE_MARKER, renderAgentGuide } from '../main/agentGuide.js';
-import { agentRuntimePaths, atomicJson, deckRevision } from '../main/agentRuntime.js';
+import { agentRuntimePaths, atomicJson, deckRevision, replaceFileAtomically } from '../main/agentRuntime.js';
 import deckHelperSource from './deckHelper.mjs?raw';
 
 /**
@@ -235,7 +235,15 @@ export function connectAgentBridge(options: ConnectOptions): AgentBridge {
   const reportedProblems = new Map<string, string>();
   const lastWrittenHtml = new Map<string, string>();
   /** The last page contents synced per file, with what the server said. */
-  const lastSync = new Map<string, { contents: string; result: SyncResponse }>();
+  const lastSync = new Map<string, {
+    contents: string;
+    result: SyncResponse;
+    /**
+     * A page of new slides the watcher synced on its own, so they went last:
+     * no `apply --after` has said where they go yet.
+     */
+    unplaced?: string[];
+  }>();
   /** One sync at a time per file: a second save waits, then re-reads. */
   const htmlQueues = new Map<string, Promise<void>>();
   /** Asset names present locally, whether downloaded or already uploaded. */
@@ -826,7 +834,15 @@ export function connectAgentBridge(options: ConnectOptions): AgentBridge {
     const previous = lastSync.get(path);
     if (authored === lastWrittenHtml.get(path) || (previous && previous.contents === authored)) {
       // Our own id stamp, or the watcher already synced exactly this page.
-      if (request) await finish({ ...(previous?.result ?? { status: 'applied', applied: false }), idempotent: true } as SyncResponse);
+      if (!request) return;
+      // An agent writes a page with one tool and runs `apply --after` with
+      // the next, by which time the watcher has synced the save — at the end,
+      // where a save puts new slides. The apply still says where they go.
+      if (request.after && previous?.unplaced) {
+        await finish(await placeSynced(file, previous, request.after));
+        return;
+      }
+      await finish({ ...(previous?.result ?? { status: 'applied', applied: false }), idempotent: true } as SyncResponse);
       return;
     }
     report(`compiling ${file}…`, { busy: true });
@@ -857,13 +873,12 @@ export function connectAgentBridge(options: ConnectOptions): AgentBridge {
       await finish(result);
       return;
     }
-    report(result.applied && result.changes
-      ? `saved ${file}: ${describeHtmlSync(result.changes)}`
-      : `${file}: no change`);
     // Stamp the assigned ids back so the next save replaces rather than
     // inserts — unless the author saved again meanwhile.
     // The fingerprints too: the next save is compared with what the deck
     // holds now, not with what the page was first exported from.
+    // Replaced, never written in place: the agent reads its page as soon as
+    // the save is reported, and an in-place write shows it an empty file.
     let stamped = authored;
     const current = await readFile(path, 'utf8').catch(() => null);
     if (current === authored && result.slides) {
@@ -872,11 +887,67 @@ export function connectAgentBridge(options: ConnectOptions): AgentBridge {
       if (based !== authored) {
         stamped = based;
         lastWrittenHtml.set(path, based);
-        await writeFile(path, based, 'utf8');
+        await replaceFileAtomically(path, based);
       }
     }
-    lastSync.set(path, { contents: stamped, result });
+    const inserted = result.applied && result.changes ? result.changes : null;
+    lastSync.set(path, {
+      contents: stamped,
+      result,
+      ...(!request && inserted && inserted.inserted.length > 0 && inserted.replaced.length === 0
+        && inserted.deleted.length === 0 ? { unplaced: inserted.inserted } : {}),
+    });
+    // Reported once the page is stamped: "saved" means the file now names
+    // the slides it made, so a save of it right away replaces, not inserts.
+    report(result.applied && result.changes
+      ? `saved ${file}: ${describeHtmlSync(result.changes)}`
+      : `${file}: no change`);
     await finish(result);
+  }
+
+  /**
+   * Move the slides a watcher sync added at the end to where an apply that
+   * arrived after it says they go, as the apply would have put them had it
+   * come first. Numbers count the deck without those slides, as they did
+   * when the agent chose one.
+   */
+  async function placeSynced(
+    file: string,
+    synced: { result: SyncResponse; unplaced?: string[] },
+    after: string,
+  ): Promise<SyncResponse> {
+    const ids = synced.unplaced ?? [];
+    // The sync's own transaction reaches this mirror over the socket, which
+    // can be behind the HTTP reply that reported it.
+    const deadline = Date.now() + ECHO_TIMEOUT_MS;
+    while (!ids.every((id) => shadow!.slides.some((slide) => slide.id === id)) && Date.now() < deadline) {
+      await new Promise((resolvePromise) => setTimeout(resolvePromise, 50));
+    }
+    const others = { ...shadow!, slides: shadow!.slides.filter((slide) => !ids.includes(slide.id)) };
+    const anchor = insertionAnchor(others, after);
+    if (anchor === undefined) {
+      return {
+        status: 'error',
+        error: `no slide ${after}; ${file} was already saved, and its slides were added at the end`,
+      };
+    }
+    const present = ids.filter((id) => shadow!.slides.some((slide) => slide.id === id));
+    const ops: AgentOperation[] = present.map((id, index) => ({
+      op: 'moveSlide', slideId: id, afterSlideId: index === 0 ? anchor : present[index - 1],
+    }));
+    const order = shadow!.slides.map((slide) => slide.id);
+    const at = anchor === null ? 0 : order.indexOf(anchor) + 1;
+    const placed = order.slice(at, at + present.length).join() === present.join();
+    if (ops.length > 0 && !placed) {
+      try {
+        await sendTransaction(`Place ${present.length === 1 ? 'the new slide' : 'the new slides'} after ${anchor ?? 'nothing (first)'}`, ops);
+      } catch (error) {
+        return { status: 'error', error: message(error) };
+      }
+      report(`placed ${file}'s ${present.length === 1 ? 'slide' : `${present.length} slides`} after ${anchor ?? 'the start'}`);
+    }
+    synced.unplaced = undefined;
+    return { ...synced.result, revision: deckRevision(shadow!) };
   }
 
   async function onApplyRequest(path: string): Promise<void> {
@@ -1244,8 +1315,9 @@ syncs — with \`./deck new > edit/slide.html\`, then fill in its \`<section>\`:
 const MIRROR_APPLY_STEP = `## 3. Put it in the deck
 
 Saving a page in \`edit/\` updates the shared deck within a second or two;
-there is no separate upload. To choose where a new slide goes, run apply right
-after you write the page:
+there is no separate upload. New slides land last; to choose where they go,
+apply the page with \`--after\` — if the save has synced already, its slides
+move there:
 
     ./deck apply . --html edit/slide.html --after 8    # insert after slide 8
     ./deck apply . --html edit/slide.html --after 0    # insert as the first slide

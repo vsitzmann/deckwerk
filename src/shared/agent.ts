@@ -118,6 +118,14 @@ const ReplaceElementOperation = z.object({
   slideId: z.string(),
   elementId: z.string(),
   element: ElementSchema,
+  /**
+   * Collaboration: the element's html as it was when this replacement was
+   * made. If the html has moved on since (someone else typed into the same
+   * box), the lenient collab apply merges the two edits three ways instead
+   * of overwriting the other person's text (collabApply.ts, textMerge.ts).
+   * The strict transaction apply ignores it.
+   */
+  baseHtml: z.string().optional(),
 });
 const DeleteElementsOperation = z.object({
   op: z.literal('deleteElements'),

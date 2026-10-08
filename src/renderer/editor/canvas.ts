@@ -24,6 +24,7 @@ import { DecodedVideoPool, releaseDecodedVideo } from '../player/decodedVideoPoo
 import { ungateVideoLoad } from '../player/mediaLoadGate.js';
 import { openSlideLinkInNewTab, slideLinkFromEvent } from '../player/links.js';
 import { expandTimeline } from '@shared/timeline.js';
+import { mapTextOffset, mergeTextHtml } from '@shared/textMerge.js';
 import {
   BASELINE_RUN_FONT_SIZE, isRelativeFontSize, restoreKatexSourceHtml,
   pastedHtmlHasMedia, sanitizePastedTextHtml, stripLayoutDeclarations, stripTextMediaPayloads,
@@ -482,6 +483,17 @@ function authoredTextHtml(body: HTMLElement): string {
 }
 
 /**
+ * The authored html a store html becomes once loaded into an editing
+ * surface — what `authoredTextHtml` would read back from a box just opened
+ * on it. Built in an inert document, so no image in it starts loading.
+ */
+function editingFormOf(html: string): string {
+  const scratch = document.implementation.createHTMLDocument('').createElement('div');
+  scratch.innerHTML = normalizeParagraphHtml(restoreKatexSourceHtml(html), true);
+  return authoredTextHtml(scratch);
+}
+
+/**
  * The declaration pair one baseline choice writes on a run, and the pair that
  * takes it back off. Both properties always travel together: a raised run that
  * was never shrunk reads as a layout accident, and a shrunk run that stayed on
@@ -756,6 +768,8 @@ export class EditorCanvas {
    */
   private textEditStoreBase: string | null = null;
   private textEditDomBase: string | null = null;
+  /** An IME composition is open in the box being edited (see adoptRemoteEditedHtml). */
+  private textEditComposing = false;
   /** Re-enter this edit after a rebuild that was forced mid-session. */
   private pendingEditReentry: {
     elementId: string;
@@ -1316,7 +1330,7 @@ export class EditorCanvas {
     for (const el of slide.elements) {
       if (el.type !== 'text' && el.type !== 'html') continue;
       if (el.id === this.editingId) {
-        this.adoptRemoteEditedHtml(el);
+        this.adoptRemoteEditedHtml(el, this.store.isApplyingRemote());
         continue;
       }
       const prev = before.get(el.id);
@@ -1331,35 +1345,79 @@ export class EditorCanvas {
 
   /**
    * Bring a collaborator's change to the box being edited into the live
-   * contenteditable — when nothing here would be lost. Skipping the edited
-   * element entirely meant the session held a stale copy that its next
-   * whole-box commit re-asserted, silently reverting the peer's edit (a list
-   * conversion, a deleted table row) the moment the local author formatted or
-   * left the box. Adoption happens only while the local DOM matches the last
-   * sync point; unsent local changes still win (whole-box last-writer-wins).
+   * contenteditable. Skipping the edited element entirely meant the session
+   * held a stale copy that its next whole-box commit re-asserted, silently
+   * reverting the peer's edit (a list conversion, a deleted table row) the
+   * moment the local author formatted or left the box.
+   *
+   * With nothing unsent here, the box takes the remote html as it is. With
+   * unsent keystrokes (both people typing at once), the remote change is
+   * merged three ways with them against the last sync point (textMerge.ts):
+   * keeping the local DOM whole was last-writer-wins, and the next push wiped
+   * the other person's words. Either way the caret is carried through the
+   * change by what was inserted or removed before it, not left at the same
+   * numeric offset, which dropped the next keystrokes into the middle of the
+   * other person's word.
    */
-  private adoptRemoteEditedHtml(el: SlideElement & { type: 'text' | 'html' }): void {
+  private adoptRemoteEditedHtml(
+    el: SlideElement & { type: 'text' | 'html' },
+    fromElsewhere: boolean,
+  ): void {
     if (this.textEditStoreBase === null || el.html === this.textEditStoreBase) return;
     const body = this.slideLayer.querySelector<HTMLElement>(
       `[data-element-id="${CSS.escape(el.id)}"] .text-content`,
     );
     if (!body) return;
-    if (this.textEditDomBase === null || authoredTextHtml(body) !== this.textEditDomBase) {
-      // Unsent local work: keep the local DOM authoritative, but move the
-      // store base forward so this remote state is not treated as "ours" by
-      // later comparisons.
+    // An open IME composition owns the preedit text in the DOM; rewriting the
+    // box would cancel it. Leave the sync point where it is: the first push
+    // after the composition commits takes this change in (pushLive).
+    if (this.textEditComposing) return;
+    const domBase = this.textEditDomBase;
+    if (domBase === null) {
       this.textEditStoreBase = el.html;
       return;
     }
-    const range = this.activeTextRange(body);
-    const offsets = range ? this.textOffsetsForRange(body, range) : null;
-    // A peer can send legacy generated KaTeX just as the session can start
-    // with it; keep the live editing surface in authored delimiter form.
-    body.innerHTML = normalizeParagraphHtml(restoreKatexSourceHtml(el.html), true);
-    if (offsets) this.restoreTextRange(body, offsets);
+    const local = authoredTextHtml(body);
+    if (local !== domBase && !fromElsewhere) {
+      // This session's own commit coming back through the store (the render
+      // it triggers runs before the commit records its sync point), or
+      // another local control's change: the DOM stays authoritative.
+      this.textEditStoreBase = el.html;
+      return;
+    }
+    const remote = local === domBase ? null : editingFormOf(el.html);
+    const merged = remote === null ? null : mergeTextHtml(domBase, remote, local);
+    if (merged !== local) {
+      const range = this.activeTextRange(body);
+      const offsets = range ? this.textOffsetsForRange(body, range) : null;
+      // Flat text offsets cannot tell the end of one paragraph from the start
+      // of the next; a caret that sat at the end of its text stays there.
+      const affinity = range?.collapsed && range.startContainer instanceof Text
+        && range.startOffset > 0 && range.startOffset === range.startContainer.data.length
+        ? 'backward' : 'forward';
+      const before = body.textContent ?? '';
+      // A peer can send legacy generated KaTeX just as the session can start
+      // with it; keep the live editing surface in authored delimiter form.
+      body.innerHTML = merged === null
+        ? normalizeParagraphHtml(restoreKatexSourceHtml(el.html), true)
+        : normalizeParagraphHtml(merged, true);
+      if (offsets) {
+        const after = body.textContent ?? '';
+        this.restoreTextRange(body, {
+          start: mapTextOffset(before, after, offsets.start),
+          end: mapTextOffset(before, after, offsets.end),
+        }, affinity);
+      }
+    }
     this.textEditStoreBase = el.html;
-    this.textEditDomBase = authoredTextHtml(body);
-    this.textEditRevertHtml = el.html;
+    if (remote === null) {
+      this.textEditDomBase = authoredTextHtml(body);
+      this.textEditRevertHtml = el.html;
+    } else {
+      // The sync point is now the remote state; what the merge kept of the
+      // local keystrokes is still unsent, and the next push carries it.
+      this.textEditDomBase = remote;
+    }
   }
 
   /** Reposition and restyle existing nodes for a non-structural change. */
@@ -3308,13 +3366,17 @@ export class EditorCanvas {
     // (the pinyin "ni" under the candidate window). Streaming or sealing it
     // would persist — and make undoable — text the author never committed.
     let composing = false;
+    this.textEditComposing = false;
     const pushLive = () => {
       liveTimer = 0;
       if (ended || this.editingId !== elementId) return;
       if (composing) return;
-      const html = authoredTextHtml(body);
       const current = findTextTarget(this.store.get().deck, elementId);
       if (!current) return;
+      // A collaborator's change that landed mid-composition was left for
+      // later: take it in before streaming over it.
+      if (this.liveTextSync) this.adoptRemoteEditedHtml(current, true);
+      const html = authoredTextHtml(body);
       if (current.html === html) return;
       // A peer moved the store past this session's sync point and nothing is
       // unsent here: streaming the stale DOM would revert their edit.
@@ -3369,9 +3431,11 @@ export class EditorCanvas {
         return;
       }
       lastEditKind = null;
-      const html = authoredTextHtml(body);
       const current = findTextTarget(this.store.get().deck, elementId);
       if (!current) return;
+      // As in pushLive: a collaborator's change left for after a composition.
+      if (this.liveTextSync) this.adoptRemoteEditedHtml(current, true);
+      const html = authoredTextHtml(body);
       // Live sync may already have streamed this exact html under the current
       // key. There is then nothing to commit — but the run is still over, so
       // the key must move on either way, or the next word would join this
@@ -3420,6 +3484,7 @@ export class EditorCanvas {
     let compositionPendingStyle: string | null = null;
     const onCompositionStart = () => {
       composing = true;
+      this.textEditComposing = true;
       const range = this.activeTextRange(body);
       const container = range?.startContainer instanceof Element
         ? range.startContainer
@@ -3465,6 +3530,7 @@ export class EditorCanvas {
     };
     const onCompositionEnd = (event: CompositionEvent) => {
       composing = false;
+      this.textEditComposing = false;
       if (event.data && compositionPendingStyle) {
         adoptComposedText(event.data, compositionPendingStyle);
       }
@@ -3739,6 +3805,7 @@ export class EditorCanvas {
 
     const finish = (commit: boolean) => {
       ended = true;
+      this.textEditComposing = false;
       if (this.finishTextEdit === finish) this.finishTextEdit = null;
       if (this.sealTextChunk === sealTextChunk) this.sealTextChunk = null;
       if (idleSeal) {
@@ -4368,7 +4435,12 @@ export class EditorCanvas {
     }
   }
 
-  private restoreTextRange(root: HTMLElement, offsets: { start: number; end: number }): void {
+  private restoreTextRange(
+    root: HTMLElement,
+    offsets: { start: number; end: number },
+    /** Which side a collapsed caret takes where two text nodes meet. */
+    caretAffinity: 'forward' | 'backward' = 'forward',
+  ): void {
     const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
     const texts: Text[] = [];
     for (let current = walker.nextNode(); current; current = walker.nextNode()) {
@@ -4389,7 +4461,7 @@ export class EditorCanvas {
       const last = texts[texts.length - 1];
       return { node: last, offset: last.data.length };
     };
-    const start = locate(offsets.start, 'forward');
+    const start = locate(offsets.start, offsets.end === offsets.start ? caretAffinity : 'forward');
     const end = offsets.end === offsets.start
       ? start
       : locate(Math.max(offsets.start, offsets.end), 'backward');

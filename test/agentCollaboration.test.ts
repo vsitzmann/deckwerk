@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { existsSync } from 'node:fs';
-import { readFile, writeFile } from 'node:fs/promises';
+import { appendFile, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { Worker } from 'node:worker_threads';
 import { validateDeckIntegrity } from '../src/shared/agent.js';
 import { sameSlideContent } from '../src/shared/htmlSlides.js';
 import type { Deck, Slide } from '../src/shared/deck.js';
@@ -169,6 +170,21 @@ for (const kind of BACKENDS) describe.skipIf(!electronBinary)(`an agent working 
     expect(refusal(nowhere)).toMatch(/no (such )?slide:? 99/i);
   });
 
+  // An agent writes the page with one tool and runs apply with the next: by
+  // then the editor's or the bridge's watcher has synced the save, at the end.
+  it('puts a new page where apply --after says even when its save was synced first', async () => {
+    const workspace = await open(kind);
+    await workspace.write('later.html', await newPage(workspace, '<h1 class="role-title">Placed after the watcher</h1>'));
+    if (kind !== 'offline') {
+      await until(async () => sectionIds(await workspace.read('later.html')).every(Boolean), 'the watcher to sync the save');
+    }
+    const placed = landed(await apply(workspace, 'later.html', '--after', '1'), workspace);
+    expect(placed.changes.inserted).toHaveLength(1);
+    const ids = (await workspace.deck()).slides.map((slide) => slide.id);
+    expect(ids[1]).toBe(placed.changes.inserted[0]);
+    expect(ids).toHaveLength(new Set(ids).size);
+  });
+
   it('re-saves an untouched export of every slide as no change at all', async () => {
     const workspace = await open(kind);
     const before = await workspace.deck();
@@ -328,7 +344,62 @@ for (const kind of BACKENDS) describe.skipIf(!electronBinary)(`an agent working 
       ['appear', byText('Second step'), 'afterPrev', 250],
     ]);
   });
+
+  // Nightly finding (hosted seed 20261005): the agent read its page the
+  // moment the save was reported and found it empty — the id stamp was
+  // written over the page in place, and a read between the truncate and the
+  // write sees nothing. The fuzz then took the empty page for "no slides".
+  it('never shows a reader its page half-written while it stamps the ids', async () => {
+    const workspace = await open(kind);
+    for (let round = 1; round <= 3; round++) {
+      const name = `stamped-${round}.html`;
+      await workspace.write(name, await newPage(workspace, `<h1 class="role-title">Stamped page ${round}</h1>`));
+      const reader = watchForTornReads(join(workspace.dir, 'edit', name));
+      try {
+        const inserted = landed(await apply(workspace, name), workspace).changes.inserted;
+        await until(async () => sectionIds(await workspace.read(name)).join() === inserted.join(), 'the id stamp');
+      } finally {
+        const { reads, torn } = await reader.stop();
+        expect(reads, 'the reader never ran').toBeGreaterThan(0);
+        expect(torn, `${torn.length} of ${reads} reads of edit/${name} found it half-written`).toEqual([]);
+      }
+    }
+  });
 });
+
+/**
+ * Read a file in a tight loop on a thread of its own, collecting every read
+ * that is not a whole page — what an agent (or its editor) reading the file
+ * at that moment would get.
+ */
+function watchForTornReads(path: string): { stop(): Promise<{ reads: number; torn: string[] }> } {
+  const stopFlag = new Int32Array(new SharedArrayBuffer(4));
+  const worker = new Worker(`
+    const { readFileSync } = require('node:fs');
+    const { workerData, parentPort } = require('node:worker_threads');
+    const torn = [];
+    let reads = 0;
+    while (Atomics.load(workerData.stop, 0) === 0) {
+      let text;
+      try { text = readFileSync(workerData.path, 'utf8'); } catch (error) { text = 'missing: ' + error.code; }
+      reads += 1;
+      if (!text.includes('</html>') && torn.length < 20) torn.push(JSON.stringify(text.slice(0, 80)));
+    }
+    parentPort.postMessage({ reads, torn });
+  `, { eval: true, workerData: { path, stop: stopFlag } });
+  const result = new Promise<{ reads: number; torn: string[] }>((resolvePromise, reject) => {
+    worker.once('message', resolvePromise);
+    worker.once('error', reject);
+  });
+  return {
+    stop: async () => {
+      Atomics.store(stopFlag, 0, 1);
+      const value = await result;
+      await worker.terminate();
+      return value;
+    },
+  };
+}
 
 describe.skipIf(!electronBinary)('a hosted session', { timeout: 240_000 }, () => {
   let hosted: HostedWorkspace;
@@ -356,6 +427,54 @@ describe.skipIf(!electronBinary)('a hosted session', { timeout: 240_000 }, () =>
     expect(untouched.outcome, untouched.line).toBe('unchanged');
     await new Promise((resolvePromise) => setTimeout(resolvePromise, 500));
     expect(hosted.human.transactions).toHaveLength(txnsBefore + 1);
+  });
+
+  // Nightly finding (hosted seeds 20261004 and 20261006, every night): after
+  // ~30 compiles the watched save was never seen, or seen as an error. Each
+  // "compiling edit/x.html…" line is a byte longer than it is characters, and
+  // the wait cut the log at a byte offset as if it were a character index —
+  // skipping further into the new lines with every compile of the walk.
+  it('reports a watched save however long the bridge log has grown', async () => {
+    hosted = await hostedWorkspace();
+    const log = join(hosted.dir, '.deckwerk-bridge.log');
+    // What a long session leaves behind: the ellipsis is three bytes, one character.
+    const earlier = Array.from({ length: 60 }, (_, index) =>
+      `${new Date().toISOString()} compiling edit/earlier-${index}.html…\n`).join('');
+    await appendFile(log, earlier, 'utf8');
+    const saved = await hosted.saveWatched!('late.html', await newPage(hosted, '<h1 class="role-title">Saved late in a session</h1>'));
+    expect(saved).toEqual({ outcome: 'saved', line: 'saved edit/late.html: 1 added' });
+  });
+
+  // Nightly finding (hosted seed 20261006, on a loaded machine): the agent
+  // wrote a new page and ran `apply --after 11`, but the watcher had synced
+  // the save first, at the end of the deck — and the apply answered "already
+  // synced" with the slide still last. An agent that writes the file with one
+  // tool and runs apply with the next is always later than the watcher.
+  it('puts a new page where apply --after says even when the watcher synced the save first', async () => {
+    hosted = await hostedWorkspace();
+    const saved = await hosted.saveWatched!('placed.html', await newPage(hosted,
+      '<h1 class="role-title">Placed first</h1>', '<h1 class="role-title">Placed second</h1>'));
+    expect(saved.outcome, saved.line).toBe('saved');
+    const synced = sectionIds(await hosted.read('placed.html')) as string[];
+    expect((await hosted.deck()).slides.slice(-2).map((slide) => slide.id)).toEqual(synced);
+
+    const placed = landed(await apply(hosted, 'placed.html', '--after', '2'), hosted);
+    expect(placed.changes.inserted).toEqual(synced);
+    const ids = (await hosted.deck()).slides.map((slide) => slide.id);
+    expect(ids.slice(2, 4)).toEqual(synced);
+    expect(ids).toHaveLength(new Set(ids).size);
+    await until(async () => (await hosted.mirrorDeck()).slides.map((slide) => slide.id).join() === ids.join(), 'the mirror');
+
+    // Applied again with no place named, it stays where it was put.
+    landed(await apply(hosted, 'placed.html'), hosted);
+    expect((await hosted.deck()).slides.map((slide) => slide.id)).toEqual(ids);
+
+    // A place that does not exist is refused, as it is before the watcher syncs.
+    const late = await hosted.saveWatched!('nowhere.html', await newPage(hosted, '<h1 class="role-title">Nowhere</h1>'));
+    expect(late.outcome, late.line).toBe('saved');
+    const nowhere = await apply(hosted, 'nowhere.html', '--after', '99');
+    expect(nowhere.code).not.toBe(0);
+    expect(refusal(nowhere)).toMatch(/no (such )?slide:? 99/i);
   });
 
   it('lands a save even when a collaborator mints the id it was about to use', async () => {

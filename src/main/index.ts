@@ -74,6 +74,7 @@ import { loadDeckHistory, saveDeckHistory } from './deckHistoryStore.js';
 import { serializeSpeakerNotes, SPEAKER_NOTES_FILE } from '@shared/speakerNotes.js';
 import { HTML_EDIT_DIR, isAuthoringFileName, readSettledFile, writeHtmlScope } from './htmlAuthoring.js';
 import { AGENT_GUIDE_FILE, defaultLauncherPath, writeAgentGuide } from './agentGuide.js';
+import { replaceFileAtomically } from './agentRuntime.js';
 import {
   attachWindow,
   deckKeyFor,
@@ -811,14 +812,16 @@ function registerHandlers(): void {
     if (target !== editDir && !target.startsWith(editDir + sep)) {
       throw new Error(`Refusing to write outside ${editDir}: ${target}`);
     }
-    const { readFile, writeFile } = await import('node:fs/promises');
+    const { readFile } = await import('node:fs/promises');
     // The author may have saved again while the compile ran; stamping ids onto
     // *those* contents is the next compile's job, not a reason to lose them.
     const current = await readFile(target, 'utf8').catch(() => null);
     if (current !== expected) return;
     // Our own write; the watcher event it fires is an echo, not an edit.
     requireOwner(event).lastWrittenHtml.set(target, contents);
-    await writeFile(target, contents, 'utf8');
+    // Replaced, not written in place: an agent reading its page meanwhile
+    // would otherwise find it empty.
+    await replaceFileAtomically(target, contents);
   });
 
   ipcMain.handle(

@@ -187,6 +187,12 @@ beforeAll(async () => {
   await makeDeck(decksRoot, 'race-lww', [
     [textEl('lww-box', '<p>Base</p>', { x: 160, y: 120, w: 1600, h: 300 })],
   ]);
+  await makeDeck(decksRoot, 'race-simultaneous', [
+    [textEl('sim-box', '<p>First line</p><p>Second line</p>', { x: 160, y: 120, w: 1600, h: 500 })],
+  ]);
+  await makeDeck(decksRoot, 'race-simultaneous-point', [
+    [textEl('point-box', '<p>Base</p>', { x: 160, y: 120, w: 1600, h: 400 })],
+  ]);
   await makeDeck(decksRoot, 'race-undo', [
     [
       textEl('del-box', '<p>Doomed</p>', { x: 300, y: 120, w: 1300, h: 180 }),
@@ -562,6 +568,117 @@ describe.skipIf(!electronBinary)('mid-edit race conditions', () => {
       .toContain('alpha');
     expect(html, 'both peers typed into the box; the server must hold both words')
       .toContain('bravo');
+  });
+
+  /**
+   * Hypothesis 5b — SIMULTANEOUS SAME-BOX TYPING.
+   *
+   * The test above leaves time between the runs, which a slow CI runner eats:
+   * its runs then overlap, and the box came out as `Base bra a bananapplevo
+   * al`. Here both people type at the same moment, as two people writing
+   * into one box do. Each streams whole-box html every 250 ms, so pushes
+   * cross in flight and arrive while the other side has unsent keystrokes.
+   * Whole-box last-writer-wins dropped one side's characters at every
+   * crossing, and the losing editor adopted the winner's html with its caret
+   * at the same numeric offset — so its next keystrokes landed inside the
+   * other person's word.
+   */
+  const ALICE_WORDS = ['alpha', 'apple', 'avocado', 'apricot'];
+  const BOB_WORDS = ['bravo', 'banana', 'blueberry', 'brownie'];
+  const plainText = (html: string) => clean(html)
+    .replace(/<\/p>/g, '\n').replace(/<[^>]*>/g, '').replace(/&nbsp;| /g, ' ');
+
+  async function typeAtOnce(deckId: string, boxId: string, carets: {
+    alice: () => Promise<void>;
+    bob: () => Promise<void>;
+  }): Promise<{ server: string; alice: string; bob: string }> {
+    await open(a!, deckId, 'Alice');
+    await open(b!, deckId, 'Bob');
+    await beginEditing(a!, boxId);
+    await carets.alice();
+    await beginEditing(b!, boxId);
+    await carets.bob();
+    // A fast typist's pace, both at once: well over a second of typing,
+    // several live-sync rounds crossing in each direction.
+    await Promise.all([
+      a!.typeKeys(ALICE_WORDS.map((word) => ` ${word}`).join(''), 45),
+      b!.typeKeys(BOB_WORDS.map((word) => ` ${word}`).join(''), 45),
+    ]);
+    await wait(800);
+    await a!.key('Escape', 27);
+    await b!.key('Escape', 27);
+    const read = async () => {
+      const live = serverElement(await fetchDeck(deckId), boxId);
+      return {
+        server: live && 'html' in live ? live.html : '',
+        alice: await storeHtml(a!, boxId),
+        bob: await storeHtml(b!, boxId),
+      };
+    };
+    const settled = await eventually(read, 'the editors never converged on the server html',
+      (state) => state.server !== '' && state.alice === state.server && state.bob === state.server,
+      15_000).catch(read);
+    expect(await pageErrors(a!)).toEqual([]);
+    expect(await pageErrors(b!)).toEqual([]);
+    return settled;
+  }
+
+  it('keeps both peers\' typing when they type into different lines of one box at once', {
+    timeout: 120_000,
+  }, async () => {
+    const settled = await typeAtOnce('race-simultaneous', 'sim-box', {
+      // Alice at the end of the first line, Bob at the end of the second.
+      alice: async () => {
+        if (process.platform === 'darwin') await a!.chord('ArrowUp', 'ArrowUp', 38, MOD);
+        else await a!.chord('Home', 'Home', 36, MOD);
+        await a!.key('End', 35);
+      },
+      bob: async () => {
+        if (process.platform === 'darwin') await b!.chord('ArrowDown', 'ArrowDown', 40, MOD);
+        else await b!.chord('End', 'End', 35, MOD);
+      },
+    });
+    // BUG: one side's characters dropped wholesale, or spliced into the
+    // other's words.
+    expect(plainText(settled.server).trim().split('\n').map((line) => line.trim()),
+      `both lines, each with its author's words (server: ${settled.server})`).toEqual([
+      `First line ${ALICE_WORDS.join(' ')}`,
+      `Second line ${BOB_WORDS.join(' ')}`,
+    ]);
+    expect(settled.alice, "Alice's editor converged on the server html").toBe(settled.server);
+    expect(settled.bob, "Bob's editor converged on the server html").toBe(settled.server);
+  });
+
+  /**
+   * Both carets at the very same point is the one case plain text cannot
+   * fully order: each person's leading space was typed at the same spot, and
+   * whose space ends up between the two runs is undecidable without
+   * per-character identity. What is guaranteed: nothing typed is lost,
+   * nobody's word is split by the other's letters, and everyone converges.
+   */
+  it('loses nothing and splits no word when two peers type at the same point at once', {
+    timeout: 120_000,
+  }, async () => {
+    const settled = await typeAtOnce('race-simultaneous-point', 'point-box', {
+      alice: async () => {},
+      bob: async () => {},
+    });
+    const text = plainText(settled.server);
+    const letters = (value: string) => value.replace(/\s/g, '').split('').sort().join('');
+    // BUG: whole runs of one side's letters went missing.
+    expect(letters(text), `every letter both people typed (server: ${settled.server})`)
+      .toBe(letters(['Base', ...ALICE_WORDS, ...BOB_WORDS].join('')));
+    for (const words of [ALICE_WORDS, BOB_WORDS]) {
+      let from = 0;
+      for (const word of words) {
+        const at = text.indexOf(word, from);
+        expect(at, `"${word}" whole and in its author's order (server: ${settled.server})`)
+          .toBeGreaterThanOrEqual(0);
+        from = at + word.length;
+      }
+    }
+    expect(settled.alice, "Alice's editor converged on the server html").toBe(settled.server);
+    expect(settled.bob, "Bob's editor converged on the server html").toBe(settled.server);
   });
 
   /**

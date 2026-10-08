@@ -138,6 +138,7 @@ export class EditorStore {
   private remoteSlides = new WeakMap<Slide, Slide>();
   /** The same memo for deck properties: the last incoming set and its parse. */
   private remoteProps: { from: Omit<Deck, 'slides'>; to: Omit<Deck, 'slides'> } | null = null;
+  private remoteDepth = 0;
 
   constructor(deck: Deck, dir: string | null = null) {
     this.state = {
@@ -157,6 +158,16 @@ export class EditorStore {
   /** Whether pointer-driven edits are currently being grouped into one change. */
   isTransactionActive(): boolean {
     return this.txnBase !== null;
+  }
+
+  /**
+   * True while listeners are being told about a deck decided elsewhere
+   * (applyRemote), as opposed to an edit made here. A text box being edited
+   * merges the former into its live DOM; the latter is its own commit coming
+   * back (EditorCanvas.adoptRemoteEditedHtml).
+   */
+  isApplyingRemote(): boolean {
+    return this.remoteDepth > 0;
   }
 
   get slide(): Slide | undefined {
@@ -310,7 +321,12 @@ export class EditorStore {
       this.currentHistoryId = null;
       this.emitHistory();
     }
-    this.emit();
+    this.remoteDepth += 1;
+    try {
+      this.emit();
+    } finally {
+      this.remoteDepth -= 1;
+    }
   }
 
   /**

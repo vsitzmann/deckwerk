@@ -2,7 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, watch, type FSWatcher } from 'node:fs';
 import { mkdir, readFile, readdir, rename, unlink, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { basename, join, resolve } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import type { BrowserWindow } from 'electron';
 import { renameRetiredFields } from '@shared/fieldAliases.js';
 import {
@@ -202,6 +202,26 @@ export async function waitForAgentResponse(
   throw new Error('Timed out waiting for the editor to process the request.'
     + ' The editor may still apply it: check `slide-agent context` before retrying,'
     + ' and never re-apply the same change on a timeout alone.');
+}
+
+/**
+ * Replace a file somebody may be reading at that moment — an authoring page
+ * in edit/ that the bridge, the editor or the CLI stamps ids into — by
+ * writing beside it and renaming over it. A reader gets the old page or the
+ * new one; written in place, it could get the empty file the write truncates
+ * to first (an agent did, reading its page as soon as the save was reported).
+ * The temporary name starts with a dot and ends in .tmp, so no edit/ watcher
+ * takes it for a page.
+ */
+export async function replaceFileAtomically(path: string, contents: string): Promise<void> {
+  const temp = join(dirname(path), `.${basename(path)}.${process.pid}.${randomUUID()}.tmp`);
+  await writeFile(temp, contents, 'utf8');
+  try {
+    await rename(temp, path);
+  } catch (error) {
+    await unlink(temp).catch(() => undefined);
+    throw error;
+  }
 }
 
 export async function atomicJson(path: string, value: unknown): Promise<void> {

@@ -826,15 +826,28 @@ export async function selectionProblems(cdp: Cdp): Promise<string[]> {
   return second.filter((problem) => first.includes(problem));
 }
 
-export async function tagListField(cdp: Cdp): Promise<string> {
-  const found = await cdp.evaluate<boolean>(`(() => {
+/**
+ * Choose a style in the inspector's List control.
+ *
+ * The control is found and chosen in one step. Tagging it with an id first
+ * and choosing by that id in a second round trip raced the inspector: a
+ * select-all just before re-renders the panel when the selection change
+ * reaches it, which on a loaded runner landed between the two calls, so the
+ * tagged select was gone and the case failed with "cannot choose".
+ */
+export async function chooseListStyle(cdp: Cdp, style: string): Promise<void> {
+  const outcome = await cdp.evaluate<string>(`(() => {
     const field = [...document.querySelectorAll('${PASTE_PANEL} label.field')]
       .find((node) => node.querySelector('span')?.textContent === 'List');
     const select = field?.querySelector('select');
-    if (!select) return false;
-    select.id = 'paste-fuzz-list-field';
-    return true;
+    if (!select) return 'missing';
+    if (![...select.options].some((option) => option.value === ${JSON.stringify(style)})) {
+      return 'no option';
+    }
+    select.focus();
+    select.value = ${JSON.stringify(style)};
+    select.dispatchEvent(new Event('change', { bubbles: true }));
+    return 'ok';
   })()`);
-  expect(found, 'the inspector List control is missing').toBe(true);
-  return '#paste-fuzz-list-field';
+  expect(outcome, `choosing List → ${style} in the inspector`).toBe('ok');
 }

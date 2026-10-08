@@ -187,6 +187,80 @@ describe.skipIf(!electronBinary)('list editing under a sweep of real edits', () 
     await expectSound('after leaving a numbered list with Return');
   });
 
+  // Minimised from the nightly walk, seed 20261001 (steps 115-119): a line
+  // cut with its break and pasted into the middle of a bold, underlined word
+  // landed as a paragraph inside the word's <span>. The block model cannot see
+  // into that shape, so a word typed at the end of the line after it picked
+  // up the outer span's bold although nothing on the line showed bold.
+  it('a line pasted into a formatted word leaves no block inside the word (seed 20261001)', {
+    timeout: 120_000,
+  }, async () => {
+    const formatted = 'font-weight: 700; text-decoration-line: underline;';
+    await session.reset(`<p><span style="${formatted}">f73b</span><br></p>`
+      + `<ul><li><span style="${formatted}">f72b<span style="font-weight: 400;">f76aw</span></span></li></ul>`);
+    await session.edit();
+    await session.caretIn('f73b', 'start');
+    await session.cdp.chord('ArrowDown', 'ArrowDown', 40, SHIFT);
+    await session.cdp.chord('x', 'KeyX', 88, MOD, ['cut']);
+    await wait(150);
+    // Between "f72" and "b" of the bold, underlined word.
+    await session.caretAt((await session.text()).indexOf('f72b') + 3);
+    await session.cdp.chord('v', 'KeyV', 86, MOD, ['paste']);
+    await wait(150);
+    const nested = await session.cdp.evaluate<string | null>(`(() => {
+      const block = document.querySelector('${CONTENT}')
+        .querySelector(':is(span, b, i, u, strong, em) :is(p, div, li, ul, ol)');
+      return block ? block.parentElement.outerHTML : null;
+    })()`);
+    expect(nested, 'the pasted line sits inside the formatted word').toBeNull();
+    await expectSound('after pasting a line into a formatted word');
+
+    // What the author sees: the line ends in plain-weight underlined text, so
+    // italic on, then typing, gives italic underlined text -- not bold.
+    await session.caretIn('f76aw', 'end');
+    await session.cdp.chord('i', 'KeyI', 73, MOD);
+    await session.cdp.typeKeys('zq');
+    expect(flags(runHolding(await session.runs(), 'zq', 'typed after the pasted line')),
+      'typed after toggling italic on a line ending in plain underlined text').toBe('-iu');
+  });
+
+  // Minimised from the nightly walk, seed 20261002 (steps 96 and 121): text
+  // typed after Cmd+B sits in a pending typing run that carries an invisible
+  // U+2060 sentinel. Cutting a line holding such a run put the sentinel on the
+  // clipboard with it, and pasting made it a real character of the text --
+  // one the caret stops on and a search for the word cannot find.
+  it('cutting and pasting a freshly formatted word carries no invisible character (seed 20261002)', {
+    timeout: 120_000,
+  }, async () => {
+    await session.reset('<p>alpha</p><p>beta</p>');
+    await session.edit();
+    // A new line holding nothing but the pending run, as the walk had it.
+    await session.caretIn('alpha', 'end');
+    await session.cdp.key('Enter', 13);
+    await session.cdp.chord('b', 'KeyB', 66, MOD);
+    await session.cdp.typeKeys('f84b');
+    await session.cdp.key('Home', 36);
+    await session.cdp.chord('End', 'End', 35, SHIFT);
+    await session.cdp.chord('x', 'KeyX', 88, MOD, ['cut']);
+    await wait(150);
+    await session.caretIn('beta', 'end');
+    await session.cdp.chord('v', 'KeyV', 86, MOD, ['paste']);
+    await wait(150);
+    const stray = await session.cdp.evaluate<number>(`(() => {
+      const root = document.querySelector('${CONTENT}');
+      const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+      let count = 0;
+      for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+        if (node.parentElement.closest('[data-editor-typing-style]')) continue;
+        count += node.data.split('\\u2060').length - 1;
+      }
+      return count;
+    })()`);
+    expect(stray, `invisible sentinels in the pasted text: ${await session.markup()}`).toBe(0);
+    expect(compact(await session.text())).toBe('alphabetaf84b');
+    await expectSound('after cutting and pasting a freshly bolded word');
+  });
+
   for (const walkSeed of WALK_SEEDS) {
     it(`survives a seeded walk through the list vocabulary (seed ${walkSeed})`, {
       timeout: RUN_EXHAUSTIVE ? 60 * 60_000 : 600_000,

@@ -920,8 +920,13 @@ guards. These rules keep the seams closed:
   mid-IME-composition; `authoredTextHtml` must strip every piece of
   editor-only chrome the session stamps on the DOM; everything
   `beginTextEdit` sets on a node, `commitTextEdit` removes.
-- **Collab editing rules:** the element being edited adopts remote html when
-  nothing local is unsent (`adoptRemoteEditedHtml`); commits never re-assert
+- **Collab editing rules:** the element being edited adopts remote html,
+  merged three ways with any unsent local keystrokes and with the caret
+  carried through the change, never left at the same numeric offset
+  (`adoptRemoteEditedHtml`, `textMerge.ts`); a text box's live-sync push
+  carries the html it was edited from (`replaceElement.baseHtml`), so pushes
+  that cross in flight merge rather than the later one wiping the earlier
+  one's characters (two people typing in one box); commits never re-assert
   a stale DOM over a store that moved past the session's sync point; remote
   decks landing mid-transaction are rebased, not applied
   (`applyRemote`/`txnBase`); a rebuild that ends an edit session re-enters it

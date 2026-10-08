@@ -484,6 +484,13 @@ would take, is in [Desktop → web feature parity](desktop-web-parity.md).
   brings that window forward rather than opening it twice.
 - Timeline (build) edits are slide-granular: two people editing builds on the
   same slide at the same moment resolve last-write-wins.
-- Two people typing in the same text box at once: the last one to finish
-  (blur) wins. The presence badge shows who is editing what.
+- Two people typing in the same text box at once: both keep their text.
+  Each live-sync push of a box carries the html it was edited from
+  (`replaceElement.baseHtml`), and the server and every client merge it
+  three ways with whatever landed in between (`src/shared/textMerge.ts`);
+  an editor with unsent keystrokes merges incoming changes into its DOM the
+  same way and carries the caret through them. Edits to the very same words
+  resolve to the later one, and two people typing at exactly the same point
+  keep every letter and every word whole, but whose space sits between the
+  two runs is not decided. The presence badge shows who is editing what.
 - Presence and edits are unauthenticated by design — trusted networks only.

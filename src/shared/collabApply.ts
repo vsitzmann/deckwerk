@@ -1,6 +1,7 @@
 import { DeckSchema, ElementSchema, SlideSchema, type Deck, type Slide, type SlideElement } from './deck.js';
 import type { AgentOperation } from './agent.js';
 import { jsonEqual } from './jsonData.js';
+import { mergeTextHtml } from './textMerge.js';
 
 export interface LenientApplyResult {
   deck: Deck;
@@ -31,6 +32,9 @@ export interface LenientApplyResult {
  * - updateDeck: always applies.
  * - setSlideProperties `clear` of a field with a default (notes, timeline,
  *   …) leaves the default, as a parse of the slide would.
+ * - replaceElement carrying `baseHtml` (live text sync) onto an element
+ *   whose html changed since that base: the two html edits are merged
+ *   three ways (textMerge.ts) rather than the later one overwriting.
  *
  * Afterwards, timeline entries referencing elements that no longer exist on
  * their slide are pruned, so a concurrent element delete can never leave a
@@ -212,7 +216,8 @@ function applyLenient(
       const index = draft.slides[at].elements.findIndex((element) => element.id === op.elementId);
       if (index === -1) return skip(op, `element ${op.elementId} no longer exists`);
       if (op.element.id !== op.elementId) return skip(op, 'replacement changes element id');
-      draft.own(at).elements[index] = admitElement(op.element);
+      const current = draft.slides[at].elements[index];
+      draft.own(at).elements[index] = withMergedHtml(current, admitElement(op.element), op.baseHtml);
       return;
     }
     case 'deleteElements': {
@@ -261,4 +266,21 @@ function applyLenient(
       return;
     }
   }
+}
+
+/**
+ * A replacement made from `baseHtml` while the element's html has moved on
+ * since: two people typing into one box. Both edits to the html are kept
+ * (mergeTextHtml); without a base, or when nothing moved, it is the plain
+ * replacement it always was.
+ */
+function withMergedHtml(
+  current: SlideElement,
+  replacement: SlideElement,
+  baseHtml: string | undefined,
+): SlideElement {
+  if (baseHtml === undefined || !('html' in current) || !('html' in replacement)) return replacement;
+  if (typeof current.html !== 'string' || typeof replacement.html !== 'string') return replacement;
+  if (current.html === baseHtml) return replacement;
+  return { ...replacement, html: mergeTextHtml(baseHtml, current.html, replacement.html) } as SlideElement;
 }

@@ -40,6 +40,7 @@ import {
   deckRevision,
   readAgentContextFile,
   readLiveAgentContext,
+  replaceFileAtomically,
   waitForAgentResponse,
   writeAgentRequest,
 } from '../main/agentRuntime.js';
@@ -436,7 +437,7 @@ async function applyCommand(argv: string[], io: CliIo): Promise<number> {
       if (authored === authoredBefore) {
         const adopted = adoptAuthoredIds(authored, outcome.slides as Slide[]) ?? authored;
         const stamped = outcome.stamp ? stampPage(adopted, outcome.stamp) : adopted;
-        if (stamped !== authored) await writeFile(filePath, stamped, 'utf8');
+        if (stamped !== authored) await replaceFileAtomically(filePath, stamped);
       }
     }
     return EXIT_OK;
@@ -488,7 +489,8 @@ async function applyCommand(argv: string[], io: CliIo): Promise<number> {
     const authored = await readFile(filePath, 'utf8');
     if (authored === authoredBefore) {
       const stamped = stampPage(adoptAuthoredIds(authored, slides) ?? authored, pageStampOf(slides));
-      if (stamped !== authored) await writeFile(filePath, stamped, 'utf8');
+      // Replaced, not written in place, which shows a reader an empty page.
+      if (stamped !== authored) await replaceFileAtomically(filePath, stamped);
     }
   }
   return code;

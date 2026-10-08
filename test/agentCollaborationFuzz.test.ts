@@ -193,10 +193,11 @@ class Walk {
     if (watched) {
       const saved = await this.ws.saveWatched!(file, page);
       this.expect(saved.outcome === 'saved', `the watched save did not land: ${saved.line}`);
-      ids = await until(async () => {
-        const stamped = sectionIds(await this.ws.read(file));
-        return stamped.length === count && stamped.every(Boolean) ? stamped as string[] : null;
-      }, 'the id stamp');
+      // "saved" is reported once the page is stamped: read it once, no waiting.
+      const stamped = sectionIds(await this.ws.read(file));
+      this.expect(stamped.length === count && stamped.every(Boolean),
+        `${saved.line}, but the page names [${stamped}]`);
+      ids = stamped as string[];
     } else {
       await this.ws.write(file, page);
       const changes = this.landed(await this.apply(file, after === null ? [] : ['--after', after]));
@@ -325,10 +326,11 @@ class Walk {
     if (watched) {
       const saved = await this.ws.saveWatched!(file, page);
       this.expect(saved.outcome === 'saved' || saved.outcome === 'unchanged', `the watched save failed: ${saved.line}`);
-      authored = await until(async () => {
-        const stamped = sectionIds(await this.ws.read(file));
-        return stamped.every(Boolean) ? stamped as string[] : null;
-      }, 'the id stamp');
+      // Read once: the bridge reports the save after stamping the page. A page
+      // read back empty is a finding, not "the page governs no slides".
+      const stamped = sectionIds(await this.ws.read(file));
+      this.expect(stamped.length > 0 && stamped.every(Boolean), `${saved.line}, but the page names [${stamped}]`);
+      authored = stamped as string[];
     } else {
       await this.ws.write(file, page);
       const reply = await this.apply(file);

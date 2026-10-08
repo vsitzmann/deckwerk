@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { electronBinary, eventually, wait } from './support/browserSession.js';
 import {
   CONTENT,
+  MOD,
   TEXT_ID,
   startListEditingSession,
   type ListEditingSession,
@@ -131,5 +132,44 @@ describe.skipIf(!electronBinary)('a press on a selected object', () => {
     expect(after.x - before.x).toBeGreaterThan(30 / scale);
     expect(after.y - before.y).toBeGreaterThan(20 / scale);
     expect(after.editing).toBe(false);
+  });
+});
+
+/**
+ * Harness soundness: the drag-to-select helpers must select, never drag.
+ *
+ * Pressing on text that is already selected picks it up for drag-and-drop.
+ * The paste fuzz swept "the first word" right after a select-all or a
+ * double-click, so its sweep started a native drag-and-drop instead -- and on
+ * a loaded Linux runner, where the synthetic release could lose the race to
+ * the native drag session, that session never ended and swallowed every later
+ * mouse and key event: each case after it failed with "the text box did not
+ * enter editing" (nightly 2026-10-06). See `sweepSelect` in browserSession.
+ */
+describe.skipIf(!electronBinary)('selecting by drag over text that is already selected', () => {
+  it('selects the swept word instead of dragging the selection', { timeout: 120_000 }, async () => {
+    const cdp = session.cdp;
+    await session.reset('<p>alpha beta gamma</p><p>delta</p>');
+    await session.edit();
+    await cdp.chord('a', 'KeyA', 65, MOD, ['selectAll']);
+    expect(await cdp.evaluate<string>('String(window.getSelection())'), 'select-all took the text')
+      .toContain('delta');
+    await cdp.evaluate(`(() => {
+      window.__dragStarts = 0;
+      window.addEventListener('dragstart', () => { window.__dragStarts += 1; }, true);
+      return true;
+    })()`);
+    await cdp.dragSelectFirstWord(CONTENT, 'first word').catch((error: unknown) => {
+      // The helper reports a drag-and-drop it could not avoid; the counter
+      // below says the same thing with the soundness detail.
+      if (!String(error).includes('drag-and-drop')) throw error;
+    });
+    expect(await cdp.evaluate<number>('window.__dragStarts'), 'the sweep started a drag-and-drop').toBe(0);
+    expect(await cdp.evaluate<string>('String(window.getSelection())')).toBe('alpha');
+
+    // And the page still hears the keyboard: typing replaces the swept word.
+    await cdp.typeKeys('omega');
+    await eventually(async () => session.text(), 'typing did not replace the swept word',
+      (text) => text.replace(/\s+/g, ' ').startsWith('omega beta gamma'));
   });
 });

@@ -604,7 +604,11 @@ export async function hostedWorkspace(options: HostedOptions = {}): Promise<Host
       await writeFile(join(mirror, 'edit', name), html, 'utf8');
       const file = `edit/${name}`;
       return until(async () => {
-        const fresh = (await readFile(bridgeLogPath, 'utf8')).slice(before).split('\n')
+        // `before` is a size in bytes: cut the log as bytes, not as a string —
+        // every "compiling edit/x.html…" before it is a byte longer than it is
+        // characters, so a string index ran ahead into the new lines. And only
+        // whole lines: the last may still be on its way.
+        const fresh = (await readFile(bridgeLogPath)).subarray(before).toString('utf8').split('\n').slice(0, -1)
           .map((line) => line.replace(/^\S+ /, ''));
         for (const line of fresh) {
           if (line.startsWith(`saved ${file}:`)) return { outcome: 'saved' as const, line };
