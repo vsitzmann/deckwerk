@@ -22,15 +22,8 @@ import { collabClientDir } from './support/collabClient.js';
  *
  * Select the arrow, Build → Add animation, pick "line draw", present, click:
  * the arrow is visible at once but only partly drawn, and whole when its
- * time is up. The rest of this header describes the rectangle suite it was
- * copied from:
- *
- * Double-click a rectangle and type.
- *
- * The rectangle becomes a text box with the same fill, border and corners,
- * the caret is in it, and what is typed is the label — one object with the
- * shape's id, so it still drags, builds and morphs as the shape did. Props
- * then shows the box's fill and a shadow for its text.
+ * time is up, its head riding the tip of the line all the way. A bent path
+ * arrow traces its outline the same way, carrying a copy of its head.
  */
 const DECK_ID = 'shape-text';
 const BOX_ID = 'label-box';
@@ -93,23 +86,34 @@ describe.skipIf(!electronBinary)('line draw on an arrow', () => {
     await editor.evaluate(`location.href = '/present.html?deck=${DECK_ID}&slide=1'`);
     await eventually(async () => editor!.evaluate<boolean>(`Boolean(document.querySelector('[data-element-id="${BOX_ID}"] svg line'))`), 'the presentation never came up');
     await wait(500);
-    // Read the line on every frame in the page itself: a sample taken from
-    // here at a fixed delay can miss a 600ms animation on a loaded machine.
+    // Read the head's tip on every frame in the page itself: a sample taken
+    // from here at a fixed delay can miss a 600ms animation on a loaded
+    // machine. A head's path starts at its tip.
+    const tipX = `(() => {
+      const head = document.querySelector('[data-element-id="${BOX_ID}"] svg path.arrowhead');
+      const match = head && /^M (-?[\\d.]+)/.exec(head.getAttribute('d'));
+      return match ? Number(match[1]) : -1;
+    })()`;
+    const lineX2 = `Number(document.querySelector('[data-element-id="${BOX_ID}"] svg line')?.getAttribute('x2'))`;
     await editor.evaluate(`(() => {
-      window.__x2 = [];
+      window.__tips = [];
       const read = () => {
-        const line = document.querySelector('[data-element-id="${BOX_ID}"] svg line');
-        window.__x2.push(Number(line?.getAttribute('x2')));
-        if (window.__x2.length < 600) requestAnimationFrame(read);
+        window.__tips.push(${tipX});
+        if (window.__tips.length < 600) requestAnimationFrame(read);
       };
       requestAnimationFrame(read);
     })()`);
     await editor.key('ArrowRight', 39);
-    await eventually(async () => editor!.evaluate<number>(`Number(document.querySelector('[data-element-id="${BOX_ID}"] svg line').getAttribute('x2'))`),
-      'the arrow never finished drawing', (x2) => x2 === 1400);
-    const frames = await editor.evaluate<number[]>('window.__x2');
-    // It grew through the middle on the way, rather than appearing whole.
-    expect(frames.some((x2) => x2 > 0 && x2 < 1400)).toBe(true);
+    await eventually(async () => editor!.evaluate<number>(tipX),
+      'the arrow never finished drawing', (x) => x === 1400);
+    const frames = await editor.evaluate<number[]>('window.__tips');
+    // It grew through the middle on the way, head first, rather than
+    // appearing whole or with its head waiting at the far end.
+    expect(frames.some((x) => x > 0 && x < 1400)).toBe(true);
+    // And ends as the static arrow does: the line stops inside the head.
+    const x2 = await editor.evaluate<number>(lineX2);
+    expect(x2).toBeGreaterThan(1300);
+    expect(x2).toBeLessThan(1400);
   });
 
   it('carries a bent arrow\'s head along the tip as the path draws', { timeout: 120_000 }, async () => {
