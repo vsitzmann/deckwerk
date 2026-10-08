@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, readFile, rm, stat, utimes, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -488,6 +488,48 @@ describe('collab server', () => {
     expect(opened.status).toBe(200);
     const deck = await opened.json() as Deck;
     expect(deck.slides.length).toBeGreaterThan(0);
+  });
+
+  it('keeps every Keynote upload, failed ones too, out of sight of the listing', async () => {
+    await server.close();
+    server = await startCollabServer({
+      rootDir,
+      port: 0,
+      host: '127.0.0.1',
+      keepUploadsDays: 30,
+      keynoteImporter: async (keyFile, outDir) => {
+        if ((await readFile(keyFile, 'utf8')) === 'broken') throw new Error('No readable .iwa streams');
+        await saveDeck(outDir, parseDeck({ ...emptyDeck('Kept'), slides: [{ id: 's', name: 'S' }] }));
+        return { warnings: [] };
+      },
+    });
+    const base = `http://127.0.0.1:${server.port}`;
+    // A stale upload from long ago goes on the next import.
+    const stale = join(rootDir, '.uploads', '2020-01-01T00-00-00-000Z-old');
+    await mkdir(stale, { recursive: true });
+    await writeFile(join(stale, 'old.key'), 'old');
+    const old = new Date('2020-01-01');
+    await utimes(stale, old, old);
+
+    expect((await fetch(`${base}/api/import-keynote?name=Kept`, { method: 'POST', body: 'good' })).status).toBe(200);
+    expect((await fetch(`${base}/api/import-keynote?name=Broken`, { method: 'POST', body: 'broken' })).status).toBe(400);
+
+    const kept = await readdir(join(rootDir, '.uploads'));
+    expect(kept).toHaveLength(2);
+    const metas = await Promise.all(kept.map(async (entry) => ({
+      meta: JSON.parse(await readFile(join(rootDir, '.uploads', entry, 'upload.json'), 'utf8')),
+      files: await readdir(join(rootDir, '.uploads', entry)),
+    })));
+    expect(metas).toContainEqual({
+      meta: expect.objectContaining({ deck: 'Kept', file: 'Kept.key', bytes: 4, ok: true }),
+      files: expect.arrayContaining(['Kept.key', 'upload.json']),
+    });
+    expect(metas).toContainEqual({
+      meta: expect.objectContaining({ deck: 'Broken', ok: false, error: expect.stringContaining('.iwa') }),
+      files: expect.arrayContaining(['Broken.key']),
+    });
+    const decks = await (await fetch(`${base}/api/decks`)).json() as Array<{ id: string }>;
+    expect(decks.map((deck) => deck.id)).not.toContain(expect.stringContaining('uploads'));
   });
 
   it('retires the direct HTTP agent authoring API in favor of the filesystem bridge', async () => {

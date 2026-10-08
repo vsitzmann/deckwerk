@@ -7,6 +7,11 @@ import { headlessBrowserProblem } from '../src/cli/compileHtml.js';
  * Collaborative editing server:
  *   npm run collab -- <decksRootDir> [--port 5800] [--host 0.0.0.0]
  *     [--no-local-agents] [--agent-name <name>] [--access <adminLogin>]
+ *     [--keep-uploads-days <n>]
+ *
+ * Every Keynote and PowerPoint upload is kept for --keep-uploads-days (30 by
+ * default, 0 turns it off) under <decksRootDir>/.uploads/, so an import that
+ * came out wrong can be debugged against the file that produced it.
  *
  * By default every participant can bring their own agent: the browser's
  * Agent… button prints a `slide-agent connect` command that mirrors the deck
@@ -39,19 +44,21 @@ let host = '0.0.0.0';
 let localAgentsEnabled = true;
 let agentName = 'Your agent';
 let accessAdmin: string | null = null;
+let keepUploadsDays = 30;
 for (let i = 0; i < args.length; i++) {
   if (args[i] === '--port') port = Number(args[++i]);
   else if (args[i] === '--host') host = args[++i];
   else if (args[i] === '--no-local-agents') localAgentsEnabled = false;
   else if (args[i] === '--agent-name') agentName = args[++i];
   else if (args[i] === '--access') accessAdmin = args[++i];
+  else if (args[i] === '--keep-uploads-days') keepUploadsDays = Number(args[++i]);
   else if (!args[i].startsWith('-') && !rootDir) rootDir = args[i];
 }
-if (!rootDir || Number.isNaN(port) || (accessAdmin !== null && !accessAdmin?.trim())) {
+if (!rootDir || Number.isNaN(port) || !(keepUploadsDays >= 0) || (accessAdmin !== null && !accessAdmin?.trim())) {
   process.stderr.write(
     'usage: npm run collab -- <decksRootDir> [--port 5800] [--host 0.0.0.0] '
     + '[--no-local-agents] [--agent-name <name>] '
-    + '[--access <adminLogin>]\n',
+    + '[--access <adminLogin>] [--keep-uploads-days <n>]\n',
   );
   process.exit(2);
 }
@@ -88,6 +95,7 @@ const server = await startCollabServer({
   host,
   localAgents,
   accessControl: accessAdmin ? { admin: accessAdmin } : undefined,
+  keepUploadsDays,
 });
 
 process.stdout.write(`${JSON.stringify({
