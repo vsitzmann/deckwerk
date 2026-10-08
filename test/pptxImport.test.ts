@@ -122,6 +122,16 @@ describe.skipIf(!existsSync(REFERENCE))('powerpoint importer', () => {
     expect(deck.slides[1].notes).toBe('Speaker notes for slide two.');
   });
 
+  it('escapes the quotes a run\'s font family carries inside its style attribute', () => {
+    // Unescaped, `style="font-family: "Calibri", …"` ends at the first quote
+    // and the run loses its face and everything listed after it.
+    const stdout = execFileSync(PYTHON, ['-c', [
+      'from importers.pptx.import_pptx import _style_attr',
+      "print(_style_attr({'font-family': '\"Calibri\", \"Carlito\", sans-serif', 'font-weight': '700'}))",
+    ].join('\n')], { encoding: 'utf8', cwd: process.cwd() });
+    expect(stdout.trim()).toBe('style="font-family: &quot;Calibri&quot;, &quot;Carlito&quot;, sans-serif; font-weight: 700"');
+  });
+
   it('inherits placeholder geometry and type from the layout and master', () => {
     const { deck } = reference();
     const title = shape(deck, 0, (el) => el.type === 'text' && el.html === 'Reference deck');

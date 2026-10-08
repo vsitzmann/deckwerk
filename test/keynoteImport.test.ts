@@ -671,4 +671,123 @@ describe('keynote importer', () => {
       await rm(dir, { recursive: true, force: true });
     }
   }, 60_000);
+
+  // A real talk (MilliVid, Oct 2026) imported with an all-bold 80px title
+  // slide, numbered steps as plain lines, a vertical axis label on top of its
+  // figure and three stray "Text" boxes mid-slide. The deck itself cannot be
+  // checked in; test/support/keynote_text_cases.py rebuilds each archive shape
+  // it used and reports what the importer made of them.
+  describe('text structures from a real talk', () => {
+    let cases: {
+      titleSlide: string;
+      rolloutList: { html: string; paragraphSpacing: number | null };
+      rotatedMiddle: Record<'x' | 'y' | 'w' | 'h' | 'cx' | 'cy', number>;
+      rotatedTop: Record<'x' | 'y' | 'w' | 'h' | 'cx' | 'cy', number>;
+      emptyBoxes: { zeroSize: string[]; sized: string[] };
+      componentsList: string;
+      partialUnderline: string;
+    };
+    const load = () => {
+      cases ??= JSON.parse(execFileSync(PYTHON, [join('test', 'support', 'keynote_text_cases.py')], {
+        encoding: 'utf8', cwd: process.cwd(),
+      }));
+      return cases;
+    };
+    /** Every attribute in the markup, as the browser would read them. */
+    const attributeNames = (markup: string) =>
+      [...markup.matchAll(/<[a-z]+((?:\s+[^\s=>]+(?:="[^"]*")?)*)\s*>/g)]
+        .flatMap((tag) => [...tag[1].matchAll(/\s+([^\s=>]+)(?:="[^"]*")?/g)].map((attr) => attr[1]));
+
+    it('keeps each paragraph\'s own size and face under the first one', () => {
+      const { titleSlide } = load();
+      const blocks = titleSlide.match(/<p[^>]*>.*?<\/p>/g)!;
+      // The title line carries the element's own 80px bold; its second half
+      // un-bolds by naming the upright face, which a Mac would otherwise
+      // still draw bold.
+      expect(blocks[0]).toMatch(/^<p>MilliVid:<span style="font-weight: 400; font-family: &quot;HelveticaNeue&quot;/);
+      // Author lines are 48pt light: 0.6 of the box size, so auto-fit still
+      // scales them. Paragraphs whose table entry names no style continue
+      // the previous one instead of falling back to the title's.
+      const authors = blocks.filter((block) => /Alice|Carol/.test(block));
+      expect(authors).toHaveLength(2);
+      for (const line of authors) {
+        expect(line).toContain('font-size: 0.6em');
+        expect(line).toContain('HelveticaNeue-Light');
+        expect(line).toContain('font-weight: 300');
+      }
+      expect(blocks.find((block) => block.includes('Equal contribution'))).toContain('font-size: 0.5em');
+      // Affiliation marks are the editor's own superscript.
+      expect(titleSlide).toContain('Alice*<span style="vertical-align: super; font-size: 0.7em">1</span>');
+      expect(titleSlide).toContain('<span style="vertical-align: super; font-size: 0.7em">1</span>MIT');
+    });
+
+    it('writes run styles the browser can read, quotes and all', () => {
+      const { titleSlide, rolloutList } = load();
+      // Font families carry double quotes. Unescaped, they ended the style
+      // attribute after `font-family: ` and turned the rest into junk
+      // attributes, so every bold or Medium word lost its styling.
+      for (const markup of [titleSlide, rolloutList.html]) {
+        expect(new Set(attributeNames(markup))).toEqual(new Set(
+          markup.includes('<ol') ? ['style', 'start'] : ['style'],
+        ));
+      }
+      expect(rolloutList.html).toContain(
+        '<span style="font-family: &quot;HelveticaNeue-Medium&quot;, &quot;Helvetica Neue&quot;, sans-serif; font-weight: 500">long</span>',
+      );
+    });
+
+    it('turns numbered paragraphs into nested lists at their level and number', () => {
+      const { rolloutList } = load();
+      // 1. at level 0, 2. at level 1, 3. and 4. at level 2, 5. back at level
+      // 1 — Keynote's explicit start numbers kept. Each nested list steps in
+      // by Keynote's 36pt (0.6em of 60pt), not the editor's 1.4em.
+      expect(rolloutList.html).toBe(
+        '<p style="text-decoration: underline">MilliVid&#x27;s Rollout Strategy</p>'
+        + '<ol><li>Predict a <span style="font-family: &quot;HelveticaNeue-Medium&quot;, &quot;Helvetica Neue&quot;, sans-serif; font-weight: 500">long</span> sequence'
+        + '<ol start="2" style="margin-left: -0.8em"><li>Predict a medium sequence'
+        + '<ol start="3" style="margin-left: -0.8em"><li>Predict a short sequence</li><li>Repeat…</li></ol>'
+        + '</li></ol><ol start="5" style="margin-left: -0.8em"><li>Repeat…</li></ol></li></ol>',
+      );
+      // Keynote's paragraphs are set without gaps here; the editor's default
+      // list gaps pushed the last step into the figure below.
+      expect(rolloutList.paragraphSpacing).toBe(0);
+    });
+
+    it('turns a text-sized label about its alignment anchor', () => {
+      const { rotatedMiddle, rotatedTop } = load();
+      // Left-aligned, vertically centred, 90° anticlockwise: the stored point
+      // is the middle of the line's start, so the label is centred on x and
+      // its text starts at the stored y (it reads upwards). The width is
+      // measured from font metrics, so only what does not depend on it is
+      // pinned.
+      expect(rotatedMiddle.cx).toBeCloseTo(77.53, 1);
+      expect(rotatedMiddle.cy + rotatedMiddle.w / 2).toBeCloseTo(870.85, 1);
+      // Top-anchored, the same rule gives the top-left convention the
+      // reference deck's vertical labels showed: shifted by half the height.
+      expect(rotatedTop.cx).toBeCloseTo(77.53 + rotatedTop.h / 2, 1);
+      expect(rotatedTop.cy + rotatedTop.w / 2).toBeCloseTo(870.85, 1);
+    });
+
+    it('counts a numbered level on across the unnumbered paragraphs under it', () => {
+      const { componentsList } = load();
+      expect(componentsList).toBe(
+        '<p>Two components:</p><ol><li>Encoder</li></ol><p>Packs history.</p><p><br></p>'
+        + '<ol start="2"><li>Rollout</li></ol><p>Uses history.</p>',
+      );
+    });
+
+    it('underlines only the runs that keep the paragraph style\'s underline', () => {
+      // A child cannot take back an underline its block draws, so the
+      // underline moves onto the run that has it.
+      expect(load().partialUnderline).toBe(
+        '<span style="text-decoration: underline">Token-matched</span> Full-Resolution Rollout',
+      );
+    });
+
+    it('drops empty text boxes that have no size, keeps sized ones as placeholders', () => {
+      const { emptyBoxes } = load();
+      expect(emptyBoxes.zeroSize).toEqual([]);
+      expect(emptyBoxes.sized).toEqual(['Text']);
+    });
+  });
 });

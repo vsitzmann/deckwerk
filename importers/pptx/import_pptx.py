@@ -1341,7 +1341,9 @@ class Paragraph:
 def _style_attr(css: dict[str, str]) -> str:
     if not css:
         return ""
-    return ' style="' + "; ".join(f"{k}: {v}" for k, v in css.items()) + '"'
+    # Font families carry their own double quotes: escape them, or they end
+    # the attribute and take the rest of the run's styling with them.
+    return ' style="' + html.escape("; ".join(f"{k}: {v}" for k, v in css.items())) + '"'
 
 
 class TextConverter:
