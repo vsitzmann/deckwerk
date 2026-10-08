@@ -8,7 +8,8 @@ lets the same importer run unchanged on macOS, Linux and Windows.
 A .pptx file is an Open Packaging Convention zip of OOXML parts: DrawingML for
 the shapes, PresentationML for slides, layouts and masters. Everything needed
 to decode it is in the standard library (zipfile and ElementTree); Pillow is
-used opportunistically to re-encode raster formats a browser cannot display.
+used opportunistically to re-encode raster formats a browser cannot display,
+and PyMuPDF to render PDF documents embedded as OLE objects.
 
 The overriding design rule — shared with the Keynote importer — is that
 **import must never fail outright**. Every shape is converted inside a guard:
@@ -65,6 +66,12 @@ ANIMATED_IMAGE_EXTS = {".gif", ".apng", ".webp"}
 # Codecs Chromium can decode on both macOS and Linux. Anything else is
 # transcoded on import, or it renders as a black rectangle.
 WEB_SAFE_VIDEO_CODECS = {"h264", "vp8", "vp9", "av1", "theora"}
+# An embedded PDF is rendered large enough to stay sharp on a 2x display if it
+# were stretched across the whole slide, capped so a poster-sized page does not
+# produce a texture Chromium struggles to decode — as in the Keynote importer.
+PDF_RASTER_DEVICE_SCALE = 2.0
+PDF_RASTER_MIN_SCALE = 2.0
+PDF_RASTER_MAX_SIDE = 4096
 
 # The deck canvas is always 1920 wide; the height follows the slide's aspect.
 CANVAS_WIDTH = 1920.0
@@ -924,6 +931,106 @@ def read_xfrm(xfrm: ET.Element | None, scale: float) -> Box | None:
     return Box(x, y, w, h, _normalise_angle(rot), attr_bool(xfrm, "flipH"), attr_bool(xfrm, "flipV"))
 
 
+# --- embedded OLE objects ---------------------------------------------------
+
+CFB_SIGNATURE = bytes.fromhex("d0cf11e0a1b11ae1")
+CFB_END_OF_CHAIN = 0xFFFFFFFE
+
+
+def compound_file_streams(raw: bytes) -> list[tuple[str, bytes]]:
+    """Every stream in an OLE compound file (MS-CFB), as (name, data).
+
+    An embedded OLE object is stored as one of these. Only reading is needed,
+    so this follows the FAT, the mini FAT and the directory and nothing else;
+    a malformed file raises, and the caller treats that as "no data".
+    """
+    def u16(offset: int) -> int:
+        return int.from_bytes(raw[offset:offset + 2], "little")
+
+    def u32(offset: int) -> int:
+        return int.from_bytes(raw[offset:offset + 4], "little")
+
+    if not raw.startswith(CFB_SIGNATURE):
+        raise ValueError("not a compound file")
+    sector = 1 << u16(0x1E)
+    mini_sector = 1 << u16(0x20)
+    mini_cutoff = u32(0x38)
+
+    def sector_data(index: int) -> bytes:
+        start = (index + 1) * sector
+        if start + sector > len(raw):
+            raise ValueError("sector out of range")
+        return raw[start:start + sector]
+
+    def table(data: bytes) -> list[int]:
+        return [int.from_bytes(data[i:i + 4], "little") for i in range(0, len(data), 4)]
+
+    def chain(start: int, fat: list[int]) -> list[int]:
+        out: list[int] = []
+        while start != CFB_END_OF_CHAIN:
+            if start >= len(fat) or len(out) > len(fat):
+                raise ValueError("broken sector chain")
+            out.append(start)
+            start = fat[start]
+        return out
+
+    # The FAT's own sectors are listed in the header, then in a DIFAT chain.
+    fat_sectors = [s for s in table(raw[0x4C:0x200]) if s < CFB_END_OF_CHAIN]
+    difat, seen = u32(0x44), set()
+    while difat < CFB_END_OF_CHAIN and difat not in seen:
+        seen.add(difat)
+        entries = table(sector_data(difat))
+        fat_sectors.extend(s for s in entries[:-1] if s < CFB_END_OF_CHAIN)
+        difat = entries[-1]
+    fat = [entry for s in fat_sectors for entry in table(sector_data(s))]
+
+    def read_chain(start: int) -> bytes:
+        return b"".join(sector_data(s) for s in chain(start, fat))
+
+    directory = read_chain(u32(0x30))
+    entries = [directory[i:i + 128] for i in range(0, len(directory) - 127, 128)]
+    if not entries:
+        raise ValueError("empty directory")
+    root = entries[0]
+    mini_stream = read_chain(int.from_bytes(root[0x74:0x78], "little"))
+    first_mini_fat = u32(0x3C)
+    mini_fat = table(read_chain(first_mini_fat)) if first_mini_fat < CFB_END_OF_CHAIN else []
+
+    streams: list[tuple[str, bytes]] = []
+    for entry in entries:
+        if entry[0x42] != 2:  # a stream, not a storage or the root
+            continue
+        name = entry[:max(0, int.from_bytes(entry[0x40:0x42], "little") - 2)].decode("utf-16-le", "replace")
+        start = int.from_bytes(entry[0x74:0x78], "little")
+        size = int.from_bytes(entry[0x78:0x80], "little")
+        if sector == 512:
+            size &= 0xFFFFFFFF  # version 3 files leave the high half undefined
+        if size < mini_cutoff:
+            data = b"".join(mini_stream[s * mini_sector:(s + 1) * mini_sector] for s in chain(start, mini_fat))
+        else:
+            data = read_chain(start)
+        streams.append((name, data[:size]))
+    return streams
+
+
+def embedded_pdf(raw: bytes) -> bytes | None:
+    """The PDF inside an embedded object's data, if it holds one.
+
+    Acrobat stores the whole document in a stream named CONTENTS; the generic
+    OLE packager (`\\x01Ole10Native`) stores a short header and then the file.
+    Either way the PDF is the stream from its `%PDF-` signature on.
+    """
+    if raw.startswith(b"%PDF-"):
+        return raw
+    if not raw.startswith(CFB_SIGNATURE):
+        return None
+    for _name, data in compound_file_streams(raw):
+        at = data.find(b"%PDF-", 0, 1024)
+        if at >= 0:
+            return data[at:]
+    return None
+
+
 # --- preset geometry --------------------------------------------------------
 
 Point = tuple[float, float]
@@ -1038,6 +1145,28 @@ def preset_path(prst: str, w: float, h: float, adj: dict[str, float]) -> str | N
         if prst == "upDownArrow":
             pts = [(y, x) for x, y in pts]
         return _fmt(pts)
+    if prst == "bentArrow":
+        # A shaft rising from the bottom left that turns right through a
+        # rounded corner into a head at the top right, per the DrawingML
+        # preset definition: adj1 shaft width, adj2 head width, adj3 head
+        # length, adj4 the corner's outer radius.
+        a2 = min(max(_adj(adj, "adj2", 25000), 0), 50000)
+        a1 = min(max(_adj(adj, "adj1", 25000), 0), 2 * a2)
+        a3 = min(max(_adj(adj, "adj3", 25000), 0), 50000)
+        th = a1 / 100000 * ss
+        aw2 = a2 / 100000 * ss
+        dh2 = aw2 - th / 2
+        ah = a3 / 100000 * ss
+        a4 = min(max(_adj(adj, "adj4", 43750), 0), 100000 * min(w - ah, h - dh2) / ss)
+        bd = a4 / 100000 * ss
+        bd2 = max(bd - th, 0)
+        x3, x4, y3 = th + bd2, w - ah, dh2 + th
+        return (f"M 0 {h:.2f} L 0 {dh2 + bd:.2f} "
+                + _arc_path(bd, dh2 + bd, bd, bd, 180, 90, move=False)
+                + f" L {x4:.2f} {dh2:.2f} L {x4:.2f} 0 L {w:.2f} {aw2:.2f} L {x4:.2f} {y3 + dh2:.2f}"
+                + f" L {x4:.2f} {y3:.2f} L {x3:.2f} {y3:.2f} "
+                + _arc_path(x3, y3 + bd2, bd2, bd2, 270, -90, move=False)
+                + f" L {th:.2f} {h:.2f} Z")
     if prst in ("plus", "mathPlus"):
         d = _adj(adj, "adj", 25000 if prst == "plus" else 23520) / 100000 * ss
         if prst == "mathPlus":
@@ -2427,6 +2556,18 @@ class Importer:
             "http://schemas.openxmlformats.org/drawingml/2006/diagram": "SmartArt",
             "http://schemas.openxmlformats.org/presentationml/2006/ole": "Embedded object",
         }.get(uri, uri.rsplit("/", 1)[-1] or "graphicFrame")
+        # PowerPoint wraps the object in `mc:AlternateContent`, so it is not
+        # necessarily a direct child of the graphic data.
+        ole = data.find(f".//{q('p:oleObj')}") if data is not None else None
+        # An embedded PDF renders from its own vector data. That beats the
+        # snapshot beside it, an EMF that only Inkscape or ImageMagick can
+        # rasterise outside Windows.
+        if ole is not None:
+            pdf = self.ole_pdf(ole, part)
+            if pdf is not None:
+                element = self._base(box.as_dict(), 0, "image")
+                element.update({"src": pdf, "fit": "fill", "alt": ole.get("name") or "", "sourceBox": None})
+                return [element]
         # An OLE object often ships a picture of itself, either as a `p:pic`
         # inside the frame or — for legacy Equation Editor objects — as a VML
         # shape whose `imagedata` is the rendered equation.
@@ -2435,7 +2576,6 @@ class Importer:
             converted = self.convert_picture(pic, slide, part, box)
             if converted and converted[0]["type"] == "image":
                 return converted
-        ole = child(data, "p:oleObj")
         if ole is not None:
             preview = self.ole_preview(ole, part)
             if preview is not None:
@@ -2445,6 +2585,79 @@ class Importer:
             kind = f"{kind} ({ole.get('progId') or 'unknown'})"
         self.report.unsupported[kind] += 1
         return [self._placeholder(box.as_dict(), kind, "not imported")]
+
+    def ole_pdf(self, ole: ET.Element, part: str) -> str | None:
+        """An embedded PDF document (an Acrobat object), rendered to an image."""
+        target = self.pkg.target(part, ole.get(R_ID))
+        if target is None or target[1] or not self.pkg.has(target[0]):
+            return None
+        key = f"{target[0]}#pdf"
+        if key in self._asset_cache:
+            return self._asset_cache[key]
+        self._asset_cache[key] = None
+        try:
+            pdf = embedded_pdf(self.pkg.read(target[0]))
+        except Exception:
+            pdf = None
+        if pdf is None:
+            return None
+        file_name = posixpath.basename(target[0])
+        stem = _safe_name(Path(file_name).stem)
+        if self.dry_run:
+            rel: str | None = f"assets/{stem}.webp"
+            self.report.converted_images += 1
+        else:
+            assets = self.out_dir / "assets"
+            assets.mkdir(parents=True, exist_ok=True)
+            self.progress.emit(f"Rendering {file_name} ({_human_bytes(len(pdf))})")
+            rel = self._rasterise_pdf(pdf, file_name, stem, assets)
+        self._asset_cache[key] = rel
+        return rel
+
+    def _rasterise_pdf(self, raw: bytes, file_name: str, stem: str, assets: Path) -> str | None:
+        """Render a PDF's first page to a lossless WebP (PNG without Pillow).
+
+        Embedded PDFs are figures — plots, diagrams, equations — so the
+        container is lossless, which also keeps a transparent background.
+        """
+        try:
+            # The `fitz` name still works but prints a deprecation notice on
+            # stdout, which is this process's JSON channel.
+            import pymupdf as fitz
+        except ImportError:
+            self.report.warn_once("PyMuPDF is not installed, so embedded PDF documents fall back to "
+                                  "their preview pictures. Install with: pip install pymupdf")
+            return None
+        try:
+            with fitz.open(stream=raw, filetype="pdf") as doc:
+                if doc.page_count == 0:
+                    return None
+                page = doc.load_page(0)
+                long_side = max(float(page.rect.width), float(page.rect.height))
+                if long_side <= 0:
+                    scale = PDF_RASTER_MIN_SCALE
+                else:
+                    target = max(self.canvas) * PDF_RASTER_DEVICE_SCALE
+                    scale = min(max(PDF_RASTER_MIN_SCALE, target / long_side), PDF_RASTER_MAX_SIDE / long_side)
+                pixmap = page.get_pixmap(matrix=fitz.Matrix(scale, scale), alpha=True)
+            try:
+                from PIL import Image
+            except ImportError:
+                dest = assets / (stem + ".png")
+                pixmap.save(dest)
+            else:
+                mode = "RGBA" if pixmap.alpha else "RGB"
+                img = Image.frombytes(mode, (pixmap.width, pixmap.height), pixmap.samples)
+                if mode == "RGBA" and img.getextrema()[3][0] == 255:
+                    # A solid background: an opaque alpha channel is bytes for nothing.
+                    img = img.convert("RGB")
+                dest = assets / (stem + ".webp")
+                img.save(dest, "WEBP", lossless=True, quality=100, method=4)
+        except Exception as exc:
+            self.report.warn(f"Could not render the PDF embedded as {file_name}: {exc}")
+            return None
+        self.report.converted_images += 1
+        return f"assets/{dest.name}"
 
     def ole_preview(self, ole: ET.Element, part: str) -> str | None:
         """The rendered picture of a legacy OLE object, via the slide's VML drawing."""
@@ -2943,7 +3156,7 @@ def self_check() -> int:
     import importlib
 
     missing = []
-    for module in ('PIL.Image',):
+    for module in ('PIL.Image', 'pymupdf'):
         try:
             importlib.import_module(module)
         except ImportError as exc:

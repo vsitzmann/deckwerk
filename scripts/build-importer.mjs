@@ -57,8 +57,9 @@ const IMPORTERS = [
   {
     name: 'pptx-import',
     script: 'importers/pptx/import_pptx.py',
-    // Pillow's format plugins are imported by name at runtime.
-    collect: ['PIL'],
+    // Pillow's format plugins are imported by name at runtime; PyMuPDF
+    // renders embedded PDF objects and ships MuPDF as package data.
+    collect: ['PIL', 'pymupdf'],
   },
 ];
 
