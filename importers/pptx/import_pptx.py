@@ -2930,7 +2930,35 @@ def import_pptx(
         pkg.close()
 
 
+def self_check() -> int:
+    """Import every module an import can reach, then exit.
+
+    Several of them are imported lazily and only warn when missing, so a broken
+    environment would otherwise surface as a failed or quietly degraded import
+    of somebody's deck. The collab server, `npm install` and build:importer run
+    this first and refuse to go on when it fails.
+    """
+    import importlib
+
+    missing = []
+    for module in ('PIL.Image',):
+        try:
+            importlib.import_module(module)
+        except ImportError as exc:
+            missing.append(f"{module} ({exc})")
+    if missing:
+        sys.stderr.write(
+            "The PowerPoint importer cannot load: " + "; ".join(missing)
+            + "\nRun: npm run setup:importers\n"
+        )
+        return 1
+    sys.stdout.write("ok\n")
+    return 0
+
+
 def main(argv: list[str]) -> int:
+    if argv == ["--self-check"]:
+        return self_check()
     parser = argparse.ArgumentParser(description="Import a PowerPoint .pptx file.")
     parser.add_argument("input", type=Path, help="Path to a .pptx file")
     parser.add_argument("--out", type=Path, help="Deck folder to create")

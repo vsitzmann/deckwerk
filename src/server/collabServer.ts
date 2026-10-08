@@ -17,7 +17,7 @@ import {
 } from '../main/deckStore.js';
 import { exportDeck, webExportUnavailableReason } from '../main/exportDeck.js';
 import { capabilities } from '../shared/capabilities.js';
-import { probeMedia } from '../main/ffmpeg.js';
+import { getFfmpegPath, getFfprobePath, probeMedia } from '../main/ffmpeg.js';
 import {
   RenditionStore,
   isVideoAsset,
@@ -2036,7 +2036,11 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
         respondJson(response, 200, { id, report });
       } catch (error) {
         await rm(dir, { recursive: true, force: true });
-        respondJson(response, 400, { error: String(error instanceof Error ? error.message : error) });
+        const message = String(error instanceof Error ? error.message : error);
+        // The person only sees this in their browser and the upload is gone
+        // afterwards; keep it in the journal so a failed import can be debugged.
+        process.stderr.write(`import of "${id}"${importRoute.extension} (${body.length} bytes) failed: ${message}\n`);
+        respondJson(response, 400, { error: message });
       } finally {
         await rm(tmp, { recursive: true, force: true });
       }
@@ -4321,16 +4325,16 @@ function sanitizeFolderPath(value: string): string | null {
   return splitDeckPath(path) ? path : null;
 }
 
+type ImporterSpec = { binary: string; script: string; label: string };
+const KEYNOTE_IMPORTER: ImporterSpec = { binary: 'keynote-import', script: 'importers/keynote/import_keynote.py', label: 'Keynote' };
+const POWERPOINT_IMPORTER: ImporterSpec = { binary: 'pptx-import', script: 'importers/pptx/import_pptx.py', label: 'PowerPoint' };
+
 /**
- * Run an importer sidecar without Electron: the frozen binary when built
- * (build/importers), otherwise the project venv's Python and the source
+ * How to run an importer sidecar without Electron: the frozen binary when
+ * built (build/importers), otherwise the project venv's Python and the source
  * script — the same fallbacks the desktop app uses.
  */
-async function runImporter(
-  importer: { binary: string; script: string; label: string },
-  sourceFile: string,
-  outDir: string,
-): Promise<unknown> {
+function importerCommand(importer: ImporterSpec): { command: string; args: string[] } {
   const repoRoot = resolve(import.meta.dirname, '../..');
   const binaryName = process.platform === 'win32' ? `${importer.binary}.exe` : importer.binary;
   const resourcesPath = (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath;
@@ -4341,19 +4345,13 @@ async function runImporter(
   const binary = binaries.find((candidate) => existsSync(candidate));
   const script = join(repoRoot, importer.script);
   const venv = join(repoRoot, '.venv-import/bin/python');
+  if (binary) return { command: binary, args: [] };
+  if (existsSync(script)) return { command: existsSync(venv) ? venv : 'python3', args: [script] };
+  throw new Error(`${importer.label} importer not found (run npm run build:importer)`);
+}
 
-  let command: string;
-  let args: string[];
-  if (binary) {
-    command = binary;
-    args = [sourceFile, '--out', outDir];
-  } else if (existsSync(script)) {
-    command = existsSync(venv) ? venv : 'python3';
-    args = [script, sourceFile, '--out', outDir];
-  } else {
-    throw new Error(`${importer.label} importer not found (run npm run build:importer)`);
-  }
-  const stdout = await new Promise<string>((resolvePromise, reject) => {
+function runSidecar(command: string, args: string[]): Promise<string> {
+  return new Promise<string>((resolvePromise, reject) => {
     const child = spawn(command, args);
     let out = '';
     let err = '';
@@ -4364,13 +4362,78 @@ async function runImporter(
       code === 0 ? resolvePromise(out) : reject(new Error(`importer failed: ${err || `exit ${code}`}`)),
     );
   });
+}
+
+async function runImporter(
+  importer: ImporterSpec,
+  sourceFile: string,
+  outDir: string,
+): Promise<unknown> {
+  const { command, args } = importerCommand(importer);
+  const stdout = await runSidecar(command, [...args, sourceFile, '--out', outDir]);
   const payload = JSON.parse(stdout) as { report?: unknown };
   return payload.report ?? null;
 }
 
+/**
+ * Whether this machine can import decks, checked the way an upload does it:
+ * each importer's `--self-check` (every Python module it can reach, including
+ * the lazily imported ones whose absence would only quietly degrade an
+ * import), then a real import of a small deck in each format through the same
+ * runImporter the upload route calls. Returns one line per problem.
+ *
+ * scripts/collab-server.mts refuses to start unless this and
+ * mediaToolProblems are empty, so a server that cannot import decks fails its
+ * deploy health check instead of failing somebody's upload.
+ */
+export async function importerProblems(): Promise<string[]> {
+  const repoRoot = resolve(import.meta.dirname, '../..');
+  const samples: Array<[ImporterSpec, string]> = [
+    [KEYNOTE_IMPORTER, join(repoRoot, 'example-keynote-decks/empty_deck.key')],
+    [POWERPOINT_IMPORTER, join(repoRoot, 'test/fixtures/pptx/reference.pptx')],
+  ];
+  const problems: string[] = [];
+  const work = await mkdtemp(join(tmpdir(), 'deckwerk-import-check-'));
+  try {
+    for (const [importer, sample] of samples) {
+      try {
+        const { command, args } = importerCommand(importer);
+        await runSidecar(command, [...args, '--self-check']);
+        await runImporter(importer, sample, join(work, importer.binary));
+      } catch (error) {
+        problems.push(`${importer.label} import: ${error instanceof Error ? error.message.trim() : String(error)}`);
+      }
+    }
+  } finally {
+    await rm(work, { recursive: true, force: true });
+  }
+  return problems;
+}
+
+/**
+ * The ffmpeg and ffprobe imports and media probing shell out to: the
+ * importers transcode with whatever is on PATH, media probing uses the
+ * bundled ffmpeg-static/ffprobe-static and falls back to PATH.
+ */
+export async function mediaToolProblems(): Promise<string[]> {
+  const tools: Array<[string, string]> = [
+    ['ffmpeg', 'ffmpeg'], ['ffprobe', 'ffprobe'],
+    ['bundled ffmpeg', getFfmpegPath()], ['bundled ffprobe', getFfprobePath()],
+  ];
+  const problems: string[] = [];
+  for (const [name, command] of tools) {
+    try {
+      await runSidecar(command, ['-version']);
+    } catch (error) {
+      problems.push(`${name} (${command}) does not run: ${error instanceof Error ? error.message.trim() : String(error)}`);
+    }
+  }
+  return problems;
+}
+
 function runKeynoteImport(keyFile: string, outDir: string): Promise<unknown> {
   return runImporter(
-    { binary: 'keynote-import', script: 'importers/keynote/import_keynote.py', label: 'Keynote' },
+    KEYNOTE_IMPORTER,
     keyFile,
     outDir,
   );
@@ -4378,7 +4441,7 @@ function runKeynoteImport(keyFile: string, outDir: string): Promise<unknown> {
 
 function runPowerPointImport(pptxFile: string, outDir: string): Promise<unknown> {
   return runImporter(
-    { binary: 'pptx-import', script: 'importers/pptx/import_pptx.py', label: 'PowerPoint' },
+    POWERPOINT_IMPORTER,
     pptxFile,
     outDir,
   );

@@ -21,8 +21,9 @@ import { initiallyHidden } from '../src/shared/timeline.js';
  * across", and only real decks exercise the archive types that appear in the
  * wild. Point KEYNOTE_FIXTURES at a folder of .key files to run them.
  *
- * The suite skips itself when the importer venv or the fixture folder is
- * absent, so a fresh checkout still passes.
+ * Fixture-backed cases skip themselves when their decks are absent, so a fresh
+ * checkout still passes. A missing importer venv is an install bug, not a
+ * reason to skip: `npm install` sets it up, so the suite fails without it.
  */
 
 const PYTHON = join(process.cwd(), '.venv-import/bin/python');
@@ -31,8 +32,6 @@ const FIXTURES = process.env.KEYNOTE_FIXTURES;
 const LOCAL_FIXTURES = join(process.cwd(), 'example_presentations');
 const BUNDLED_IMPORTER = join(process.cwd(), 'build', 'importers',
   process.platform === 'win32' ? 'keynote-import.exe' : 'keynote-import');
-
-const ready = existsSync(PYTHON) && existsSync(SCRIPT);
 
 type ImportReport = {
   slides: number;
@@ -74,7 +73,12 @@ function report(keyPath: string): ImportReport {
   return analyseFixtures([keyPath]).get(keyPath)!.report;
 }
 
-describe.skipIf(!ready)('keynote importer', () => {
+describe('keynote importer', () => {
+  it('has its importer venv (npm run setup:importers)', () => {
+    expect(existsSync(PYTHON)).toBe(true);
+    expect(existsSync(SCRIPT)).toBe(true);
+  });
+
   const fixtures = FIXTURES && existsSync(FIXTURES)
     ? FIXTURES
     : existsSync(LOCAL_FIXTURES) ? LOCAL_FIXTURES : null;
@@ -167,6 +171,72 @@ describe.skipIf(!ready)('keynote importer', () => {
     },
     120_000,
   );
+
+  // A student's 200 MB talk failed on the server with "No readable .iwa
+  // streams": it was a Keynote *package*, whose Index/*.iwa sit in a nested
+  // Index.zip, zipped up whole by macOS on upload. Each shape a package
+  // travels in is rebuilt here from the single-file fixture and must import to
+  // the same deck.
+  it('imports a Keynote package zipped flat, zipped in its folder, or as the folder', async () => {
+    const source = join(process.cwd(), 'example-keynote-decks/empty_deck.key');
+    const work = await mkdtemp(join(tmpdir(), 'kn-package-'));
+    try {
+      execFileSync(PYTHON, ['-c', [
+        'import io, os, sys, zipfile',
+        'src = zipfile.ZipFile(sys.argv[1]); work = sys.argv[2]',
+        'index = io.BytesIO()',
+        "with zipfile.ZipFile(index, 'w') as iz:",
+        "    for i in src.infolist():",
+        "        if i.filename.startswith('Index/'): iz.writestr(i.filename, src.read(i))",
+        "rest = [i for i in src.infolist() if not i.filename.startswith('Index/')]",
+        "for name, prefix in (('flat.key', ''), ('in-folder.key', 'Talk.key/')):",
+        "    with zipfile.ZipFile(os.path.join(work, name), 'w') as z:",
+        "        z.writestr(prefix + 'Index.zip', index.getvalue())",
+        "        z.writestr('__MACOSX/' + prefix + '._Index.zip', b'resource fork')",
+        "        for i in rest: z.writestr(prefix + i.filename, src.read(i))",
+        "folder = os.path.join(work, 'folder.key')",
+        "for i in rest:",
+        "    os.makedirs(os.path.dirname(os.path.join(folder, i.filename)), exist_ok=True)",
+        "    open(os.path.join(folder, i.filename), 'wb').write(src.read(i))",
+        "open(os.path.join(folder, 'Index.zip'), 'wb').write(index.getvalue())",
+      ].join('\n'), source, work]);
+
+      const importDeck = (keyPath: string, out: string) => {
+        const stdout = execFileSync(PYTHON, [SCRIPT, keyPath, '--out', join(work, out)], {
+          encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, stdio: ['ignore', 'pipe', 'ignore'],
+        });
+        const { title: _title, ...deck } = parseDeck(JSON.parse(stdout).deck);
+        return deck;
+      };
+      const expected = importDeck(source, 'out-single');
+      expect(expected.slides.length).toBeGreaterThan(0);
+      for (const name of ['flat.key', 'in-folder.key', 'folder.key']) {
+        expect(importDeck(join(work, name), `out-${name}`), name).toEqual(expected);
+      }
+    } finally {
+      await rm(work, { recursive: true, force: true });
+    }
+  }, 60_000);
+
+  it('says what a .key without Keynote data holds instead of failing obscurely', async () => {
+    const work = await mkdtemp(join(tmpdir(), 'kn-not-keynote-'));
+    try {
+      const keyPath = join(work, 'old.key');
+      execFileSync(PYTHON, ['-c', [
+        'import sys, zipfile',
+        "with zipfile.ZipFile(sys.argv[1], 'w') as z: z.writestr('index.apxl.gz', b'x')",
+      ].join('\n'), keyPath]);
+      let stderr = '';
+      try {
+        execFileSync(PYTHON, [SCRIPT, keyPath, '--out', join(work, 'out')], { encoding: 'utf8', stdio: 'pipe' });
+      } catch (error) {
+        stderr = String((error as { stderr?: string }).stderr);
+      }
+      expect(stderr).toContain("Keynote '09");
+    } finally {
+      await rm(work, { recursive: true, force: true });
+    }
+  });
 
   // Full written imports copy and transcode gigabytes of assets. Keep this
   // opt-in for CI or focused local runs; report mode above still parses every

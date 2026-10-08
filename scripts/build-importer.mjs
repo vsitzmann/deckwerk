@@ -13,15 +13,12 @@
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
+import { ensureImporterVenv, findPython, PYTHON_MISSING, venvExe } from './importer-python.mjs';
 
 const WINDOWS = process.platform === 'win32';
-const VENV = '.venv-import';
-// virtualenv puts executables in Scripts/ on Windows and bin/ everywhere else.
-const VENV_BIN = join(VENV, WINDOWS ? 'Scripts' : 'bin');
-const exe = (name) => join(VENV_BIN, WINDOWS ? `${name}.exe` : name);
 
-function run(command, args, { quiet = false } = {}) {
-  const result = spawnSync(command, args, { stdio: quiet ? 'pipe' : 'inherit' });
+function run(command, args) {
+  const result = spawnSync(command, args, { stdio: 'inherit' });
   if (result.error || result.status !== 0) {
     const detail = result.error?.message ?? `exited with status ${result.status}`;
     throw new Error(`${command} ${args.join(' ')}\n  ${detail}`);
@@ -29,32 +26,9 @@ function run(command, args, { quiet = false } = {}) {
   return result;
 }
 
-/**
- * Find a usable interpreter. Windows installs `python` (and the `py` launcher)
- * rather than `python3`, and a bare `python3` on Windows may be the Microsoft
- * Store stub that prints an advert and exits 9009.
- */
-function findPython() {
-  const candidates = WINDOWS ? [['py', ['-3']], ['python', []]] : [['python3', []], ['python', []]];
-  for (const [command, prefix] of candidates) {
-    const probe = spawnSync(command, [...prefix, '--version'], { encoding: 'utf8' });
-    if (probe.status === 0 && /^Python 3\.(\d+)/.test(probe.stdout || probe.stderr)) {
-      const minor = Number(RegExp.$1);
-      if (minor >= 10) return { command, prefix };
-      console.error(`  ${command}: Python 3.${minor} is too old, need 3.10+`);
-    }
-  }
-  return null;
-}
-
-const python = findPython();
-if (!python) {
+if (!findPython()) {
   console.error(
-    'Python 3.10+ is required to build the presentation importers, and was not found.\n' +
-      '\n' +
-      '  macOS    brew install python\n' +
-      '  Debian   sudo apt-get install python3 python3-venv\n' +
-      '  Windows  winget install Python.Python.3.12\n' +
+    PYTHON_MISSING +
       '\n' +
       'Python is needed only to build; the app ships the interpreter inside the\n' +
       'frozen importers, so people who install DeckWerk never need it.',
@@ -62,23 +36,12 @@ if (!python) {
   process.exit(1);
 }
 
-console.log(`Using ${[python.command, ...python.prefix].join(' ')}`);
-
-if (!existsSync(exe('python'))) {
-  console.log(`Creating ${VENV}`);
-  run(python.command, [...python.prefix, '-m', 'venv', VENV]);
-}
-
-// PyMuPDF rasterises the PDF figures Keynote users paste in from LaTeX. The
-// importer degrades without it, but only to the 256px thumbnail Keynote keeps
-// beside each PDF, which is exactly the blurry-figure bug a shipped binary
-// must not have.
-console.log('Installing keynote-parser, pillow, pymupdf and pyinstaller');
-run(exe('python'), ['-m', 'pip', 'install', '--quiet', '--upgrade', 'pip']);
-run(exe('python'), [
-  '-m', 'pip', 'install', '--quiet',
-  'keynote-parser', 'pillow', 'pymupdf', 'pyinstaller',
-]);
+// The same venv `npm install` sets up, from importers/requirements.txt, plus
+// pyinstaller. PyMuPDF (listed there) rasterises the PDF figures Keynote users
+// paste in from LaTeX. The importer degrades without it, but only to the 256px
+// thumbnail Keynote keeps beside each PDF, which is exactly the blurry-figure
+// bug a shipped binary must not have.
+ensureImporterVenv(process.cwd(), { extraPackages: ['pyinstaller'] });
 
 mkdirSync('build/importers', { recursive: true });
 
@@ -101,7 +64,7 @@ const IMPORTERS = [
 
 for (const importer of IMPORTERS) {
   console.log(`Freezing ${importer.name}`);
-  run(exe('pyinstaller'), [
+  run(venvExe(process.cwd(), 'pyinstaller'), [
     '--onefile',
     '--name', importer.name,
     ...importer.collect.flatMap((pkg) => ['--collect-all', pkg]),
@@ -115,8 +78,9 @@ for (const importer of IMPORTERS) {
   const frozen = join('build/importers', WINDOWS ? `${importer.name}.exe` : importer.name);
   if (!existsSync(frozen)) throw new Error(`pyinstaller reported success but ${frozen} is missing`);
 
-  // Prove the binary is genuinely self-contained before anything packages it.
-  const check = spawnSync(frozen, ['--help'], { encoding: 'utf8' });
+  // Prove the binary is genuinely self-contained before anything packages it:
+  // --self-check imports every module an import can reach.
+  const check = spawnSync(frozen, ['--self-check'], { encoding: 'utf8' });
   if (check.status !== 0) {
     throw new Error(`frozen importer does not run: ${check.stderr || check.error?.message}`);
   }

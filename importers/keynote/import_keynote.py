@@ -27,6 +27,7 @@ import argparse
 import functools
 import hashlib
 import html
+import io
 import json
 import math
 import os
@@ -50,7 +51,7 @@ try:
     from keynote_parser.codec import IWAFile
 except ImportError:  # pragma: no cover - environment problem, not a deck problem
     sys.stderr.write(
-        "keynote-parser is not installed. Run: pip install keynote-parser\n"
+        "keynote-parser is not installed. Run: npm run setup:importers\n"
     )
     raise SystemExit(2)
 
@@ -188,13 +189,22 @@ def _human_bytes(count: float) -> str:
 
 
 class Package:
-    """Read-only access to a .key package, whether zipped or a directory."""
+    """Read-only access to a .key document, in every shape one travels in.
+
+    Keynote writes two formats. The single file is a zip holding Index/*.iwa,
+    Data/ and Metadata/. The package is a folder whose Index/*.iwa sit inside a
+    nested Index.zip instead; it arrives as that folder, or zipped up whole —
+    which is what macOS does when a package is uploaded through a browser or
+    fetched from a cloud drive — usually inside a "<name>.key/" folder and
+    with Finder's __MACOSX/ entries alongside. All of them read the same here.
+    """
 
     def __init__(self, path: Path):
         self.path = path
-        self._zip: zipfile.ZipFile | None = None
-        # Maps the name a package *should* have for each member to the name
-        # the container actually stores it under. Keynote writes UTF-8 file
+        self._zips: list[zipfile.ZipFile] = []
+        # Maps the name a package *should* have for each member to where it is
+        # actually stored: (the zip holding it, or None for a file under
+        # `path`, and the name it is stored under). Keynote writes UTF-8 file
         # names into the zip without setting the UTF-8 flag, so `zipfile`
         # decodes them as CP437 and a macOS screenshot called
         # "... 12.12.40\u202fPM.png" comes back as mojibake. Looked up by the
@@ -202,30 +212,64 @@ class Package:
         # silently falls back to the 256px thumbnail. Directory packages have
         # the mirror-image problem: HFS+/APFS hand back decomposed (NFD)
         # names while the protobuf holds composed (NFC) ones.
-        self._members: dict[str, str] = {}
+        self._members: dict[str, tuple[zipfile.ZipFile | None, str]] = {}
         if path.is_dir():
             for member in path.rglob("*"):
                 if member.is_file():
                     stored = str(member.relative_to(path))
-                    self._members[_canonical_name(stored)] = stored
+                    self._members[_canonical_name(stored)] = (None, stored)
         else:
-            self._zip = zipfile.ZipFile(path)
-            for info in self._zip.infolist():
-                self._members[_canonical_name(_zip_member_name(info))] = info.filename
+            self._add_zip(zipfile.ZipFile(path))
+        self._strip_bundle_folder()
+        index = self._members.pop("Index.zip", None)
+        if index is not None:
+            self._add_zip(zipfile.ZipFile(io.BytesIO(self._read(*index))), under="Index/")
         self.names = list(self._members)
+
+    def _add_zip(self, archive: zipfile.ZipFile, under: str = "") -> None:
+        self._zips.append(archive)
+        for info in archive.infolist():
+            if info.is_dir():
+                continue
+            name = _canonical_name(_zip_member_name(info))
+            if under and not name.startswith(under):
+                name = under + name
+            self._members.setdefault(name, (archive, info.filename))
+
+    def _strip_bundle_folder(self) -> None:
+        """Drop the "<name>.key/" folder a zipped-up package sits in."""
+        names = [name for name in self._members if not name.startswith("__MACOSX/")]
+        if not names or any(name == "Index.zip" or name.startswith("Index/") for name in names):
+            return
+        tops = {name.split("/", 1)[0] for name in names}
+        if len(tops) != 1 or not all("/" in name for name in names):
+            return
+        prefix = tops.pop() + "/"
+        inner = {
+            name[len(prefix):]: member
+            for name, member in self._members.items()
+            if name.startswith(prefix)
+        }
+        # Only a folder that holds a document is the bundle's; a deck whose
+        # every member happens to live under Data/ keeps its paths.
+        if any(name == "Index.zip" or name.startswith("Index/") for name in inner):
+            self._members = inner
 
     def __contains__(self, name: str) -> bool:
         return _canonical_name(name) in self._members
 
     def read(self, name: str) -> bytes:
-        stored = self._members.get(_canonical_name(name), name)
-        if self._zip is not None:
-            return self._zip.read(stored)
+        default = (self._zips[0] if self._zips else None, name)
+        return self._read(*self._members.get(_canonical_name(name), default))
+
+    def _read(self, archive: zipfile.ZipFile | None, stored: str) -> bytes:
+        if archive is not None:
+            return archive.read(stored)
         return (self.path / stored).read_bytes()
 
     def close(self) -> None:
-        if self._zip is not None:
-            self._zip.close()
+        for archive in self._zips:
+            archive.close()
 
 
 def _zip_member_name(info: zipfile.ZipInfo) -> str:
@@ -3071,7 +3115,15 @@ def import_key(
         progress.phase(f"Decoding {path.name}", OPEN_SPAN[1])
         objects = load_objects(pkg, report, progress)
         if not objects:
-            raise SystemExit(f"No readable .iwa streams in {path}")
+            streams = [name for name in pkg.names if name.endswith(".iwa")]
+            if streams:
+                detail = f"none of its {len(streams)} .iwa streams decoded ({'; '.join(report.warnings[:2])})"
+            else:
+                shown = sorted({name.split("/", 1)[0] for name in pkg.names})[:8]
+                detail = f"it holds no Keynote .iwa streams (top level: {', '.join(shown) or 'nothing'})"
+                if "index.apxl" in pkg or "index.apxl.gz" in pkg:
+                    detail += "; it is a Keynote '09 file, open and re-save it in a current Keynote"
+            raise SystemExit(f"Could not read {path.name}: {detail}")
 
         datas = data_file_table(objects)
         if not datas:
@@ -3160,7 +3212,35 @@ def import_key(
         pkg.close()
 
 
+def self_check() -> int:
+    """Import every module an import can reach, then exit.
+
+    Several of them are imported lazily and only warn when missing, so a broken
+    environment would otherwise surface as a failed or quietly degraded import
+    of somebody's deck. The collab server, `npm install` and build:importer run
+    this first and refuse to go on when it fails.
+    """
+    import importlib
+
+    missing = []
+    for module in ('keynote_parser.codec', 'PIL.Image', 'PIL.ImageChops', 'PIL.ImageFont', 'pymupdf'):
+        try:
+            importlib.import_module(module)
+        except ImportError as exc:
+            missing.append(f"{module} ({exc})")
+    if missing:
+        sys.stderr.write(
+            "The Keynote importer cannot load: " + "; ".join(missing)
+            + "\nRun: npm run setup:importers\n"
+        )
+        return 1
+    sys.stdout.write("ok\n")
+    return 0
+
+
 def main(argv: list[str]) -> int:
+    if argv == ["--self-check"]:
+        return self_check()
     parser = argparse.ArgumentParser(description="Import a Keynote .key file.")
     parser.add_argument("input", type=Path, help="Path to a .key file or bundle")
     parser.add_argument("--out", type=Path, help="Deck folder to create")

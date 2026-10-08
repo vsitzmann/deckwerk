@@ -1,0 +1,9 @@
+# Python dependencies of the Keynote and PowerPoint importers.
+#
+# `npm install` installs these into the checkout's own .venv-import
+# (scripts/setup-importers.mjs), and `npm run build:importer` freezes them into
+# the shipped binaries. Pinned so a fresh install and the server run exactly
+# what CI tested. Bump keynote-parser when Keynote's file format moves on.
+keynote-parser==1.14.5.0
+pillow==12.3.0
+pymupdf==1.28.2
