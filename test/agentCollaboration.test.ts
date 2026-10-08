@@ -345,6 +345,36 @@ for (const kind of BACKENDS) describe.skipIf(!electronBinary)(`an agent working 
     ]);
   });
 
+  // A build's effect and its time are part of what a page states. Merging a
+  // saved page kept the previous entry's whole action, so an agent that
+  // changed a dissolve to a blur, or took the effect off, saw no change land.
+  it('changes and removes a build effect the page states', async () => {
+    const workspace = await open(kind);
+    await workspace.write('effects.html', await newPage(workspace, [
+      '<h1 class="role-title">Effects</h1>',
+      '<p class="role-body" data-build="click" data-build-effect="dissolve" data-build-duration="1000">Fades in</p>',
+    ].join('')));
+    const slideId = landed(await apply(workspace, 'effects.html'), workspace).changes.inserted[0];
+    const effectOf = async () => {
+      const slide = slideById(await workspace.deck(), slideId);
+      return slide.timeline.map((entry) => [entry.action.type, entry.action.value, entry.action.duration]);
+    };
+    expect(await effectOf()).toEqual([['appear', 'dissolve', 1000]]);
+
+    const page = await exportPage(workspace, slideId);
+    expect(page).toContain('data-build-effect="dissolve" data-build-duration="1000"');
+    await workspace.write('blur.html', page.replace(
+      'data-build-effect="dissolve" data-build-duration="1000"', 'data-build-effect="blur" data-build-duration="400"'));
+    expect(landed(await apply(workspace, 'blur.html'), workspace).changes.replaced).toEqual([slideId]);
+    expect(await effectOf()).toEqual([['appear', 'blur', 400]]);
+
+    const plain = (await exportPage(workspace, slideId))
+      .replace(' data-build-effect="blur" data-build-duration="400"', '');
+    await workspace.write('plain.html', plain);
+    expect(landed(await apply(workspace, 'plain.html'), workspace).changes.replaced).toEqual([slideId]);
+    expect(await effectOf()).toEqual([['appear', null, undefined]]);
+  });
+
   // Nightly finding (hosted seed 20261005): the agent read its page the
   // moment the save was reported and found it empty — the id stamp was
   // written over the page in place, and a read between the truncate and the

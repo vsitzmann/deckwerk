@@ -12,7 +12,7 @@ import {
   resolveState,
   stepCount,
 } from '@shared/timeline.js';
-import { ARROWHEAD_PATH, ARROWHEAD_REF, partialStroke } from '@shared/shapeSvg.js';
+import { arrowHeadSize, shapeSvg } from '@shared/shapeSvg.js';
 import {
   applyStageScale,
   fitAutoTextElement,
@@ -1341,17 +1341,24 @@ export class Player {
   private drawIn(slide: Slide, entry: TimelineEntry, duration: number): void {
     const el = slide.elements.find((candidate) => candidate.id === entry.action.target);
     if (!el || el.type !== 'shape') return;
+    const svg = this.stage.querySelector<SVGSVGElement>(`[data-element-id="${CSS.escape(el.id)}"] svg`);
     // The stroke is the SVG's own child; an arrowhead's path sits in <defs>.
-    const stroke = this.stage.querySelector<SVGElement>(
-      `[data-element-id="${CSS.escape(el.id)}"] svg > :is(line, path, rect, ellipse)`,
-    );
-    if (!stroke || duration <= 0) return;
+    const stroke = svg?.querySelector<SVGElement>(':scope > :is(line, path, rect, ellipse)') ?? null;
+    if (!svg || !stroke || duration <= 0) return;
 
-    // A line or arrow is shortened, so its head rides the tip. An outline (a
-    // box, an ellipse, a drawn path) is traced with a dash as long as the
-    // outline, slid into place; its fill comes in once the outline is nearly
-    // closed, the way a drawn shape is coloured in.
+    // A line or arrow is redrawn each frame as the piece of itself drawn so
+    // far (shapeSvg's drawProgress), heads and all, so a head rides the tip
+    // and the last frame is the static drawing exactly. An outline (a box, an
+    // ellipse, a drawn path) is traced with a dash as long as the outline,
+    // slid into place; its fill comes in once the outline is nearly closed,
+    // the way a drawn shape is coloured in.
     const open = el.shape === 'line' || el.shape === 'arrow';
+    const template = document.createElement('template');
+    const drawOpen = (progress: number): void => {
+      template.innerHTML = shapeSvg(el, { drawProgress: progress });
+      const fresh = template.content.firstElementChild;
+      if (fresh) svg.replaceChildren(...fresh.childNodes);
+    };
     const length = open ? 0 : (stroke as SVGGeometryElement).getTotalLength?.() ?? 0;
     if (!open && !(length > 0)) return;
     const filled = !open && el.fill !== null;
@@ -1364,7 +1371,9 @@ export class Player {
     if (markerEnd) {
       stroke.removeAttribute('marker-end');
       head = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-      head.setAttribute('d', ARROWHEAD_PATH);
+      // The marker's own triangle (shapeSvg's arrowMarker: a 6x6 box, its
+      // point at 5,3, drawn arrowHeadSize wide in the path's units).
+      head.setAttribute('d', 'M0,0 L6,3 L0,6 Z');
       head.setAttribute('fill', stroke.getAttribute('stroke') ?? 'currentColor');
       stroke.after(head);
     }
@@ -1379,16 +1388,14 @@ export class Player {
         forward ? tip.y - other.y : other.y - tip.y,
         forward ? tip.x - other.x : other.x - tip.x,
       ) * 180) / Math.PI;
-      // The same placement the marker has: stroke-width units, anchored at its refX/refY.
+      // The same placement the marker has: its size, anchored at its refX/refY.
       head.setAttribute('transform', `translate(${tip.x} ${tip.y}) rotate(${angle})`
-        + ` scale(${el.strokeWidth}) translate(${-ARROWHEAD_REF.x} ${-ARROWHEAD_REF.y})`);
+        + ` scale(${arrowHeadSize(el) / 6}) translate(-5 -3)`);
       head.style.opacity = progress > 0 ? '1' : '0';
     };
     const show = (progress: number): void => {
       if (open) {
-        const geometry = partialStroke(el, progress);
-        if (!geometry) return;
-        for (const [name, value] of Object.entries(geometry)) stroke.setAttribute(name, String(value));
+        drawOpen(progress);
         return;
       }
       if (progress >= 1) {
@@ -1422,7 +1429,7 @@ export class Player {
     const tick = (now: number): void => {
       if (done) return;
       // A re-render replaced the slide; the new node is already complete.
-      if (!stroke.isConnected) { done = true; clearTimeout(fallback); return; }
+      if (!svg.isConnected || (!open && !stroke.isConnected)) { done = true; clearTimeout(fallback); return; }
       const t = Math.min(1, Math.max(0, (now - started) / duration));
       if (t >= 1) finish();
       else {

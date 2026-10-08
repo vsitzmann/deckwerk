@@ -15,7 +15,13 @@ import { braceDepthOf, bracePath } from './brace.js';
 
 type Shape = Extract<SlideElement, { type: 'shape' }>;
 
-export function shapeSvg(el: Shape): string {
+/**
+ * `drawProgress` (0..1) draws a line or arrow only that far along its length,
+ * for the Line Draw build: the piece drawn is a line or arrow in its own
+ * right, heads and all, so the head rides the tip and the last frame is
+ * exactly the static drawing. Other shapes ignore it.
+ */
+export function shapeSvg(el: Shape, options: { drawProgress?: number } = {}): string {
   // A path carries its own coordinate space; everything else is drawn directly
   // in element pixels.
   const view = el.shape === 'path' && el.pathSize ? el.pathSize : { w: el.w, h: el.h };
@@ -42,7 +48,7 @@ export function shapeSvg(el: Shape): string {
       break;
     case 'line':
     case 'arrow':
-      node = lineSvg(el, stroke, paint);
+      node = lineSvg(el, stroke, paint, options.drawProgress ?? 1);
       break;
     case 'brace':
       node = `<path d="${bracePath(el.w, el.h, braceDepthOf(el))}" stroke-linecap="round"`
@@ -88,13 +94,21 @@ type XY = { x: number; y: number };
  * the triangle's sloping sides, even for the smallest head, one as wide as
  * the line itself. A curved line keeps its round end where it has no head.
  */
-function lineSvg(el: Shape, stroke: string, paint: string): string {
+function lineSvg(el: Shape, stroke: string, paint: string, progress = 1): string {
   const startHead = el.arrowStart;
   const endHead = el.arrowEnd || (!el.arrowStart && el.shape === 'arrow');
-  const p0 = { x: 0, y: el.h / 2 };
-  const p2 = { x: el.w, y: el.h / 2 };
   const local = el.control ? quadraticControl(el) : null;
-  const p1 = local ?? { x: el.w / 2, y: el.h / 2 };
+  const start = { x: 0, y: el.h / 2 };
+  const end = { x: el.w, y: el.h / 2 };
+  const through = local ?? { x: el.w / 2, y: el.h / 2 };
+  // Drawn partway (Line Draw), the line is its first `progress` of itself:
+  // a quadratic's piece from its start is again a quadratic, and a straight
+  // line's is straight. Everything below then treats that piece as the line.
+  const drawn = Math.min(1, Math.max(0, progress));
+  if (drawn <= 0) return '';
+  const p0 = start;
+  const p2 = drawn < 1 ? quadraticPoint(start, through, end, drawn) : end;
+  const p1 = drawn < 1 ? quadraticBlossom(start, through, end, 0, drawn) : through;
   const at = (t: number): XY => quadraticPoint(p0, p1, p2, t);
   // Heads share the line's length when it is too short for them at full
   // size: two meet at its middle, one spans it, rather than crossing over.
@@ -296,42 +310,6 @@ export function quadraticPath(el: Shape): string {
   const control = quadraticControl(el);
   if (!control) return '';
   return `M 0 ${el.h / 2} Q ${control.x} ${control.y} ${el.w} ${el.h / 2}`;
-}
-
-/** The arrowhead, in stroke-width units, and the point of it that sits on the line's end. */
-export const ARROWHEAD_PATH = 'M0,0 L6,3 L0,6 Z';
-export const ARROWHEAD_REF = { x: 5, y: 3 };
-
-/**
- * The attributes of a line or arrow drawn only as far as `progress` (0..1)
- * along its length, for the draw-in build. The geometry itself is shortened,
- * rather than masked with a dash pattern, so an arrowhead rides the tip of
- * the stroke and turns with a curve instead of waiting at the far end.
- *
- * A straight line shortens its `x2`. A curve is cut with de Casteljau: the
- * first `progress` of a quadratic is itself a quadratic, from the same start,
- * through the control point pulled back by the same fraction.
- */
-export function partialStroke(
-  el: Shape,
-  progress: number,
-): { x2: number } | { d: string } | null {
-  if (el.shape !== 'line' && el.shape !== 'arrow') return null;
-  const clamped = Math.min(1, Math.max(0, progress));
-  const control = quadraticControl(el);
-  if (!control) return { x2: el.w * clamped };
-  if (clamped === 1) return { d: quadraticPath(el) };
-  // A curve of no length has no direction, and an arrowhead on it would point
-  // along the x axis until the first frame turned it. A sliver keeps the
-  // head facing the way the curve sets off.
-  const t = Math.max(clamped, 0.002);
-  const start = { x: 0, y: el.h / 2 };
-  const end = { x: el.w, y: el.h / 2 };
-  const mix = (a: { x: number; y: number }, b: { x: number; y: number }) =>
-    ({ x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t });
-  const first = mix(start, control);
-  const tip = mix(first, mix(control, end));
-  return { d: `M ${start.x} ${start.y} Q ${first.x} ${first.y} ${tip.x} ${tip.y}` };
 }
 
 function escapeAttr(value: string): string {

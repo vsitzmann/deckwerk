@@ -5,7 +5,7 @@ import { Player } from '../src/renderer/player/player.js';
 import { EditorStore } from '../src/renderer/editor/store.js';
 import { TimelinePanel } from '../src/renderer/editor/timelinePanel.js';
 import { buildFromNode, slideToHtml } from '../src/shared/htmlSlides.js';
-import { partialStroke } from '../src/shared/shapeSvg.js';
+import { shapeSvg } from '../src/shared/shapeSvg.js';
 import { DEFAULT_DRAW_DURATION, drawDuration, isDrawBuild } from '../src/shared/timeline.js';
 import { installCanvasDomShims } from './support/canvasHarness.js';
 
@@ -44,29 +44,48 @@ function deckWith(element: SlideElement, entry: TimelineEntry): Deck {
   return deck;
 }
 
-describe('the geometry of a partly drawn stroke', () => {
-  it('shortens a straight line from its start', () => {
-    expect(partialStroke(arrow(), 0)).toEqual({ x2: 0 });
-    expect(partialStroke(arrow(), 0.25)).toEqual({ x2: 100 });
-    expect(partialStroke(arrow(), 1)).toEqual({ x2: 400 });
-    expect(partialStroke(arrow(), 7)).toEqual({ x2: 400 });
+/** The tip of the first arrowhead in some SVG markup: its path starts there. */
+function headTip(markup: string): [number, number] | null {
+  const match = /class="arrowhead" d="M (-?[\d.]+) (-?[\d.]+)/.exec(markup);
+  return match ? [Number(match[1]), Number(match[2])] : null;
+}
+
+describe('the drawing of a partly drawn line', () => {
+  it('is the static drawing exactly when done', () => {
+    for (const el of [
+      arrow(), arrow({ control: { x: 300, y: 110 } }), arrow({ arrowStart: true }),
+      arrow({ arrowStart: true, arrowEnd: false }), arrow({ shape: 'line', arrowEnd: false }),
+      arrow({ arrowSize: 40 }), arrow({ control: { x: 300, y: 110 }, arrowEnd: false, shape: 'line' }),
+    ]) {
+      expect(shapeSvg(el, { drawProgress: 1 })).toBe(shapeSvg(el));
+      expect(shapeSvg(el, { drawProgress: 7 })).toBe(shapeSvg(el));
+    }
   });
 
-  it('cuts a curve so its tip lies on the full curve', () => {
-    // Control point straight above the middle of a horizontal 400 px arrow.
-    const curved = arrow({ control: { x: 300, y: 110 } });
-    const half = partialStroke(curved, 0.5) as { d: string };
-    const numbers = half.d.match(/-?\d+(\.\d+)?/g)!.map(Number);
-    // M 0 10 Q <first control> <tip>: the tip is the curve's own midpoint,
+  it('draws nothing before it starts', () => {
+    expect(shapeSvg(arrow(), { drawProgress: 0 })).not.toMatch(/<line|<path/);
+  });
+
+  it('carries the head at the tip of what is drawn, with the line stopping behind it', () => {
+    const quarter = shapeSvg(arrow(), { drawProgress: 0.25 });
+    expect(headTip(quarter)).toEqual([100, 10]);
+    const x2 = Number(/<line[^>]* x2="(-?[\d.]+)"/.exec(quarter)![1]);
+    // Main's arrows trim the line inside the head's tail; so does a partial one.
+    expect(x2).toBeLessThan(100);
+    expect(x2).toBeGreaterThan(50);
+  });
+
+  it('puts the tip of a curve on the curve', () => {
+    // Control point straight above the middle of a horizontal 400 px arrow:
+    // the tip at half way is the curve's own midpoint,
     // B(0.5) = (P0 + 2·C + P2) / 4, in the element's local coordinates.
-    expect(numbers.slice(0, 2)).toEqual([0, 10]);
-    expect(numbers.slice(4)).toEqual([200, -40]);
-    expect(numbers.slice(2, 4)).toEqual([100, -40]);
-    expect((partialStroke(curved, 1) as { d: string }).d).toBe('M 0 10 Q 200 -90 400 10');
+    const half = shapeSvg(arrow({ control: { x: 300, y: 110 } }), { drawProgress: 0.5 });
+    expect(headTip(half)).toEqual([200, -40]);
   });
 
-  it('shortens only lines and arrows; outlines are traced another way', () => {
-    expect(partialStroke(arrow({ shape: 'rect' }), 0.5)).toBeNull();
+  it('gives an arrow with only a start head its head from the first frame', () => {
+    const el = arrow({ arrowStart: true, arrowEnd: false });
+    expect(headTip(shapeSvg(el, { drawProgress: 0.5 }))).toEqual([0, 10]);
   });
 });
 
@@ -115,7 +134,7 @@ describe('drawing an arrow in while presenting', () => {
   });
   afterEach(() => vi.useRealTimers());
 
-  function present(deck: Deck): { player: Player; line: () => SVGElement; hidden: () => boolean } {
+  function present(deck: Deck): { player: Player; svg: () => string; hidden: () => boolean } {
     installCanvasDomShims();
     const host = document.createElement('div');
     document.body.replaceChildren(host);
@@ -123,28 +142,33 @@ describe('drawing an arrow in while presenting', () => {
     const node = () => host.querySelector<HTMLElement>('[data-element-id="arrow"]')!;
     return {
       player,
-      line: () => node().querySelector<SVGElement>('svg > line, svg > path')!,
+      svg: () => node().querySelector('svg')!.innerHTML,
       hidden: () => node().style.visibility === 'hidden',
     };
   }
-  const x2 = (line: SVGElement) => Number(line.getAttribute('x2'));
+  /** What the static renderer draws inside the shape's <svg>, parsed the same way. */
+  const finished = (el: Shape): string => {
+    const template = document.createElement('template');
+    template.innerHTML = shapeSvg(el);
+    return template.content.firstElementChild!.innerHTML;
+  };
 
-  it('grows from nothing to the whole line over its duration', () => {
-    const { player, line, hidden } = present(deckWith(arrow(), draw()));
+  it('grows from nothing to the whole arrow over its duration, head leading', () => {
+    const { player, svg, hidden } = present(deckWith(arrow(), draw()));
     expect(hidden()).toBe(true);
 
     player.next();
     // Visible, but not yet drawn: the full line is never painted first.
     expect(hidden()).toBe(false);
-    expect(x2(line())).toBe(0);
+    expect(svg()).toBe('');
 
     vi.advanceTimersByTime(400);
-    const halfway = x2(line());
-    expect(halfway).toBeGreaterThan(100);
-    expect(halfway).toBeLessThan(300);
+    const tip = headTip(svg())!;
+    expect(tip[0]).toBeGreaterThan(100);
+    expect(tip[0]).toBeLessThan(300);
 
     vi.advanceTimersByTime(600);
-    expect(x2(line())).toBe(400);
+    expect(svg()).toBe(finished(arrow()));
   });
 
   it('finishes the stroke at once when the talk moves on mid-draw', () => {
@@ -154,35 +178,35 @@ describe('drawing an arrow in while presenting', () => {
       id: 't-next', trigger: { on: 'click', ref: null, delay: 0 },
       action: { type: 'appear', target: 'second', value: null },
     });
-    const { player, line } = present(deck);
+    const { player, svg } = present(deck);
     player.next();
     vi.advanceTimersByTime(300);
-    expect(x2(line())).toBeLessThan(400);
+    expect(svg()).not.toBe(finished(arrow()));
     player.next();
-    expect(x2(line())).toBe(400);
+    expect(svg()).toBe(finished(arrow()));
     // And nothing keeps animating it afterwards.
     vi.advanceTimersByTime(3000);
-    expect(x2(line())).toBe(400);
+    expect(svg()).toBe(finished(arrow()));
   });
 
-  it('shows the finished line when a step is jumped to rather than played', () => {
-    const { player, line, hidden } = present(deckWith(arrow(), draw()));
+  it('shows the finished arrow when a step is jumped to rather than played', () => {
+    const { player, svg, hidden } = present(deckWith(arrow(), draw()));
     player.goTo({ slide: 0, step: 1 });
     expect(hidden()).toBe(false);
-    expect(x2(line())).toBe(400);
+    expect(svg()).toBe(finished(arrow()));
   });
 
-  it('draws a curve with its tip on the curve', () => {
-    const { player, line } = present(deckWith(arrow({ control: { x: 300, y: 110 } }), draw()));
-    const full = line().getAttribute('d');
+  it('draws a curve with its head on the curve, ending as the static curve', () => {
+    const curved = arrow({ control: { x: 300, y: 110 } });
+    const { player, svg } = present(deckWith(curved, draw()));
     player.next();
-    // A sliver, not a point, so the arrowhead already faces along the curve.
-    const tip = line().getAttribute('d')!.match(/-?\d+(\.\d+)?/g)!.map(Number).slice(4);
-    expect(tip[0]).toBeGreaterThan(0);
-    expect(tip[0]).toBeLessThan(2);
-    expect(tip[1]).toBeLessThan(10);
-    vi.advanceTimersByTime(1100);
-    expect(line().getAttribute('d')).toBe(full);
+    vi.advanceTimersByTime(400);
+    const [x, y] = headTip(svg())!;
+    // Above the chord: the tip follows the curve, not a straight line.
+    expect(y).toBeLessThan(10);
+    expect(x).toBeGreaterThan(0);
+    vi.advanceTimersByTime(700);
+    expect(svg()).toBe(finished(curved));
   });
 });
 

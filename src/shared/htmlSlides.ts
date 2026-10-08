@@ -831,7 +831,11 @@ function mergedTimeline(previous: Slide, compiled: Slide, theirs = new Set<strin
       claimed.add(target);
       const kept = page.trigger.on === entry.trigger.on && entry.trigger.ref && present.has(entry.trigger.ref)
         ? entry.trigger.ref : null;
-      merged.push({ ...structuredClone(entry), trigger: { ...page.trigger, ref: page.trigger.ref ?? kept } });
+      merged.push({
+        ...structuredClone(entry),
+        trigger: { ...page.trigger, ref: page.trigger.ref ?? kept },
+        action: pageEffect(entry.action, page.action),
+      });
       continue;
     }
     // Not something a page can state — another kind of step, or a second
@@ -847,6 +851,20 @@ function mergedTimeline(previous: Slide, compiled: Slide, theirs = new Set<strin
     merged.push({ ...entry, id: uniqueId(entry.id, ids) });
   }
   return merged;
+}
+
+/**
+ * A kept build's action with the effect the page states: the page names an
+ * effect and its time with `data-build-effect` / `data-build-duration`, so
+ * whatever it says (or no longer says) wins. A value a page cannot state —
+ * a by-paragraph reveal — stays as it was.
+ */
+function pageEffect(previous: TimelineEntry['action'], page: TimelineEntry['action']): TimelineEntry['action'] {
+  const { duration: _previousDuration, ...rest } = structuredClone(previous);
+  if (isEffectName(page.value)) {
+    return { ...rest, value: page.value, ...(page.duration !== undefined ? { duration: page.duration } : {}) };
+  }
+  return { ...rest, value: isEffectName(previous.value) ? null : previous.value };
 }
 
 /* --- what a page was exported from ---------------------------------------- */
@@ -914,7 +932,13 @@ function elementFingerprint(element: SlideElement, build: string): string {
 /** An object's first appearance, as `data-build` states it. */
 function buildSpec(slide: Slide, elementId: string): string {
   const entry = slide.timeline.find((candidate) => candidate.action.type === 'appear' && candidate.action.target === elementId);
-  return entry ? `${entry.trigger.on}+${entry.trigger.delay}@${entry.trigger.ref ?? ''}` : '';
+  if (!entry) return '';
+  const spec = `${entry.trigger.on}+${entry.trigger.delay}@${entry.trigger.ref ?? ''}`;
+  // An effect is part of what the page states, so a change to it is a change
+  // to the object; without one the spec is what it always was, so pages
+  // exported before effects existed still match.
+  return isEffectName(entry.action.value)
+    ? `${spec}~${entry.action.value}/${entry.action.duration ?? ''}` : spec;
 }
 
 /** cyrb53: a quick 53-bit string hash, the same in Node and in any browser. */
