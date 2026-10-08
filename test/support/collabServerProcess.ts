@@ -122,10 +122,22 @@ export function chromiumSandboxesHere(electron: string): boolean {
   return hostSandboxes;
 }
 
+/** What the server's own event loop went through (test/support/collabServerMain.mts). */
+export interface StallReport {
+  windowMs: number;
+  /** The longest the event loop was blocked, in ms. */
+  maxMs: number;
+  p99Ms: number;
+  /** The longest blocks: ms after the window opened, how long, and how much of it was GC. */
+  blocks: Array<{ at: number; ms: number; gcMs: number }>;
+}
+
 export interface CollabServerProcess {
   port: number;
   /** False where no user systemd session exists (CI): the server then runs unsandboxed. */
   sandboxed: boolean;
+  /** The server's event-loop blocks since the last reset; needs `measureStalls`. */
+  stalls: (reset?: boolean) => Promise<StallReport>;
   /** Everything the server wrote to stderr so far, for failure messages. */
   stderr: () => string;
   /** Whether the server process is still running. */
@@ -155,12 +167,16 @@ export async function startCollabServerProcess(options: {
   localAgents?: boolean;
   /** systemd-run properties to run under instead of PRODUCTION_SANDBOX. */
   sandbox?: string[];
+  /** Time the server's event loop; read it with `stalls()` (see collabServerMain.mts). */
+  measureStalls?: boolean;
 }): Promise<CollabServerProcess> {
   const command = [
     join(REPO, 'node_modules/.bin/vite-node'),
     '--config', 'vitest.config.ts', 'test/support/collabServerMain.mts',
   ];
-  const config = JSON.stringify({ rootDir: options.rootDir, clientDir: options.clientDir, localAgents: options.localAgents });
+  const config = JSON.stringify({
+    rootDir: options.rootDir, clientDir: options.clientDir, localAgents: options.localAgents, measureStalls: options.measureStalls,
+  });
   const sandboxed = canSandbox();
   // Named, because the transient unit outlives a killed systemd-run client:
   // liveness and shutdown both have to go through the unit itself.
@@ -186,18 +202,27 @@ export async function startCollabServerProcess(options: {
       return false;
     }
   };
+  let stallsPort: number | null = null;
   const port = await new Promise<number>((resolvePort, reject) => {
     let stdout = '';
     child.stdout?.on('data', (chunk) => {
       stdout += chunk;
-      const match = /"status":"serving","port":(\d+)/.exec(stdout);
-      if (match) resolvePort(Number(match[1]));
+      const match = /"status":"serving","port":(\d+)(?:,"stallsPort":(\d+))?/.exec(stdout);
+      if (match) {
+        if (match[2]) stallsPort = Number(match[2]);
+        resolvePort(Number(match[1]));
+      }
     });
     child.once('exit', (code, signal) => reject(new Error(`collab server exited (${code ?? signal}) before serving:\n${stderr}`)));
   });
   return {
     port,
     sandboxed,
+    stalls: async (reset = false) => {
+      if (stallsPort === null) throw new Error('start the server with measureStalls to read its stalls');
+      const response = await fetch(`http://127.0.0.1:${stallsPort}/stalls${reset ? '?reset=1' : ''}`);
+      return await response.json() as StallReport;
+    },
     stderr: () => stderr,
     alive: () => !exited && (!sandboxed || unitActive()),
     close: async () => {

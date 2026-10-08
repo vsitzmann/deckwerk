@@ -45,7 +45,8 @@ import {
   writeAgentRequest,
 } from '../main/agentRuntime.js';
 import { adoptAuthoredIds, htmlSyncSummary, insertionAnchor, pageStampOf, stampPage, type PageStamp } from '@shared/htmlSlides.js';
-import { DECK_FILE, importAsset, importWebPage, loadDeck } from '../main/deckStore.js';
+import { DECK_FILE, importAsset, importWebPage, loadDeck, loadTheme, saveDeck, saveTheme } from '../main/deckStore.js';
+import { listDeckVersions, readDeckVersion, VERSIONS_DIR, writeDeckVersion } from '../main/deckVersions.js';
 import { injectWebBridgeRuntime } from '@shared/webBridge.js';
 import { measureBuiltTextOverflows } from './compileHtml.js';
 import { serveBundle } from './previewServer.js';
@@ -199,6 +200,10 @@ Everything else:
                                           changed what, when. --deleted lists only
                                           changes that removed slides or objects,
                                           with their full JSON, to put them back
+            [deck] --versions             the deck as it was, every few minutes of
+                                          editing (.versions/, kept by the server)
+            [deck] --restore <id | time>  put a version back, for everyone editing;
+                                          what it replaces becomes a version too
 
 Adding slides vs. changing them: 'new' writes a page that can only add, while
 'inspect --html' creates authoring HTML that governs the slides it names — do
@@ -1557,12 +1562,25 @@ function authoredScenes(
  * full JSON with --deleted or --full, and their number and title otherwise.
  */
 async function historyCommand(argv: string[], io: CliIo): Promise<number> {
-  const { flags, options, positional } = parseFlags(argv, ['limit']);
-  ensureKnownFlags('history', flags, ['deleted', 'slide', 'full']);
+  const { flags, options, positional } = parseFlags(argv, ['limit', 'restore']);
+  ensureKnownFlags('history', flags, ['deleted', 'slide', 'full', 'versions']);
   ensurePositionals('history', positional, 1);
   const deckDir = resolveDeckDir(positional[0], io);
   const limit = options.has('limit') ? Number.parseInt(options.get('limit')!, 10) : 50;
   if (!Number.isFinite(limit) || limit < 1) throw new UsageError('--limit takes a positive number');
+  if (options.has('restore')) return restoreVersion(deckDir, options.get('restore')!, io);
+  if (flags.has('versions')) {
+    const versions = await listDeckVersions(deckDir);
+    io.out(json({
+      dir: join(deckDir, VERSIONS_DIR),
+      total: versions.length,
+      shown: Math.min(limit, versions.length),
+      ...(versions.length ? {} : { note: 'No versions here. A collaboration server keeps them for decks it hosts.' }),
+      versions: versions.slice(-limit).map(({ id, at, bytes }) => ({ id, at: at.toISOString(), bytes })),
+      restore: 'slide-agent history <deck> --restore <id | ISO time>',
+    }));
+    return EXIT_OK;
+  }
   const slideIds = new Set([...flags].filter((flag) => flag.startsWith('slide='))
     .flatMap((flag) => flag.slice('slide='.length).split(',')).map((id) => id.trim()).filter(Boolean));
   const deletedOnly = flags.has('deleted');
@@ -1596,6 +1614,61 @@ async function historyCommand(argv: string[], io: CliIo): Promise<number> {
     entries: shown,
   }));
   return EXIT_OK;
+}
+
+/** How long a hosting server takes to notice a deck.json written behind it and adopt it. */
+const restoreSettleMs = (): number => Number(process.env.DECKWERK_RESTORE_SETTLE_MS ?? 2_500);
+
+/**
+ * Put a version of the deck back: `id` names one exactly (or by a unique
+ * prefix), or is a time, meaning the newest version at or before it. What the
+ * deck holds now becomes a version first, so a restore is itself undoable.
+ *
+ * Written as deck.json beside the deck. A collab server hosting it adopts the
+ * file for everyone (and records the replacement); a save of its own landing
+ * in the same instant would overwrite it, so the write is checked and retried.
+ */
+async function restoreVersion(deckDir: string, wanted: string, io: CliIo): Promise<number> {
+  const versions = await listDeckVersions(deckDir);
+  const byId = versions.filter((version) => version.id === wanted || version.id.startsWith(wanted));
+  const time = Date.parse(wanted);
+  const chosen = byId.length === 1 ? byId[0]
+    : byId.length === 0 && Number.isFinite(time) ? versions.filter((version) => version.at.getTime() <= time).at(-1)
+      : undefined;
+  if (!chosen) {
+    throw new UsageError(byId.length > 1
+      ? `"${wanted}" matches ${byId.length} versions; give more of the id.`
+      : `No version "${wanted}" in ${join(deckDir, VERSIONS_DIR)}. List them with: slide-agent history <deck> --versions`);
+  }
+  const { deck: raw, theme } = await readDeckVersion(chosen);
+  const deck = parseDeck(raw);
+
+  const currentJson = await readFile(join(deckDir, DECK_FILE), 'utf8');
+  const currentThemeFile = parseDeck(JSON.parse(currentJson)).theme;
+  const currentTheme = await loadTheme(deckDir, currentThemeFile);
+  const kept = await writeDeckVersion(deckDir, {
+    deckJson: currentJson, theme: { file: currentThemeFile, css: currentTheme },
+  });
+
+  if (theme && (theme.file !== currentThemeFile || theme.css !== currentTheme)) {
+    await saveTheme(deckDir, theme.file, theme.css);
+  }
+  let written = '';
+  for (let attempt = 0; attempt < 4; attempt++) {
+    written = await saveDeck(deckDir, deck);
+    await new Promise((resolveWait) => setTimeout(resolveWait, restoreSettleMs()));
+    if (await readFile(join(deckDir, DECK_FILE), 'utf8') === written) {
+      io.out(json({
+        restored: chosen.id,
+        at: chosen.at.toISOString(),
+        slides: deck.slides.length,
+        previous: kept?.id ?? 'unchanged since the newest version',
+        undo: `slide-agent history <deck> --restore ${kept?.id ?? versions.at(-1)?.id ?? '<id>'}`,
+      }));
+      return EXIT_OK;
+    }
+  }
+  throw new Error('The server hosting this deck kept saving over the restore (someone is editing it right now). Try again.');
 }
 
 /** A caller mistake, reported as usage rather than as a failure of the tool. */

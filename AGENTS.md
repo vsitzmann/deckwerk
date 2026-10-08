@@ -527,6 +527,17 @@ with `slide-agent history [deck] [--deleted] [--slide <id>] [--limit n]
 [--full]` on the machine that hosts the deck; a deleted slide's `slide` is
 exactly what an `insertSlides` transaction needs to put it back.
 
+Beside the log, the server keeps **versions**: what the deck *was*, in
+`.versions/<time>.<hash>.json.gz` (deck.json plus the theme; src/main/deckVersions.ts).
+One is taken when a deck opens, at most every 2 minutes while it is edited,
+on both sides of a deck.json replaced on disk, and when the session closes;
+all are kept for 30 days, then the last of each day. `slide-agent history
+[deck] --versions` lists them and `--restore <id | ISO time>` puts one back
+for everyone editing, after first saving what it replaces as a version, so a
+restore is itself undoable. Use it to undo anyone's change — a person's, an
+agent's, a script's — when the log shows what went wrong and when. Like every
+dotfile, `.versions/` is never mirrored, downloaded or copied by Save As.
+
 The bridge (`slide-agent connect`) also treats a `deck.json` or `notes.md`
 written in its mirror as a three-way merge: the edit is the difference from
 the version the bridge wrote that it differs from least, and only that is
@@ -955,6 +966,15 @@ guards. These rules keep the seams closed:
 - **Harness recoveries are findings.** Test helpers that repair lost
   selections/sessions must record it (`recordRecovery`) — a silent retry hides
   exactly the bug class these suites exist to catch.
+
+- **Nothing on the collab server's event loop scales with the deck.** Every
+  room shares one loop, so a whole-deck stringify, parse or encode is a pause
+  in everyone's typing (a 23 MB deck once stalled it 120 ms per autosave).
+  Saves go through `DeckSerializer` (re-serialises only what an edit
+  replaced), whole-deck messages through `DeckWire`, versions through the
+  sliced, thread-pool writer. `test/collabStalls.test.ts` drives people and
+  agents against a 20 MB deck and fails on any block over 30 ms;
+  `STALL_TEST_DECK=<folder>` runs it against a copy of a real deck.
 
 **OS-event input smoke tier** (`npm run test:osinput`,
 `test/osInputSmokeBrowser.test.ts` + `test/support/osInput.ts`): every other

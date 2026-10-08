@@ -7,6 +7,7 @@ import type { ImportedAsset } from '@shared/ipc.js';
 import { classifyMediaName, CONVERTED_IMAGE_EXTS } from '@shared/media.js';
 import { serializeSpeakerNotes, SPEAKER_NOTES_FILE } from '@shared/speakerNotes.js';
 import { HISTORY_FILES } from '@shared/editHistory.js';
+import { VERSIONS_DIR } from './deckVersions.js';
 import { convertImageToPng, isWebSafeCodec, probeMedia, transcodeToH264, videoCodec } from './ffmpeg.js';
 import { needsFastStart, writeFastStart } from './mp4FastStart.js';
 import { copyFileStreamed } from './copyFileStreamed.js';
@@ -197,8 +198,8 @@ export async function createDeck(dir: string, title?: string): Promise<Deck> {
 
 /**
  * Copy a complete deck folder without overwriting an existing destination.
- * A collaboration server's edit log (history.jsonl) stays behind: it records
- * the original's edits, not the copy's.
+ * A collaboration server's edit log (history.jsonl) and versions (.versions/)
+ * stay behind: they record the original's edits, not the copy's.
  */
 export async function copyDeck(sourceDir: string, targetDir: string): Promise<Deck> {
   const source = resolve(sourceDir);
@@ -209,7 +210,7 @@ export async function copyDeck(sourceDir: string, targetDir: string): Promise<De
   }
   if (existsSync(target)) throw new Error(`A file or folder already exists at ${target}`);
 
-  const logs = new Set(HISTORY_FILES.map((name) => join(source, name)));
+  const logs = new Set([...HISTORY_FILES, VERSIONS_DIR].map((name) => join(source, name)));
   await cp(source, target, {
     recursive: true, force: false, errorOnExist: true, filter: (path) => !logs.has(resolve(path)),
   });

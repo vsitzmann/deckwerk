@@ -18,6 +18,7 @@ import {
 import { exportDeck, webExportUnavailableReason } from '../main/exportDeck.js';
 import { capabilities } from '../shared/capabilities.js';
 import { getFfmpegPath, getFfprobePath, probeMedia } from '../main/ffmpeg.js';
+import { DeckWire } from './deckWire.js';
 import {
   RenditionStore,
   isVideoAsset,
@@ -540,6 +541,28 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
     return people.size;
   }
 
+  /**
+   * A deck's title and slide count for the listing. Every listing used to
+   * parse every deck.json in full, and one 20 MB deck made each visit to the
+   * deck picker hold the event loop ~20 ms for everyone editing. An open deck
+   * answers from memory; any other is parsed once per change of its file.
+   */
+  const summaries = new Map<string, { size: number; mtimeMs: number; title?: string; slides: number }>();
+  async function deckSummary(
+    id: string,
+    dir: string,
+    saved: { size: number; mtimeMs: number } | null,
+  ): Promise<{ title?: string; slides: number }> {
+    const open = rooms.get(id);
+    if (open) return { title: open.session.deck.title, slides: open.session.deck.slides.length };
+    const known = summaries.get(dir);
+    if (known && saved && known.size === saved.size && known.mtimeMs === saved.mtimeMs) return known;
+    const raw = JSON.parse(await readFile(join(dir, 'deck.json'), 'utf8')) as { title?: string; slides?: unknown[] };
+    const summary = { title: raw.title, slides: Array.isArray(raw.slides) ? raw.slides.length : 0 };
+    if (saved) summaries.set(dir, { ...summary, size: saved.size, mtimeMs: saved.mtimeMs });
+    return summary;
+  }
+
   async function deckListEntry(
     id: string,
     dir: string,
@@ -547,10 +570,8 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
   ): Promise<DeckListEntry | null> {
     let listed: DeckListEntry;
     try {
-      const raw = JSON.parse(await readFile(join(dir, 'deck.json'), 'utf8')) as {
-        title?: string; slides?: unknown[];
-      };
       const saved = await stat(join(dir, 'deck.json')).catch(() => null);
+      const raw = await deckSummary(id, dir, saved);
       // deck.json is replaced on every save, so its own birth time is the last
       // save; the folder's is when the deck was made. Without birth times,
       // the earliest time we have is the best guess.
@@ -562,7 +583,7 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
       listed = {
         id,
         title: raw.title ?? name,
-        slides: Array.isArray(raw.slides) ? raw.slides.length : 0,
+        slides: raw.slides,
         editedAt: saved ? saved.mtime.toISOString() : null,
         createdAt: Number.isFinite(createdMs) ? new Date(createdMs).toISOString() : null,
         editors: editorsIn(rooms.get(id)),
@@ -983,22 +1004,28 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
     return room;
   }
 
+  /** Messages carrying a whole deck are spliced from a cache (deckWire.ts). */
+  const wire = new DeckWire();
   const send = (peer: Peer, message: ServerMessage) => {
-    if (peer.socket.readyState === peer.socket.OPEN) peer.socket.send(JSON.stringify(message));
+    if (peer.socket.readyState === peer.socket.OPEN) peer.socket.send(wire.encode(message), { binary: false });
   };
   /**
-   * One message to every greeted peer. Serialised once, however many peers
-   * there are: a whole-deck message for a large deck is megabytes of JSON,
-   * and stringifying it per peer held the event loop for each of them.
-   * (permessage-deflate still compresses per socket — each connection has
-   * its own compression context, which ws offers no way to share.)
+   * One message to every greeted peer. Serialised and encoded once, however
+   * many peers there are: a whole-deck message for a large deck is megabytes
+   * of JSON, and stringifying it (or encoding the string) per peer held the
+   * event loop for each of them. (permessage-deflate still compresses per
+   * socket — each connection has its own compression context, which ws
+   * offers no way to share — but that runs on zlib's thread pool.)
    */
   const broadcast = (room: Room, message: ServerMessage, except?: string) => {
-    let data: string | null = null;
+    let data: Buffer | null = null;
     for (const [id, peer] of room.peers) {
       if (id === except || !peer.greeted || peer.socket.readyState !== peer.socket.OPEN) continue;
-      data ??= JSON.stringify(message);
-      peer.socket.send(data);
+      if (!data) {
+        const encoded = wire.encode(message);
+        data = typeof encoded === 'string' ? Buffer.from(encoded, 'utf8') : encoded;
+      }
+      peer.socket.send(data, { binary: false });
     }
   };
   /** An agent behind an HTTP route, for the edit log: a linked bridge, or the server's agent. */
