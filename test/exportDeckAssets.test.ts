@@ -83,6 +83,40 @@ describe.skipIf(webExportUnavailableReason() !== null)('web export asset copying
     expect(existsSync(join(out, 'assets', 'figures', 'plot.png'))).toBe(true);
   });
 
+  // Exports are routinely re-run into the same folder. Skipping any theme
+  // file that was already there kept shipping the previous export's font.
+  it('replaces a theme file an earlier export left behind', async () => {
+    const { dir, out } = await deckWithImage('assets/figures/plot.png');
+    await mkdir(join(dir, 'assets', 'figures'), { recursive: true });
+    await mkdir(join(dir, 'assets', 'fonts'), { recursive: true });
+    await writeFile(join(dir, 'assets', 'figures', 'plot.png'), Buffer.from([1, 2, 3]));
+    await writeFile(join(dir, 'assets', 'fonts', 'serif.woff2'), Buffer.from([4, 5, 6]));
+    await writeFile(join(dir, 'theme.css'),
+      '@font-face { font-family: "Serif"; src: url("assets/fonts/serif.woff2"); }', 'utf8');
+    const deck = JSON.parse(await readFile(join(dir, 'deck.json'), 'utf8'));
+
+    await exportDeck(dir, deck, out);
+    await writeFile(join(dir, 'assets', 'fonts', 'serif.woff2'), Buffer.from([7, 7, 7]));
+    await exportDeck(dir, deck, out);
+    expect(await readFile(join(out, 'assets', 'fonts', 'serif.woff2'))).toEqual(Buffer.from([7, 7, 7]));
+  });
+
+  // The app resolves `./assets/…` in theme.css like `assets/…`, so a theme
+  // that works on screen must not lose its files on the way out.
+  it('ships theme files named with a leading ./', async () => {
+    const { dir, out } = await deckWithImage('assets/figures/plot.png');
+    await mkdir(join(dir, 'assets', 'figures'), { recursive: true });
+    await mkdir(join(dir, 'assets', 'fonts'), { recursive: true });
+    await writeFile(join(dir, 'assets', 'figures', 'plot.png'), Buffer.from([1, 2, 3]));
+    await writeFile(join(dir, 'assets', 'fonts', 'dot.woff2'), Buffer.from([4, 5, 6]));
+    await writeFile(join(dir, 'theme.css'),
+      '@font-face { font-family: "Dot"; src: url("./assets/fonts/dot.woff2"); }', 'utf8');
+    const deck = JSON.parse(await readFile(join(dir, 'deck.json'), 'utf8'));
+
+    await exportDeck(dir, deck, out);
+    expect(await readFile(join(out, 'assets', 'fonts', 'dot.woff2'))).toEqual(Buffer.from([4, 5, 6]));
+  });
+
   it('keeps theme.css inside the deck boundary too', async () => {
     const { root, dir, out } = await deckWithImage('assets/figures/plot.png');
     await writeFile(join(root, 'secret.woff2'), Buffer.from([9, 9, 9]));

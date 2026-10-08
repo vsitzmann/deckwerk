@@ -171,6 +171,9 @@ export async function exportDeck(
   if (wanted.size > 0 || themeAssets.size > 0) await mkdir(join(outDir, 'assets'), { recursive: true });
   const renamed = new Map<string, string>();
   const trimmed = new Map<string, number>();
+  // What the slides' copies wrote in this run, so the theme's pass below can
+  // tell "a slide already shipped this" from "an earlier export left it here".
+  const written = new Set<string>();
   let exportedBytes = 0;
   const jobs = [...wanted].map((rel, index) => async () => {
     const source = sources.get(rel);
@@ -193,6 +196,7 @@ export async function exportDeck(
     );
     doneWeight += source.bytes;
     exportedBytes += outcome.bytes;
+    written.add(outcome.to);
     if (outcome.rel !== rel) renamed.set(rel, outcome.rel);
     if (outcome.trimmedFrom !== undefined) trimmed.set(rel, outcome.trimmedFrom);
   });
@@ -200,11 +204,12 @@ export async function exportDeck(
 
   // Byte for byte, and only what a slide's copy did not already put there
   // unchanged: a re-encoded picture leaves its original name free, and the
-  // theme still points at that name.
+  // theme still points at that name. A file an earlier export left in the
+  // folder is overwritten, or a re-export would keep shipping the old font.
   for (const rel of themeAssets) {
     const source = sources.get(rel);
     const to = source ? join(outDir, source.within) : null;
-    if (!source || !to || existsSync(to)) continue;
+    if (!source || !to || written.has(to)) continue;
     report(`Copying ${rel}`);
     await mkdir(dirname(to), { recursive: true });
     await copyFileStreamed(source.path, to);
@@ -292,14 +297,14 @@ async function exportAsset(
   renderedEdge: number,
   range: PlayedRange | null,
   progress: (verb: string, fraction: number) => void,
-): Promise<{ rel: string; bytes: number; trimmedFrom?: number }> {
+): Promise<{ rel: string; bytes: number; to: string; trimmedFrom?: number }> {
   const ext = extname(source.within).toLowerCase();
-  const copy = async (): Promise<{ rel: string; bytes: number }> => {
+  const copy = async (): Promise<{ rel: string; bytes: number; to: string }> => {
     progress('Copying', 0);
     const to = join(outDir, source.within);
     await mkdir(dirname(to), { recursive: true });
     await copyFileStreamed(source.path, to);
-    return { rel, bytes: source.bytes };
+    return { rel, bytes: source.bytes, to };
   };
 
   if (profile.video && VIDEO_EXTENSIONS.has(ext)) {
@@ -307,14 +312,14 @@ async function exportAsset(
     const target = withExtension(source.within, container);
     const encoded = await encodeVideo(source, join(outDir, target), profile.video, renderedEdge, range, progress);
     if (encoded !== null) {
-      return { rel: withExtension(rel, container), bytes: encoded, trimmedFrom: range?.start };
+      return { rel: withExtension(rel, container), bytes: encoded, to: join(outDir, target), trimmedFrom: range?.start };
     }
     return copy();
   }
   if (profile.image && IMAGE_EXTENSIONS.has(ext) && source.bytes >= profile.image.minBytes) {
     const target = withExtension(source.within, '.webp');
     const encoded = await encodeImage(source, join(outDir, target), profile.image, renderedEdge, progress);
-    if (encoded !== null) return { rel: withExtension(rel, '.webp'), bytes: encoded };
+    if (encoded !== null) return { rel: withExtension(rel, '.webp'), bytes: encoded, to: join(outDir, target) };
     return copy();
   }
   return copy();
@@ -496,21 +501,21 @@ export function referencedAssets(deck: Deck): Set<string> {
   return wanted;
 }
 
-/** Assets referenced only by an isolated HTML region still belong in exports. */
-/** The deck files theme.css refers to with `url(assets/…)`. */
+/** The deck files theme.css refers to with `url(assets/…)` or `url(./assets/…)`. */
 export function themeReferencedAssets(css: string): Set<string> {
   const wanted = new Set<string>();
   for (const match of css.matchAll(CSS_ASSET_URL)) wanted.add(match[1]);
   return wanted;
 }
 
+/** Assets referenced only by an isolated HTML region still belong in exports. */
 function collectFallbackAssets(source: string, wanted: Set<string>): void {
   for (const pattern of HTML_ASSET_PATTERNS) {
     for (const match of source.matchAll(pattern)) wanted.add(match[1]);
   }
 }
 
-const CSS_ASSET_URL = /url\(\s*["']?(assets\/[^"')#?]+)(?:[?#][^"')]*)?["']?\s*\)/gi;
+const CSS_ASSET_URL = /url\(\s*["']?(?:\.\/)?(assets\/[^"')#?]+)(?:[?#][^"')]*)?["']?\s*\)/gi;
 
 const HTML_ASSET_PATTERNS = [
   /\b(?:src|poster)\s*=\s*["'](assets\/[^"'#?]+)(?:[?#][^"']*)?["']/gi,
