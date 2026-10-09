@@ -142,8 +142,8 @@ through its own upload code, and runs ffmpeg and ffprobe. The importers' Python
 packages live in the checkout's own `.venv-import`, which `npm ci` creates from
 `importers/requirements.txt` and `npm run collab` brings up to date before
 every start (`npm run setup:importers` does it by hand). A deploy that cannot
-import therefore fails its health check and rolls back (`deploy/update.sh`),
-instead of failing somebody's upload with "keynote-parser is not installed". `test/agentCollaborationSandbox.test.ts`
+import therefore fails its first health check, and a deploy script that waits
+for the server to answer can roll back, instead of failing somebody's upload with "keynote-parser is not installed". `test/agentCollaborationSandbox.test.ts`
 runs the agent workflow under this policy, and — on a machine where
 `deckwerk-collab.service` is installed — under the unit systemd actually
 resolved.

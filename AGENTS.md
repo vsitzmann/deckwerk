@@ -55,24 +55,6 @@ A change to that loop — the export, the compile, the sync, the bridge, `./deck
 — adds its case to the regression suite and, if it is a new move, to the fuzz
 alphabet, in the same PR.
 
-## Deploying to srg-lab-server
-
-The hosted server (`deckwerk-collab.service`, `/srv/deckwerk/app`) runs the
-**committed HEAD of `~/Work/deckwerk`**, whatever branch is checked out — the
-same model as TeXWerk. To deploy, commit, then:
-
-```bash
-systemctl start deckwerk-update && journalctl -u deckwerk-update -n 30 --no-pager
-```
-
-No sudo needed (`deploy/deckwerk-update.service`; a polkit rule lets the
-checkout's owner start it). It restarts even with people connected; their tabs
-reconnect. The new server checks itself before it listens and refuses to start
-if the importers, ffmpeg or the headless browser do not work; the deploy then
-puts the previous version back and prints the server's log. After editing
-`deploy/update.sh`, re-install the root-owned copy with
-`sudo ./deploy/install-deploy-access.sh`.
-
 ## UI consistency
 
 Every new UI element must match the rest of the application. Reuse the shared
