@@ -3184,9 +3184,82 @@ def self_check() -> int:
     return 0
 
 
+def pdf_first_page(argv: list[str]) -> int:
+    """Render the top of a PDF's first page, for a paper card (src/main/pdfFirstPage.ts).
+
+    This is not PowerPoint work, but this sidecar is the one that already
+    carries PyMuPDF — frozen into the packaged app and in the server's venv —
+    and Chromium has no way to rasterise a PDF on its own. The page is clipped
+    to its top `--crop` fraction (title, authors, abstract) and rendered
+    `--width` pixels wide. Prints the size and what the PDF says about itself
+    as JSON; the title guess is the largest horizontal type in the top half,
+    which skips arXiv's rotated margin stamp.
+    """
+    parser = argparse.ArgumentParser(prog="pdf-first-page")
+    parser.add_argument("input", type=Path)
+    parser.add_argument("--out", type=Path, required=True)
+    parser.add_argument("--width", type=int, default=1600)
+    parser.add_argument("--crop", type=float, default=0.55)
+    args = parser.parse_args(argv)
+    try:
+        import pymupdf
+    except ImportError:
+        sys.stderr.write("PyMuPDF is not installed. Run: npm run setup:importers\n")
+        return 1
+    try:
+        doc = pymupdf.open(args.input)
+    except Exception as exc:
+        sys.stderr.write(f"Not a readable PDF: {exc}\n")
+        return 1
+    with doc:
+        if doc.needs_pass:
+            sys.stderr.write("The PDF is password-protected.\n")
+            return 1
+        if doc.page_count == 0:
+            sys.stderr.write("The PDF has no pages.\n")
+            return 1
+        page = doc.load_page(0)
+        rect = page.rect
+        crop = min(max(args.crop, 0.05), 1.0)
+        clip = pymupdf.Rect(rect.x0, rect.y0, rect.x1, rect.y0 + rect.height * crop)
+        scale = max(16, args.width) / rect.width
+        pixmap = page.get_pixmap(matrix=pymupdf.Matrix(scale, scale), clip=clip, alpha=False)
+        pixmap.save(str(args.out))
+
+        lines = []
+        top_half = pymupdf.Rect(rect.x0, rect.y0, rect.x1, rect.y0 + rect.height * 0.5)
+        for block in page.get_text("dict", clip=top_half)["blocks"]:
+            for line in block.get("lines", []):
+                if abs(line["dir"][1]) > 0.01:
+                    continue
+                text = "".join(span["text"] for span in line["spans"]).strip()
+                size = max((span["size"] for span in line["spans"]), default=0)
+                if len(text) > 2:
+                    lines.append((size, text))
+        title_guess = None
+        if lines:
+            largest = max(size for size, _ in lines)
+            title_guess = " ".join(text for size, text in lines if size >= largest - 0.5)[:300] or None
+        metadata = doc.metadata or {}
+        json.dump({
+            "width": pixmap.width,
+            "height": pixmap.height,
+            "pageWidth": rect.width,
+            "pageHeight": rect.height,
+            "pages": doc.page_count,
+            "title": (metadata.get("title") or "").strip() or None,
+            "author": (metadata.get("author") or "").strip() or None,
+            "textTitle": title_guess,
+        }, sys.stdout)
+    sys.stdout.write("\n")
+    return 0
+
+
 def main(argv: list[str]) -> int:
     if argv == ["--self-check"]:
         return self_check()
+    if argv[:1] == ["--pdf-first-page"]:
+        return pdf_first_page(argv[1:])
     parser = argparse.ArgumentParser(description="Import a PowerPoint .pptx file.")
     parser.add_argument("input", type=Path, help="Path to a .pptx file")
     parser.add_argument("--out", type=Path, help="Deck folder to create")
