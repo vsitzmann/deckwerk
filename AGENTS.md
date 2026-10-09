@@ -73,6 +73,14 @@ puts the previous version back and prints the server's log. After editing
 `deploy/update.sh`, re-install the root-owned copy with
 `sudo ./deploy/install-deploy-access.sh`.
 
+Every night at 04:00 ET, `deckwerk-nightly.timer` fast-forwards the checkout to
+`origin/main` and deploys it if that is newer than what is serving
+(`update.sh --pull`). It skips the night, touching nothing, while the checkout
+is on another branch, has uncommitted changes, or has commits that
+`origin/main` does not. So a merged PR goes live by the next morning without
+anyone deploying; deploy by hand to ship it sooner. See what it did with
+`journalctl -u deckwerk-nightly -n 20 --no-pager`.
+
 ## UI consistency
 
 Every new UI element must match the rest of the application. Reuse the shared

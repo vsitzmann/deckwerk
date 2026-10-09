@@ -1,0 +1,14 @@
+# Nightly, from deckwerk-nightly.timer: fast-forward ~/Work/deckwerk to
+# origin/main, then deploy it if that is newer than what is serving. Skips the
+# whole run while the checkout is on another branch or has uncommitted changes.
+# Installed by deploy/install-deploy-access.sh.
+[Unit]
+Description=Pull origin/main into the DeckWerk checkout and deploy it
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+Environment=DECKWERK_SRC=/home/vsitzmann/Work/deckwerk
+ExecStart=/usr/local/bin/deckwerk-update --force --pull
+TimeoutStartSec=900

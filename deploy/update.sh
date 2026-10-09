@@ -4,12 +4,18 @@
 #   systemctl start deckwerk-update    # no sudo (see deckwerk-update.service)
 #   sudo ./deploy/update.sh --force    # the same, by hand
 #   sudo ./deploy/update.sh            # refuses while someone is connected
+#   sudo ./deploy/update.sh --force --pull   # what deckwerk-nightly.timer runs
 #
 # Deploys what is committed (HEAD) on whatever branch is checked out, never
 # uncommitted work — the same model as TeXWerk's deploy/update.sh. The new
 # server checks itself before it listens (importers, ffmpeg, headless
 # browser; scripts/collab-server.mts) and refuses to start if anything is
 # missing; if it does not come up, the previous version is put back.
+#
+# --pull first fast-forwards the checkout to origin/main and deploys only if
+# that changed what is serving. It leaves the checkout alone, and deploys
+# nothing, while it is on another branch, has uncommitted changes, or has
+# commits that origin/main does not.
 set -euo pipefail
 [[ $EUID -eq 0 ]] || { echo "run with sudo"; exit 1; }
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -20,7 +26,11 @@ UNIT=deckwerk-collab.service
 PORT=5800
 HEALTH_TIMEOUT=120
 force=0
-for a in "$@"; do [[ $a == --force ]] && force=1; done
+pull=0
+for a in "$@"; do
+  [[ $a == --force ]] && force=1
+  [[ $a == --pull ]] && pull=1
+done
 as_dw() { sudo -u deckwerk env HOME=/srv/deckwerk PATH=/opt/deckwerk-node/bin:/usr/bin "$@"; }
 # Built or installed on the server, never in git; the copy leaves them alone.
 KEEP=(--exclude /.git --exclude /node_modules --exclude /.venv-import --exclude /dist
@@ -34,9 +44,23 @@ fi
 # else owns, and could run hooks configured in it.
 owner=$(stat -c %U "$SRC")
 as_owner() { runuser -u "$owner" -- "$@"; }
-rev=$(as_owner git -C "$SRC" rev-parse HEAD)
 branch=$(as_owner git -C "$SRC" rev-parse --abbrev-ref HEAD)
 previous_rev=$(cat "$APP/REVISION" 2>/dev/null || echo unknown)
+if [[ $pull == 1 ]]; then
+  [[ $branch == main ]] || { echo "not pulling: the checkout is on $branch, not main"; exit 0; }
+  if [[ -n $(as_owner git -C "$SRC" status --porcelain --untracked-files=no) ]]; then
+    echo "not pulling: the checkout has uncommitted changes"; exit 0
+  fi
+  as_owner git -C "$SRC" fetch --quiet origin main
+  if [[ $(as_owner git -C "$SRC" rev-list --count origin/main..HEAD) != 0 ]]; then
+    echo "not pulling: main has commits that origin/main does not"; exit 0
+  fi
+  as_owner git -C "$SRC" merge --ff-only --quiet origin/main
+  if [[ $(as_owner git -C "$SRC" rev-parse HEAD) == "$previous_rev" ]]; then
+    echo "already serving ${previous_rev:0:7}, the tip of origin/main"; exit 0
+  fi
+fi
+rev=$(as_owner git -C "$SRC" rev-parse HEAD)
 echo "== deploying ${rev:0:7} ($branch) from $SRC, replacing ${previous_rev:0:7}"
 if [[ -n $(as_owner git -C "$SRC" status --porcelain --untracked-files=no) ]]; then
   echo "   note: the checkout has uncommitted changes; they are NOT deployed"

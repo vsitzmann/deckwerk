@@ -1,0 +1,13 @@
+[Unit]
+Description=Pull and deploy DeckWerk's main nightly at 04:00 ET
+
+[Timer]
+# Pinned to the tailnet's home timezone rather than inheriting the system
+# one, so it stays 4am Eastern across DST and any future timezone change.
+OnCalendar=*-*-* 04:00:00 America/New_York
+# If the machine was asleep or off at 04:00, run once it comes back.
+Persistent=true
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target
