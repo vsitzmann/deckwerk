@@ -6,6 +6,7 @@ import { KATEX_AUTO_RENDER_JS, KATEX_CSS, KATEX_JS } from './katexInline.js';
 import { shapeSvg } from './shapeSvg.js';
 import { applyTableColumnWidths } from './paragraphs.js';
 import { normalizeHtmlLineHeights, normalizeStyleLineHeight } from './lineHeight.js';
+import { compareDataAttrs, compareFromDataset } from './compare.js';
 import { layoutMaster, placeNewPlaceholders, syncSlideWithLayoutMaster, type FixedLayout } from './layoutMasters.js';
 import {
   cssMediaBorder,
@@ -1290,7 +1291,11 @@ export function elementFromNode(
   // not authored element CSS and must not accumulate in the deck on every
   // HTML round trip.
   delete mediaBase.style.overflow;
-  const mediaDecoration = mediaDecorationFromNode(node, mediaBase.style);
+  const mediaDecoration = {
+    ...mediaDecorationFromNode(node, mediaBase.style),
+    // A before/after wipe's top layer (shared/compare.ts).
+    ...compareFromDataset(node.dataset),
+  };
 
   // A cropped picture is exported as a window with the media inside it, the
   // way the player renders one, so the wrapper — not the `<img>` — is the
@@ -1858,7 +1863,7 @@ function mediaDataAttrs(element: Extract<SlideElement, { type: 'image' | 'video'
   const mask = element.maskShape !== undefined
     ? ` data-mask-shape="${element.maskShape}"`
     : '';
-  return border + radius + mask;
+  return border + radius + mask + compareDataAttrs(element);
 }
 
 function effectsDataAttrs(

@@ -34,6 +34,8 @@ import {
 import { ARRANGE_LABELS, arrangeSelection } from './arrange.js';
 import { COLOR_LIVE_END, COLOR_LIVE_START, colorField, colorForInput } from './colorPicker.js';
 import { setCircularMask } from '@shared/mediaMask.js';
+import { DEFAULT_WIPE, wipeLayers, type CompareMedia } from '@shared/compare.js';
+import { arrangeWipe, clearWipe, setWipe } from './compareEdits.js';
 import {
   hasTextBox,
   setTextBoxBorder,
@@ -1705,6 +1707,7 @@ export class Inspector {
       playback.content.appendChild(sync);
       wrap.appendChild(playback.section);
     }
+    if (media.length === 2) wrap.appendChild(this.wipeArrangeSection(media));
     const masking = optionSection('Mask', 'media-masking-options', 'non-destructive');
     const maskSettings = document.createElement('div');
     maskSettings.className = 'media-mask-settings';
@@ -1778,6 +1781,54 @@ export class Inspector {
     return wrap;
   }
 
+  /**
+   * Two pictures selected: stack them as a before/after wipe, or, when they
+   * already are one, the wipe's own controls.
+   */
+  private wipeArrangeSection(media: CompareMedia[]): HTMLElement {
+    const layers = wipeLayers(this.store.slide?.elements ?? [], media[0]);
+    const ids = media.map((element) => element.id).sort().join(',');
+    if (layers?.under && [layers.top.id, layers.under.id].sort().join(',') === ids) {
+      return this.wipeSection(layers.top);
+    }
+    const section = optionSection('Compare', 'media-compare-options', 'before / after');
+    const arrange = button('Arrange as wipe', () => {
+      arrangeWipe(this.store, [media[0].id, media[1].id]);
+    }, 'panel-action');
+    arrange.title = media[0].type === 'video'
+      ? 'Stack both videos in one box, playing in sync, split by a divider the presenter can drag'
+      : 'Stack both pictures in one box, split by a divider the presenter can drag';
+    section.content.appendChild(arrange);
+    return section.section;
+  }
+
+  /** The wipe this picture is a layer of, top or beneath, if any. */
+  private wipeControls(el: CompareMedia): HTMLElement | null {
+    const layers = wipeLayers(this.store.slide?.elements ?? [], el);
+    return layers ? this.wipeSection(layers.top) : null;
+  }
+
+  private wipeSection(top: CompareMedia): HTMLElement {
+    const section = optionSection('Wipe', 'media-compare-options', 'before / after');
+    section.content.appendChild(opacityField(
+      top.wipe ?? DEFAULT_WIPE,
+      () => {
+        this.continuousEdit = true;
+        this.store.beginTransaction('Move wipe divider');
+      },
+      (value) => setWipe(this.store, top.id, value),
+      () => {
+        this.store.endTransaction();
+        this.continuousEdit = false;
+      },
+      'Divider',
+    ));
+    const off = button('Turn off wipe', () => clearWipe(this.store, top.id), 'panel-action');
+    off.title = 'Show both layers whole again; they stay stacked in place';
+    section.content.appendChild(off);
+    return section.section;
+  }
+
   private typeSection(el: SlideElement): HTMLElement | null {
     switch (el.type) {
       case 'video': {
@@ -1828,6 +1879,8 @@ export class Inspector {
           playback.content.append(note, unsync);
         }
         wrap.appendChild(playback.section);
+        const videoWipe = this.wipeControls(el);
+        if (videoWipe) wrap.appendChild(videoWipe);
 
         // Trim is about time, like playback, so it sits beside it rather than
         // after the mask and border sections.
@@ -1852,6 +1905,8 @@ export class Inspector {
 
       case 'image': {
         const wrap = typeSections();
+        const imageWipe = this.wipeControls(el);
+        if (imageWipe) wrap.appendChild(imageWipe);
         wrap.appendChild(this.mediaMaskControls(el.id));
         wrap.appendChild(this.mediaBorderControls());
         wrap.appendChild(this.mediaEffectsControls());
@@ -3131,12 +3186,13 @@ function opacityField(
   onBegin: () => void,
   onInput: (value: number) => void,
   onEnd: () => void,
+  name = 'Opacity',
 ): HTMLElement {
   const wrap = document.createElement('label');
   wrap.className = 'field field-opacity';
 
   const label = document.createElement('span');
-  label.textContent = 'Opacity';
+  label.textContent = name;
 
   const controls = document.createElement('div');
   controls.className = 'field-opacity-controls';
@@ -3146,7 +3202,7 @@ function opacityField(
   input.max = '100';
   input.step = '1';
   input.value = String(value === null ? 50 : Math.round(clamp(value, 0, 1) * 100));
-  input.setAttribute('aria-label', 'Opacity');
+  input.setAttribute('aria-label', name);
 
   const output = document.createElement('output');
   output.textContent = value === null ? 'Mixed' : `${input.value}%`;
