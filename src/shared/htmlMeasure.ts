@@ -1522,6 +1522,30 @@ export function measureSlides(doc: Document): MeasuredSlide[] {
           node.dataset.tableWidths = widths.join(',');
         }
       }
+      // `<pre><code class="language-python">` is how the web writes a code
+      // listing, so it is a code block, not a monospace text box that would
+      // lose its language and its highlighting.
+      if (!node.dataset.element && node.tagName.toLowerCase() === 'pre') {
+        const only = node.children.length === 1 ? node.firstElementChild as HTMLElement : null;
+        const named = /(?:^|\s)lang(?:uage)?-([\w+#-]+)/.exec(
+          `${node.className} ${only?.tagName.toLowerCase() === 'code' ? only.className : ''}`);
+        if (named) {
+          node.dataset.element = 'code';
+          node.dataset.language ??= named[1];
+        }
+      }
+      // A listing written to start on its own line, `<code>` then a newline,
+      // means the code starts on the next line. HTML drops that newline only
+      // straight after `<pre>`, so the browser would show (and measure) a
+      // blank first line the slide does not have.
+      if (node.dataset.element === 'code') {
+        const only = node.children.length === 1 && node.firstElementChild?.tagName.toLowerCase() === 'code'
+          ? node.firstElementChild : node;
+        const first = only.firstChild;
+        if (first && first.nodeType === 3 && (first as Text).data.startsWith('\n')) {
+          (first as Text).data = (first as Text).data.slice(1);
+        }
+      }
       // A leaf with nothing to say but paint — an empty div with a background
       // — is a rectangle, not an empty text box.
       if (!node.dataset.element && typeOf(node) === 'text' && node.textContent!.trim() === ''

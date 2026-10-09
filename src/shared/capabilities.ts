@@ -479,6 +479,36 @@ export function capabilities(): Capability[] {
       ],
     },
     {
+      id: 'code-block',
+      what: 'Source code, syntax-highlighted with Shiki in a bundled colour scheme, offline, the same in the editor, the player, web export and PDF.',
+      when: 'Any listing on a slide: an algorithm, a kernel, a config. Never fake code with a monospace text box.',
+      notes: [
+        'Fields: code (verbatim; whitespace, tabs and blank lines are kept), language, scheme, fontSize (px; line height and padding scale with it), lineNumbers.',
+        'language: python, javascript, typescript, c, cpp, cuda (highlighted as C++), rust, glsl, bash, json, yaml, latex, html, css, sql, go, java, julia, matlab, plaintext. Common aliases (py, ts, sh, yml, tex, cu…) are accepted.',
+        "scheme: github-light, github-dark, one-dark-pro, solarized-light, dracula, nord, or deck — derived from the deck theme's text, muted, accent and palette colours, so the code matches the slides and follows a theme change.",
+        'In authoring HTML: <pre data-element="code" data-language="python" data-scheme="github-dark" data-font-size="28" data-line-numbers="true"><code>…HTML-escaped code…</code></pre>. A bare <pre><code class="language-python"> is a code block too. One newline straight after <code> and one straight before </code> are formatting and dropped. Size the box with CSS like anything else; its height should be lines × 1.5 × fontSize + 1.5 × fontSize.',
+        "Line builds: a timeline entry { action: { type: 'lines', target, value: '1-3; 4-6; highlight:5; highlight:all' } } fans out into one step per ';'-separated part. A plain step reveals its lines (lines named by reveal steps start hidden; the rest show from the start); highlight:<lines> dims every other line until the next step; highlight:all ends it. In authoring HTML: data-build-lines=\"1-3; highlight:5\" on the <pre>, one click per step.",
+        'Borders, a corner radius and a shadow on the element style apply to the block; the scheme owns its background, ink and type.',
+      ],
+      elements: [
+        text('cap-code-title', 'Code, highlighted', TITLE, { class: ['role-title'] }),
+        {
+          id: 'cap-code', type: 'code', x: 160, y: 300, w: 1100, h: 210, rot: 0, z: 2,
+          opacity: 1, class: [], style: { 'border-radius': '12px' },
+          code: 'def stress(F, mu, lam):\n    J = np.linalg.det(F)\n    Finv_T = np.linalg.inv(F).T\n    return mu * (F - Finv_T) + lam * np.log(J) * Finv_T\n',
+          language: 'python', scheme: 'github-dark', fontSize: 28, lineNumbers: true,
+        },
+        text('cap-code-caption', 'Neo-Hookean first Piola–Kirchhoff stress, revealed then highlighted line by line.', CAPTION, { class: ['role-caption'] }),
+      ],
+      timeline: [
+        {
+          id: 'cap-code-lines',
+          trigger: { on: 'click', ref: null, delay: 0 },
+          action: { type: 'lines', target: 'cap-code', value: '2-3; 4; highlight:4' },
+        },
+      ],
+    },
+    {
       id: 'html-element',
       what: 'An escape hatch element holding arbitrary markup.',
       when: 'A small structure the object model has no vocabulary for — for example a tight two-column flow inside one box. Reach for real text, table, image, and shape elements first.',

@@ -154,6 +154,15 @@ export async function exportDeck(
   await copyFileStreamed(playerJs, join(outDir, 'player.js'));
   doneWeight += fixedWeight;
 
+  // Code blocks highlight from a second script holding every grammar; a deck
+  // without code does not carry it (vite.export.config.ts).
+  const codeHighlightJs = join(bundleDir, 'code-highlight.js');
+  if (exported.slides.some((slide) => slide.elements.some((element) => element.type === 'code'))
+    && existsSync(codeHighlightJs)) {
+    report('Copying code-highlight.js');
+    await copyFileStreamed(codeHighlightJs, join(outDir, 'code-highlight.js'));
+  }
+
   // The player's structural CSS, then the deck's theme, in that order — the
   // theme must win, exactly as it does in the app.
   const playerCss = join(bundleDir, 'player.css');

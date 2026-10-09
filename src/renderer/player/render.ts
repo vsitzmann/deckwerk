@@ -11,6 +11,7 @@ import { quadraticPath, shapeSvg } from '@shared/shapeSvg.js';
 import { isMediaBorderPaint, typedPropertyOwnsCss } from '@shared/nativeCss.js';
 import { applyTableColumnWidths } from '@shared/paragraphs.js';
 import { isEmbeddableWebSrc, webReadinessAction } from '@shared/webBridge.js';
+import { renderCodeBody } from './codeRender.js';
 import renderMathInElement from 'katex/contrib/auto-render';
 import 'katex/dist/katex.min.css';
 
@@ -793,6 +794,9 @@ function renderBody(el: SlideElement, opts: RenderOptions): HTMLElement | SVGEle
 
     case 'web':
       return renderWeb(el, opts);
+
+    case 'code':
+      return renderCodeBody(el);
 
     case 'unsupported': {
       // Visible on purpose: an import gap you can see and fix beats content

@@ -12,7 +12,7 @@ const ElementEditSchema = z.object({
   target: z.literal('element'),
   slideId: z.string().min(1),
   elementId: z.string().min(1),
-  expectedType: z.enum(['text', 'image', 'video', 'shape', 'html', 'web', 'unsupported']).optional(),
+  expectedType: z.enum(['text', 'image', 'video', 'shape', 'html', 'web', 'code', 'unsupported']).optional(),
   set: SetValuesSchema,
   unset: UnsetPathsSchema,
 });
@@ -148,6 +148,13 @@ const ELEMENT_PROPERTIES: Record<SlideElement['type'], PropertyDoc[]> = {
     { path: 'poster', type: 'deck-relative asset path|null', description: 'Still shown where the page cannot run (PDF, thumbnails).', example: 'assets/web/chart.poster.png' },
     { path: 'interactive', type: 'boolean', description: 'Whether the page receives clicks while presenting. Off, clicks advance the deck.', example: true },
     { path: 'title', type: 'string', description: 'Accessible name of the embedded page.', example: 'Papers per year' },
+  ],
+  code: [
+    { path: 'code', type: 'string', description: 'The source code, verbatim: whitespace, tabs and blank lines are kept.', example: 'def f(x):\n    return x * 2' },
+    { path: 'language', type: 'string', description: 'Grammar id: python, javascript, typescript, c, cpp, cuda, rust, glsl, bash, json, yaml, latex, html, css, sql, go, java, julia, matlab or plaintext.', example: 'python' },
+    { path: 'scheme', type: 'enum', values: ['github-light', 'github-dark', 'one-dark-pro', 'solarized-light', 'dracula', 'nord', 'deck'], description: 'Colour scheme; deck follows the deck theme colours.', example: 'github-dark' },
+    { path: 'fontSize', type: 'positive number', description: 'Type size in pixels; line height and padding scale with it.', example: 28 },
+    { path: 'lineNumbers', type: 'boolean', description: 'Show a gutter of line numbers.', example: true },
   ],
   unsupported: [],
 };
