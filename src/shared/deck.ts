@@ -265,6 +265,13 @@ const VideoElement = BaseElement.extend({
   end: z.number().min(0).nullable().default(null),
   poster: z.string().nullable().default(null),
   /**
+   * Videos on a slide that share a sync group play from one clock while
+   * presenting: the first of them (in z order) leads and the rest follow its
+   * time, measured from each one's own in-point, so a real clip and its
+   * simulation stay frame-matched however long the talk dwells on them.
+   */
+  syncGroup: z.string().min(1).optional(),
+  /**
    * Crop, expressed exactly as on an image: where the *whole* video sits
    * relative to this element's box, which acts as the visible window.
    *

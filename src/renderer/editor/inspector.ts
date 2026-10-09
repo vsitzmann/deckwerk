@@ -1651,6 +1651,20 @@ export class Inspector {
         ), VIDEO_FLAG_SHORT[key]));
       }
       playback.content.appendChild(flags);
+      // Real next to simulated, before next to after: one clock while presenting.
+      const groups = media.map((element) => (element.type === 'video' ? element.syncGroup ?? null : null));
+      const shared = groups[0] !== null && groups.every((group) => group === groups[0]);
+      const sync = checkboxField('Play in sync', shared, (on) => {
+        const group = `sync-${media[0].id}`;
+        this.store.updateSelected((element) => {
+          if (element.type !== 'video') return;
+          if (on) element.syncGroup = group;
+          else delete element.syncGroup;
+        });
+      });
+      sync.title = 'While presenting, these videos play, pause and loop together, '
+        + 'each measured from its own in-point';
+      playback.content.appendChild(sync);
       wrap.appendChild(playback.section);
     }
     const masking = optionSection('Mask', 'media-masking-options', 'non-destructive');
@@ -1762,6 +1776,19 @@ export class Inspector {
           ));
         }
         playback.content.appendChild(flags);
+        if (el.syncGroup) {
+          const partners = this.store.slide?.elements.filter((other) =>
+            other.id !== el.id && other.type === 'video' && other.syncGroup === el.syncGroup).length ?? 0;
+          const note = document.createElement('div');
+          note.className = 'insp-hint';
+          note.textContent = partners > 0
+            ? `Plays in sync with ${partners} other video${partners === 1 ? '' : 's'}`
+            : 'In a sync group with no other video on this slide';
+          const unsync = button('Unsync', () => this.store.updateSelected((e) => {
+            if (e.type === 'video') delete e.syncGroup;
+          }), 'panel-action');
+          playback.content.append(note, unsync);
+        }
         wrap.appendChild(playback.section);
 
         // Trim is about time, like playback, so it sits beside it rather than

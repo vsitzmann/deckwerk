@@ -1316,6 +1316,7 @@ export function elementFromNode(
       start,
       end,
       poster: node.dataset.poster ?? null,
+      ...(node.dataset.syncGroup ? { syncGroup: node.dataset.syncGroup } : {}),
     };
   }
 
@@ -1349,6 +1350,7 @@ export function elementFromNode(
       end,
       poster: node.attrs.poster ?? null,
       sourceBox: cropFrom(node.dataset.crop),
+      ...(node.dataset.syncGroup ? { syncGroup: node.dataset.syncGroup } : {}),
     };
   }
 
@@ -1682,7 +1684,8 @@ function elementToHtml(element: SlideElement, build?: TimelineEntry, base?: stri
     case 'video': {
       const flags = `${element.loop ? ' loop' : ''}${element.muted ? ' muted' : ''}`
         + `${element.autoplay ? ' autoplay' : ''}${element.controls ? ' controls' : ''}`;
-      const trim = ` data-trim="${element.start},${element.end ?? ''}"`;
+      const trim = ` data-trim="${element.start},${element.end ?? ''}"`
+        + (element.syncGroup ? ` data-sync-group="${escape(element.syncGroup)}"` : '');
       if (element.sourceBox) {
         return `  <div ${attrs} data-element="video"`
           + ` data-src="${escape(element.src)}" data-fit="${element.fit}"${trim}`
