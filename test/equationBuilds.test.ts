@@ -23,6 +23,8 @@ import {
   stepCount,
 } from '../src/shared/timeline.js';
 import { renderSlide } from '../src/renderer/player/render.js';
+import renderMathInElement from 'katex/contrib/auto-render';
+import { renderAuthoredMath } from '../src/shared/htmlSlides.js';
 import { applyStaticSlideState } from '../src/renderer/player/staticState.js';
 
 const MOMENTUM = String.raw`$$\nabla \cdot \sigma \step{1}{+ f} = \step{2}{\rho \ddot{u}}$$`;
@@ -66,6 +68,17 @@ describe('term markers', () => {
     expect(rendered.querySelector('.katex-error')).toBeNull();
     expect(rendered.querySelector('.katex-html .step-1')?.textContent).toContain('+');
     expect(rendered.querySelector('.katex-html .step-2')?.textContent).toContain('ρ');
+  });
+
+  it('renders term markers on the authoring page too, so a page measures as the slide does', () => {
+    const doc = document.implementation.createHTMLDocument('page');
+    doc.body.innerHTML = String.raw`<p>$a \step{1}{+ b} \class{step-2}{+ c}$</p>`;
+    renderAuthoredMath(doc, renderMathInElement as (el: Element, opts: unknown) => void);
+    expect(doc.querySelector('.katex-error')).toBeNull();
+    expect(doc.querySelector('.katex-html .step-1')).not.toBeNull();
+    expect(doc.querySelector('.katex-html .step-2')).not.toBeNull();
+    // The TeX the compile reads back is what the author wrote.
+    expect(doc.querySelector('annotation')?.textContent).toBe(String.raw`a \step{1}{+ b} \class{step-2}{+ c}`);
   });
 
   it('still refuses every other HTML extension', () => {

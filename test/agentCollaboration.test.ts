@@ -345,6 +345,26 @@ for (const kind of BACKENDS) describe.skipIf(!electronBinary)(`an agent working 
     ]);
   });
 
+  it('lands equation term builds and pulses a new page declares, and re-saves them as no change', async () => {
+    const workspace = await open(kind);
+    await workspace.write('equation.html', await newPage(workspace, [
+      '<h1 class="role-title">Momentum balance</h1>',
+      String.raw`<p class="role-body" data-term-build="click" data-pulse="click" data-pulse-term="2">$$\nabla \cdot \sigma \step{1}{+ f} = \step{2}{\rho \ddot{u}}$$</p>`,
+    ].join('')));
+    const result = landed(await apply(workspace, 'equation.html'), workspace);
+    const slide = slideById(await workspace.deck(), result.changes.inserted[0]);
+    const equation = slide.elements.find((element) => element.type === 'text' && element.html.includes('\\step{2}'));
+    // Still the TeX the agent wrote, markers and all, not KaTeX's render.
+    expect(equation && equation.type === 'text' && equation.html).toContain(String.raw`\step{1}{+ f}`);
+    expect(slide.timeline.map((entry) => [entry.action.type, entry.action.target, entry.action.term ?? null, entry.trigger.on])).toEqual([
+      ['terms', equation!.id, null, 'click'],
+      ['pulse', equation!.id, '2', 'click'],
+    ]);
+    await workspace.write('again.html', await exportPage(workspace, slide.id));
+    expect(landed(await apply(workspace, 'again.html'), workspace).changes)
+      .toEqual({ replaced: [], inserted: [], deleted: [], moved: 0 });
+  });
+
   // A build's effect and its time are part of what a page states. Merging a
   // saved page kept the previous entry's whole action, so an agent that
   // changed a dissolve to a blur, or took the effect off, saw no change land.
