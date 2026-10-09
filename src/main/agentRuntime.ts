@@ -119,9 +119,21 @@ export class AgentRuntime {
       this.processing.add(name);
       try {
         const path = join(paths.inbox, name);
+        // One atomic write fires several watch events, so drains overlap: a
+        // drain that listed this request before another one took it finds it
+        // gone. Answering that with an ENOENT error would overwrite the real
+        // response — and tell the agent its change failed while the editor
+        // applies it.
+        let text: string;
+        try {
+          text = await readFile(path, 'utf8');
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue;
+          throw error;
+        }
         // The schema strips keys it does not know, so a request written against
         // retired field names is canonicalised before it is parsed.
-        const request = AgentRequestSchema.parse(renameRetiredFields(JSON.parse(await readFile(path, 'utf8'))));
+        const request = AgentRequestSchema.parse(renameRetiredFields(JSON.parse(text)));
         const win = this.editor();
         if (!win || win.isDestroyed()) {
           await this.respond({
