@@ -135,9 +135,15 @@ ignores setuid bits. Turning Chromium's sandbox off instead would leave
 collaborators' pages rendering with nothing between them and the server's
 decks.)
 
-A server whose browser cannot start says so: in its log at startup, in the
-warning a bridge prints the moment it connects (also shown in the person's
-Agent panel), and in every failed save. `test/agentCollaborationSandbox.test.ts`
+A server whose browser cannot start refuses to start, and says why in its
+log. So does one that cannot import decks: before it listens, the server runs
+each importer's `--self-check`, imports a small Keynote and PowerPoint deck
+through its own upload code, and runs ffmpeg and ffprobe. The importers' Python
+packages live in the checkout's own `.venv-import`, which `npm ci` creates from
+`importers/requirements.txt` and `npm run collab` brings up to date before
+every start (`npm run setup:importers` does it by hand). A deploy that cannot
+import therefore fails its health check and rolls back (`deploy/update.sh`),
+instead of failing somebody's upload with "keynote-parser is not installed". `test/agentCollaborationSandbox.test.ts`
 runs the agent workflow under this policy, and — on a machine where
 `deckwerk-collab.service` is installed — under the unit systemd actually
 resolved.

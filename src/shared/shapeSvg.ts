@@ -15,7 +15,13 @@ import { braceDepthOf, bracePath } from './brace.js';
 
 type Shape = Extract<SlideElement, { type: 'shape' }>;
 
-export function shapeSvg(el: Shape): string {
+/**
+ * `drawProgress` (0..1) draws a line or arrow only that far along its length,
+ * for the Line Draw build: the piece drawn is a line or arrow in its own
+ * right, heads and all, so the head rides the tip and the last frame is
+ * exactly the static drawing. Other shapes ignore it.
+ */
+export function shapeSvg(el: Shape, options: { drawProgress?: number } = {}): string {
   // A path carries its own coordinate space; everything else is drawn directly
   // in element pixels.
   const view = el.shape === 'path' && el.pathSize ? el.pathSize : { w: el.w, h: el.h };
@@ -42,7 +48,7 @@ export function shapeSvg(el: Shape): string {
       break;
     case 'line':
     case 'arrow':
-      node = lineSvg(el, stroke, paint);
+      node = lineSvg(el, stroke, paint, options.drawProgress ?? 1);
       break;
     case 'brace':
       node = `<path d="${bracePath(el.w, el.h, braceDepthOf(el))}" stroke-linecap="round"`
@@ -88,13 +94,21 @@ type XY = { x: number; y: number };
  * the triangle's sloping sides, even for the smallest head, one as wide as
  * the line itself. A curved line keeps its round end where it has no head.
  */
-function lineSvg(el: Shape, stroke: string, paint: string): string {
+function lineSvg(el: Shape, stroke: string, paint: string, progress = 1): string {
   const startHead = el.arrowStart;
   const endHead = el.arrowEnd || (!el.arrowStart && el.shape === 'arrow');
-  const p0 = { x: 0, y: el.h / 2 };
-  const p2 = { x: el.w, y: el.h / 2 };
   const local = el.control ? quadraticControl(el) : null;
-  const p1 = local ?? { x: el.w / 2, y: el.h / 2 };
+  const start = { x: 0, y: el.h / 2 };
+  const end = { x: el.w, y: el.h / 2 };
+  const through = local ?? { x: el.w / 2, y: el.h / 2 };
+  // Drawn partway (Line Draw), the line is its first `progress` of itself:
+  // a quadratic's piece from its start is again a quadratic, and a straight
+  // line's is straight. Everything below then treats that piece as the line.
+  const drawn = Math.min(1, Math.max(0, progress));
+  if (drawn <= 0) return '';
+  const p0 = start;
+  const p2 = drawn < 1 ? quadraticPoint(start, through, end, drawn) : end;
+  const p1 = drawn < 1 ? quadraticBlossom(start, through, end, 0, drawn) : through;
   const at = (t: number): XY => quadraticPoint(p0, p1, p2, t);
   // Heads share the line's length when it is too short for them at full
   // size: two meet at its middle, one spans it, rather than crossing over.

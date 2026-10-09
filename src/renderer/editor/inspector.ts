@@ -16,7 +16,7 @@ import type {
   TableSelection,
 } from './canvas.js';
 import { type AlignMode, alignElements } from './align.js';
-import { sameDeckIgnoringNotes, type EditorStore } from './store.js';
+import { sameDeckDrawing, type EditorStore } from './store.js';
 import { LAYOUT_LABELS, applySlideLayout, type SlideLayout } from './slideLayouts.js';
 import { elementFollowsLayout, layoutGeometryFor, realignElementToLayout } from '@shared/layoutMasters.js';
 import { MorphPanel } from './morphPanel.js';
@@ -279,7 +279,7 @@ export class Inspector {
       // Morph previews — every slide picture in the panel flickered per key.
       if (
         this.lastDeck !== null
-        && sameDeckIgnoringNotes(deck, this.lastDeck)
+        && sameDeckDrawing(deck, this.lastDeck)
         && sel === this.lastSelection
         && slideIndex === this.lastSlide
         && slideSel === this.lastSlideSelection

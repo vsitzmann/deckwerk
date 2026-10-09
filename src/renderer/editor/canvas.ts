@@ -74,8 +74,16 @@ import {
 } from './pendingUploads.js';
 import { dragImageSource, type ClipboardImageSource } from '@shared/clipboardImages.js';
 import type { ImportedAsset } from '@shared/ipc.js';
-import { newComment, openCommentsPopover, openCount } from './comments.js';
+import { commentFocus, commentHighlightsShown, onCommentHighlightsChange, openComments } from './comments.js';
+import { openThreadCount } from '@shared/comments.js';
 import { reportRenderDivergences } from './renderInvariants.js';
+import { SpellingSession } from './spellcheck.js';
+
+/** A row of the canvas right-click menu. */
+type ContextMenuEntry =
+  | { label: string; action: () => void; checked?: boolean }
+  | { heading: string; title?: string }
+  | 'separator';
 import { isWebBridgeAction } from '@shared/webBridge.js';
 import { reportSelectionViolations } from './selectionInvariants.js';
 import {
@@ -89,7 +97,7 @@ import {
   snapResize,
   spacingGuides,
 } from './snapping.js';
-import { sameSlideIgnoringNotes, type EditorStore } from './store.js';
+import { sameSlideDrawing, type EditorStore } from './store.js';
 
 export type TableSelection = {
   elementId: string;
@@ -788,6 +796,8 @@ export class EditorCanvas {
   private textEditRevertHtml: string | null = null;
   /** Ends the current run of typing so the next edit is its own undo step. */
   private sealTextChunk: (() => void) | null = null;
+  /** Spelling and grammar checking of the box being edited (no DOM of its own). */
+  readonly spelling = new SpellingSession();
   /**
    * What the text panel last drew itself from, so a moving caret redraws it
    * only when the answer changes. The panel reports the run under the
@@ -915,6 +925,10 @@ export class EditorCanvas {
     document.addEventListener('selectionchange', () => this.captureTextSelection());
 
     store.subscribe(() => this.render());
+    onCommentHighlightsChange(() => {
+      const slide = this.store.slide;
+      if (slide) this.drawOverlay(this.store.get().deck, slide.elements, this.store.get().selection);
+    });
     this.render();
   }
 
@@ -950,7 +964,7 @@ export class EditorCanvas {
     // them.
     if (
       slide === this.renderedSlide
-      || (this.renderedSlide !== null && sameSlideIgnoringNotes(this.renderedSlide, slide))
+      || (this.renderedSlide !== null && sameSlideDrawing(this.renderedSlide, slide))
     ) {
       this.renderedSlide = slide;
       this.rescale();
@@ -979,6 +993,9 @@ export class EditorCanvas {
       // A live cell range's highlight lives on cell nodes a patch can
       // replace; repaint it (or drop a range whose cells are now gone).
       this.syncTableSelectionHighlight();
+      // Outside a text edit no spelling highlight may survive: its ranges
+      // would point into nodes the session no longer owns.
+      if (!this.editingId) this.spelling.assertDetached();
       // In development, verify that patching left the DOM where a full render
       // would have. A property handled by `renderElement` and not by the patch
       // path updates the deck without changing the pixels, and the only symptom
@@ -1854,28 +1871,40 @@ export class EditorCanvas {
       }
     }
 
-    // Comment badges: a small bubble pinned to the top-right corner of any
-    // element that carries comments. Always visible (comments are useless if
-    // you cannot find them), counter-scaled like the handles, clickable even
-    // though the overlay itself is pointer-events: none.
-    for (const el of elements) {
-      const open = openCount(el.comments);
-      if ((el.comments?.length ?? 0) === 0) continue;
-      const bubble = document.createElement('div');
-      bubble.className = `element-comment${open > 0 ? '' : ' resolved'}`;
-      bubble.textContent = open > 0 ? String(open) : '✓';
-      bubble.title = open > 0
-        ? `${open} open comment${open === 1 ? '' : 's'}`
-        : 'All comments resolved';
-      bubble.style.left = `${el.x + el.w}px`;
-      bubble.style.top = `${el.y}px`;
-      bubble.style.setProperty('--inv', String(1 / this.scale));
-      bubble.addEventListener('pointerdown', (e) => e.stopPropagation());
-      bubble.addEventListener('click', (e) => {
-        e.stopPropagation();
-        this.openElementComments(el.id, bubble.getBoundingClientRect());
-      });
-      frag.appendChild(bubble);
+    // Comment highlights: whatever carries an open thread, and whatever the
+    // open comment popover is about (drawn stronger). Under the selection
+    // outlines, and inert: threads open from the right-click menu only.
+    {
+      const slide = this.store.slide;
+      const focus = commentFocus();
+      const shown = commentHighlightsShown();
+      const onThisSlide = focus !== null && focus.slideId === slide?.id;
+      const slideOpen = shown && slide ? openThreadCount(slide.comments) : 0;
+      if (slide && (slideOpen > 0 || (onThisSlide && !focus.elementId))) {
+        const frame = document.createElement('div');
+        frame.className = `comment-mark comment-slide-mark${onThisSlide && !focus.elementId ? ' hot' : ''}`;
+        frame.style.width = `${deck.canvas.w}px`;
+        frame.style.height = `${deck.canvas.h}px`;
+        frame.style.setProperty('--inv', String(1 / this.scale));
+        if (slideOpen > 0) frame.dataset.count = String(slideOpen);
+        frag.appendChild(frame);
+      }
+      for (const el of elements) {
+        const open = shown ? openThreadCount(el.comments) : 0;
+        const hot = onThisSlide && focus.elementId === el.id;
+        if (open === 0 && !hot) continue;
+        const mark = document.createElement('div');
+        mark.className = `comment-mark${hot ? ' hot' : ''}`;
+        mark.dataset.elementId = el.id;
+        mark.style.left = `${el.x}px`;
+        mark.style.top = `${el.y}px`;
+        mark.style.width = `${el.w}px`;
+        mark.style.height = `${el.h}px`;
+        if (el.rot && !hasEndpoints(el)) mark.style.transform = `rotate(${el.rot}deg)`;
+        mark.style.setProperty('--inv', String(1 / this.scale));
+        if (open > 0) mark.dataset.count = String(open);
+        frag.appendChild(mark);
+      }
     }
 
     // In mask mode, show the full frame faintly outside the crop window so it
@@ -3001,57 +3030,49 @@ export class EditorCanvas {
     if (slide) this.drawOverlay(deck, slide.elements, selection);
   }
 
-  /** Custom context menu: right-click selects the element and offers actions. */
   /**
-   * Comments popover for one element. Public so the context menu's "Add
-   * comment…" can open it; the badge drawn by drawOverlay uses it too.
+   * The comment threads on one object (or, with no id, everything on the
+   * current slide), opened from the right-click menu beside `at`.
    */
-  openElementComments(elementId: string, anchor?: DOMRect): void {
+  openComments(elementId: string | null, at?: { x: number; y: number }, opts: { compose?: boolean; threadId?: string } = {}): void {
     const slideId = this.store.slide?.id;
     if (!slideId) return;
-    const find = (deck: Deck) =>
-      deck.slides.find((s) => s.id === slideId)?.elements.find((e) => e.id === elementId);
-    const current = () => find(this.store.get().deck)?.comments ?? [];
-    // Anchor on the element's on-screen box when the caller has no badge rect.
-    const node = this.slideLayer.querySelector<HTMLElement>(
-      `[data-element-id="${CSS.escape(elementId)}"]`,
-    );
-    const at = anchor ?? node?.getBoundingClientRect();
-    if (!at) return;
-    const mutate = (label: string, fn: (el: SlideElement) => void) => {
-      this.store.commit((deck) => {
-        const el = find(deck);
-        if (el) fn(el);
-      }, { label });
-      pop.refresh(current());
-    };
-    const pop = openCommentsPopover({
-      anchor: at,
-      title: 'Comments',
-      comments: current(),
-      onAdd: (text) => mutate('Add comment', (el) => {
-        (el.comments ??= []).push(newComment(text));
-      }),
-      onResolve: (id, resolved) => mutate(resolved ? 'Resolve comment' : 'Reopen comment', (el) => {
-        const comment = el.comments?.find((c) => c.id === id);
-        if (comment) comment.resolved = resolved;
-      }),
-      onDelete: (id) => mutate('Delete comment', (el) => {
-        el.comments = (el.comments ?? []).filter((c) => c.id !== id);
-        if (el.comments.length === 0) delete el.comments;
-      }),
+    const node = elementId
+      ? this.slideLayer.querySelector<HTMLElement>(`[data-element-id="${CSS.escape(elementId)}"]`)
+      : null;
+    const anchor = at ?? node?.getBoundingClientRect() ?? this.lastContextPoint ?? this.stage.getBoundingClientRect();
+    openComments({
+      store: this.store,
+      slideId,
+      ...(elementId ? { elementId } : {}),
+      anchor,
+      ...opts,
+      reveal: (target) => {
+        if (target.elementId) this.store.select([target.elementId]);
+      },
     });
   }
 
+  /** Where the last right-click landed: a slide's comments open there. */
+  private lastContextPoint: { x: number; y: number } | null = null;
+
+  /** Custom context menu: right-click selects the element and offers actions. */
   private onContextMenu(ev: MouseEvent): void {
     ev.preventDefault();
+    this.lastContextPoint = { x: ev.clientX, y: ev.clientY };
     document.getElementById('ctx-menu')?.remove();
-    if (!this.contextActions) return;
+    // Inside the box being edited the menu leads with spelling: fixes for the
+    // flagged word under the pointer, then the on/off switch.
+    const spelling = this.editingId ? this.spellingMenuItems(ev.clientX, ev.clientY) : [];
+    if (!this.contextActions && spelling.length === 0) return;
 
     const hit = this.hitTest(this.toCanvas(ev as PointerEvent));
     if (hit && !this.store.get().selection.has(hit.id)) this.store.select([hit.id]);
 
-    const items = this.contextActions(hit);
+    const actions = this.contextActions?.(hit) ?? [];
+    const items: Array<ContextMenuEntry> = actions.length
+      ? [...spelling, 'separator', ...actions]
+      : spelling;
     if (items.length === 0) return;
 
     const menu = document.createElement('div');
@@ -3063,8 +3084,23 @@ export class EditorCanvas {
         menu.appendChild(hr);
         continue;
       }
+      if ('heading' in item) {
+        const heading = document.createElement('div');
+        heading.className = 'ctx-heading';
+        heading.textContent = item.heading;
+        heading.title = item.title ?? '';
+        menu.appendChild(heading);
+        continue;
+      }
       const row = document.createElement('button');
       row.textContent = item.label;
+      if (item.checked !== undefined) {
+        row.className = 'ctx-check';
+        row.setAttribute('role', 'menuitemcheckbox');
+        row.setAttribute('aria-checked', String(item.checked));
+      }
+      // Keep the caret (and the edit session) in the text box.
+      row.addEventListener('mousedown', (event) => event.preventDefault());
       row.addEventListener('click', () => {
         menu.remove();
         item.action();
@@ -3368,6 +3404,8 @@ export class EditorCanvas {
     // jsdom has no execCommand; the editing command is a browser-only nicety.
     document.execCommand?.('defaultParagraphSeparator', false, 'p');
     body.contentEditable = 'true';
+    // Harper (this.spelling) checks the box; Chromium's own squiggles would
+    // double up on top of it.
     body.spellcheck = false;
     body.style.outline = 'none';
     body.style.cursor = 'text';
@@ -3405,6 +3443,7 @@ export class EditorCanvas {
     this.textEditDomBase = authoredTextHtml(body);
     this.textEditRevertHtml = el.html;
     this.onTextEditModeChange?.(elementId);
+    this.spelling.attach(body);
 
     // Live sync: stream the box's content to the store (and thus to
     // collaborators) while typing, throttled to one commit per interval. The
@@ -3865,6 +3904,7 @@ export class EditorCanvas {
     const finish = (commit: boolean) => {
       ended = true;
       this.textEditComposing = false;
+      this.spelling.detach();
       if (this.finishTextEdit === finish) this.finishTextEdit = null;
       if (this.sealTextChunk === sealTextChunk) this.sealTextChunk = null;
       if (idleSeal) {
@@ -5017,6 +5057,7 @@ export class EditorCanvas {
     this.editingId = null;
     this.tableSelection = null;
     this.textSelectionRange = null;
+    this.spelling.detach();
     this.onTextEditModeChange?.(null);
 
     const node = this.slideLayer.querySelector<HTMLElement>(
@@ -5751,6 +5792,62 @@ export class EditorCanvas {
     );
     if (body && authoredTextHtml(body) !== this.textEditStoreBase) this.commitLiveTextDom('Edit text');
     return false;
+  }
+
+  /** Right-click entries for the flagged word at a point, plus the switch. */
+  private spellingMenuItems(x: number, y: number): ContextMenuEntry[] {
+    const items: ContextMenuEntry[] = [];
+    const found = this.spelling.isEnabled ? this.spelling.lintAtPoint(x, y) : null;
+    if (found) {
+      const { lint, range } = found;
+      const word = range.toString();
+      items.push({ heading: lint.kind === 'spelling' ? 'Spelling' : 'Grammar', title: lint.message });
+      for (const suggestion of lint.suggestions) {
+        items.push({
+          label: suggestion === '' ? `Remove "${word}"` : suggestion,
+          action: () => this.applySpellingFix(range, suggestion),
+        });
+      }
+      if (lint.kind === 'spelling' && /^\S+$/.test(word)) {
+        items.push({ label: `Add "${word}" to dictionary`, action: () => void this.spelling.addWord(word) });
+      }
+      items.push({ label: 'Ignore', action: () => this.spelling.ignore(lint) });
+      items.push('separator');
+    }
+    const on = this.spelling.isEnabled;
+    items.push({ label: 'Check spelling and grammar', checked: on, action: () => this.spelling.setEnabled(!on) });
+    return items;
+  }
+
+  /**
+   * Replace a flagged range in the box being edited with a suggestion, as its
+   * own undo step ("Fix spelling") through the same commit path as formatting.
+   */
+  applySpellingFix(range: Range, replacement: string): void {
+    const elementId = this.editingId;
+    if (!elementId) return;
+    const body = this.slideLayer.querySelector<HTMLElement>(
+      `[data-element-id="${CSS.escape(elementId)}"] .text-content`,
+    );
+    if (!body || !body.contains(range.commonAncestorContainer)) return;
+    // The run being typed is its own undo step, not part of the fix.
+    this.sealTextChunk?.();
+    range.deleteContents();
+    const caret = document.createRange();
+    if (replacement) {
+      const text = document.createTextNode(replacement);
+      range.insertNode(text);
+      caret.setStartAfter(text);
+    } else {
+      caret.setStart(range.startContainer, range.startOffset);
+    }
+    caret.collapse(true);
+    const selection = window.getSelection();
+    selection?.removeAllRanges();
+    selection?.addRange(caret);
+    this.textSelectionRange = caret.cloneRange();
+    this.commitLiveTextDom('Fix spelling');
+    this.spelling.recheck();
   }
 
   private commitLiveTextDom(label: string): void {

@@ -6,9 +6,10 @@ import { renderSlide } from '../player/render.js';
 import { applyDeckThemeToNewSlide } from '@shared/themes.js';
 import { LAYOUT_LABELS_BY_ID } from './layoutPreview.js';
 import { LAYOUT_LABELS, applySlideLayout, type SlideLayout } from './slideLayouts.js';
-import { newComment, openCommentsPopover, openCount } from './comments.js';
+import { openComments } from './comments.js';
+import { openThreadCount } from '@shared/comments.js';
 import type { Deck, Slide } from '@shared/deck.js';
-import { sameSlideIgnoringNotes, type EditorStore } from './store.js';
+import { sameSlideDrawing, type EditorStore } from './store.js';
 import { showConfirmDialog } from './confirmDialog.js';
 
 /**
@@ -360,7 +361,7 @@ export class SlideRail {
   private rekeyNoteOnlyChanges(deck: Deck): void {
     for (const slide of deck.slides) {
       const previous = this.slideById.get(slide.id);
-      if (previous && previous !== slide && sameSlideIgnoringNotes(previous, slide)) {
+      if (previous && previous !== slide && sameSlideDrawing(previous, slide)) {
         const thumb = this.thumbCache.get(previous);
         if (thumb) {
           this.thumbCache.delete(previous);
@@ -665,6 +666,7 @@ export class SlideRail {
       const item = cached.row;
       this.rowBySlideId.set(slide.id, item);
       this.syncRowState(item, i === slideIndex, slideSelection.has(slide.id));
+      this.syncCommentState(item, slide);
       const thumb = item.querySelector<HTMLElement>(':scope > .rail-thumb');
       if (thumb) {
         this.pendingThumbs.set(thumb, { deck, slide });
@@ -712,26 +714,7 @@ export class SlideRail {
         badge.textContent = 'Hidden';
         item.appendChild(badge);
       }
-      // Comment affordance in the row's bottom-right corner: hidden until
-      // hover when the slide has no comments, always visible (with the open
-      // count) when it does. A <span>, not a <button> — the row itself is a
-      // button and nesting them is invalid HTML.
-      {
-        const open = openCount(slide.comments);
-        const bubble = document.createElement('span');
-        bubble.className = `rail-comment${open > 0 ? ' has-comments' : ''}`;
-        bubble.setAttribute('role', 'button');
-        bubble.title = open > 0
-          ? `${open} open comment${open === 1 ? '' : 's'}`
-          : 'Add comment';
-        bubble.textContent = open > 0 ? String(open) : '+';
-        bubble.addEventListener('pointerdown', (e) => e.stopPropagation());
-        bubble.addEventListener('click', (e) => {
-          e.stopPropagation();
-          this.openComments(slide.id, i, bubble.getBoundingClientRect());
-        });
-        item.appendChild(bubble);
-      }
+      this.syncCommentState(item, slide);
       // Selection runs on pointerdown, not click: the row is draggable for
       // reorder, and Chromium starts a native drag on a few pixels of drift,
       // which suppresses the click entirely — every real (slightly wobbly)
@@ -792,6 +775,9 @@ export class SlideRail {
         checked: layout === current,
         action: () => this.applyLayout(layout, label),
       })),
+      'separator',
+      commentMenuItem(slide, () => this.rowBySlideId.get(slide.id)?.getBoundingClientRect()
+        ?? new DOMRect(ev.clientX, ev.clientY, 0, 0), (anchor, compose) => this.openComments(slide.id, anchor, compose)),
       'separator',
       { label: 'Delete', action: () => this.deleteSlide() },
     ];
@@ -963,32 +949,42 @@ export class SlideRail {
     });
   }
 
-  /** Open the comments popover for a slide; edits commit like any other. */
-  private openComments(slideId: string, index: number, anchor: DOMRect): void {
-    const current = () =>
-      this.store.get().deck.slides.find((s) => s.id === slideId)?.comments ?? [];
-    const mutate = (label: string, fn: (slide: Slide) => void) => {
-      this.store.commit((deck) => {
-        const slide = deck.slides.find((s) => s.id === slideId);
-        if (slide) fn(slide);
-      }, { label });
-      pop.refresh(current());
-    };
-    const pop = openCommentsPopover({
+  /**
+   * Highlight a row whose slide, or anything on it, carries an open comment
+   * thread, with the count in its corner. Rows are reused when only comments
+   * changed (`sameSlideDrawing`), so this runs on every render.
+   */
+  private syncCommentState(item: HTMLElement, slide: Slide): void {
+    const open = openThreadCount(slide.comments)
+      + slide.elements.reduce((sum, element) => sum + openThreadCount(element.comments), 0);
+    item.classList.toggle('has-comments', open > 0);
+    let chip = item.querySelector<HTMLElement>(':scope > .rail-comment-count');
+    if (open === 0) {
+      chip?.remove();
+      return;
+    }
+    if (!chip) {
+      chip = document.createElement('span');
+      chip.className = 'rail-comment-count';
+      item.appendChild(chip);
+    }
+    chip.textContent = String(open);
+    chip.title = `${open} open comment thread${open === 1 ? '' : 's'} on this slide. Right-click to read them.`;
+  }
+
+  /** Every thread on a slide, beside its row. */
+  private openComments(slideId: string, anchor: DOMRect, compose: boolean): void {
+    openComments({
+      store: this.store,
+      slideId,
       anchor,
-      title: `Comments — slide ${index + 1}`,
-      comments: current(),
-      onAdd: (text) => mutate('Add comment', (slide) => {
-        (slide.comments ??= []).push(newComment(text));
-      }),
-      onResolve: (id, resolved) => mutate(resolved ? 'Resolve comment' : 'Reopen comment', (slide) => {
-        const comment = slide.comments?.find((c) => c.id === id);
-        if (comment) comment.resolved = resolved;
-      }),
-      onDelete: (id) => mutate('Delete comment', (slide) => {
-        slide.comments = (slide.comments ?? []).filter((c) => c.id !== id);
-        if (slide.comments.length === 0) delete slide.comments;
-      }),
+      compose,
+      reveal: (target) => {
+        const index = this.store.get().deck.slides.findIndex((slide) => slide.id === target.slideId);
+        if (index < 0) return;
+        this.store.selectSlide(index);
+        if (target.elementId) this.store.select([target.elementId]);
+      },
     });
   }
 
@@ -1171,4 +1167,18 @@ function railButton(label: string, onClick: () => void): HTMLElement {
   b.textContent = label;
   b.addEventListener('click', onClick);
   return b;
+}
+
+/** The rail menu's comment row: a count when the slide has open threads. */
+function commentMenuItem(
+  slide: Slide,
+  anchor: () => DOMRect,
+  open: (anchor: DOMRect, compose: boolean) => void,
+): MenuItem {
+  const count = openThreadCount(slide.comments)
+    + slide.elements.reduce((sum, element) => sum + openThreadCount(element.comments), 0);
+  return {
+    label: count > 0 ? `Comments (${count})…` : 'Comment on slide…',
+    action: () => open(anchor(), count === 0),
+  };
 }

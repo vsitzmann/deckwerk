@@ -148,7 +148,7 @@ type OpName =
   | 'click' | 'shift-click' | 'double-click text' | 'double-click image then text'
   | 'type nonce' | 'bold mid-word' | 'escape' | 'click empty' | 'marquee'
   | 'rail hop' | 'undo' | 'redo' | 'undo round-trip' | 'delete selection'
-  | 'cmd+a' | 'click with stray hover' | 'rail multi-delete' | 'stack key';
+  | 'cmd+a' | 'click with stray hover' | 'rail multi-delete' | 'stack key' | 'spelling fix';
 
 interface Violation { seed: number; step: number; op: OpName; oracle: string; detail: string }
 
@@ -389,6 +389,7 @@ function chooseOp(next: () => number, pre: CrossState): OpName {
     add('type nonce', 3);
     add('bold mid-word', 2);
     add('click', 2); // click the other box mid-typing, no Escape first
+    add('spelling fix', 1);
   }
   add('escape', 1);
   add('click empty', 1);
@@ -620,6 +621,36 @@ async function performOp(
       await wait(300);
       if (await snapshot() !== before) {
         flag('undoRoundTrip', `undo after the confirmed slide deletion did not restore the deck: ${await snapshot()}`);
+      }
+      return 'same';
+    }
+    case 'spelling fix': {
+      // Type a misspelling, wait for Harper's mark, and take the first
+      // suggestion from the right-click menu: a programmatic edit inside the
+      // live session that must land in the box being edited, as its own step.
+      await session.type(' wrold ');
+      let point: { x: number; y: number } | null = null;
+      const deadline = Date.now() + 20_000;
+      while (!point && Date.now() < deadline) {
+        point = await session.cdp.evaluate<{ x: number; y: number } | null>(`(() => {
+          const h = CSS.highlights.get('deckwerk-spelling');
+          const r = h && [...h].find((range) => range.toString() === 'wrold');
+          if (!r) return null;
+          const box = r.getBoundingClientRect();
+          return { x: box.left + box.width / 2, y: box.top + box.height / 2 };
+        })()`);
+        if (!point) await wait(100);
+      }
+      if (!point) {
+        flag('routing', 'typed "wrold" while editing but Harper never marked it');
+        return 'same';
+      }
+      await session.cdp.rightClickAt(point.x, point.y);
+      await session.cdp.clickByText('#ctx-menu button', 'world');
+      await wait(120);
+      const texts = await session.allTexts();
+      if (pre.editing && !texts[pre.editing]?.includes('world')) {
+        flag('routing', `the spelling fix did not land in ${pre.editing}: "${texts[pre.editing]}"`);
       }
       return 'same';
     }

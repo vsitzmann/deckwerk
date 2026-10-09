@@ -61,17 +61,25 @@ const ThemeSelectionSchema = z.object({
 });
 
 /**
- * A comment attached to a slide or an element. Comments live in deck.json so
- * they sync through the same element-level diff/merge as every other edit and
- * survive download/export. `ts` is an ISO-8601 timestamp.
+ * One message in a comment thread on a slide or an element. Comments live in
+ * deck.json so they survive download and export, but they are review state,
+ * not content: they change only through the `updateComments` operation, which
+ * merges by comment id, and undo never touches them (shared/comments.ts).
+ *
+ * A thread is a root comment (no `parentId`) and the replies that name it.
+ * The root's `resolved` is the thread's. `ts` and `edited` are ISO-8601.
  */
 export const CommentSchema = z.object({
   id: Id,
   author: z.string().default(''),
+  /** Who wrote it, on an access-controlled server; decides who may edit it. */
+  login: z.string().optional(),
   text: z.string(),
   ts: z.string(),
+  edited: z.string().optional(),
   resolved: z.boolean().default(false),
-  /** Optional parent comment for a lightweight reply thread. */
+  resolvedBy: z.string().optional(),
+  /** The root comment this replies to. */
   parentId: Id.optional(),
 });
 
@@ -392,8 +400,16 @@ export const ActionSchema = z.object({
     'removeClass',
   ]),
   target: Id,
-  /** Seconds for `seek`; class name for `addClass`/`removeClass`. */
+  /**
+   * Seconds for `seek`; class name for `addClass`/`removeClass`. On `appear`,
+   * `"byParagraph"` reveals text a paragraph at a time and `"draw"` draws a
+   * line or arrow in from its start to its end. On `appear` or `disappear`,
+   * `"dissolve"` fades the element in or out and `"blur"` brings it into (or
+   * takes it out of) focus as it fades.
+   */
   value: z.union([z.number(), z.string()]).nullable().default(null),
+  /** Milliseconds an animated build takes (`"draw"`, `"dissolve"`, `"blur"`). */
+  duration: z.number().min(0).optional(),
 });
 
 export const TimelineEntrySchema = z.object({

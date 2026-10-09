@@ -17,6 +17,7 @@ import { slidesToHtml } from '@shared/htmlSlides.js';
 import { capabilities } from '@shared/capabilities.js';
 import { PLAYER_TYPE_CSS } from '@shared/playerTypeCss.js';
 import { CustomThemeSchema, parseDeck, type Comment, type Deck, type Slide, type SlideElement } from '@shared/deck.js';
+import { commentsOperation, findComment, threadEdits } from '@shared/comments.js';
 import { diffDecks } from '@shared/deckDiff.js';
 import { renameRetiredFields } from '@shared/fieldAliases.js';
 import {
@@ -45,7 +46,8 @@ import {
   writeAgentRequest,
 } from '../main/agentRuntime.js';
 import { adoptAuthoredIds, htmlSyncSummary, insertionAnchor, pageStampOf, stampPage, type PageStamp } from '@shared/htmlSlides.js';
-import { DECK_FILE, importAsset, importWebPage, loadDeck } from '../main/deckStore.js';
+import { DECK_FILE, importAsset, importWebPage, loadDeck, loadTheme, saveDeck, saveTheme } from '../main/deckStore.js';
+import { listDeckVersions, readDeckVersion, VERSIONS_DIR, writeDeckVersion } from '../main/deckVersions.js';
 import { injectWebBridgeRuntime } from '@shared/webBridge.js';
 import { measureBuiltTextOverflows } from './compileHtml.js';
 import { serveBundle } from './previewServer.js';
@@ -178,10 +180,12 @@ Everything else:
   comments  [deck] [--unresolved]         every comment, with its slide number.
                                           Humans leave instructions this way —
                                           check it at the start of a task.
-  comments  [deck] --resolve <commentId>  mark a comment resolved (do this
+  comments  [deck] --resolve <commentId>  mark a thread resolved (do this
                                           after acting on it; never delete)
+  comments  [deck] --add <text> --reply <commentId> [--author <name>]
+                                          answer in a thread (reopens it)
   comments  [deck] --add <text> (--slide <id|number> | --element <elementId>)
-                                          [--author <name>]  reply on a thread
+                                          [--author <name>]  start a new thread
   chat      [deck] [--since <messageId>]  the deck's chat, oldest first. Lives on
                                           the collab server, not in the folder:
                                           run it in a connected mirror, or pass
@@ -199,6 +203,10 @@ Everything else:
                                           changed what, when. --deleted lists only
                                           changes that removed slides or objects,
                                           with their full JSON, to put them back
+            [deck] --versions             the deck as it was, every few minutes of
+                                          editing (.versions/, kept by the server)
+            [deck] --restore <id | time>  put a version back, for everyone editing;
+                                          what it replaces becomes a version too
 
 Adding slides vs. changing them: 'new' writes a page that can only add, while
 'inspect --html' creates authoring HTML that governs the slides it names — do
@@ -1208,7 +1216,7 @@ function titleFromHtml(html: string): string | null {
  */
 async function commentsCommand(argv: string[], io: CliIo): Promise<number> {
   const { flags, options, positional } = parseFlags(argv, [
-    'resolve', 'add', 'slide', 'element', 'author',
+    'resolve', 'add', 'slide', 'element', 'author', 'reply',
   ]);
   ensureKnownFlags('comments', flags, ['unresolved']);
   ensurePositionals('comments', positional, 1);
@@ -1218,12 +1226,19 @@ async function commentsCommand(argv: string[], io: CliIo): Promise<number> {
   const addText = options.get('add');
   const slideRef = options.get('slide');
   const elementId = options.get('element');
+  const replyId = options.get('reply');
 
   if (resolveId) {
-    const operation = resolveCommentOperation(deck, resolveId);
-    if (!operation) {
+    const found = findComment(deck, resolveId);
+    if (!found) {
       io.err(`No comment with id ${resolveId}`);
       return EXIT_ERROR;
+    }
+    const operation = commentsOperation(deck, found.target, (comments) =>
+      threadEdits.resolve(comments, resolveId, true, options.get('author') ?? 'agent'));
+    if (!operation) {
+      io.out(json({ resolved: resolveId, alreadyResolved: true }));
+      return EXIT_OK;
     }
     return applyTransaction(deckDir, {
       version: AGENT_PROTOCOL_VERSION,
@@ -1233,10 +1248,6 @@ async function commentsCommand(argv: string[], io: CliIo): Promise<number> {
   }
 
   if (addText) {
-    if (Boolean(slideRef) === Boolean(elementId)) {
-      io.err('comments --add needs exactly one of --slide <slideId> or --element <elementId>');
-      return EXIT_USAGE;
-    }
     const comment: Comment = {
       id: `comment-${randomUUID().slice(0, 8)}`,
       author: options.get('author') ?? 'agent',
@@ -1244,18 +1255,36 @@ async function commentsCommand(argv: string[], io: CliIo): Promise<number> {
       ts: new Date().toISOString(),
       resolved: false,
     };
-    // A number here is the slide number the listing above prints, so a reply
-    // can name the slide the same way the comment it answers did.
-    const slideId = slideRef ? slideIdForRef(deck, slideRef) ?? slideRef : undefined;
-    const operation = addCommentOperation(deck, comment, slideId, elementId);
-    if (!operation) {
-      io.err(`No such ${slideRef ? `slide: ${slideRef}` : `element: ${elementId}`}`);
-      return EXIT_ERROR;
+    let operation: DraftOperation | null;
+    if (replyId) {
+      const found = findComment(deck, replyId);
+      if (!found) {
+        io.err(`No comment with id ${replyId}`);
+        return EXIT_ERROR;
+      }
+      operation = commentsOperation(deck, found.target, (comments) => threadEdits.reply(comments, replyId, comment));
+    } else {
+      if (Boolean(slideRef) === Boolean(elementId)) {
+        io.err('comments --add needs --reply <commentId>, or exactly one of --slide <slideId> or --element <elementId>');
+        return EXIT_USAGE;
+      }
+      // A number here is the slide number the listing above prints, so a
+      // comment can name the slide the same way a person does.
+      const slideId = slideRef ? slideIdForRef(deck, slideRef) ?? slideRef : undefined;
+      const slide = deck.slides.find((candidate) => (slideId
+        ? candidate.id === slideId
+        : candidate.elements.some((element) => element.id === elementId)));
+      if (!slide) {
+        io.err(`No such ${slideRef ? `slide: ${slideRef}` : `element: ${elementId}`}`);
+        return EXIT_ERROR;
+      }
+      operation = commentsOperation(deck, { slideId: slide.id, ...(elementId ? { elementId } : {}) },
+        (comments) => threadEdits.start(comments, comment));
     }
     return applyTransaction(deckDir, {
       version: AGENT_PROTOCOL_VERSION,
-      label: 'Add comment',
-      operations: [operation],
+      label: replyId ? 'Reply to comment' : 'Add comment',
+      operations: [operation!],
     }, io, { commentId: comment.id });
   }
 
@@ -1338,49 +1367,6 @@ function listComments(deck: Deck): CommentRow[] {
 }
 
 type DraftOperation = DraftTransaction['operations'][number];
-
-function resolveCommentOperation(deck: Deck, commentId: string): DraftOperation | null {
-  for (const slide of deck.slides) {
-    const onSlide = slide.comments?.find((c) => c.id === commentId);
-    if (onSlide) {
-      const { elements: _elements, ...props } = structuredClone(slide);
-      for (const c of props.comments ?? []) if (c.id === commentId) c.resolved = true;
-      return { op: 'setSlideProperties', slideId: slide.id, slide: props };
-    }
-    for (const element of slide.elements) {
-      if (element.comments?.some((c) => c.id === commentId)) {
-        const next = structuredClone(element);
-        for (const c of next.comments ?? []) if (c.id === commentId) c.resolved = true;
-        return { op: 'replaceElement', slideId: slide.id, elementId: element.id, element: next };
-      }
-    }
-  }
-  return null;
-}
-
-function addCommentOperation(
-  deck: Deck,
-  comment: Comment,
-  slideId?: string,
-  elementId?: string,
-): DraftOperation | null {
-  for (const slide of deck.slides) {
-    if (slideId && slide.id === slideId) {
-      const { elements: _elements, ...props } = structuredClone(slide);
-      (props.comments ??= []).push(comment);
-      return { op: 'setSlideProperties', slideId: slide.id, slide: props };
-    }
-    if (elementId) {
-      const element = slide.elements.find((e) => e.id === elementId);
-      if (element) {
-        const next = structuredClone(element);
-        (next.comments ??= []).push(comment);
-        return { op: 'replaceElement', slideId: slide.id, elementId, element: next };
-      }
-    }
-  }
-  return null;
-}
 
 async function transactionCommand(argv: string[], io: CliIo): Promise<number> {
   const [sub, ...rest] = argv;
@@ -1557,12 +1543,25 @@ function authoredScenes(
  * full JSON with --deleted or --full, and their number and title otherwise.
  */
 async function historyCommand(argv: string[], io: CliIo): Promise<number> {
-  const { flags, options, positional } = parseFlags(argv, ['limit']);
-  ensureKnownFlags('history', flags, ['deleted', 'slide', 'full']);
+  const { flags, options, positional } = parseFlags(argv, ['limit', 'restore']);
+  ensureKnownFlags('history', flags, ['deleted', 'slide', 'full', 'versions']);
   ensurePositionals('history', positional, 1);
   const deckDir = resolveDeckDir(positional[0], io);
   const limit = options.has('limit') ? Number.parseInt(options.get('limit')!, 10) : 50;
   if (!Number.isFinite(limit) || limit < 1) throw new UsageError('--limit takes a positive number');
+  if (options.has('restore')) return restoreVersion(deckDir, options.get('restore')!, io);
+  if (flags.has('versions')) {
+    const versions = await listDeckVersions(deckDir);
+    io.out(json({
+      dir: join(deckDir, VERSIONS_DIR),
+      total: versions.length,
+      shown: Math.min(limit, versions.length),
+      ...(versions.length ? {} : { note: 'No versions here. A collaboration server keeps them for decks it hosts.' }),
+      versions: versions.slice(-limit).map(({ id, at, bytes }) => ({ id, at: at.toISOString(), bytes })),
+      restore: 'slide-agent history <deck> --restore <id | ISO time>',
+    }));
+    return EXIT_OK;
+  }
   const slideIds = new Set([...flags].filter((flag) => flag.startsWith('slide='))
     .flatMap((flag) => flag.slice('slide='.length).split(',')).map((id) => id.trim()).filter(Boolean));
   const deletedOnly = flags.has('deleted');
@@ -1596,6 +1595,61 @@ async function historyCommand(argv: string[], io: CliIo): Promise<number> {
     entries: shown,
   }));
   return EXIT_OK;
+}
+
+/** How long a hosting server takes to notice a deck.json written behind it and adopt it. */
+const restoreSettleMs = (): number => Number(process.env.DECKWERK_RESTORE_SETTLE_MS ?? 2_500);
+
+/**
+ * Put a version of the deck back: `id` names one exactly (or by a unique
+ * prefix), or is a time, meaning the newest version at or before it. What the
+ * deck holds now becomes a version first, so a restore is itself undoable.
+ *
+ * Written as deck.json beside the deck. A collab server hosting it adopts the
+ * file for everyone (and records the replacement); a save of its own landing
+ * in the same instant would overwrite it, so the write is checked and retried.
+ */
+async function restoreVersion(deckDir: string, wanted: string, io: CliIo): Promise<number> {
+  const versions = await listDeckVersions(deckDir);
+  const byId = versions.filter((version) => version.id === wanted || version.id.startsWith(wanted));
+  const time = Date.parse(wanted);
+  const chosen = byId.length === 1 ? byId[0]
+    : byId.length === 0 && Number.isFinite(time) ? versions.filter((version) => version.at.getTime() <= time).at(-1)
+      : undefined;
+  if (!chosen) {
+    throw new UsageError(byId.length > 1
+      ? `"${wanted}" matches ${byId.length} versions; give more of the id.`
+      : `No version "${wanted}" in ${join(deckDir, VERSIONS_DIR)}. List them with: slide-agent history <deck> --versions`);
+  }
+  const { deck: raw, theme } = await readDeckVersion(chosen);
+  const deck = parseDeck(raw);
+
+  const currentJson = await readFile(join(deckDir, DECK_FILE), 'utf8');
+  const currentThemeFile = parseDeck(JSON.parse(currentJson)).theme;
+  const currentTheme = await loadTheme(deckDir, currentThemeFile);
+  const kept = await writeDeckVersion(deckDir, {
+    deckJson: currentJson, theme: { file: currentThemeFile, css: currentTheme },
+  });
+
+  if (theme && (theme.file !== currentThemeFile || theme.css !== currentTheme)) {
+    await saveTheme(deckDir, theme.file, theme.css);
+  }
+  let written = '';
+  for (let attempt = 0; attempt < 4; attempt++) {
+    written = await saveDeck(deckDir, deck);
+    await new Promise((resolveWait) => setTimeout(resolveWait, restoreSettleMs()));
+    if (await readFile(join(deckDir, DECK_FILE), 'utf8') === written) {
+      io.out(json({
+        restored: chosen.id,
+        at: chosen.at.toISOString(),
+        slides: deck.slides.length,
+        previous: kept?.id ?? 'unchanged since the newest version',
+        undo: `slide-agent history <deck> --restore ${kept?.id ?? versions.at(-1)?.id ?? '<id>'}`,
+      }));
+      return EXIT_OK;
+    }
+  }
+  throw new Error('The server hosting this deck kept saving over the restore (someone is editing it right now). Try again.');
 }
 
 /** A caller mistake, reported as usage rather than as a failure of the tool. */

@@ -52,7 +52,8 @@ Everything else:
   render    (--selected|--slide …|--all) --output <dir>
                                           PNGs of slides, through the server's renderer
   comments  [--unresolved]                every comment, with its slide number
-  comments  --resolve <commentId>         mark a comment done (never delete)
+  comments  --resolve <commentId>         mark a thread done (never delete)
+  comments  --add <text> --reply <commentId> [--author <name>]   answer in a thread
   comments  --add <text> (--slide <id|number> | --element <elementId>) [--author <name>]
   chat      [--since <messageId>]         the deck's chat with the people in it, oldest first
   chat      --wait [--since <id>] [--timeout <seconds>]
@@ -337,7 +338,7 @@ async function main(argv) {
       return EXIT_OK;
     }
     case 'comments': {
-      const { flags, options } = parseArgs(rest, ['resolve', 'add', 'slide', 'element', 'author']);
+      const { flags, options } = parseArgs(rest, ['resolve', 'add', 'slide', 'element', 'author', 'reply']);
       if (options.has('resolve')) {
         const body = await api('/api/comments/resolve', {}, {
           method: 'POST', headers: { 'content-type': 'application/json' },
@@ -346,11 +347,21 @@ async function main(argv) {
         out({ status: 'applied', applied: true, live: true, resolved: options.get('resolve'), ...body });
         return EXIT_OK;
       }
+      if (options.has('add') && options.has('reply')) {
+        const comment = await api('/api/comments', {}, {
+          method: 'POST', headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            text: options.get('add'), author: options.get('author') ?? 'agent', parentId: options.get('reply'),
+          }),
+        });
+        out({ status: 'applied', applied: true, live: true, commentId: comment.id });
+        return EXIT_OK;
+      }
       if (options.has('add')) {
         const slideRef = options.get('slide');
         const elementId = options.get('element');
         if (Boolean(slideRef) === Boolean(elementId)) {
-          fail('comments --add needs exactly one of --slide <id|number> or --element <elementId>', EXIT_USAGE);
+          fail('comments --add needs --reply <commentId>, or exactly one of --slide <id|number> or --element <elementId>', EXIT_USAGE);
         }
         let slideId;
         if (slideRef) {

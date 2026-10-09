@@ -1,4 +1,6 @@
-import type { SlideElement } from '@shared/deck.js';
+import type { Comment, SlideElement } from '@shared/deck.js';
+import { openThreadCount } from '@shared/comments.js';
+import { commentHighlightsShown, setCommentHighlightsShown } from './comments.js';
 import { elementFollowsLayout, layoutGeometryFor, realignElementToLayout } from '@shared/layoutMasters.js';
 import { EditorCanvas } from './canvas.js';
 import { ARRANGE_LABELS, arrangeSelection } from './arrange.js';
@@ -475,10 +477,7 @@ export function makeContextActions(
         { label: 'Duplicate', action: () => duplicateSelection(store) },
         { label: 'Delete', action: () => store.deleteSelection() },
         'separator',
-        {
-          label: (el.comments?.length ?? 0) > 0 ? 'Comments…' : 'Add comment…',
-          action: () => canvas.openElementComments(el.id),
-        },
+        commentItem(el.comments, (compose) => canvas.openComments(el.id, undefined, { compose })),
         { label: ARRANGE_LABELS.front, action: () => arrangeSelection(store, 'front') },
         { label: ARRANGE_LABELS.forward, action: () => arrangeSelection(store, 'forward') },
         { label: ARRANGE_LABELS.backward, action: () => arrangeSelection(store, 'backward') },
@@ -536,8 +535,38 @@ export function makeContextActions(
       if (el.type === 'text' && sel === 1) {
         items.unshift({ label: 'Edit text', action: () => canvas.beginTextEdit(el.id) }, 'separator');
       }
+    } else if (store.slide) {
+      // The slide's own threads, and the ones on its objects, open from its
+      // background. Comments open only from here: nothing on the canvas is
+      // clickable for them.
+      const slide = store.slide;
+      const open = openThreadCount(slide.comments)
+        + slide.elements.reduce((sum, element) => sum + openThreadCount(element.comments), 0);
+      items.push(
+        'separator',
+        {
+          label: open > 0 ? `Comments on this slide (${open})…` : 'Comment on slide…',
+          action: () => canvas.openComments(null, undefined, { compose: open === 0 }),
+        },
+        {
+          label: commentHighlightsShown() ? 'Hide comment highlights' : 'Show comment highlights',
+          action: () => setCommentHighlightsShown(!commentHighlightsShown()),
+        },
+      );
     }
     return items;
+  };
+}
+
+/** The menu row that opens an object's threads: a count when it has open ones. */
+function commentItem(
+  comments: Comment[] | undefined,
+  open: (compose: boolean) => void,
+): { label: string; action: () => void } {
+  const count = openThreadCount(comments);
+  return {
+    label: count > 0 ? `Comments (${count})…` : 'Comment…',
+    action: () => open(count === 0),
   };
 }
 

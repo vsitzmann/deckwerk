@@ -12,7 +12,7 @@ import {
 import type { Deck, Slide, SlideElement } from '@shared/deck.js';
 import type { PageStamp } from '@shared/htmlSlides.js';
 import { fitAutoText, renderSlide } from '../player/render.js';
-import { sameSlideIgnoringNotes, type EditorStore } from './store.js';
+import { sameSlideDrawing, type EditorStore } from './store.js';
 
 const COMPUTED_PROPERTIES = [
   'color', 'background-color', 'font-family', 'font-size', 'font-weight',
@@ -200,7 +200,7 @@ export class AgentBridge {
         && previous.canvas.h === canvas.h
         && previous.slides.length === selectedSlides.length
         && previous.slides.every((entry, i) => entry.index === selectedSlides[i].index
-          && sameSlideIgnoringNotes(entry.slide, selectedSlides[i].slide));
+          && sameSlideDrawing(entry.slide, selectedSlides[i].slide));
       const scenes = reusable
         ? previous.scenes
         : await buildComputedScenes(

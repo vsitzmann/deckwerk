@@ -9,7 +9,8 @@ import { setIdSuffix } from '@shared/geometry.js';
 import { CANVAS_NOTICE_EVENT, EditorCanvas } from '../editor/canvas.js';
 import { SpeakerNotesDrawer } from '../editor/speakerNotesDrawer.js';
 import { createDeckWerkButton } from '../editor/aboutDialog.js';
-import { setCommentAuthor } from '../editor/comments.js';
+import { setCommentAuthor, setCommentLinks } from '../editor/comments.js';
+import { findComment } from '@shared/comments.js';
 import { CssEditor } from '../editor/cssEditor.js';
 import {
   createToolbarPicker,
@@ -300,9 +301,8 @@ const chatPanel = new ChatPanel(el('chat'), {
     const index = slideIndexOf(slideId);
     return index >= 0 ? index + 1 : null;
   },
-  slideOfComment: (commentId) => store.get().deck.slides.find((slide) =>
-    slide.comments?.some((comment) => comment.id === commentId)
-    || slide.elements.some((element) => element.comments?.some((comment) => comment.id === commentId)))?.id ?? null,
+  slideOfComment: (commentId) => findComment(store.get().deck, commentId)?.target.slideId ?? null,
+  openComment: (commentId) => openCommentById(commentId),
   jumpTo: (slideId, elementId) => {
     const index = slideIndexOf(slideId);
     if (index < 0) return;
@@ -313,6 +313,32 @@ const chatPanel = new ChatPanel(el('chat'), {
   },
   onUnreadChange: (unread, mentions) => setChatBadge(unread, mentions),
 });
+
+/* --- comment links ----------------------------------------------------------- */
+
+// A comment's link is this page with `comment=<id>`: anyone who can open the
+// presentation lands on its slide with the thread open.
+setCommentLinks((commentId) => {
+  const url = new URL(location.pathname, location.origin);
+  url.searchParams.set('deck', deckId);
+  url.searchParams.set('comment', commentId);
+  return url.href;
+});
+let linkedCommentPending = new URLSearchParams(location.search).get('comment');
+
+/** Go to the slide holding a comment, select what it is on, and open its thread. */
+function openCommentById(commentId: string): void {
+  const found = findComment(store.get().deck, commentId);
+  if (!found) {
+    setStatusMessage('That comment no longer exists. It may have been deleted.');
+    return;
+  }
+  store.selectSlide(found.slideIndex);
+  if (found.target.elementId) store.select([found.target.elementId]);
+  else store.clearSelection();
+  // The canvas draws the slide on the store's change; anchor on it after.
+  requestAnimationFrame(() => canvas.openComments(found.target.elementId ?? null, undefined, { threadId: commentId }));
+}
 
 /** The Chat tab's unread count; accented when one of them mentions this person. */
 function setChatBadge(unread: number, mentions: number): void {
@@ -422,6 +448,15 @@ const bridge = new CollabBridge(wsUrl, undefined, {
     if (initialViewPending) {
       restoreEditorView(store, initialView);
       initialViewPending = false;
+    }
+    if (linkedCommentPending) {
+      const commentId = linkedCommentPending;
+      linkedCommentPending = null;
+      openCommentById(commentId);
+      // Reloading the page should not open the thread again.
+      const params = new URLSearchParams(location.search);
+      params.delete('comment');
+      history.replaceState(history.state, '', `${location.pathname}?${params.toString()}${location.hash}`);
     }
     cssEditor.setValue(welcome.themeCss);
     themePanel.noteDeckOpened(welcome.deck);

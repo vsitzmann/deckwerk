@@ -1,4 +1,5 @@
-import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { BrowserWindow } from 'electron';
@@ -301,6 +302,24 @@ describe('the file-backed request bridge', () => {
     const response = await waitForAgentResponse(responsePath, 2_000);
     expect(response).toMatchObject({ status: 'error' });
     expect(response.message).toMatch(/not available/);
+    await runtime.close();
+  });
+
+  it('leaves a request another drain already took to that drain', async () => {
+    // One atomic write fires several watch events, so drains overlap, and one
+    // can list a request that another answers and removes before it reads it.
+    // A dangling link is that request: listed, but gone when read.
+    const runtime = new AgentRuntime(() => null);
+    await runtime.open(dir);
+    const paths = agentRuntimePaths(dir);
+    await symlink(join(paths.inbox, 'gone.json'), join(paths.inbox, 'req-taken.json'));
+    const internals = runtime as unknown as { drain(): Promise<void>; processing: Set<string> };
+    await internals.drain();
+    // The watcher's own drain may hold it still; wait until it has let go.
+    await vi.waitFor(() => expect(internals.processing.size).toBe(0));
+    // An ENOENT error here would overwrite the real answer — and could tell an
+    // agent its change failed while the editor applies it.
+    expect(existsSync(join(paths.responses, 'req-taken.json'))).toBe(false);
     await runtime.close();
   });
 

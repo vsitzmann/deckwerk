@@ -31,7 +31,7 @@ import {
  * add, remove and restyle objects, toggle builds, reorder, delete and add
  * sections; re-save a page untouched; apply the same page twice; save
  * without applying and let the watcher sync it. The person's moves are what
- * people do in a session: notes, comments, skipping a slide, rewriting a
+ * people do in a session: notes, comments and replies to them, skipping a slide, rewriting a
  * phrase, adding and deleting slides — on a hosted deck over the WebSocket,
  * sometimes while the agent's page is compiling; beside a local deck through
  * the same CLI transactions any second writer would use. In a hosted mirror
@@ -136,7 +136,10 @@ class Walk {
       markers.push(token);
       return this.phrase(token);
     };
-    const build = () => (this.chance(0.25) ? ` data-build="${this.pick(['click', 'afterPrev+200', 'withPrev'])}"` : '');
+    const build = () => (this.chance(0.25)
+      ? ` data-build="${this.pick(['click', 'afterPrev+200', 'withPrev'])}"`
+        + (this.chance(0.3) ? ` data-build-effect="${this.pick(['dissolve', 'blur'])}"` : '')
+      : '');
     const parts: string[] = [];
     const kind = this.pick(['title', 'prose', 'list', 'flex', 'layout', 'maths']);
     if (kind === 'layout') {
@@ -229,6 +232,8 @@ class Walk {
     const stale = this.chance(0.35) ? await this.personMeanwhile(scope) : null;
     if (stale) edits.push(stale.what);
     const removed = new Set<string>();
+    // Objects whose build effect this page set, changed or took away.
+    const effected = new Set<Element>();
     // What each object's markup was, so "touched" means changed on balance:
     // a build toggled on and off again is no edit, and the merge agrees.
     // (Attribute order aside: a parser that removes and re-adds an attribute moves it.)
@@ -244,7 +249,7 @@ class Walk {
       for (let move = 0; move < moves; move++) {
         const objects = [...section.querySelectorAll(':scope > [data-element-id]')];
         const texts = [...section.querySelectorAll('[data-text-content]')];
-        const op = this.pick(['retext', 'retext', 'add', 'remove', 'restyle', 'build']);
+        const op = this.pick(['retext', 'retext', 'add', 'remove', 'restyle', 'build', 'effect', 'effect']);
         const holding = texts.filter((text) => [...markersOf(id)].some((marker) => text.textContent?.includes(marker)));
         if (op === 'retext' && holding.length > 0) {
           const text = this.pick(holding);
@@ -278,6 +283,23 @@ class Walk {
           if (object.hasAttribute('data-build')) object.removeAttribute('data-build');
           else object.setAttribute('data-build', this.pick(['click', 'afterPrev+300']));
           edits.push(`toggle a build in ${id}`);
+        } else if (op === 'effect' && objects.length > 0) {
+          // Give a build an effect, change it, or take it away again; an
+          // object with no build yet gets one with an effect, for a later
+          // page to change.
+          const built = objects.filter((candidate) => candidate.hasAttribute('data-build'));
+          const object = this.pick(built.length > 0 ? built : objects);
+          if (!object.hasAttribute('data-build')) object.setAttribute('data-build', this.pick(['click', 'afterPrev+300']));
+          if (object.hasAttribute('data-build-effect') && this.chance(0.4)) {
+            object.removeAttribute('data-build-effect');
+            object.removeAttribute('data-build-duration');
+          } else {
+            object.setAttribute('data-build-effect', this.pick(['dissolve', 'blur']));
+            if (this.chance(0.6)) object.setAttribute('data-build-duration', String(this.pick([300, 800, 1500])));
+            else object.removeAttribute('data-build-duration');
+          }
+          effected.add(object);
+          edits.push(`change a build effect in ${id}`);
         } else {
           const token = this.token();
           const paragraph = doc.createElement('p');
@@ -375,6 +397,24 @@ class Walk {
     // Whatever landed, the page now names exactly the slides it governs.
     const stamped = sectionIds(await this.ws.read(file));
     this.expect(stamped.join() === authored.join(), `the page is stamped [${stamped}], the deck has [${authored}]`);
+    // A build effect the page states is the one that landed.
+    if (effected.size > 0) {
+      const deck = await this.ws.deck();
+      for (const object of effected) {
+        const elementId = object.getAttribute('data-element-id');
+        const slideId = object.closest('section')?.getAttribute('data-slide-id');
+        if (!elementId || !slideId || !object.isConnected || !object.hasAttribute('data-build')) continue;
+        const entry = deck.slides.find((slide) => slide.id === slideId)?.timeline
+          .find((candidate) => candidate.action.type === 'appear' && candidate.action.target === elementId);
+        if (!entry) continue;
+        const effect = object.getAttribute('data-build-effect');
+        const duration = object.getAttribute('data-build-duration');
+        this.expect(entry.action.value === effect
+          && entry.action.duration === (effect && duration !== null ? Number(duration) : undefined),
+        `${elementId} on ${slideId}: the page says ${effect ?? 'no effect'}/${duration ?? '-'}, `
+          + `the deck has ${String(entry.action.value)}/${String(entry.action.duration)}`);
+      }
+    }
   }
 
   /** Export slides and save the page as it came: nothing may change. */
@@ -416,9 +456,20 @@ class Walk {
   async human(concurrently = false): Promise<void> {
     const id = this.pick(this.order);
     const model = this.slides.get(id)!;
-    const op = this.pick(['notes', 'skip', 'comment', 'retext', 'add', 'delete']);
+    const op = this.pick(['notes', 'skip', 'comment', 'reply', 'retext', 'add', 'delete']);
     const hosted = this.ws.kind === 'hosted' ? (this.ws as HostedWorkspace).human : null;
-    if (op === 'comment') {
+    if (op === 'reply' && model.comments > 0) {
+      // Answering in a thread: the reply joins the thread on that slide and
+      // nothing an agent's page does to the slide may lose it.
+      const root = (await this.ws.deck()).slides.find((slide) => slide.id === id)?.comments?.[0]?.id;
+      this.expect(Boolean(root), `slide ${id} has no comment to reply to`);
+      this.log(`a person replies to a comment on ${id}`);
+      const result = await this.ws.run('comments', '--add', `Re: ${id}`, '--reply', root!);
+      this.expect(result.code === 0, `reply failed: ${result.stderr}`);
+      model.comments += 1;
+      return;
+    }
+    if (op === 'comment' || op === 'reply') {
       this.log(`a person comments on ${id}`);
       const result = await this.ws.run('comments', '--add', `Look at ${id}`, '--slide', id);
       this.expect(result.code === 0, `comment failed: ${result.stderr}`);

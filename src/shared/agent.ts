@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import {
+  CommentSchema,
   DeckSchema,
   ElementSchema,
   SlideSchema,
@@ -9,6 +10,7 @@ import {
   type SlideElement,
 } from './deck.js';
 import { renameRetiredFields } from './fieldAliases.js';
+import { contentOf, keepComments, keepSlideComments, mergeComments, setComments } from './comments.js';
 import { braceDepthOf } from './brace.js';
 
 export const AGENT_PROTOCOL_VERSION = 1 as const;
@@ -192,7 +194,23 @@ const SetSlidePropertiesOperation = z.object({
   clear: z.array(z.string()).optional(),
 });
 
+/**
+ * Change the comment threads on a slide (no `elementId`) or on one object.
+ * `base` is the list the change was made from; the apply merges by comment
+ * id against whatever the target holds by then (shared/comments.ts), so
+ * concurrent replies all land. This is the only operation that changes
+ * comments: the content replacements above keep the target's own.
+ */
+const UpdateCommentsOperation = z.object({
+  op: z.literal('updateComments'),
+  slideId: z.string(),
+  elementId: z.string().optional(),
+  base: z.array(CommentSchema).default([]),
+  comments: z.array(CommentSchema),
+});
+
 export const AgentOperationSchema = z.discriminatedUnion('op', [
+  UpdateCommentsOperation,
   InsertSlidesOperation,
   ReplaceSlideOperation,
   DeleteSlideOperation,
@@ -295,7 +313,7 @@ function applyOperation(deck: Deck, operation: AgentOperation): void {
       if (operation.slide.id !== operation.slideId) {
         throw new Error(`Replacement slide id must remain ${operation.slideId}`);
       }
-      deck.slides[at] = structuredClone(operation.slide);
+      deck.slides[at] = keepSlideComments(structuredClone(operation.slide), deck.slides[at]);
       return;
     }
     case 'deleteSlide': {
@@ -331,7 +349,7 @@ function applyOperation(deck: Deck, operation: AgentOperation): void {
       if (operation.element.id !== operation.elementId) {
         throw new Error(`Replacement element id must remain ${operation.elementId}`);
       }
-      slide.elements[at] = structuredClone(operation.element);
+      slide.elements[at] = keepComments(structuredClone(operation.element), slide.elements[at]);
       return;
     }
     case 'deleteElements': {
@@ -379,13 +397,22 @@ function applyOperation(deck: Deck, operation: AgentOperation): void {
       }
       deck.slides[at] = {
         ...deck.slides[at],
-        ...structuredClone(operation.slide),
+        ...contentOf(structuredClone(operation.slide)),
         elements: deck.slides[at].elements,
       };
       for (const key of operation.clear ?? []) {
-        if (key === 'id' || key === 'elements') continue;
+        if (key === 'id' || key === 'elements' || key === 'comments') continue;
         delete (deck.slides[at] as Record<string, unknown>)[key];
       }
+      return;
+    }
+    case 'updateComments': {
+      const slide = requireSlide(deck, operation.slideId);
+      const target = operation.elementId === undefined
+        ? slide
+        : slide.elements.find((element) => element.id === operation.elementId);
+      if (!target) throw new Error(`Unknown element id: ${operation.elementId}`);
+      setComments(target, mergeComments(target.comments ?? [], operation.base, operation.comments));
       return;
     }
   }

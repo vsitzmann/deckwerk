@@ -15,6 +15,7 @@ import {
 import type { ChatMessage, ChatRef } from '@shared/chat.js';
 import type { Deck } from '@shared/deck.js';
 import { diffDecks } from '@shared/deckDiff.js';
+import { withoutCommentOps } from '@shared/comments.js';
 import { makeId } from '@shared/geometry.js';
 import type { RemoteHistoryOptions } from '../editor/store.js';
 
@@ -201,17 +202,20 @@ export class CollabBridge {
   localEdit = (prev: Deck, next: Deck, label: string, coalesceKey?: string): void => {
     const forward = diffDecks(prev, next);
     if (forward.length === 0) return;
-    const inverse = diffDecks(next, prev);
-    if (!this.replayingHistory) {
+    // Comment changes go to the server but never onto the undo stack, and
+    // undo never takes one back (shared/comments.ts).
+    const undoForward = withoutCommentOps(forward);
+    const inverse = withoutCommentOps(diffDecks(next, prev));
+    if (!this.replayingHistory && undoForward.length > 0) {
       const top = this.undoStack[this.undoStack.length - 1];
       if (coalesceKey && top?.coalesceKey === coalesceKey) {
         // Op lists compose by concatenation: forward replays oldest→newest,
         // inverse newest→oldest, so undoing lands on the session's start.
         top.label = label;
-        top.forward.push(...forward);
+        top.forward.push(...undoForward);
         top.inverse.unshift(...inverse);
       } else {
-        this.undoStack.push({ label, forward, inverse, coalesceKey });
+        this.undoStack.push({ label, forward: undoForward, inverse, coalesceKey });
         if (this.undoStack.length > UNDO_LIMIT) this.undoStack.shift();
       }
       this.redoStack = [];

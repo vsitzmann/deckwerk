@@ -46,6 +46,8 @@ export interface ChatPanelOptions {
   slideNumber: (slideId: string) => number | null;
   /** The slide holding a comment, when a message points at one. */
   slideOfComment: (commentId: string) => string | null;
+  /** Go to a comment and open its thread. */
+  openComment?: (commentId: string) => void;
   jumpTo: (slideId: string, elementId?: string) => void;
   /** Unread messages and, of those, how many mention this person. */
   onUnreadChange?: (unread: number, mentions: number) => void;
@@ -495,7 +497,10 @@ export class ChatPanel {
     }
     chip.textContent = `${'commentId' in ref ? 'Comment on slide' : elementId ? 'Object on slide' : 'Slide'} ${number}`;
     chip.title = 'Go there';
-    chip.addEventListener('click', () => this.options.jumpTo(slideId, elementId));
+    chip.addEventListener('click', () => {
+      if ('commentId' in ref && this.options.openComment) this.options.openComment(ref.commentId);
+      else this.options.jumpTo(slideId, elementId);
+    });
     return chip;
   }
 

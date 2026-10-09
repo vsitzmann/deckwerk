@@ -58,6 +58,8 @@ const CLIPBOARD_MARKERS = [
 
 /** Suites that share machine state or need a process topology of their own. */
 const SERIAL_BY_NATURE = [
+  // Measures the collab server's event loop under load: timing, so alone.
+  'test/collabStalls.test.ts',
   // CDP's IME path reaches Chromium's real InputMethodController. When two
   // Electron apps drive it concurrently under Xvfb, Linux can terminate one
   // synthetic preedit before its next update and leave the old candidate in

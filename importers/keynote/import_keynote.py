@@ -24,9 +24,11 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import copy
 import functools
 import hashlib
 import html
+import io
 import json
 import math
 import os
@@ -50,7 +52,7 @@ try:
     from keynote_parser.codec import IWAFile
 except ImportError:  # pragma: no cover - environment problem, not a deck problem
     sys.stderr.write(
-        "keynote-parser is not installed. Run: pip install keynote-parser\n"
+        "keynote-parser is not installed. Run: npm run setup:importers\n"
     )
     raise SystemExit(2)
 
@@ -188,13 +190,22 @@ def _human_bytes(count: float) -> str:
 
 
 class Package:
-    """Read-only access to a .key package, whether zipped or a directory."""
+    """Read-only access to a .key document, in every shape one travels in.
+
+    Keynote writes two formats. The single file is a zip holding Index/*.iwa,
+    Data/ and Metadata/. The package is a folder whose Index/*.iwa sit inside a
+    nested Index.zip instead; it arrives as that folder, or zipped up whole —
+    which is what macOS does when a package is uploaded through a browser or
+    fetched from a cloud drive — usually inside a "<name>.key/" folder and
+    with Finder's __MACOSX/ entries alongside. All of them read the same here.
+    """
 
     def __init__(self, path: Path):
         self.path = path
-        self._zip: zipfile.ZipFile | None = None
-        # Maps the name a package *should* have for each member to the name
-        # the container actually stores it under. Keynote writes UTF-8 file
+        self._zips: list[zipfile.ZipFile] = []
+        # Maps the name a package *should* have for each member to where it is
+        # actually stored: (the zip holding it, or None for a file under
+        # `path`, and the name it is stored under). Keynote writes UTF-8 file
         # names into the zip without setting the UTF-8 flag, so `zipfile`
         # decodes them as CP437 and a macOS screenshot called
         # "... 12.12.40\u202fPM.png" comes back as mojibake. Looked up by the
@@ -202,30 +213,64 @@ class Package:
         # silently falls back to the 256px thumbnail. Directory packages have
         # the mirror-image problem: HFS+/APFS hand back decomposed (NFD)
         # names while the protobuf holds composed (NFC) ones.
-        self._members: dict[str, str] = {}
+        self._members: dict[str, tuple[zipfile.ZipFile | None, str]] = {}
         if path.is_dir():
             for member in path.rglob("*"):
                 if member.is_file():
                     stored = str(member.relative_to(path))
-                    self._members[_canonical_name(stored)] = stored
+                    self._members[_canonical_name(stored)] = (None, stored)
         else:
-            self._zip = zipfile.ZipFile(path)
-            for info in self._zip.infolist():
-                self._members[_canonical_name(_zip_member_name(info))] = info.filename
+            self._add_zip(zipfile.ZipFile(path))
+        self._strip_bundle_folder()
+        index = self._members.pop("Index.zip", None)
+        if index is not None:
+            self._add_zip(zipfile.ZipFile(io.BytesIO(self._read(*index))), under="Index/")
         self.names = list(self._members)
+
+    def _add_zip(self, archive: zipfile.ZipFile, under: str = "") -> None:
+        self._zips.append(archive)
+        for info in archive.infolist():
+            if info.is_dir():
+                continue
+            name = _canonical_name(_zip_member_name(info))
+            if under and not name.startswith(under):
+                name = under + name
+            self._members.setdefault(name, (archive, info.filename))
+
+    def _strip_bundle_folder(self) -> None:
+        """Drop the "<name>.key/" folder a zipped-up package sits in."""
+        names = [name for name in self._members if not name.startswith("__MACOSX/")]
+        if not names or any(name == "Index.zip" or name.startswith("Index/") for name in names):
+            return
+        tops = {name.split("/", 1)[0] for name in names}
+        if len(tops) != 1 or not all("/" in name for name in names):
+            return
+        prefix = tops.pop() + "/"
+        inner = {
+            name[len(prefix):]: member
+            for name, member in self._members.items()
+            if name.startswith(prefix)
+        }
+        # Only a folder that holds a document is the bundle's; a deck whose
+        # every member happens to live under Data/ keeps its paths.
+        if any(name == "Index.zip" or name.startswith("Index/") for name in inner):
+            self._members = inner
 
     def __contains__(self, name: str) -> bool:
         return _canonical_name(name) in self._members
 
     def read(self, name: str) -> bytes:
-        stored = self._members.get(_canonical_name(name), name)
-        if self._zip is not None:
-            return self._zip.read(stored)
+        default = (self._zips[0] if self._zips else None, name)
+        return self._read(*self._members.get(_canonical_name(name), default))
+
+    def _read(self, archive: zipfile.ZipFile | None, stored: str) -> bytes:
+        if archive is not None:
+            return archive.read(stored)
         return (self.path / stored).read_bytes()
 
     def close(self) -> None:
-        if self._zip is not None:
-            self._zip.close()
+        for archive in self._zips:
+            archive.close()
 
 
 def _zip_member_name(info: zipfile.ZipInfo) -> str:
@@ -511,6 +556,30 @@ def flip_svg_path(
         out.append(f"{value:.2f}")
         axis ^= 1
     return " ".join(out)
+
+
+def _outset_for_stroke(box: dict[str, float], style: "ShapeStyle") -> dict[str, float]:
+    """The box of a native rectangle whose outline lands where Keynote's does.
+
+    Keynote centres a shape's stroke on its geometry, so half of it lies
+    outside the stored box. The editor draws a native rectangle's stroke
+    wholly inside the element box (shapeSvg insets it by half the width), so
+    taking Keynote's box as is shrinks every outline by one stroke width: a
+    5px frame drawn tight around a picture let the picture's edge show past
+    it. Growing the box by half the stroke on each side, about the same
+    centre so rotation is unaffected, puts the stroke back on the geometry.
+    Paths need none of this: their stroke is centred on the path already.
+    """
+    if style.stroke is None or style.stroke_width <= 0:
+        return box
+    half = style.stroke_width / 2
+    return {
+        **box,
+        "x": box["x"] - half,
+        "y": box["y"] - half,
+        "w": box["w"] + style.stroke_width,
+        "h": box["h"] + style.stroke_width,
+    }
 
 
 def is_axis_aligned_rectangle(path_msg: Any) -> bool:
@@ -872,6 +941,47 @@ class TextStyle:
     color: str | None = None
     gradient: str | None = None
     horizontal_padding: float = 8.0
+    # Character spacing as a fraction of the size (Keynote's "tracking").
+    tracking: float | None = None
+    # The paragraph's line spacing as Keynote states it: (mode, amount).
+    line_spacing: tuple[str, float] | None = None
+    space_before: float | None = None
+    space_after: float | None = None
+
+
+# The line height Keynote gives Helvetica Neue and its other system faces at
+# "1.0 lines": the face's ascent plus descent, ~1.2 of the size.
+KEYNOTE_LINE_HEIGHT = 1.2
+
+
+def line_height_css(spacing: tuple[str, float] | None, font_size: float | None) -> str:
+    """A unitless CSS line-height for a Keynote line spacing at a size.
+
+    Unitless, so it scales with the font when auto-fit shrinks the box.
+    """
+    natural = KEYNOTE_LINE_HEIGHT
+    if spacing is not None:
+        mode, amount = spacing
+        size = font_size or DEFAULT_FONT_SIZE
+        if mode == "kRelativeLineSpacing" and amount > 0:
+            natural = KEYNOTE_LINE_HEIGHT * amount
+        elif mode == "kExactLineSpacing" and amount > 0:
+            natural = amount / size
+        elif mode == "kMinimumLineSpacing":
+            natural = max(natural, amount / size)
+        elif mode == "kMaximumLineSpacing" and amount > 0:
+            natural = min(natural, amount / size)
+        elif mode == "kSpaceBetweenLineSpacing":
+            natural += max(0.0, amount) / size
+    return f"{natural:.4g}"
+
+
+def tracking_css(tracking: float | None) -> str:
+    """Keynote tracking as CSS letter-spacing; `normal` when there is none, so
+    a theme's title letter-spacing never tightens imported text."""
+    if not tracking:
+        return "normal"
+    return f"{tracking:.4g}em"
 
 
 def resolve_text_style(objects: dict[int, Any], shape: Any) -> TextStyle:
@@ -980,6 +1090,8 @@ def _read_char_properties(chars: Any, out: TextStyle) -> None:
         out.font_name = str(chars.font_name) or None
     if out.bold is None and chars.HasField("bold"):
         out.bold = bool(chars.bold)
+    if out.tracking is None and chars.HasField("tracking"):
+        out.tracking = float(chars.tracking)
     if out.color is None and chars.HasField("font_color"):
         out.color = color_to_hex(chars.font_color)
     if out.gradient is None and chars.HasField("tsd_fill"):
@@ -1010,21 +1122,27 @@ def _read_para_style(objects: dict[int, Any], style_id: int, out: TextStyle) -> 
         if _has(style, "char_properties"):
             _read_char_properties(style.char_properties, out)
 
-        if not align_found and _has(style, "para_properties"):
+        if _has(style, "para_properties"):
             paras = style.para_properties
-            if paras.HasField("alignment"):
+            if not align_found and paras.HasField("alignment"):
                 # The enum serialises as a name like "TATvalue2".
                 digits = "".join(c for c in str(paras.alignment) if c.isdigit())
                 if digits:
                     out.align = ALIGNMENT_NAMES.get(int(digits), "left")
                     align_found = True
+            # An empty line_spacing message is Keynote's "1.0 lines".
+            if out.line_spacing is None and paras.HasField("line_spacing"):
+                spacing = paras.line_spacing
+                if spacing.HasField("amount"):
+                    mode = _enum_name(spacing, "mode", spacing.mode) if spacing.HasField("mode") else "kRelativeLineSpacing"
+                    out.line_spacing = (mode, float(spacing.amount))
+            if out.space_before is None and paras.HasField("space_before"):
+                out.space_before = float(paras.space_before)
+            if out.space_after is None and paras.HasField("space_after"):
+                out.space_after = float(paras.space_after)
 
-        if (
-            out.font_size is not None
-            and (out.color is not None or out.gradient is not None)
-            and align_found
-        ):
-            return
+        # Read to the root: line spacing and paragraph spacing usually live
+        # in the theme's styles, above the leaf that names size and colour.
         try:
             parent = style.super.parent
             current_id = int(parent.identifier) if parent.identifier else None
@@ -1065,17 +1183,38 @@ def text_to_html(text: str) -> str:
     return _wrap_paragraphs(escaped.split("\n"))
 
 
+def _enum_name(message: Any, field_name: str, value: int) -> str:
+    """The protobuf name of an enum value, e.g. "kSuperscript"."""
+    enum = message.DESCRIPTOR.fields_by_name[field_name].enum_type
+    found = enum.values_by_number.get(int(value)) if enum is not None else None
+    return found.name if found is not None else ""
+
+
+def _regular_face(font_name: str) -> str | None:
+    """The upright face of a bold PostScript name, e.g. HelveticaNeue-Bold.
+
+    Keynote un-bolds a run inside a bold paragraph by setting bold: false and
+    leaving the paragraph's face name alone. In CSS that face name still picks
+    the bold face wherever it is installed (Safari and Chrome on a Mac match
+    PostScript names), so the run needs the regular family named instead.
+    """
+    for suffix in ("-Bold", "-BoldMT", "-Heavy", "-Black"):
+        if font_name.endswith(suffix):
+            return font_name[: -len(suffix)] or None
+    return None
+
+
 def _char_run_css(
     objects: dict[int, Any], style_id: int | None, base: TextStyle
 ) -> dict[str, str]:
-    """CSS for one character-style run, as a delta against the box's base style.
+    """CSS for one character-style run, as a delta against its paragraph's style.
 
     Only the leaf style's own fields are read: a run's character style names
     exactly what differs from the paragraph (Keynote styles are thin
     variations), and walking the parent chain here would re-state box-level
-    defaults on every run. Values that merely repeat what the element already
-    carries inline are dropped, so an unstyled deck still imports with no
-    spans at all.
+    defaults on every run. Values that merely repeat what the paragraph already
+    carries are dropped, so an unstyled deck still imports with no spans at
+    all. Sizes are relative (em) so they shrink along with auto-fit.
     """
     css: dict[str, str] = {}
     style = objects.get(style_id) if style_id else None
@@ -1085,6 +1224,9 @@ def _char_run_css(
 
     if chars.HasField("bold") and bool(chars.bold) != bool(base.bold):
         css["font-weight"] = "700" if chars.bold else "400"
+        regular = _regular_face(base.font_name or "")
+        if not chars.bold and regular and not chars.HasField("font_name"):
+            css["font-family"] = _font_family_css(regular)
     # The element never carries font-style inline, so only true is a delta.
     if chars.HasField("italic") and chars.italic:
         css["font-style"] = "italic"
@@ -1101,7 +1243,16 @@ def _char_run_css(
     if chars.HasField("font_size"):
         size = float(chars.font_size)
         if size > 0 and size != base.font_size:
-            css["font-size"] = f"{size:.0f}px"
+            css["font-size"] = _relative_size(size, base.font_size)
+    if chars.HasField("tracking") and float(chars.tracking) != (base.tracking or 0.0):
+        css["letter-spacing"] = tracking_css(float(chars.tracking))
+    if chars.HasField("superscript"):
+        shift = _enum_name(chars, "superscript", chars.superscript)
+        if shift in ("kSuperscript", "kSubscript"):
+            # The editor's own superscript: raised and shrunk, relative to the
+            # text around it (htmlSafety.ts BASELINE_RUN_FONT_SIZE).
+            css["vertical-align"] = "super" if shift == "kSuperscript" else "sub"
+            css["font-size"] = "0.7em"
     # A colour span inside gradient-clipped text would punch through the clip,
     # so runs keep their colour only on solid-colour boxes.
     if base.gradient is None and chars.HasField("font_color"):
@@ -1111,74 +1262,405 @@ def _char_run_css(
     return css
 
 
-def styled_text_to_html(
-    objects: dict[int, Any], shape: Any, base: TextStyle
-) -> str | None:
-    """HTML for a shape's text with `<span>` runs for within-box styling.
+def _relative_size(size: float, base: float | None) -> str:
+    """A font size as a ratio to the size around it, so auto-fit scales it."""
+    if not base or base <= 0:
+        return f"{size:.0f}px"
+    return f"{size / base:.4g}em"
 
-    Slices the storage text at the `table_char_style` run boundaries and wraps
-    each styled run. Returns None when the box has no run-level deltas (or the
-    run table can't be trusted), letting the caller fall back to the plain
-    single-style path.
-    """
+
+def _style_attr(css: dict[str, str]) -> str:
+    """A ` style="…"` attribute, escaped: font families carry their own double
+    quotes, which would otherwise end the attribute and take the rest of the
+    run's styling with them."""
+    if not css:
+        return ""
+    return f' style="{html.escape("; ".join(f"{k}: {v}" for k, v in css.items()))}"'
+
+
+def _table_at(entries: list[tuple[int, Any]], index: int) -> Any:
+    """The value of a run table (sorted (start, value) pairs) at `index`."""
+    found = None
+    for start, value in entries:
+        if start > index:
+            break
+        found = value
+    return found
+
+
+def _storage_of(objects: dict[int, Any], shape: Any) -> Any | None:
     for field_name in ("owned_storage", "deprecated_storage"):
         reference = find_in_super_chain(shape, field_name)
         if reference is None:
             continue
         storage = objects.get(int(reference.identifier) if reference.identifier else -1)
-        if storage is None or not _has(storage, "table_char_style"):
-            continue
-        if not _has(storage, "text"):
-            continue
-        chunks = [t for t in storage.text if t]
-        # Run indices address one contiguous text stream; with more than one
-        # chunk the mapping is ambiguous, so styling is dropped rather than
-        # misplaced.
-        if len(chunks) != 1:
-            return None
-        text = _normalise_breaks(chunks[0]).rstrip()
-        if not text:
-            return None
-
-        entries = sorted(
-            storage.table_char_style.entries, key=lambda e: int(e.character_index)
-        )
-        runs: list[tuple[str, dict[str, str]]] = []
-        for pos, entry in enumerate(entries):
-            start = int(entry.character_index)
-            end = (
-                int(entries[pos + 1].character_index)
-                if pos + 1 < len(entries)
-                else len(text)
-            )
-            if start > len(text):
-                return None
-            if start >= end:
-                continue
-            style_id = int(entry.object.identifier) if entry.object.identifier else None
-            runs.append((text[start:end], _char_run_css(objects, style_id, base)))
-
-        if not runs or not any(css for _, css in runs):
-            return None
-
-        # Runs are sliced by character index and cut across paragraph breaks,
-        # so the split happens per run and the pieces are regrouped: a styled
-        # run spanning two paragraphs yields one span in each.
-        paragraphs: list[str] = [""]
-        for run_text, css in runs:
-            pieces = html.escape(run_text).split("\n")
-            for pos, piece in enumerate(pieces):
-                if pos:
-                    paragraphs.append("")
-                if not piece:
-                    continue
-                if css:
-                    style_attr = "; ".join(f"{k}: {v}" for k, v in css.items())
-                    paragraphs[-1] += f'<span style="{style_attr}">{piece}</span>'
-                else:
-                    paragraphs[-1] += piece
-        return _wrap_paragraphs(paragraphs)
+        if storage is not None and _has(storage, "text"):
+            return storage
     return None
+
+
+def _ref_entries(table: Any, carry: bool) -> list[tuple[int, int | None]]:
+    """A storage's object table as sorted (start, object id) pairs.
+
+    A paragraph-level entry without an object continues the previous one —
+    Keynote writes one entry per paragraph even when consecutive paragraphs
+    share a style — so `carry` fills it in. In the character table an empty
+    entry means "no character style": the paragraph's own style resumes.
+    """
+    out: list[tuple[int, int | None]] = []
+    previous: int | None = None
+    for entry in sorted(table.entries, key=lambda e: int(e.character_index)):
+        ident = int(entry.object.identifier) if entry.object.identifier else None
+        if ident is None and carry:
+            ident = previous
+        previous = ident
+        out.append((int(entry.character_index), ident))
+    return out
+
+
+def _para_decoration_css(objects: dict[int, Any], style_id: int | None) -> dict[str, str]:
+    """Underline and italic a paragraph style applies to all of its text.
+
+    The box-level style never carries these, so a paragraph style that names
+    them — an underlined heading line in a body placeholder — states them.
+    """
+    css: dict[str, str] = {}
+    seen: set[int] = set()
+    underline = italic = None
+    current = style_id
+    for _ in range(8):
+        if current is None or current in seen or current not in objects:
+            break
+        seen.add(current)
+        style = objects[current]
+        if _has(style, "char_properties"):
+            chars = style.char_properties
+            if underline is None and chars.HasField("underline"):
+                underline = int(chars.underline) != 0
+            if italic is None and chars.HasField("italic"):
+                italic = bool(chars.italic)
+        try:
+            parent = style.super.parent
+            current = int(parent.identifier) if parent.identifier else None
+        except AttributeError:
+            break
+    if underline:
+        css["text-decoration"] = "underline"
+    if italic:
+        css["font-style"] = "italic"
+    return css
+
+
+LIST_NUMBER_TYPES = (
+    ("RomanUpper", "upper-roman"),
+    ("RomanLower", "lower-roman"),
+    ("AlphaUpper", "upper-alpha"),
+    ("AlphaLower", "lower-alpha"),
+)
+
+
+def _list_label(objects: dict[int, Any], style_id: int | None, level: int) -> tuple[str, str | None] | None:
+    """("ol", list-style-type) or ("ul", None) for a list style at a level.
+
+    None for Keynote's "None" label: an ordinary paragraph. A variation that
+    does not restate the label arrays inherits them from its parent.
+    """
+    seen: set[int] = set()
+    current = style_id
+    for _ in range(8):
+        if current is None or current in seen or current not in objects:
+            return None
+        seen.add(current)
+        style = objects[current]
+        if _has(style, "label_types") and len(style.label_types) > level:
+            label = _enum_name(style, "label_types", style.label_types[level])
+            if label == "kNumber":
+                kind = None
+                if _has(style, "number_types") and len(style.number_types) > level:
+                    number = _enum_name(style, "number_types", style.number_types[level])
+                    kind = next((css for key, css in LIST_NUMBER_TYPES if key in number), None)
+                return ("ol", kind)
+            if label in ("kBullet", "kImage"):
+                return ("ul", None)
+            return None
+        try:
+            parent = style.super.parent
+            current = int(parent.identifier) if parent.identifier else None
+        except AttributeError:
+            return None
+    return None
+
+
+def _list_indent(objects: dict[int, Any], style_id: int | None, level: int) -> float | None:
+    """How far, in points, Keynote indents a list level (`indents`, inherited)."""
+    seen: set[int] = set()
+    current = style_id
+    for _ in range(8):
+        if current is None or current in seen or current not in objects:
+            return None
+        seen.add(current)
+        style = objects[current]
+        if _has(style, "indents") and len(style.indents) > level:
+            return float(style.indents[level])
+        try:
+            parent = style.super.parent
+            current = int(parent.identifier) if parent.identifier else None
+        except AttributeError:
+            return None
+    return None
+
+
+def _para_spacing(objects: dict[int, Any], style_id: int | None) -> float:
+    """Space before plus after a paragraph style, in points, inherited."""
+    before = after = None
+    seen: set[int] = set()
+    current = style_id
+    for _ in range(8):
+        if current is None or current in seen or current not in objects:
+            break
+        seen.add(current)
+        style = objects[current]
+        if _has(style, "para_properties"):
+            paras = style.para_properties
+            if before is None and paras.HasField("space_before"):
+                before = float(paras.space_before)
+            if after is None and paras.HasField("space_after"):
+                after = float(paras.space_after)
+        try:
+            parent = style.super.parent
+            current = int(parent.identifier) if parent.identifier else None
+        except AttributeError:
+            break
+    return max(0.0, (before or 0.0) + (after or 0.0))
+
+
+# The hanging indent type.css gives every list item (`.text-body li`), which is
+# also the step one nested list sits inside its parent item.
+EDITOR_LIST_STEP_EM = 1.4
+
+
+def styled_text_to_html(
+    objects: dict[int, Any], shape: Any, base: TextStyle
+) -> str | None:
+    """HTML for a shape's text: paragraph styles, character runs and lists.
+
+    The element carries the first paragraph's style (`base`). A paragraph
+    whose own style differs — a title slide's 48pt author lines under an 80pt
+    title — states the difference on its block, and a character run (a bold
+    word, a superscript affiliation) on a `<span>` inside it, each relative
+    to what surrounds it. Keynote's numbered and bulleted paragraphs become
+    nested `<ol>`/`<ul>` at their list level, keeping explicit start numbers.
+
+    Returns None when the result would be the plain text anyway, or when the
+    run tables can't be trusted, letting the caller use the plain path.
+    """
+    storage = _storage_of(objects, shape)
+    if storage is None:
+        return None
+    chunks = [t for t in storage.text if t]
+    # Run indices address one contiguous text stream; with more than one chunk
+    # the mapping is ambiguous, so styling is dropped rather than misplaced.
+    if len(chunks) != 1:
+        return None
+    text = _normalise_breaks(chunks[0]).rstrip()
+    if not text:
+        return None
+
+    def table(name: str, carry: bool) -> list[tuple[int, int | None]]:
+        return _ref_entries(getattr(storage, name), carry) if _has(storage, name) else []
+
+    para_styles = table("table_para_style", carry=True)
+    char_styles = table("table_char_style", carry=False)
+    list_styles = table("table_list_style", carry=True)
+    levels = sorted(
+        (int(e.character_index), int(e.first))
+        for e in (storage.table_para_data.entries if _has(storage, "table_para_data") else [])
+    )
+    starts = {
+        int(e.character_index): int(e.first)
+        for e in (storage.table_para_starts.entries if _has(storage, "table_para_starts") else [])
+    }
+    if any(start > len(text) for start, _ in char_styles):
+        return None
+
+    first_style_id = _table_at(para_styles, 0)
+    resolved: dict[int | None, TextStyle] = {}
+
+    def paragraph_style(style_id: int | None) -> TextStyle:
+        """The paragraph's effective style; the first paragraph's is `base`."""
+        if style_id == first_style_id or style_id is None:
+            return base
+        if style_id not in resolved:
+            own = TextStyle()
+            _read_para_style(objects, style_id, own)
+            resolved[style_id] = TextStyle(
+                font_size=own.font_size or base.font_size,
+                font_name=own.font_name or base.font_name,
+                # The chain was read to its root: a bold it never names is
+                # not bold, whatever the first paragraph is.
+                bold=bool(own.bold),
+                align=own.align,
+                color=own.color or base.color,
+                gradient=base.gradient,
+                tracking=own.tracking or 0.0,
+                line_spacing=own.line_spacing,
+                space_before=own.space_before,
+                space_after=own.space_after,
+            )
+        return resolved[style_id]
+
+    blocks: list[str] = []
+    stack: list[tuple[str, int]] = []  # open lists, outermost first: (tag, level)
+    numbers: list[int] = []  # the number each open list last gave out
+    counters: dict[int, int] = {}  # Keynote's running count per level
+
+    def close_lists(to_level: int) -> None:
+        while stack and stack[-1][1] >= to_level:
+            tag, _ = stack.pop()
+            numbers.pop()
+            blocks[-1] += f"</li></{tag}>"
+
+    pos = 0
+    # Keynote adds one paragraph's space after to the next one's space
+    # before; CSS would collapse two margins into the larger, so the whole
+    # gap goes on the later paragraph as its margin-top.
+    gap_after = 0.0
+    for index, line in enumerate(text.split("\n")):
+        line_start, line_end = pos, pos + len(line)
+        pos = line_end + 1
+        style_id = _table_at(para_styles, line_start)
+        para = paragraph_style(style_id)
+
+        block_css: dict[str, str] = {}
+        if para is not base:
+            if para.font_size and para.font_size != base.font_size:
+                block_css["font-size"] = _relative_size(para.font_size, base.font_size)
+            if para.font_name and para.font_name != base.font_name:
+                block_css["font-family"] = _font_family_css(para.font_name)
+            weight = "700" if para.bold else _font_weight_css(para.font_name or "") or "400"
+            base_weight = "700" if base.bold else _font_weight_css(base.font_name or "") or "400"
+            if weight != base_weight:
+                block_css["font-weight"] = weight
+            if para.color and para.color != base.color and base.gradient is None:
+                block_css["color"] = para.color
+            if para.align != base.align:
+                block_css["text-align"] = para.align
+            if (para.tracking or 0.0) != (base.tracking or 0.0):
+                block_css["letter-spacing"] = tracking_css(para.tracking)
+            line_height = line_height_css(para.line_spacing, para.font_size)
+            if line_height != line_height_css(base.line_spacing, base.font_size):
+                block_css["line-height"] = line_height
+        para_size = para.font_size or base.font_size or DEFAULT_FONT_SIZE
+        gap = gap_after + ((para.space_before or 0.0) if index > 0 else 0.0)
+        gap_after = para.space_after or 0.0
+        decoration = _para_decoration_css(objects, style_id)
+        underlined = decoration.pop("text-decoration", None) is not None
+        block_css.update(decoration)
+
+        boundaries = sorted(
+            {line_start, line_end}
+            | {start for start, _ in char_styles if line_start < start < line_end}
+        )
+        runs: list[tuple[str, dict[str, str], bool]] = []
+        for run_start, run_end in zip(boundaries, boundaries[1:]):
+            run_id = _table_at(char_styles, run_start)
+            css = _char_run_css(objects, run_id, para)
+            css.pop("text-decoration", None)
+            chars = objects[run_id].char_properties if run_id in objects and _has(objects[run_id], "char_properties") else None
+            run_underlined = (
+                int(chars.underline) != 0 if chars is not None and chars.HasField("underline") else underlined
+            )
+            runs.append((html.escape(text[run_start:run_end]), css, run_underlined))
+        # An underline the paragraph style applies belongs on the block —
+        # unless a run switches it off again ("Token-matched" underlined, the
+        # rest of the heading not), which CSS cannot do inside an underlined
+        # block. Then each underlined run carries its own.
+        if runs and all(run_underlined for piece, _, run_underlined in runs if piece.strip()):
+            block_css["text-decoration"] = "underline"
+        else:
+            for _, css, run_underlined in runs:
+                if run_underlined:
+                    css["text-decoration"] = "underline"
+        inner = "".join(
+            f"<span{_style_attr(css)}>{piece}</span>" if css else piece for piece, css, _ in runs
+        )
+
+        label = _list_label(objects, _table_at(list_styles, line_start), _table_at(levels, line_start) or 0)
+        if label is not None and line.strip():
+            tag, number_type = label
+            level = _table_at(levels, line_start) or 0
+            # Keynote counts each level on across deeper paragraphs, numbered
+            # or not ("1. Encoder / its explanation / 2. Rollout"), and a
+            # paragraph can restart the count by hand.
+            number = starts.get(line_start, 0) or counters.get(level, 0) + 1
+            counters[level] = number
+            for deeper in [key for key in counters if key > level]:
+                del counters[deeper]
+            if stack and stack[-1][1] > level:
+                close_lists(level + 1)
+            if stack and stack[-1][1] == level and (stack[-1][0] != tag or number != numbers[-1] + 1):
+                # A different kind, or a number the open list would not reach
+                # by counting on: a new list at this level, beside it.
+                close_lists(level)
+            start = number
+            list_css: dict[str, str] = {}
+            if number_type:
+                list_css["list-style-type"] = number_type
+            if stack and stack[-1][1] < level:
+                # Keynote steps each level in by its own indent (36pt by
+                # default, 0.6em of 60pt body text); the editor's item indent
+                # alone steps 1.4em and pushes deep levels into wrapping. The
+                # nested list makes up the difference.
+                list_id = _table_at(list_styles, line_start)
+                here = _list_indent(objects, list_id, level)
+                above = _list_indent(objects, list_id, stack[-1][1])
+                size = para.font_size or base.font_size
+                if here is not None and above is not None and size:
+                    shift = (here - above) / size - EDITOR_LIST_STEP_EM
+                    if abs(shift) > 0.01:
+                        list_css["margin-left"] = f"{shift:.3g}em"
+            opening = f"<{tag}"
+            if tag == "ol" and start > 1:
+                opening += f' start="{start}"'
+            opening += f"{_style_attr(list_css)}>"
+            if not stack or stack[-1][1] < level:
+                if stack:
+                    blocks[-1] += opening
+                else:
+                    blocks.append(opening)
+                stack.append((tag, level))
+                numbers.append(number)
+                blocks[-1] += f"<li{_style_attr(block_css)}>{inner}"
+            else:
+                numbers[-1] = number
+                blocks[-1] += f"</li><li{_style_attr(block_css)}>{inner}"
+            continue
+
+        # A paragraph outside any list ends the count at its level and below;
+        # deeper ones (an explanation under a numbered item) do not.
+        # An empty line is skipped by the count, as Keynote numbers it.
+        plain_level = _table_at(levels, line_start) or 0
+        for ended in [key for key in counters if key >= plain_level and line.strip()]:
+            del counters[ended]
+        close_lists(0)
+        if gap > 0.05:
+            block_css["margin-top"] = f"{gap / para_size:.4g}em"
+        if block_css:
+            blocks.append(f"<p{_style_attr(block_css)}>{inner or '<br>'}</p>")
+        else:
+            blocks.append(inner)
+    close_lists(0)
+
+    while blocks and not re.sub(r"<[^>]+>", "", blocks[-1]).strip() and not blocks[-1].startswith(("<ol", "<ul")):
+        blocks.pop()
+    if len(blocks) <= 1 and not (blocks and blocks[0].startswith(("<p", "<ol", "<ul"))):
+        out = blocks[0] if blocks else ""
+    else:
+        out = "".join(
+            block if block.startswith(("<p", "<ol", "<ul")) else f"<p>{block or '<br>'}</p>"
+            for block in blocks
+        )
+    return None if out == text_to_html(text) else out
 
 
 def _font_family_css(font_name: str) -> str:
@@ -1845,6 +2327,13 @@ class Importer:
         # Keynote shows one. Dropping it would lose a deliberate slot in the
         # layout; importing it as a zero-height shape would leave an invisible
         # sliver that cannot be selected.
+        #
+        # A box sized to its content (stored 0×0) that holds no content has
+        # no extent in Keynote at all: it is the trace of a stray click with
+        # the text tool, invisible there, and would surface here as three
+        # tiny "Text" labels floating mid-slide.
+        if not text.strip() and _is_text_box(obj) and box["w"] <= 1 and box["h"] <= 1:
+            return out
         if not text.strip() and _is_text_box(obj):
             style = resolve_text_style(self.objects, obj)
             font_size = style.font_size or DEFAULT_FONT_SIZE
@@ -1926,13 +2415,17 @@ class Importer:
                 )
             elif style.color:
                 inline["color"] = style.color
+            # Stated inline so the theme's role defaults (a title's tighter
+            # tracking and leading) never restyle text Keynote laid out.
+            inline["line-height"] = line_height_css(style.line_spacing, font_size)
+            inline["letter-spacing"] = tracking_css(style.tracking)
 
             element = self._base(box, z, "text")
             element["opacity"] = shape_paint.opacity
+            markup = styled_text_to_html(self.objects, obj, style) or text_to_html(text)
             element.update(
                 {
-                    "html": styled_text_to_html(self.objects, obj, style)
-                    or text_to_html(text),
+                    "html": markup,
                     "autoFit": True,
                     "align": style.align,
                     "valign": style.valign,
@@ -1940,6 +2433,16 @@ class Importer:
                     "style": inline,
                 }
             )
+            if "<li" in markup:
+                # The editor's lists gap their items by 0.15em unless the box
+                # names its own spacing; Keynote's paragraphs carry theirs
+                # explicitly (usually none), and five gaps of 9px are what
+                # pushed a numbered list into the figure below it.
+                storage = _storage_of(self.objects, obj)
+                first = _ref_entries(storage.table_para_style, carry=True) if storage is not None else []
+                element["paragraphSpacing"] = round(
+                    _para_spacing(self.objects, first[0][1] if first else None), 1
+                )
             out.append(element)
 
         return out
@@ -1981,6 +2484,7 @@ class Importer:
         # Vertical text: Keynote's anchor conventions for auto-sized geometry
         # change once a box is turned on its side.
         quarter_turn = abs(abs(rot) - 90.0) < 2.0
+        rotated = abs(rot) > 0.5
 
         if width_was_auto:
             measured = _measure_text_width(
@@ -1999,7 +2503,7 @@ class Importer:
             # left edge: centred labels use their horizontal centre and
             # right-aligned labels use their right edge. Fully-auto rotated
             # boxes are anchored differently and handled below instead.
-            if not (quarter_turn and height_was_auto):
+            if not (rotated and height_was_auto):
                 if align == "center":
                     out["x"] -= out["w"] / 2
                 elif align == "right":
@@ -2024,32 +2528,35 @@ class Importer:
             # Auto-height geometry stores the vertical alignment anchor: top,
             # centre, or bottom depending on the shape style. Rotated boxes
             # use their own anchors, applied below.
-            if not quarter_turn:
+            if not quarter_turn and not (rotated and width_was_auto):
                 if valign == "middle":
                     out["y"] = centre_y - out["h"] / 2
                 elif valign == "bottom":
                     out["y"] = centre_y - out["h"]
             self.report.autosized_boxes += 1
 
-        # Quarter-turned text stores its position under conventions of its own,
-        # reverse-engineered from the hand-authored vertical labels on
-        # reference.key slide 25 (all rotated 90° anticlockwise):
+        # A box sized to its text in both directions stores the point its text
+        # grows from — the alignment anchor, as for unrotated text above: the
+        # left, centre or right of the line, at the top, middle or bottom —
+        # and Keynote turns the laid-out box about that point. "Detail →"
+        # beside a grid (MilliVid slide 21: left, middle, 90° anticlockwise)
+        # landed on the grid when the anchor was taken as the top-left corner.
+        # For a left/top box the two agree, which is what the hand-authored
+        # vertical labels on reference.key slide 25 showed.
         #
-        #  * both dimensions auto: the stored position is where the *unrotated
-        #    frame's top-left corner* lands after rotating about the frame's
-        #    centre. Solved generally below, so it also reduces to the plain
-        #    top-left at rot 0.
-        #  * fixed width, auto height: the stored position is the frame's
-        #    top-left displaced by (h/2, h/2) — h being the laid-out height —
-        #    independent of the shape's valign (slide 25's labels carry
-        #    valign bottom yet anchor at h/2). Only observed at 90°
-        #    anticlockwise; assumed symmetric for clockwise.
-        if quarter_turn and width_was_auto and height_was_auto:
+        # A fixed-width box with auto height turned a quarter: the stored
+        # position is the frame's top-left displaced by (h/2, h/2) — h being
+        # the laid-out height — independent of the shape's valign (slide 25's
+        # labels carry valign bottom yet anchor at h/2). Only observed at 90°
+        # anticlockwise; assumed symmetric for clockwise.
+        if rotated and width_was_auto and height_was_auto:
+            local_x = {"center": 0.0, "right": -out["w"] / 2}.get(align, out["w"] / 2)
+            local_y = {"middle": 0.0, "bottom": -out["h"] / 2}.get(valign, out["h"] / 2)
             theta = math.radians(rot)
-            corner_dx = (-out["w"] / 2) * math.cos(theta) - (-out["h"] / 2) * math.sin(theta)
-            corner_dy = (-out["w"] / 2) * math.sin(theta) + (-out["h"] / 2) * math.cos(theta)
-            out["x"] = box["x"] - corner_dx - out["w"] / 2
-            out["y"] = box["y"] - corner_dy - out["h"] / 2
+            centre_x = box["x"] + local_x * math.cos(theta) - local_y * math.sin(theta)
+            centre_y = box["y"] + local_x * math.sin(theta) + local_y * math.cos(theta)
+            out["x"] = centre_x - out["w"] / 2
+            out["y"] = centre_y - out["h"] / 2
         elif quarter_turn and not width_was_auto and height_was_auto:
             out["x"] -= out["h"] / 2
             out["y"] -= out["h"] / 2
@@ -2191,7 +2698,7 @@ class Importer:
         ):
             source = pathsource.scalar_path_source
             if int(source.type) == 0:
-                element = self._base(box, z, "shape")
+                element = self._base(_outset_for_stroke(box, style), z, "shape")
                 element.update(
                     {
                         "shape": "rect",
@@ -2298,7 +2805,7 @@ class Importer:
             and not style.arrow_end
             and is_axis_aligned_rectangle(path_msg)
         ):
-            element = self._base(box, z, "shape")
+            element = self._base(_outset_for_stroke(box, style), z, "shape")
             element.update(
                 {
                     "shape": "rect",
@@ -2633,6 +3140,30 @@ class Importer:
                 animation_type = str(build.attributes.animationAttributes.animation_type)
             except AttributeError:
                 continue
+            if animation_type == "Action":
+                move = _motion_path_offset(build)
+                if move is not None:
+                    duration = float(build.attributes.animationAttributes.duration or 1.0)
+                    timeline.append(
+                        {
+                            # Never written to a deck, so it takes no id from
+                            # the counter that numbers every object after it.
+                            "id": MOVE_ACTION,
+                            "trigger": {
+                                "on": "afterPrev" if automatic else "click",
+                                "ref": None,
+                                "delay": round(delay * 1000),
+                            },
+                            "action": {
+                                "type": MOVE_ACTION,
+                                "targets": list(targets),
+                                "dx": move[0],
+                                "dy": move[1],
+                                "duration": duration,
+                            },
+                        }
+                    )
+                continue
             action = (
                 "appear"
                 if animation_type == "In"
@@ -2675,6 +3206,160 @@ DEFAULT_FONT_SIZE = 36.0
 
 """Shown in an empty imported text box, mirroring what Keynote displays."""
 PLACEHOLDER_TEXT = "Text"
+
+
+# A Keynote "Move" build, held in a slide's timeline only until
+# `split_at_moves` turns it into a Morph; never written to a deck.
+MOVE_ACTION = "_move"
+
+
+def _motion_path_offset(build: Any) -> tuple[float, float] | None:
+    """How far a Move build carries its object: the motion path's end point
+    relative to its start. Morph moves in a straight line, so a curved path
+    keeps only where it ends."""
+    try:
+        source = build.attributes.action_motionPathSource
+        subpaths = list(source.editable_bezier_path_source.subpaths)
+    except AttributeError:
+        return None
+    nodes = [node for subpath in subpaths for node in subpath.nodes]
+    if len(nodes) < 2:
+        return None
+    start, end = nodes[0].nodePoint, nodes[-1].nodePoint
+    dx, dy = float(end.x) - float(start.x), float(end.y) - float(start.y)
+    if source.horizontalFlip:
+        dx = -dx
+    if source.verticalFlip:
+        dy = -dy
+    if abs(dx) < 0.01 and abs(dy) < 0.01:
+        return None
+    return round(dx, 2), round(dy, 2)
+
+
+def split_at_moves(slide: dict[str, Any], report: "Report | None" = None) -> list[dict[str, Any]]:
+    """Turn a slide's Keynote Move builds into Morphs to copies of the slide.
+
+    The editor's builds show and hide objects; only Morph, between two
+    slides, moves them. So the builds up to a Move stay on this slide, and
+    the slide continues on a copy that Morphs in from it: everything that is
+    on screen at that moment, with the moved objects in their new places,
+    followed by the builds that come after. Moves that follow the first one
+    automatically ride the same transition. Each object keeps one morphId
+    across the copies, so only what moved animates.
+
+    Left alone, a Move was dropped, and the objects that make room for it
+    built in on top of the one that should have moved out of their way.
+    """
+    if not any(entry["action"]["type"] == MOVE_ACTION for entry in slide["timeline"]):
+        return [slide]
+    for element in slide["elements"]:
+        element["morphId"] = element.get("morphId") or element["id"]
+
+    out: list[dict[str, Any]] = []
+    current = slide
+    part = 1
+    while True:
+        entries = current["timeline"]
+        first = next((i for i, e in enumerate(entries) if e["action"]["type"] == MOVE_ACTION), None)
+        if first is None:
+            out.append(current)
+            return out
+        last = first + 1
+        while (
+            last < len(entries)
+            and entries[last]["action"]["type"] == MOVE_ACTION
+            and entries[last]["trigger"]["on"] != "click"
+        ):
+            last += 1
+        before, moves, after = entries[:first], entries[first:last], entries[last:]
+
+        # What is on screen when the Move starts.
+        visibility = [e for e in before + after if e["action"]["type"] in ("appear", "disappear")]
+        decided: set[str] = set()
+        hidden: set[str] = set()
+        for entry in visibility:
+            target = entry["action"]["target"]
+            if target not in decided:
+                decided.add(target)
+                if entry["action"]["type"] == "appear":
+                    hidden.add(target)
+        visible = {element["id"] for element in current["elements"]} - hidden
+        shown_here = set(visible)
+        for entry in before:
+            kind, target = entry["action"]["type"], entry["action"].get("target")
+            if kind == "appear":
+                visible.add(target)
+                shown_here.add(target)
+            elif kind == "disappear":
+                visible.discard(target)
+        # Objects whose build comes after the Move belong to the copy only:
+        # here, with no build left to hide them, they would show from the start.
+        every_element = current["elements"]
+        current["elements"] = [e for e in every_element if e["id"] in shown_here]
+        current["timeline"] = before
+        out.append(current)
+
+        part += 1
+        suffix = f"-m{part}"
+        shift: dict[str, tuple[float, float]] = {}
+        for move in moves:
+            for target in move["action"]["targets"]:
+                dx, dy = shift.get(target, (0.0, 0.0))
+                shift[target] = (dx + move["action"]["dx"], dy + move["action"]["dy"])
+        appears_later = {
+            e["action"]["target"] for e in after
+            if e["action"]["type"] == "appear"
+        }
+        kept = [
+            element for element in every_element
+            if element["id"] in visible or element["id"] in appears_later
+        ]
+        ids = {element["id"]: element["id"] + suffix for element in kept}
+        elements = []
+        for element in kept:
+            moved = copy.deepcopy(element)
+            moved["id"] = ids[element["id"]]
+            dx, dy = shift.get(element["id"], (0.0, 0.0))
+            moved["x"] = round(moved["x"] + dx, 2)
+            moved["y"] = round(moved["y"] + dy, 2)
+            elements.append(moved)
+
+        timeline = []
+        for entry in after:
+            action = entry["action"]
+            if action["type"] == MOVE_ACTION:
+                targets = [ids[t] for t in action["targets"] if t in ids]
+                if not targets:
+                    continue
+                action = {**action, "targets": targets}
+            elif action.get("target") not in ids:
+                continue
+            else:
+                action = {**action, "target": ids[action["target"]]}
+            trigger = dict(entry["trigger"])
+            if trigger.get("ref"):
+                trigger["ref"] = ids.get(trigger["ref"])
+            timeline.append({"id": entry["id"] + suffix, "trigger": trigger, "action": action})
+
+        duration = max(move["action"]["duration"] for move in moves)
+        nxt = {
+            key: copy.deepcopy(value) for key, value in current.items()
+            if key not in ("elements", "timeline")
+        }
+        nxt.update(
+            {
+                "id": slide["id"] + suffix,
+                "elements": elements,
+                "timeline": timeline,
+                "morphFromPrevious": True,
+                "morphDuration": max(100, min(5000, round(duration * 1000))),
+            }
+        )
+        if report is not None:
+            report.warnings.append(
+                f"{slide['name']}: a Move build continues on the next slide as a Morph"
+            )
+        current = nxt
 
 
 def _normalise_angle(degrees: float) -> float:
@@ -3071,7 +3756,15 @@ def import_key(
         progress.phase(f"Decoding {path.name}", OPEN_SPAN[1])
         objects = load_objects(pkg, report, progress)
         if not objects:
-            raise SystemExit(f"No readable .iwa streams in {path}")
+            streams = [name for name in pkg.names if name.endswith(".iwa")]
+            if streams:
+                detail = f"none of its {len(streams)} .iwa streams decoded ({'; '.join(report.warnings[:2])})"
+            else:
+                shown = sorted({name.split("/", 1)[0] for name in pkg.names})[:8]
+                detail = f"it holds no Keynote .iwa streams (top level: {', '.join(shown) or 'nothing'})"
+                if "index.apxl" in pkg or "index.apxl.gz" in pkg:
+                    detail += "; it is a Keynote '09 file, open and re-save it in a current Keynote"
+            raise SystemExit(f"Could not read {path.name}: {detail}")
 
         datas = data_file_table(objects)
         if not datas:
@@ -3112,7 +3805,7 @@ def import_key(
                 node = objects[int(node_ref.identifier)]
                 slide_obj = objects[int(node.slide.identifier)]
                 skipped = bool(getattr(node, "isSkipped", False))
-                slides.append(importer.convert_slide(slide_obj, index, skipped))
+                slides.extend(split_at_moves(importer.convert_slide(slide_obj, index, skipped), report))
             except Exception as exc:
                 # One unreadable slide must not cost the other ninety-five.
                 report.warnings.append(f"Slide {index + 1} failed: {exc}")
@@ -3160,7 +3853,35 @@ def import_key(
         pkg.close()
 
 
+def self_check() -> int:
+    """Import every module an import can reach, then exit.
+
+    Several of them are imported lazily and only warn when missing, so a broken
+    environment would otherwise surface as a failed or quietly degraded import
+    of somebody's deck. The collab server, `npm install` and build:importer run
+    this first and refuse to go on when it fails.
+    """
+    import importlib
+
+    missing = []
+    for module in ('keynote_parser.codec', 'PIL.Image', 'PIL.ImageChops', 'PIL.ImageFont', 'pymupdf'):
+        try:
+            importlib.import_module(module)
+        except ImportError as exc:
+            missing.append(f"{module} ({exc})")
+    if missing:
+        sys.stderr.write(
+            "The Keynote importer cannot load: " + "; ".join(missing)
+            + "\nRun: npm run setup:importers\n"
+        )
+        return 1
+    sys.stdout.write("ok\n")
+    return 0
+
+
 def main(argv: list[str]) -> int:
+    if argv == ["--self-check"]:
+        return self_check()
     parser = argparse.ArgumentParser(description="Import a Keynote .key file.")
     parser.add_argument("input", type=Path, help="Path to a .key file or bundle")
     parser.add_argument("--out", type=Path, help="Deck folder to create")

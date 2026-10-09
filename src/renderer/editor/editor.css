@@ -3820,12 +3820,58 @@ select.panel-action-select {
    shape menu paints above the canvas. */
 .bar-center { z-index: 20; }
 
-/* --- comments --- */
+/* --- comments (comments.ts) ---
+   Comments open only from the right-click menus. What stays on screen is a
+   highlight on whatever carries an open thread: an amber frame and count on
+   the canvas, an amber ring and count on the slide's rail row. */
 
-/* Slide rail: bubble in the row's bottom-right. Invisible until the row is
-   hovered when the slide has no comments; always shown with the open count
-   when it does. */
-.rail-comment {
+:root { --comment: var(--yellow, #e0af68); }
+
+.comment-mark {
+  position: absolute;
+  pointer-events: none;
+  outline: calc(2px * var(--inv, 1)) solid color-mix(in srgb, var(--comment) 80%, transparent);
+  outline-offset: calc(3px * var(--inv, 1));
+  background: color-mix(in srgb, var(--comment) 10%, transparent);
+}
+.comment-mark.hot {
+  outline-width: calc(3px * var(--inv, 1));
+  outline-color: var(--comment);
+  background: color-mix(in srgb, var(--comment) 20%, transparent);
+}
+.comment-slide-mark {
+  left: 0;
+  top: 0;
+  outline: 0;
+  background: transparent;
+  box-shadow: inset 0 0 0 calc(4px * var(--inv, 1)) color-mix(in srgb, var(--comment) 75%, transparent);
+}
+.comment-slide-mark.hot {
+  box-shadow: inset 0 0 0 calc(6px * var(--inv, 1)) var(--comment);
+  background: color-mix(in srgb, var(--comment) 6%, transparent);
+}
+.comment-mark[data-count]::after {
+  content: attr(data-count);
+  position: absolute;
+  right: 0;
+  top: 0;
+  transform: translate(50%, -50%) scale(var(--inv, 1));
+  min-width: 20px;
+  height: 20px;
+  padding: 0 5px;
+  border-radius: 10px 10px 10px 2px;
+  background: var(--comment);
+  color: #1a1b26;
+  font: 700 11px/20px var(--mono, system-ui), sans-serif;
+  text-align: center;
+  box-shadow: 0 2px 6px rgb(0 0 0 / 35%);
+}
+.comment-slide-mark[data-count]::after { transform: translate(-30%, 30%) scale(var(--inv, 1)); transform-origin: top right; }
+
+.rail-item.has-comments .rail-thumb {
+  box-shadow: inset 0 0 0 1px var(--rail-thumb-stroke, var(--line)), 0 0 0 2px var(--comment);
+}
+.rail-comment-count {
   position: absolute;
   right: 6px;
   bottom: 6px;
@@ -3833,57 +3879,25 @@ select.panel-action-select {
   height: 16px;
   padding: 0 4px;
   border-radius: 8px 8px 8px 2px;
-  background: var(--panel-2);
-  border: 1px solid var(--line);
-  color: var(--muted);
-  font-size: 10px;
-  line-height: 14px;
+  background: var(--comment);
+  color: #1a1b26;
+  font: 700 10px/16px var(--mono, system-ui), sans-serif;
   text-align: center;
-  opacity: 0;
-  transition: opacity 100ms ease;
-  cursor: pointer;
+  pointer-events: none;
 }
-.rail-item:hover .rail-comment { opacity: 1; }
-.rail-comment.has-comments {
-  opacity: 1;
-  background: var(--accent);
-  border-color: var(--accent);
-  color: #fff;
-}
-.rail-comment:hover { border-color: var(--accent); color: var(--text); }
-.rail-comment.has-comments:hover { color: #fff; }
 
-/* Canvas: bubble pinned to an element's top-right corner. Lives in the
-   overlay (slide coordinates) and counter-scales like handles do. */
-.element-comment {
-  position: absolute;
-  transform: translate(-30%, -70%) scale(var(--inv, 1));
-  transform-origin: center;
-  min-width: 22px;
-  height: 22px;
-  padding: 0 6px;
-  border-radius: 11px 11px 11px 3px;
-  background: var(--accent);
-  color: #fff;
-  font: 12px/22px system-ui, sans-serif;
-  text-align: center;
-  pointer-events: auto;
-  cursor: pointer;
-  box-shadow: 0 2px 8px rgb(0 0 0 / 40%);
-}
-.element-comment.resolved { background: var(--panel-2); color: var(--muted); border: 1px solid var(--line); }
-
-/* Shared popover. */
+/* The thread popover. */
 #comments-popover {
   position: fixed;
+  /* Under a presentation iframe (z-index 9999), which closes it anyway. */
   z-index: 1000;
-  width: 280px;
-  max-height: 60vh;
+  width: 340px;
+  max-height: 70vh;
   display: flex;
   flex-direction: column;
   background: var(--panel);
   border: 1px solid var(--line);
-  border-radius: 8px;
+  border-top: 2px solid var(--comment);
   box-shadow: 0 10px 32px rgb(0 0 0 / 50%);
   overflow: hidden;
 }
@@ -3892,36 +3906,93 @@ select.panel-action-select {
   border-bottom: 1px solid var(--line);
   color: var(--muted);
   font-size: 11px;
-  text-transform: uppercase;
   letter-spacing: 0.06em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
-.comments-list { overflow-y: auto; padding: 4px 0; flex: 1; }
-.comments-empty { padding: 10px; color: var(--muted); }
-.comment { padding: 8px 10px; border-bottom: 1px solid var(--line); }
-.comment:last-child { border-bottom: 0; }
-.comment.resolved { opacity: 0.55; }
-.comment-meta { display: flex; gap: 8px; align-items: baseline; margin-bottom: 2px; }
-.comment-author { font-weight: 600; font-size: 12px; }
-.comment-when { color: var(--muted); font-size: 10.5px; }
-.comment-text { white-space: pre-wrap; }
-.comment-actions { display: flex; gap: 8px; margin-top: 4px; }
-.comment-actions button {
+.comments-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.comments-empty { padding: 4px 2px; color: var(--muted); }
+.comments-resolved-toggle {
+  align-self: flex-start;
   border: 0;
   background: transparent;
   color: var(--muted);
+  padding: 2px 0;
   font-size: 11px;
-  padding: 0;
-  cursor: pointer;
 }
-.comment-actions button:hover { color: var(--accent); }
+.comments-resolved-toggle:not(:disabled):hover { color: var(--text); background: transparent; }
+
+.cthread {
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--comment);
+  background: var(--panel-2, var(--panel));
+  padding: 6px 8px 8px;
+}
+.cthread.resolved { border-left-color: var(--line); opacity: 0.7; }
+.cthread.flash { animation: cthread-flash 1.6s ease-out; }
+@keyframes cthread-flash {
+  from { box-shadow: 0 0 0 3px var(--comment); }
+  to { box-shadow: 0 0 0 0 transparent; }
+}
+.comment-meta { display: flex; gap: 8px; align-items: baseline; margin-bottom: 2px; }
+.cthread .comment-meta { align-items: center; gap: 6px; }
+.cthread-head { display: flex; align-items: center; gap: 6px; }
+.cthread-head { margin-bottom: 4px; }
+.cthread-head .spacer, .comment-meta .spacer { flex: 1; }
+.cthread-head button, .cmsg-tools button {
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  padding: 1px 4px;
+  font-size: 10.5px;
+}
+.cthread-head button:not(:disabled):hover, .cmsg-tools button:not(:disabled):hover {
+  background: transparent;
+  color: var(--text);
+}
+.cthread-head .cthread-resolve { color: var(--comment); }
+.cthread-where {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+  font-size: 10.5px;
+  text-transform: none;
+  letter-spacing: 0;
+}
+button.cthread-where:not(:disabled) { cursor: pointer; text-decoration: underline dotted; }
+button.cthread-where:disabled { cursor: default; opacity: 1; }
+.cmsg { padding: 4px 0; }
+.cmsg + .cmsg { border-top: 1px solid var(--line); }
+.cmsg-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; }
+.cmsg-dot.agent { border-radius: 2px; }
+.cmsg-tools { display: flex; gap: 2px; opacity: 0; transition: opacity 100ms ease; }
+.cmsg:hover .cmsg-tools, .cmsg-tools:focus-within { opacity: 1; }
+.cmsg-tools button.danger { color: var(--danger); opacity: 1; }
+.comment-author { font-weight: 600; font-size: 12px; }
+.comment-when { color: var(--muted); font-size: 10.5px; }
+.comment-text { white-space: pre-wrap; overflow-wrap: anywhere; }
 .comment-compose {
   display: flex;
   gap: 6px;
   padding: 8px;
   border-top: 1px solid var(--line);
 }
+.comment-compose.creply { padding: 6px 0 0; border-top: 0; }
+.cmsg .comment-compose { padding: 4px 0; border-top: 0; }
 .comment-compose textarea {
   flex: 1;
+  min-width: 0;
   resize: none;
   background: var(--panel-2);
   border: 1px solid var(--line);
@@ -3930,6 +4001,7 @@ select.panel-action-select {
   font: inherit;
   padding: 6px 8px;
 }
+.cthread .comment-compose textarea { background: var(--panel); }
 .comment-compose textarea:focus { outline: none; border-color: var(--accent); }
 .comment-compose button {
   align-self: flex-end;
@@ -3940,6 +4012,7 @@ select.panel-action-select {
   padding: 6px 10px;
   cursor: pointer;
 }
+.comment-compose button[hidden] { display: none; }
 
 /* --- DeckWerk identity and About dialog --- */
 
@@ -4613,4 +4686,16 @@ button.ghost:hover:not(:disabled) { color: var(--text); background: transparent;
   text-transform: uppercase;
   transform: translateX(-50%);
   pointer-events: none;
+}
+
+/* Harper spelling/grammar marks on the box being edited (spellcheck.ts). */
+::highlight(deckwerk-spelling) {
+  text-decoration: underline wavy #e5484d;
+  text-decoration-thickness: 1.5px;
+  text-underline-offset: 3px;
+}
+::highlight(deckwerk-grammar) {
+  text-decoration: underline wavy #3e8ef7;
+  text-decoration-thickness: 1.5px;
+  text-underline-offset: 3px;
 }

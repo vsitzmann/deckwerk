@@ -50,7 +50,7 @@ export async function importKeynote(
   if (!sidecar) {
     throw new Error(
       'Keynote importer not found. In development, create the venv:\n' +
-        '  python3 -m venv .venv-import && ./.venv-import/bin/pip install keynote-parser pillow pymupdf',
+        '  npm run setup:importers',
     );
   }
 

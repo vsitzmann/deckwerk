@@ -4,7 +4,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import { lookup } from 'node:dns/promises';
 import { createReadStream, createWriteStream, existsSync, statSync } from 'node:fs';
 import { pipeline } from 'node:stream/promises';
-import { mkdir, mkdtemp, readdir, readFile, rename, rm, rmdir, stat, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, mkdtemp, readdir, readFile, rename, rm, rmdir, stat, writeFile } from 'node:fs/promises';
 import { createHash, randomUUID } from 'node:crypto';
 import { networkInterfaces, tmpdir } from 'node:os';
 import { basename, dirname, extname, join, normalize, resolve } from 'node:path';
@@ -17,7 +17,8 @@ import {
 } from '../main/deckStore.js';
 import { exportDeck, webExportUnavailableReason } from '../main/exportDeck.js';
 import { capabilities } from '../shared/capabilities.js';
-import { probeMedia } from '../main/ffmpeg.js';
+import { getFfmpegPath, getFfprobePath, probeMedia } from '../main/ffmpeg.js';
+import { DeckWire } from './deckWire.js';
 import {
   RenditionStore,
   isVideoAsset,
@@ -69,7 +70,8 @@ import { authoringPageHtml, type TextOverflow } from '../shared/htmlMeasure.js';
 import { deckRevision } from '../main/agentRuntime.js';
 import { applyAgentTransaction, validateDeckIntegrity, type AgentOperation } from '../shared/agent.js';
 import { NativeEditRequestSchema, applyNativeEdits, nativeEditContract } from '../shared/nativeEdits.js';
-import { type Deck, type Slide, type SlideElement } from '../shared/deck.js';
+import { type Comment, type Deck, type Slide, type SlideElement } from '../shared/deck.js';
+import { commentsAt, commentsOperation, findComment, threadEdits, threadIdOf } from '../shared/comments.js';
 import { classifyMediaName } from '../shared/media.js';
 import { deckOutline } from '../shared/deckDigest.js';
 import type { AgentPanelState } from '../shared/ipc.js';
@@ -321,6 +323,13 @@ export interface CollabServerOptions {
    * than CPU. An object configures the store (a test's own cache directory).
    */
   mediaRenditions?: boolean | RenditionOptions;
+  /**
+   * Keep every Keynote and PowerPoint upload, successful or not, for this
+   * many days under `<rootDir>/.uploads/`, so a bad import can be debugged
+   * against the file that produced it. Off (0) unless set: the hosted server
+   * turns it on, a desktop app sharing one deck has no imports to keep.
+   */
+  keepUploadsDays?: number;
 }
 
 export interface RunningCollabServer {
@@ -533,6 +542,28 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
     return people.size;
   }
 
+  /**
+   * A deck's title and slide count for the listing. Every listing used to
+   * parse every deck.json in full, and one 20 MB deck made each visit to the
+   * deck picker hold the event loop ~20 ms for everyone editing. An open deck
+   * answers from memory; any other is parsed once per change of its file.
+   */
+  const summaries = new Map<string, { size: number; mtimeMs: number; title?: string; slides: number }>();
+  async function deckSummary(
+    id: string,
+    dir: string,
+    saved: { size: number; mtimeMs: number } | null,
+  ): Promise<{ title?: string; slides: number }> {
+    const open = rooms.get(id);
+    if (open) return { title: open.session.deck.title, slides: open.session.deck.slides.length };
+    const known = summaries.get(dir);
+    if (known && saved && known.size === saved.size && known.mtimeMs === saved.mtimeMs) return known;
+    const raw = JSON.parse(await readFile(join(dir, 'deck.json'), 'utf8')) as { title?: string; slides?: unknown[] };
+    const summary = { title: raw.title, slides: Array.isArray(raw.slides) ? raw.slides.length : 0 };
+    if (saved) summaries.set(dir, { ...summary, size: saved.size, mtimeMs: saved.mtimeMs });
+    return summary;
+  }
+
   async function deckListEntry(
     id: string,
     dir: string,
@@ -540,10 +571,8 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
   ): Promise<DeckListEntry | null> {
     let listed: DeckListEntry;
     try {
-      const raw = JSON.parse(await readFile(join(dir, 'deck.json'), 'utf8')) as {
-        title?: string; slides?: unknown[];
-      };
       const saved = await stat(join(dir, 'deck.json')).catch(() => null);
+      const raw = await deckSummary(id, dir, saved);
       // deck.json is replaced on every save, so its own birth time is the last
       // save; the folder's is when the deck was made. Without birth times,
       // the earliest time we have is the best guess.
@@ -555,7 +584,7 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
       listed = {
         id,
         title: raw.title ?? name,
-        slides: Array.isArray(raw.slides) ? raw.slides.length : 0,
+        slides: raw.slides,
         editedAt: saved ? saved.mtime.toISOString() : null,
         createdAt: Number.isFinite(createdMs) ? new Date(createdMs).toISOString() : null,
         editors: editorsIn(rooms.get(id)),
@@ -798,6 +827,50 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
    * the rules that applied before it was trashed. `.trash` is a dot-name, so
    * splitDeckPath refuses it: no listing walks into it and no route opens it.
    */
+  /**
+   * Uploaded Keynote and PowerPoint files, kept for options.keepUploadsDays.
+   * One folder per upload: the file under the name it was imported as, and
+   * upload.json saying which deck it became, who sent it and whether the
+   * import worked. A dot-name like .trash, so no listing or route reaches it.
+   */
+  const UPLOADS_DIR = join(rootDir, '.uploads');
+  const keepUploadsDays = Math.max(0, options.keepUploadsDays ?? 0);
+
+  async function keepUpload(file: string, meta: Record<string, unknown>): Promise<void> {
+    if (keepUploadsDays <= 0) return;
+    try {
+      const at = new Date();
+      const slug = String(meta.deck).replace(/[^0-9A-Za-z._-]+/g, '-').slice(0, 80);
+      const entry = join(UPLOADS_DIR, `${at.toISOString().replace(/[:.]/g, '-')}-${slug}`);
+      await mkdir(entry, { recursive: true });
+      await copyFile(file, join(entry, basename(file)));
+      await writeFile(join(entry, 'upload.json'), `${JSON.stringify({ ...meta, at: at.toISOString() }, null, 2)}\n`);
+    } catch (error) {
+      process.stderr.write(`could not keep upload ${basename(file)}: ${String(error)}\n`);
+    }
+    await pruneUploads();
+  }
+
+  async function pruneUploads(): Promise<void> {
+    if (keepUploadsDays <= 0) return;
+    const cutoff = Date.now() - keepUploadsDays * 24 * 60 * 60 * 1000;
+    let entries: string[];
+    try {
+      entries = await readdir(UPLOADS_DIR);
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      const path = join(UPLOADS_DIR, entry);
+      try {
+        if ((await stat(path)).mtimeMs < cutoff) await rm(path, { recursive: true, force: true });
+      } catch {
+        // Gone already, or unreadable: the next prune tries again.
+      }
+    }
+  }
+  void pruneUploads();
+
   const TRASH_DIR = join(rootDir, '.trash');
   const TRASH_ENTRY_ID = /^[0-9A-Za-z-]{8,80}$/;
 
@@ -932,22 +1005,28 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
     return room;
   }
 
+  /** Messages carrying a whole deck are spliced from a cache (deckWire.ts). */
+  const wire = new DeckWire();
   const send = (peer: Peer, message: ServerMessage) => {
-    if (peer.socket.readyState === peer.socket.OPEN) peer.socket.send(JSON.stringify(message));
+    if (peer.socket.readyState === peer.socket.OPEN) peer.socket.send(wire.encode(message), { binary: false });
   };
   /**
-   * One message to every greeted peer. Serialised once, however many peers
-   * there are: a whole-deck message for a large deck is megabytes of JSON,
-   * and stringifying it per peer held the event loop for each of them.
-   * (permessage-deflate still compresses per socket — each connection has
-   * its own compression context, which ws offers no way to share.)
+   * One message to every greeted peer. Serialised and encoded once, however
+   * many peers there are: a whole-deck message for a large deck is megabytes
+   * of JSON, and stringifying it (or encoding the string) per peer held the
+   * event loop for each of them. (permessage-deflate still compresses per
+   * socket — each connection has its own compression context, which ws
+   * offers no way to share — but that runs on zlib's thread pool.)
    */
   const broadcast = (room: Room, message: ServerMessage, except?: string) => {
-    let data: string | null = null;
+    let data: Buffer | null = null;
     for (const [id, peer] of room.peers) {
       if (id === except || !peer.greeted || peer.socket.readyState !== peer.socket.OPEN) continue;
-      data ??= JSON.stringify(message);
-      peer.socket.send(data);
+      if (!data) {
+        const encoded = wire.encode(message);
+        data = typeof encoded === 'string' ? Buffer.from(encoded, 'utf8') : encoded;
+      }
+      peer.socket.send(data, { binary: false });
     }
   };
   /** An agent behind an HTTP route, for the edit log: a linked bridge, or the server's agent. */
@@ -2028,15 +2107,22 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
       if (existsSync(dir)) return respondJson(response, 409, { error: `deck "${id}" already exists` });
       const body = await readBody(request);
       const tmp = await mkdtemp(join(tmpdir(), 'collab-import-'));
+      const sourceFile = join(tmp, `${name}${importRoute.extension}`);
+      const upload = { deck: id, file: basename(sourceFile), bytes: body.length, by: identity?.login ?? null };
       try {
-        const sourceFile = join(tmp, `${name}${importRoute.extension}`);
         await writeFile(sourceFile, body);
         const report = await importRoute.run(sourceFile, dir);
         await writeImportedDeckAccess(dir);
+        await keepUpload(sourceFile, { ...upload, ok: true });
         respondJson(response, 200, { id, report });
       } catch (error) {
         await rm(dir, { recursive: true, force: true });
-        respondJson(response, 400, { error: String(error instanceof Error ? error.message : error) });
+        const message = String(error instanceof Error ? error.message : error);
+        // The person only sees this in their browser; keep it in the journal
+        // (and the file in .uploads/, when kept) so the failure can be debugged.
+        process.stderr.write(`import of "${id}"${importRoute.extension} (${body.length} bytes) failed: ${message}\n`);
+        await keepUpload(sourceFile, { ...upload, ok: false, error: message });
+        respondJson(response, 400, { error: message });
       } finally {
         await rm(tmp, { recursive: true, force: true });
       }
@@ -3051,25 +3137,37 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
       };
       if (!body.text?.trim()) return respondJson(response, 400, { error: 'missing text' });
       const room = await getRoom(deckParam);
-      const slide = body.slideId
-        ? room.session.deck.slides.find((candidate) => candidate.id === body.slideId)
-        : room.session.deck.slides.find((candidate) => candidate.elements.some((element) => element.id === body.elementId));
+      // A reply needs only the comment it answers: that says where it goes.
+      const thread = body.parentId && !body.slideId && !body.elementId
+        ? findComment(room.session.deck, body.parentId)
+        : null;
+      if (body.parentId && !body.slideId && !body.elementId && !thread) {
+        return respondJson(response, 404, { error: 'no such comment to reply to' });
+      }
+      const slideId = thread?.target.slideId ?? body.slideId;
+      const elementId = thread ? thread.target.elementId : body.elementId;
+      const slide = slideId
+        ? room.session.deck.slides.find((candidate) => candidate.id === slideId)
+        : room.session.deck.slides.find((candidate) => candidate.elements.some((element) => element.id === elementId));
       if (!slide) return respondJson(response, 404, { error: 'no such slide or element' });
-      const owner = body.elementId ? slide.elements.find((element) => element.id === body.elementId) : slide;
+      const owner = elementId ? slide.elements.find((element) => element.id === elementId) : slide;
       if (!owner) return respondJson(response, 404, { error: 'no such element' });
-      const comment = {
+      const comment: Comment = {
         id: `comment-${randomUUID()}`,
         author: body.author?.trim() || 'Agent',
+        ...(identity?.login ? { login: `${identity.login}:agent` } : {}),
         text: body.text.trim(),
         ts: new Date().toISOString(),
         resolved: false,
-        ...(body.parentId ? { parentId: body.parentId } : {}),
       };
-      const next = structuredClone(owner);
-      (next.comments ??= []).push(comment);
-      const operation: AgentOperation = 'elements' in owner
-        ? { op: 'replaceSlide', slideId: slide.id, slide: next as typeof slide }
-        : { op: 'replaceElement', slideId: slide.id, elementId: owner.id, element: next as typeof owner };
+      const target = { slideId: slide.id, ...(elementId ? { elementId } : {}) };
+      const parentId = body.parentId;
+      if (parentId && !threadIdOf(commentsAt(room.session.deck, target), parentId)) {
+        return respondJson(response, 404, { error: 'no such comment to reply to on that slide or element' });
+      }
+      const operation = commentsOperation(room.session.deck, target, (comments) => (parentId
+        ? threadEdits.reply(comments, parentId, comment)
+        : threadEdits.start(comments, comment)))!;
       const commentLabel = `The Agent added a comment${body.slideId ? ` to slide ${body.slideId}` : ''}: ${body.text.trim().slice(0, 160)}`;
       const applied = room.session.applyOps([operation], {
         label: commentLabel,
@@ -3093,24 +3191,11 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
       const body = JSON.parse((await readBody(request)).toString('utf8')) as { commentId?: string; resolved?: boolean };
       if (!body.commentId) return respondJson(response, 400, { error: 'missing commentId' });
       const room = await getRoom(deckParam);
-      let operation: AgentOperation | null = null;
-      for (const slide of room.session.deck.slides) {
-        const slideComment = slide.comments?.find((comment) => comment.id === body.commentId);
-        if (slideComment) {
-          const next = structuredClone(slide);
-          next.comments!.find((comment) => comment.id === body.commentId)!.resolved = body.resolved ?? true;
-          operation = { op: 'replaceSlide', slideId: slide.id, slide: next };
-          break;
-        }
-        for (const element of slide.elements) {
-          if (!element.comments?.some((comment) => comment.id === body.commentId)) continue;
-          const next = structuredClone(element);
-          next.comments!.find((comment) => comment.id === body.commentId)!.resolved = body.resolved ?? true;
-          operation = { op: 'replaceElement', slideId: slide.id, elementId: element.id, element: next };
-          break;
-        }
-        if (operation) break;
-      }
+      const commentId = body.commentId;
+      const found = findComment(room.session.deck, commentId);
+      const operation = found && commentsOperation(room.session.deck, found.target, (comments) =>
+        threadEdits.resolve(comments, commentId, body.resolved ?? true, identity ? `${identity.name} · agent` : 'Agent'));
+      if (found && !operation) return respondJson(response, 200, { ok: true, resolved: body.resolved ?? true });
       if (!operation) return respondJson(response, 404, { error: 'no such comment' });
       const resolveLabel = `The Agent marked comment ${body.commentId} ${body.resolved ?? true ? 'resolved' : 'unresolved'}.`;
       const applied = room.session.applyOps([operation], {
@@ -4321,16 +4406,16 @@ function sanitizeFolderPath(value: string): string | null {
   return splitDeckPath(path) ? path : null;
 }
 
+type ImporterSpec = { binary: string; script: string; label: string };
+const KEYNOTE_IMPORTER: ImporterSpec = { binary: 'keynote-import', script: 'importers/keynote/import_keynote.py', label: 'Keynote' };
+const POWERPOINT_IMPORTER: ImporterSpec = { binary: 'pptx-import', script: 'importers/pptx/import_pptx.py', label: 'PowerPoint' };
+
 /**
- * Run an importer sidecar without Electron: the frozen binary when built
- * (build/importers), otherwise the project venv's Python and the source
+ * How to run an importer sidecar without Electron: the frozen binary when
+ * built (build/importers), otherwise the project venv's Python and the source
  * script — the same fallbacks the desktop app uses.
  */
-async function runImporter(
-  importer: { binary: string; script: string; label: string },
-  sourceFile: string,
-  outDir: string,
-): Promise<unknown> {
+function importerCommand(importer: ImporterSpec): { command: string; args: string[] } {
   const repoRoot = resolve(import.meta.dirname, '../..');
   const binaryName = process.platform === 'win32' ? `${importer.binary}.exe` : importer.binary;
   const resourcesPath = (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath;
@@ -4341,19 +4426,13 @@ async function runImporter(
   const binary = binaries.find((candidate) => existsSync(candidate));
   const script = join(repoRoot, importer.script);
   const venv = join(repoRoot, '.venv-import/bin/python');
+  if (binary) return { command: binary, args: [] };
+  if (existsSync(script)) return { command: existsSync(venv) ? venv : 'python3', args: [script] };
+  throw new Error(`${importer.label} importer not found (run npm run build:importer)`);
+}
 
-  let command: string;
-  let args: string[];
-  if (binary) {
-    command = binary;
-    args = [sourceFile, '--out', outDir];
-  } else if (existsSync(script)) {
-    command = existsSync(venv) ? venv : 'python3';
-    args = [script, sourceFile, '--out', outDir];
-  } else {
-    throw new Error(`${importer.label} importer not found (run npm run build:importer)`);
-  }
-  const stdout = await new Promise<string>((resolvePromise, reject) => {
+function runSidecar(command: string, args: string[]): Promise<string> {
+  return new Promise<string>((resolvePromise, reject) => {
     const child = spawn(command, args);
     let out = '';
     let err = '';
@@ -4364,13 +4443,78 @@ async function runImporter(
       code === 0 ? resolvePromise(out) : reject(new Error(`importer failed: ${err || `exit ${code}`}`)),
     );
   });
+}
+
+async function runImporter(
+  importer: ImporterSpec,
+  sourceFile: string,
+  outDir: string,
+): Promise<unknown> {
+  const { command, args } = importerCommand(importer);
+  const stdout = await runSidecar(command, [...args, sourceFile, '--out', outDir]);
   const payload = JSON.parse(stdout) as { report?: unknown };
   return payload.report ?? null;
 }
 
+/**
+ * Whether this machine can import decks, checked the way an upload does it:
+ * each importer's `--self-check` (every Python module it can reach, including
+ * the lazily imported ones whose absence would only quietly degrade an
+ * import), then a real import of a small deck in each format through the same
+ * runImporter the upload route calls. Returns one line per problem.
+ *
+ * scripts/collab-server.mts refuses to start unless this and
+ * mediaToolProblems are empty, so a server that cannot import decks fails its
+ * deploy health check instead of failing somebody's upload.
+ */
+export async function importerProblems(): Promise<string[]> {
+  const repoRoot = resolve(import.meta.dirname, '../..');
+  const samples: Array<[ImporterSpec, string]> = [
+    [KEYNOTE_IMPORTER, join(repoRoot, 'example-keynote-decks/empty_deck.key')],
+    [POWERPOINT_IMPORTER, join(repoRoot, 'test/fixtures/pptx/reference.pptx')],
+  ];
+  const problems: string[] = [];
+  const work = await mkdtemp(join(tmpdir(), 'deckwerk-import-check-'));
+  try {
+    for (const [importer, sample] of samples) {
+      try {
+        const { command, args } = importerCommand(importer);
+        await runSidecar(command, [...args, '--self-check']);
+        await runImporter(importer, sample, join(work, importer.binary));
+      } catch (error) {
+        problems.push(`${importer.label} import: ${error instanceof Error ? error.message.trim() : String(error)}`);
+      }
+    }
+  } finally {
+    await rm(work, { recursive: true, force: true });
+  }
+  return problems;
+}
+
+/**
+ * The ffmpeg and ffprobe imports and media probing shell out to: the
+ * importers transcode with whatever is on PATH, media probing uses the
+ * bundled ffmpeg-static/ffprobe-static and falls back to PATH.
+ */
+export async function mediaToolProblems(): Promise<string[]> {
+  const tools: Array<[string, string]> = [
+    ['ffmpeg', 'ffmpeg'], ['ffprobe', 'ffprobe'],
+    ['bundled ffmpeg', getFfmpegPath()], ['bundled ffprobe', getFfprobePath()],
+  ];
+  const problems: string[] = [];
+  for (const [name, command] of tools) {
+    try {
+      await runSidecar(command, ['-version']);
+    } catch (error) {
+      problems.push(`${name} (${command}) does not run: ${error instanceof Error ? error.message.trim() : String(error)}`);
+    }
+  }
+  return problems;
+}
+
 function runKeynoteImport(keyFile: string, outDir: string): Promise<unknown> {
   return runImporter(
-    { binary: 'keynote-import', script: 'importers/keynote/import_keynote.py', label: 'Keynote' },
+    KEYNOTE_IMPORTER,
     keyFile,
     outDir,
   );
@@ -4378,7 +4522,7 @@ function runKeynoteImport(keyFile: string, outDir: string): Promise<unknown> {
 
 function runPowerPointImport(pptxFile: string, outDir: string): Promise<unknown> {
   return runImporter(
-    { binary: 'pptx-import', script: 'importers/pptx/import_pptx.py', label: 'PowerPoint' },
+    POWERPOINT_IMPORTER,
     pptxFile,
     outDir,
   );

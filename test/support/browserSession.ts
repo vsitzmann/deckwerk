@@ -234,14 +234,27 @@ export class Cdp {
    * A real double-click at a point. The second press carries clickCount 2, the
    * way the OS reports it: two clickCount-1 presses rely on Chromium pairing
    * them by wall-clock interval, which a loaded CI runner routinely exceeds.
+   *
+   * The four events are also stamped the way the OS stamps hardware input —
+   * when the button moved, not when the event reached the renderer. CDP
+   * otherwise stamps each one on arrival, and every dispatch waits for the
+   * renderer to handle the one before: the first press selects the box and
+   * redraws, which on a loaded runner took long enough that the second press's
+   * `timeStamp` fell outside the canvas's own double-click interval
+   * (`DOUBLE_CLICK_MS` in canvas.ts). The canvas then opened a bare caret
+   * instead of taking the word, a gap no physical double-click produces.
    */
   async doubleClickAt(x: number, y: number): Promise<void> {
     await this.mouse('mouseMoved', x, y, 0);
-    await this.mouse('mousePressed', x, y, 1);
-    await this.mouse('mouseReleased', x, y, 1);
+    const start = Date.now() / 1000;
+    await this.mouse('mousePressed', x, y, 1, 0, start);
+    await this.mouse('mouseReleased', x, y, 1, 0, start + 0.01);
+    // Keep the two clicks inside the native double-click interval without
+    // collapsing them into the same event-loop instant. Back-to-back CDP
+    // packets can exercise renderer coalescing that no physical mouse can.
     await wait(35);
-    await this.mouse('mousePressed', x, y, 2);
-    await this.mouse('mouseReleased', x, y, 2);
+    await this.mouse('mousePressed', x, y, 2, 0, start + 0.045);
+    await this.mouse('mouseReleased', x, y, 2, 0, start + 0.055);
   }
 
   /** A real left click at a point inside the matching node, given as 0..1. */
@@ -364,6 +377,8 @@ export class Cdp {
     y: number,
     clickCount: number,
     modifiers = 0,
+    /** Seconds since the epoch; CDP stamps the event on arrival without it. */
+    timestamp?: number,
   ): Promise<void> {
     const pressed = type === 'mousePressed' || (type === 'mouseMoved' && clickCount > 0);
     return this.call('Input.dispatchMouseEvent', {
@@ -372,6 +387,7 @@ export class Cdp {
       y,
       clickCount,
       modifiers,
+      timestamp,
       button: clickCount ? 'left' : 'none',
       buttons: pressed ? 1 : 0,
     });
@@ -507,11 +523,7 @@ export class Cdp {
   /** A real double-click at the centre of a visible node. */
   async doubleClick(selector: string, label = selector): Promise<void> {
     const box = await this.boxOf(selector, label);
-    await this.mouse('mouseMoved', box.x, box.y, 0);
-    await this.mouse('mousePressed', box.x, box.y, 1);
-    await this.mouse('mouseReleased', box.x, box.y, 1);
-    await this.mouse('mousePressed', box.x, box.y, 2);
-    await this.mouse('mouseReleased', box.x, box.y, 2);
+    await this.doubleClickAt(box.x, box.y);
   }
 
   /** Double-click the first rendered word in a node, using its glyph box. */
@@ -538,15 +550,7 @@ export class Cdp {
       return { error: 'node has no rendered text' };
     })()`);
     if ('error' in point) throw new Error(`cannot double-click ${label}: ${point.error}`);
-    await this.mouse('mouseMoved', point.x, point.y, 0);
-    await this.mouse('mousePressed', point.x, point.y, 1);
-    await this.mouse('mouseReleased', point.x, point.y, 1);
-    // Keep the two clicks inside the native double-click interval without
-    // collapsing them into the same event-loop instant. Back-to-back CDP
-    // packets can exercise renderer coalescing that no physical mouse can.
-    await wait(35);
-    await this.mouse('mousePressed', point.x, point.y, 2);
-    await this.mouse('mouseReleased', point.x, point.y, 2);
+    await this.doubleClickAt(point.x, point.y);
   }
 
   /** Double-click the rendered word containing a flat text offset. */
@@ -556,12 +560,7 @@ export class Cdp {
     label = selector,
   ): Promise<void> {
     const point = await this.textGlyphPoint(selector, offset, 0.5, label);
-    await this.mouse('mouseMoved', point.x, point.y, 0);
-    await this.mouse('mousePressed', point.x, point.y, 1);
-    await this.mouse('mouseReleased', point.x, point.y, 1);
-    await wait(35);
-    await this.mouse('mousePressed', point.x, point.y, 2);
-    await this.mouse('mouseReleased', point.x, point.y, 2);
+    await this.doubleClickAt(point.x, point.y);
   }
 
   /**

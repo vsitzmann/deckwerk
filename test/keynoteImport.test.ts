@@ -21,8 +21,9 @@ import { initiallyHidden } from '../src/shared/timeline.js';
  * across", and only real decks exercise the archive types that appear in the
  * wild. Point KEYNOTE_FIXTURES at a folder of .key files to run them.
  *
- * The suite skips itself when the importer venv or the fixture folder is
- * absent, so a fresh checkout still passes.
+ * Fixture-backed cases skip themselves when their decks are absent, so a fresh
+ * checkout still passes. A missing importer venv is an install bug, not a
+ * reason to skip: `npm install` sets it up, so the suite fails without it.
  */
 
 const PYTHON = join(process.cwd(), '.venv-import/bin/python');
@@ -31,8 +32,6 @@ const FIXTURES = process.env.KEYNOTE_FIXTURES;
 const LOCAL_FIXTURES = join(process.cwd(), 'example_presentations');
 const BUNDLED_IMPORTER = join(process.cwd(), 'build', 'importers',
   process.platform === 'win32' ? 'keynote-import.exe' : 'keynote-import');
-
-const ready = existsSync(PYTHON) && existsSync(SCRIPT);
 
 type ImportReport = {
   slides: number;
@@ -74,7 +73,12 @@ function report(keyPath: string): ImportReport {
   return analyseFixtures([keyPath]).get(keyPath)!.report;
 }
 
-describe.skipIf(!ready)('keynote importer', () => {
+describe('keynote importer', () => {
+  it('has its importer venv (npm run setup:importers)', () => {
+    expect(existsSync(PYTHON)).toBe(true);
+    expect(existsSync(SCRIPT)).toBe(true);
+  });
+
   const fixtures = FIXTURES && existsSync(FIXTURES)
     ? FIXTURES
     : existsSync(LOCAL_FIXTURES) ? LOCAL_FIXTURES : null;
@@ -167,6 +171,72 @@ describe.skipIf(!ready)('keynote importer', () => {
     },
     120_000,
   );
+
+  // A student's 200 MB talk failed on the server with "No readable .iwa
+  // streams": it was a Keynote *package*, whose Index/*.iwa sit in a nested
+  // Index.zip, zipped up whole by macOS on upload. Each shape a package
+  // travels in is rebuilt here from the single-file fixture and must import to
+  // the same deck.
+  it('imports a Keynote package zipped flat, zipped in its folder, or as the folder', async () => {
+    const source = join(process.cwd(), 'example-keynote-decks/empty_deck.key');
+    const work = await mkdtemp(join(tmpdir(), 'kn-package-'));
+    try {
+      execFileSync(PYTHON, ['-c', [
+        'import io, os, sys, zipfile',
+        'src = zipfile.ZipFile(sys.argv[1]); work = sys.argv[2]',
+        'index = io.BytesIO()',
+        "with zipfile.ZipFile(index, 'w') as iz:",
+        "    for i in src.infolist():",
+        "        if i.filename.startswith('Index/'): iz.writestr(i.filename, src.read(i))",
+        "rest = [i for i in src.infolist() if not i.filename.startswith('Index/')]",
+        "for name, prefix in (('flat.key', ''), ('in-folder.key', 'Talk.key/')):",
+        "    with zipfile.ZipFile(os.path.join(work, name), 'w') as z:",
+        "        z.writestr(prefix + 'Index.zip', index.getvalue())",
+        "        z.writestr('__MACOSX/' + prefix + '._Index.zip', b'resource fork')",
+        "        for i in rest: z.writestr(prefix + i.filename, src.read(i))",
+        "folder = os.path.join(work, 'folder.key')",
+        "for i in rest:",
+        "    os.makedirs(os.path.dirname(os.path.join(folder, i.filename)), exist_ok=True)",
+        "    open(os.path.join(folder, i.filename), 'wb').write(src.read(i))",
+        "open(os.path.join(folder, 'Index.zip'), 'wb').write(index.getvalue())",
+      ].join('\n'), source, work]);
+
+      const importDeck = (keyPath: string, out: string) => {
+        const stdout = execFileSync(PYTHON, [SCRIPT, keyPath, '--out', join(work, out)], {
+          encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, stdio: ['ignore', 'pipe', 'ignore'],
+        });
+        const { title: _title, ...deck } = parseDeck(JSON.parse(stdout).deck);
+        return deck;
+      };
+      const expected = importDeck(source, 'out-single');
+      expect(expected.slides.length).toBeGreaterThan(0);
+      for (const name of ['flat.key', 'in-folder.key', 'folder.key']) {
+        expect(importDeck(join(work, name), `out-${name}`), name).toEqual(expected);
+      }
+    } finally {
+      await rm(work, { recursive: true, force: true });
+    }
+  }, 60_000);
+
+  it('says what a .key without Keynote data holds instead of failing obscurely', async () => {
+    const work = await mkdtemp(join(tmpdir(), 'kn-not-keynote-'));
+    try {
+      const keyPath = join(work, 'old.key');
+      execFileSync(PYTHON, ['-c', [
+        'import sys, zipfile',
+        "with zipfile.ZipFile(sys.argv[1], 'w') as z: z.writestr('index.apxl.gz', b'x')",
+      ].join('\n'), keyPath]);
+      let stderr = '';
+      try {
+        execFileSync(PYTHON, [SCRIPT, keyPath, '--out', join(work, 'out')], { encoding: 'utf8', stdio: 'pipe' });
+      } catch (error) {
+        stderr = String((error as { stderr?: string }).stderr);
+      }
+      expect(stderr).toContain("Keynote '09");
+    } finally {
+      await rm(work, { recursive: true, force: true });
+    }
+  });
 
   // Full written imports copy and transcode gigabytes of assets. Keep this
   // opt-in for CI or focused local runs; report mode above still parses every
@@ -601,4 +671,187 @@ describe.skipIf(!ready)('keynote importer', () => {
       await rm(dir, { recursive: true, force: true });
     }
   }, 60_000);
+
+  // A real talk (MilliVid, Oct 2026) imported with an all-bold 80px title
+  // slide, numbered steps as plain lines, a vertical axis label on top of its
+  // figure and three stray "Text" boxes mid-slide. The deck itself cannot be
+  // checked in; test/support/keynote_text_cases.py rebuilds each archive shape
+  // it used and reports what the importer made of them.
+  describe('text structures from a real talk', () => {
+    let cases: {
+      titleSlide: string;
+      moveBuild: Array<{
+        id: string; morphFromPrevious?: boolean; morphDuration?: number; notes: string;
+        elements: Array<{ id: string; x: number; morphId: string }>;
+        timeline: Array<{ id: string; trigger: { on: string }; action: { type: string; target: string } }>;
+      }>;
+      titleSlideElement: { html: string; style: Record<string, string> };
+      outlinedFrame: { shape: string; x: number; y: number; w: number; h: number; stroke: string; strokeWidth: number; fill: null };
+      lineSpacingBody: { html: string; style: Record<string, string> };
+      rolloutList: { html: string; paragraphSpacing: number | null };
+      rotatedMiddle: Record<'x' | 'y' | 'w' | 'h' | 'cx' | 'cy', number>;
+      rotatedTop: Record<'x' | 'y' | 'w' | 'h' | 'cx' | 'cy', number>;
+      emptyBoxes: { zeroSize: string[]; sized: string[] };
+      componentsList: string;
+      partialUnderline: string;
+    };
+    const load = () => {
+      cases ??= JSON.parse(execFileSync(PYTHON, [join('test', 'support', 'keynote_text_cases.py')], {
+        encoding: 'utf8', cwd: process.cwd(),
+      }));
+      return cases;
+    };
+    /** Every attribute in the markup, as the browser would read them. */
+    const attributeNames = (markup: string) =>
+      [...markup.matchAll(/<[a-z]+((?:\s+[^\s=>]+(?:="[^"]*")?)*)\s*>/g)]
+        .flatMap((tag) => [...tag[1].matchAll(/\s+([^\s=>]+)(?:="[^"]*")?/g)].map((attr) => attr[1]));
+
+    it('keeps each paragraph\'s own size and face under the first one', () => {
+      const { titleSlide } = load();
+      const blocks = titleSlide.match(/<p[^>]*>.*?<\/p>/g)!;
+      // The title line carries the element's own 80px bold; its second half
+      // un-bolds by naming the upright face, which a Mac would otherwise
+      // still draw bold.
+      expect(blocks[0]).toMatch(/^<p>MilliVid:<span style="font-weight: 400; font-family: &quot;HelveticaNeue&quot;/);
+      // Author lines are 48pt light: 0.6 of the box size, so auto-fit still
+      // scales them. Paragraphs whose table entry names no style continue
+      // the previous one instead of falling back to the title's.
+      const authors = blocks.filter((block) => /Alice|Carol/.test(block));
+      expect(authors).toHaveLength(2);
+      for (const line of authors) {
+        expect(line).toContain('font-size: 0.6em');
+        expect(line).toContain('HelveticaNeue-Light');
+        expect(line).toContain('font-weight: 300');
+      }
+      expect(blocks.find((block) => block.includes('Equal contribution'))).toContain('font-size: 0.5em');
+      // Affiliation marks are the editor's own superscript.
+      expect(titleSlide).toContain('Alice*<span style="vertical-align: super; font-size: 0.7em">1</span>');
+      expect(titleSlide).toContain('<span style="vertical-align: super; font-size: 0.7em">1</span>MIT');
+    });
+
+    it('keeps Keynote\'s spacing: tracking, line spacing and space between paragraphs', () => {
+      const { titleSlideElement, lineSpacingBody } = load();
+      // Stated on the element, so the theme's role-title defaults (tighter
+      // tracking, 1.08 leading) cannot squeeze a title Keynote laid out:
+      // that turned slide 1's author block into condensed, cramped lines.
+      expect(titleSlideElement.style).toMatchObject({ 'line-height': '1.2', 'letter-spacing': '-0.02em' });
+      const blocks = titleSlideElement.html.match(/<p[^>]*>.*?<\/p>/g)!;
+      // The author lines track normally; only the title is tightened.
+      expect(blocks.find((block) => block.includes('Alice'))).toContain('letter-spacing: normal');
+      // The affiliations' 24pt space after sets the footnote apart, as a
+      // margin in em of the 40pt line so auto-fit scales it too.
+      expect(blocks.find((block) => block.includes('Equal contribution'))).toContain('margin-top: 0.6em');
+      expect(blocks.filter((block) => block.includes('margin'))).toHaveLength(1);
+      // 0.9 lines of a 1.2 natural line height; a space before becomes the
+      // second paragraph's margin, and nothing goes above the first.
+      expect(lineSpacingBody.style).toMatchObject({ 'line-height': '1.08', 'letter-spacing': 'normal' });
+      expect(lineSpacingBody.html).toBe('<p>Existing datasets fall short</p><p style="margin-top: 0.5em">We generate our own</p>');
+    });
+
+    it('keeps an outline centred on Keynote\'s geometry, as Keynote strokes it', () => {
+      const { outlinedFrame } = load();
+      // Keynote's 5pt stroke straddles the 200x200 box; the editor strokes a
+      // rectangle inside its box, so the box grows by half the stroke each
+      // way. Taken as is, the frame came out 5px too small and the picture
+      // it surrounds showed past its edge.
+      expect(outlinedFrame).toEqual({
+        shape: 'rect', x: 94.5, y: 764.5, w: 205, h: 205, stroke: '#ee220c', strokeWidth: 5, fill: null,
+      });
+    });
+
+    it('turns a Move build into a Morph to a copy of the slide', () => {
+      const { moveBuild } = load();
+      // Builds only show and hide; Morph is what moves. Dropped, the Move
+      // left "Latents 16x16" in place and 8x8 built in on top of it.
+      expect(moveBuild.map((slide) => slide.id)).toEqual(['slide-11', 'slide-11-m2']);
+      const [before, after] = moveBuild;
+      // Up to the Move: only what has appeared by then, with its builds.
+      expect(before.elements.map((e) => e.id)).toEqual(['title', 'gt', 'label16', 'recon16']);
+      expect(before.timeline.map((e) => e.id)).toEqual(['b1', 'b2', 'b3']);
+      expect(before.morphFromPrevious).toBeUndefined();
+      // The copy: everything on screen at the Move, moved by both Move builds
+      // (the automatic one rides the same transition), paired by morphId.
+      expect(after).toMatchObject({ morphFromPrevious: true, morphDuration: 1000, notes: 'n' });
+      const at = Object.fromEntries(after.elements.map((e) => [e.morphId, e]));
+      expect(at.label16.x).toBe(101);
+      expect(at.recon16.x).toBe(97);
+      expect(at.gt.x).toBe(440);
+      expect(after.elements.every((e) => e.id === `${e.morphId}-m2`)).toBe(true);
+      expect(before.elements.every((e) => e.morphId === e.id)).toBe(true);
+      // What builds after the Move builds on the copy, still hidden until then.
+      expect(after.timeline).toEqual([
+        expect.objectContaining({ id: 'b4-m2', trigger: expect.objectContaining({ on: 'click' }),
+          action: expect.objectContaining({ type: 'appear', target: 'label8-m2' }) }),
+      ]);
+    });
+
+    it('writes run styles the browser can read, quotes and all', () => {
+      const { titleSlide, rolloutList } = load();
+      // Font families carry double quotes. Unescaped, they ended the style
+      // attribute after `font-family: ` and turned the rest into junk
+      // attributes, so every bold or Medium word lost its styling.
+      for (const markup of [titleSlide, rolloutList.html]) {
+        expect(new Set(attributeNames(markup))).toEqual(new Set(
+          markup.includes('<ol') ? ['style', 'start'] : ['style'],
+        ));
+      }
+      expect(rolloutList.html).toContain(
+        '<span style="font-family: &quot;HelveticaNeue-Medium&quot;, &quot;Helvetica Neue&quot;, sans-serif; font-weight: 500">long</span>',
+      );
+    });
+
+    it('turns numbered paragraphs into nested lists at their level and number', () => {
+      const { rolloutList } = load();
+      // 1. at level 0, 2. at level 1, 3. and 4. at level 2, 5. back at level
+      // 1 — Keynote's explicit start numbers kept. Each nested list steps in
+      // by Keynote's 36pt (0.6em of 60pt), not the editor's 1.4em.
+      expect(rolloutList.html).toBe(
+        '<p style="text-decoration: underline">MilliVid&#x27;s Rollout Strategy</p>'
+        + '<ol><li>Predict a <span style="font-family: &quot;HelveticaNeue-Medium&quot;, &quot;Helvetica Neue&quot;, sans-serif; font-weight: 500">long</span> sequence'
+        + '<ol start="2" style="margin-left: -0.8em"><li>Predict a medium sequence'
+        + '<ol start="3" style="margin-left: -0.8em"><li>Predict a short sequence</li><li>Repeat…</li></ol>'
+        + '</li></ol><ol start="5" style="margin-left: -0.8em"><li>Repeat…</li></ol></li></ol>',
+      );
+      // Keynote's paragraphs are set without gaps here; the editor's default
+      // list gaps pushed the last step into the figure below.
+      expect(rolloutList.paragraphSpacing).toBe(0);
+    });
+
+    it('turns a text-sized label about its alignment anchor', () => {
+      const { rotatedMiddle, rotatedTop } = load();
+      // Left-aligned, vertically centred, 90° anticlockwise: the stored point
+      // is the middle of the line's start, so the label is centred on x and
+      // its text starts at the stored y (it reads upwards). The width is
+      // measured from font metrics, so only what does not depend on it is
+      // pinned.
+      expect(rotatedMiddle.cx).toBeCloseTo(77.53, 1);
+      expect(rotatedMiddle.cy + rotatedMiddle.w / 2).toBeCloseTo(870.85, 1);
+      // Top-anchored, the same rule gives the top-left convention the
+      // reference deck's vertical labels showed: shifted by half the height.
+      expect(rotatedTop.cx).toBeCloseTo(77.53 + rotatedTop.h / 2, 1);
+      expect(rotatedTop.cy + rotatedTop.w / 2).toBeCloseTo(870.85, 1);
+    });
+
+    it('counts a numbered level on across the unnumbered paragraphs under it', () => {
+      const { componentsList } = load();
+      expect(componentsList).toBe(
+        '<p>Two components:</p><ol><li>Encoder</li></ol><p>Packs history.</p><p><br></p>'
+        + '<ol start="2"><li>Rollout</li></ol><p>Uses history.</p>',
+      );
+    });
+
+    it('underlines only the runs that keep the paragraph style\'s underline', () => {
+      // A child cannot take back an underline its block draws, so the
+      // underline moves onto the run that has it.
+      expect(load().partialUnderline).toBe(
+        '<span style="text-decoration: underline">Token-matched</span> Full-Resolution Rollout',
+      );
+    });
+
+    it('drops empty text boxes that have no size, keeps sized ones as placeholders', () => {
+      const { emptyBoxes } = load();
+      expect(emptyBoxes.zeroSize).toEqual([]);
+      expect(emptyBoxes.sized).toEqual(['Text']);
+    });
+  });
 });

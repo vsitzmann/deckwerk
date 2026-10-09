@@ -49,7 +49,7 @@ export async function importPowerPoint(
   if (!sidecar) {
     throw new Error(
       'PowerPoint importer not found. In development, create the venv:\n' +
-        '  npm run setup:importer',
+        '  npm run setup:importers',
     );
   }
 

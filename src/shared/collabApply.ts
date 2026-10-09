@@ -1,7 +1,8 @@
-import { DeckSchema, ElementSchema, SlideSchema, type Deck, type Slide, type SlideElement } from './deck.js';
+import { CommentSchema, DeckSchema, ElementSchema, SlideSchema, type Deck, type Slide, type SlideElement } from './deck.js';
 import type { AgentOperation } from './agent.js';
 import { jsonEqual } from './jsonData.js';
 import { mergeTextHtml } from './textMerge.js';
+import { contentOf, keepComments, keepSlideComments, mergeComments, setComments } from './comments.js';
 
 export interface LenientApplyResult {
   deck: Deck;
@@ -178,7 +179,7 @@ function applyLenient(
       const at = draft.indexOf(op.slideId);
       if (at === -1) return skip(op, `slide ${op.slideId} no longer exists`);
       if (op.slide.id !== op.slideId) return skip(op, 'replacement changes slide id');
-      draft.slides[at] = draft.admit(op.slide);
+      draft.slides[at] = draft.admit(keepSlideComments(op.slide, draft.slides[at]));
       return;
     }
     case 'deleteSlide': {
@@ -222,7 +223,10 @@ function applyLenient(
       if (index === -1) return skip(op, `element ${op.elementId} no longer exists`);
       if (op.element.id !== op.elementId) return skip(op, 'replacement changes element id');
       const current = draft.slides[at].elements[index];
-      draft.own(at).elements[index] = withMergedHtml(current, admitElement(op.element), op.baseHtml);
+      draft.own(at).elements[index] = keepComments(
+        withMergedHtml(current, admitElement(op.element), op.baseHtml),
+        current,
+      );
       return;
     }
     case 'deleteElements': {
@@ -261,13 +265,29 @@ function applyLenient(
       // a concurrent edit to a different field of the same slide survives.
       const slide = draft.own(at);
       const elements = slide.elements;
-      Object.assign(slide, structuredClone(op.slide));
+      Object.assign(slide, contentOf(structuredClone(op.slide)));
       slide.elements = elements;
       // Absence in a patch means "unchanged", so a removal is stated instead.
       for (const key of op.clear ?? []) {
-        if (key === 'id' || key === 'elements') continue;
+        if (key === 'id' || key === 'elements' || key === 'comments') continue;
         delete (slide as Record<string, unknown>)[key];
       }
+      return;
+    }
+    case 'updateComments': {
+      const at = draft.indexOf(op.slideId);
+      if (at === -1) return skip(op, `slide ${op.slideId} no longer exists`);
+      if (op.elementId === undefined) {
+        const slide = draft.own(at);
+        setComments(slide, mergeComments(slide.comments ?? [], op.base, op.comments));
+        return;
+      }
+      const index = draft.slides[at].elements.findIndex((element) => element.id === op.elementId);
+      if (index === -1) return skip(op, `element ${op.elementId} no longer exists`);
+      const elements = draft.own(at).elements;
+      const element = { ...elements[index] };
+      setComments(element, mergeComments(element.comments ?? [], op.base, op.comments).map((c) => CommentSchema.parse(c)));
+      elements[index] = element;
       return;
     }
   }

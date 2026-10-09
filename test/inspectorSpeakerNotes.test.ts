@@ -2,7 +2,7 @@
 import { describe, expect, it } from 'vitest';
 import { emptyDeck } from '../src/shared/deck.js';
 import { Inspector } from '../src/renderer/editor/inspector.js';
-import { EditorStore, sameDeckIgnoringNotes } from '../src/renderer/editor/store.js';
+import { EditorStore, sameDeckDrawing } from '../src/renderer/editor/store.js';
 
 /**
  * Typing in the speaker notes drawer commits a fresh deck per keystroke. The
@@ -100,23 +100,23 @@ describe('inspector while speaker notes are typed', () => {
   });
 });
 
-describe('sameDeckIgnoringNotes', () => {
+describe('sameDeckDrawing', () => {
   it('sees through a note edit but not through anything else', () => {
     const deck = emptyDeck('Compare');
     const noted = structuredClone(deck);
     noted.slides[0].notes = 'a note';
-    expect(sameDeckIgnoringNotes(deck, noted)).toBe(true);
+    expect(sameDeckDrawing(deck, noted)).toBe(true);
 
     const renamed = structuredClone(deck);
     renamed.slides[0].name = 'Other';
-    expect(sameDeckIgnoringNotes(deck, renamed)).toBe(false);
+    expect(sameDeckDrawing(deck, renamed)).toBe(false);
 
     const retitled = structuredClone(deck);
     retitled.title = 'Other';
-    expect(sameDeckIgnoringNotes(deck, retitled)).toBe(false);
+    expect(sameDeckDrawing(deck, retitled)).toBe(false);
 
     const longer = structuredClone(deck);
     longer.slides.push(structuredClone(deck.slides[0]));
-    expect(sameDeckIgnoringNotes(deck, longer)).toBe(false);
+    expect(sameDeckDrawing(deck, longer)).toBe(false);
   });
 });

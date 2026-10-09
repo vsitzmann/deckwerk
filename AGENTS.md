@@ -55,6 +55,24 @@ A change to that loop — the export, the compile, the sync, the bridge, `./deck
 — adds its case to the regression suite and, if it is a new move, to the fuzz
 alphabet, in the same PR.
 
+## Deploying to srg-lab-server
+
+The hosted server (`deckwerk-collab.service`, `/srv/deckwerk/app`) runs the
+**committed HEAD of `~/Work/deckwerk`**, whatever branch is checked out — the
+same model as TeXWerk. To deploy, commit, then:
+
+```bash
+systemctl start deckwerk-update && journalctl -u deckwerk-update -n 30 --no-pager
+```
+
+No sudo needed (`deploy/deckwerk-update.service`; a polkit rule lets the
+checkout's owner start it). It restarts even with people connected; their tabs
+reconnect. The new server checks itself before it listens and refuses to start
+if the importers, ffmpeg or the headless browser do not work; the deploy then
+puts the previous version back and prints the server's log. After editing
+`deploy/update.sh`, re-install the root-owned copy with
+`sudo ./deploy/install-deploy-access.sh`.
+
 ## UI consistency
 
 Every new UI element must match the rest of the application. Reuse the shared
@@ -509,6 +527,17 @@ with `slide-agent history [deck] [--deleted] [--slide <id>] [--limit n]
 [--full]` on the machine that hosts the deck; a deleted slide's `slide` is
 exactly what an `insertSlides` transaction needs to put it back.
 
+Beside the log, the server keeps **versions**: what the deck *was*, in
+`.versions/<time>.<hash>.json.gz` (deck.json plus the theme; src/main/deckVersions.ts).
+One is taken when a deck opens, at most every 2 minutes while it is edited,
+on both sides of a deck.json replaced on disk, and when the session closes;
+all are kept for 30 days, then the last of each day. `slide-agent history
+[deck] --versions` lists them and `--restore <id | ISO time>` puts one back
+for everyone editing, after first saving what it replaces as a version, so a
+restore is itself undoable. Use it to undo anyone's change — a person's, an
+agent's, a script's — when the log shows what went wrong and when. Like every
+dotfile, `.versions/` is never mirrored, downloaded or copied by Save As.
+
 The bridge (`slide-agent connect`) also treats a `deck.json` or `notes.md`
 written in its mirror as a three-way merge: the edit is the difference from
 the version the bridge wrote that it differs from least, and only that is
@@ -573,8 +602,9 @@ The deck argument defaults to the current directory.
 
 People leave you work in two places. **Comments** sit on a slide or an
 object, live inside `deck.json`, and are review state: `slide-agent comments
---unresolved` at the start of a task, act on each, then `--resolve <id>`
-(never delete). **Chat** is the running conversation about a hosted deck —
+--unresolved` at the start of a task, act on each, answer in its thread with
+`--add <text> --reply <id>` when there is something to say, then
+`--resolve <id>` (never delete). **Chat** is the running conversation about a hosted deck —
 "@agent can you tighten slide 4?" — and is deliberately *not* part of the
 document: the collab server keeps it per deck in `chat.jsonl` beside
 `deck.json` (append-only, one JSON message per line), and it never enters a
@@ -582,6 +612,24 @@ transaction, undo or History. So chat needs the server: run the commands in
 the folder `slide-agent connect` mirrored (they read its
 `.deckwerk-mirror.json`), or name it with `--server <origin> --deck-id <id>`.
 In a mirror, `./deck chat` / `./deck say` are the same commands.
+
+A comment is a thread, as in TeXWerk: a root comment (no `parentId`) and the
+replies whose `parentId` names it; the root's `resolved` is the thread's, and
+a reply reopens a resolved thread. In the editor threads open only from the
+right-click menus (an object's, the slide background's, a rail row's); what
+stays on screen is an amber highlight on whatever carries an open thread, on
+the canvas and on the slide's rail row, and never in a presentation. A
+hosted thread's **Link** is `?deck=<id>&comment=<id>`, which opens the deck
+on that slide with the thread showing.
+
+Comments are review state, not content, and three rules keep them that way
+(`src/shared/comments.ts`): they change only through the `updateComments`
+operation, which carries the list it was made from and merges by comment id,
+so concurrent replies all land; `replaceElement`, `replaceSlide` and
+`setSlideProperties` keep the target's comments whatever they carry, so a
+drag or a retype can never carry a stale thread over a newer one, and
+`diffDecks` never puts comments in them; and undo, redo and History leave
+comments where they are.
 
 ```bash
 slide-agent chat                          # everything, oldest first; prints "last"
@@ -937,6 +985,15 @@ guards. These rules keep the seams closed:
 - **Harness recoveries are findings.** Test helpers that repair lost
   selections/sessions must record it (`recordRecovery`) — a silent retry hides
   exactly the bug class these suites exist to catch.
+
+- **Nothing on the collab server's event loop scales with the deck.** Every
+  room shares one loop, so a whole-deck stringify, parse or encode is a pause
+  in everyone's typing (a 23 MB deck once stalled it 120 ms per autosave).
+  Saves go through `DeckSerializer` (re-serialises only what an edit
+  replaced), whole-deck messages through `DeckWire`, versions through the
+  sliced, thread-pool writer. `test/collabStalls.test.ts` drives people and
+  agents against a 20 MB deck and fails on any block over 30 ms;
+  `STALL_TEST_DECK=<folder>` runs it against a copy of a real deck.
 
 **OS-event input smoke tier** (`npm run test:osinput`,
 `test/osInputSmokeBrowser.test.ts` + `test/support/osInput.ts`): every other

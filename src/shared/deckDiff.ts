@@ -1,5 +1,6 @@
 import type { Deck, Slide } from './deck.js';
 import type { AgentOperation } from './agent.js';
+import { contentOf } from './comments.js';
 
 /**
  * Structural diff of two decks into the agent op vocabulary, keyed entirely by
@@ -116,8 +117,18 @@ function insertSlideOps(next: Deck, prevIds: Set<string>): AgentOperation[] {
 function diffSlide(prev: Slide, next: Slide): AgentOperation[] {
   const ops: AgentOperation[] = [];
 
-  const { elements: prevElements, ...prevProps } = prev;
-  const { elements: nextElements, ...nextProps } = next;
+  // Comments travel as their own merging op, never inside a content patch
+  // (shared/comments.ts).
+  const { elements: prevElements, comments: prevComments, ...prevProps } = prev;
+  const { elements: nextElements, comments: nextComments, ...nextProps } = next;
+  if (JSON.stringify(prevComments ?? []) !== JSON.stringify(nextComments ?? [])) {
+    ops.push({
+      op: 'updateComments',
+      slideId: next.id,
+      base: structuredClone(prevComments ?? []),
+      comments: structuredClone(nextComments ?? []),
+    });
+  }
   if (JSON.stringify(prevProps) !== JSON.stringify(nextProps)) {
     // Only the fields that actually changed. Sending the whole blob made a
     // notes edit overwrite a peer's concurrent timeline edit on the same slide.
@@ -178,12 +189,22 @@ function diffSlide(prev: Slide, next: Slide): AgentOperation[] {
   for (const element of nextElements) {
     const before = prevById.get(element.id);
     if (!before || before === element) continue;
-    if (JSON.stringify(before) !== JSON.stringify(element)) {
+    const content = contentOf(element);
+    if (JSON.stringify(contentOf(before)) !== JSON.stringify(content)) {
       ops.push({
         op: 'replaceElement',
         slideId: next.id,
         elementId: element.id,
-        element: structuredClone(element),
+        element: structuredClone(content) as typeof element,
+      });
+    }
+    if (JSON.stringify(before.comments ?? []) !== JSON.stringify(element.comments ?? [])) {
+      ops.push({
+        op: 'updateComments',
+        slideId: next.id,
+        elementId: element.id,
+        base: structuredClone(before.comments ?? []),
+        comments: structuredClone(element.comments ?? []),
       });
     }
   }

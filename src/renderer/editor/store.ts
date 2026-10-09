@@ -4,6 +4,7 @@ import { renameRetiredFields } from '@shared/fieldAliases.js';
 import { cloneJson, jsonEqual } from '@shared/jsonData.js';
 import { applyAgentOperations, type AgentOperation } from '@shared/agent.js';
 import { diffDecks } from '@shared/deckDiff.js';
+import { carryComments, withoutCommentOps } from '@shared/comments.js';
 import { applyOpsLenient } from '@shared/collabApply.js';
 import {
   type ClipboardReadResult,
@@ -544,11 +545,13 @@ export class EditorStore {
     label: string,
     forward = diffDecks(previous, next),
   ): void {
-    if (forward.length === 0) return;
+    // Comment changes are not undoable edits (shared/comments.ts).
+    const contentForward = withoutCommentOps(forward);
+    if (contentForward.length === 0) return;
     this.undoStack.push({
       label,
-      forward,
-      inverse: diffDecks(next, previous),
+      forward: contentForward,
+      inverse: withoutCommentOps(diffDecks(next, previous)),
     });
     if (this.undoStack.length > HISTORY_LIMIT) this.undoStack.shift();
     this.redoStack = [];
@@ -610,7 +613,9 @@ export class EditorStore {
   restoreHistory(id: number): boolean {
     const historyIndex = this.historyLog.findIndex((item) => item.id === id);
     const snapshot = this.historyLog[historyIndex];
-    const snapshotDeck = this.materializeHistoryIndex(historyIndex);
+    const materialized = this.materializeHistoryIndex(historyIndex);
+    // A version brings back content, never the comment threads it had then.
+    const snapshotDeck = materialized && carryComments(this.state.deck, materialized);
     if (!snapshot || !snapshotDeck || sameDeck(snapshotDeck, this.state.deck)) return false;
     const previous = this.state.deck;
     const slideIndex = Math.min(
@@ -1004,21 +1009,27 @@ function sameValues(left: object, right: object): boolean {
 }
 
 /**
- * Whether two slides draw the same picture: everything but the speaker note
- * agrees. Typing in the notes drawer commits a fresh slide object per
- * keystroke, and views that only paint the slide must not treat that as a
- * change worth rebuilding for.
+ * Whether two slides draw the same picture: everything but the speaker notes
+ * and the comment threads (on the slide and on its objects) agrees. Typing in
+ * the notes drawer commits a fresh slide object per keystroke, a reply to a
+ * comment one per post, and views that only paint the slide must not treat
+ * either as a change worth rebuilding for: rebuilding the box a collaborator
+ * is typing in, because someone commented on it, would take their caret.
  */
-export function sameSlideIgnoringNotes(left: Slide, right: Slide): boolean {
-  return left === right || jsonEqual(left, right, ['notes']);
+export function sameSlideDrawing(left: Slide, right: Slide): boolean {
+  if (left === right) return true;
+  if (!jsonEqual(left, right, ['notes', 'comments', 'elements'])) return false;
+  if (left.elements.length !== right.elements.length) return false;
+  return left.elements.every((element, i) =>
+    element === right.elements[i] || jsonEqual(element, right.elements[i], ['comments']));
 }
 
-/** Whether two decks differ in nothing but their slides' speaker notes. */
-export function sameDeckIgnoringNotes(left: Deck, right: Deck): boolean {
+/** Whether two decks differ in nothing but their slides' speaker notes and comments. */
+export function sameDeckDrawing(left: Deck, right: Deck): boolean {
   if (left === right) return true;
   if (left.slides.length !== right.slides.length) return false;
   for (let i = 0; i < left.slides.length; i++) {
-    if (!sameSlideIgnoringNotes(left.slides[i], right.slides[i])) return false;
+    if (!sameSlideDrawing(left.slides[i], right.slides[i])) return false;
   }
   return jsonEqual(left, right, ['slides']);
 }
@@ -1027,7 +1038,8 @@ export function sameDeckIgnoringNotes(left: Deck, right: Deck): boolean {
 function operationTargets(operations: AgentOperation[]): string {
   const ids = new Set<string>();
   for (const operation of operations) {
-    if ('elementId' in operation) ids.add(operation.elementId);
+    if (operation.op === 'updateComments') ids.add(`comments:${operation.elementId ?? operation.slideId}`);
+    else if ('elementId' in operation) ids.add(operation.elementId);
     else if ('elementIds' in operation) for (const id of operation.elementIds) ids.add(id);
     else if ('slideId' in operation) ids.add(`slide:${operation.slideId}`);
     else ids.add(`deck:${operation.op}`);

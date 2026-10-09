@@ -25,6 +25,8 @@ const PYTHON = existsSync(join(process.cwd(), '.venv-import/bin/python'))
   : 'python3';
 
 const REFERENCE = join(process.cwd(), 'test/fixtures/pptx/reference.pptx');
+// reference.pptx plus one slide: a bent arrow and an embedded PDF (make_embedded.py).
+const EMBEDDED = join(process.cwd(), 'test/fixtures/pptx/embedded.pptx');
 const FIXTURES = process.env.PPTX_FIXTURES;
 const LOCAL_FIXTURES = join(process.cwd(), 'example_presentations');
 
@@ -122,6 +124,16 @@ describe.skipIf(!existsSync(REFERENCE))('powerpoint importer', () => {
     expect(deck.slides[1].notes).toBe('Speaker notes for slide two.');
   });
 
+  it('escapes the quotes a run\'s font family carries inside its style attribute', () => {
+    // Unescaped, `style="font-family: "Calibri", …"` ends at the first quote
+    // and the run loses its face and everything listed after it.
+    const stdout = execFileSync(PYTHON, ['-c', [
+      'from importers.pptx.import_pptx import _style_attr',
+      "print(_style_attr({'font-family': '\"Calibri\", \"Carlito\", sans-serif', 'font-weight': '700'}))",
+    ].join('\n')], { encoding: 'utf8', cwd: process.cwd() });
+    expect(stdout.trim()).toBe('style="font-family: &quot;Calibri&quot;, &quot;Carlito&quot;, sans-serif; font-weight: 700"');
+  });
+
   it('inherits placeholder geometry and type from the layout and master', () => {
     const { deck } = reference();
     const title = shape(deck, 0, (el) => el.type === 'text' && el.html === 'Reference deck');
@@ -210,6 +222,67 @@ describe.skipIf(!existsSync(REFERENCE))('powerpoint importer', () => {
       await rm(out, { recursive: true, force: true });
     }
   }, 60_000);
+
+  describe.skipIf(!existsSync(EMBEDDED))('OLE-era content', () => {
+    let embedded: ReturnType<typeof analyse> | null = null;
+    const deck = () => (embedded ??= analyse(EMBEDDED)).deck;
+
+    it('draws a bent arrow as its preset path instead of a rectangle', () => {
+      const arrow = shape(deck(), 5, (el) => el.type === 'shape' && el.fill === '#156082');
+      if (arrow.type !== 'shape') throw new Error('expected a shape');
+      expect([arrow.x, arrow.y, arrow.w, arrow.h]).toEqual([IN, IN, 2 * IN, 3 * IN]);
+      expect(arrow.shape).toBe('path');
+      // The end point of every segment. With the default adjustments in a
+      // 288 x 432 box the preset's guides are: shaft 72 wide, head 144 wide
+      // and 72 long, outer corner radius 126, inner 54.
+      const ends = (arrow.path ?? '').split(/(?=[MLCZ])/).map((segment) => segment.trim().split(/\s+/))
+        .filter((parts) => parts[0] !== 'Z')
+        .map((parts) => parts.slice(-2).map(Number));
+      expect(ends).toEqual([
+        [0, 432], [0, 162], [126, 36], [216, 36], [216, 0], [288, 72],
+        [216, 144], [216, 108], [126, 108], [72, 162], [72, 432],
+      ]);
+      expect(embedded!.report.warnings.join('\n')).not.toContain('approximated as a rectangle');
+    });
+
+    it('renders an embedded PDF from the OLE object, not its unconvertible EMF preview', () => {
+      const object = shape(deck(), 5, (el) => el.type === 'image');
+      if (object.type !== 'image') throw new Error('expected an image');
+      expect([object.x, object.y, object.w, object.h]).toEqual([5 * IN, IN, 3 * IN, 3 * IN]);
+      expect(object.src).toBe('assets/oleObject1.webp');
+      expect(embedded!.report.unsupported).toEqual({});
+    });
+
+    it('writes the rendered page, read through the compound file\'s sector chain', async () => {
+      const out = await mkdtemp(join(tmpdir(), 'pptx-embedded-'));
+      try {
+        // The PDF's sectors are stored back to front: a scan for "%PDF" finds
+        // scrambled bytes, so the solid fill only comes out if the FAT was followed.
+        const stdout = execFileSync(PYTHON, ['-c', [
+          'import json, sys',
+          'from pathlib import Path',
+          'from PIL import Image',
+          'sys.path.insert(0, "importers/pptx")',
+          'from import_pptx import import_pptx',
+          'out = Path(sys.argv[2])',
+          'deck, report = import_pptx(Path(sys.argv[1]), out, True)',
+          'image = next(el for el in deck["slides"][5]["elements"] if el["type"] == "image")',
+          'with Image.open(out / image["src"]) as img:',
+          '    pixel = img.convert("RGB").getpixel((img.width // 2, img.height // 2))',
+          '    size = img.size',
+          'print(json.dumps({"src": image["src"], "pixel": pixel, "size": size, "unsupported": report.to_dict()["unsupported"]}))',
+        ].join('\n'), EMBEDDED, out], { encoding: 'utf8', cwd: process.cwd(), maxBuffer: 64 * 1024 * 1024 });
+        const result = JSON.parse(stdout) as { src: string; pixel: number[]; size: number[]; unsupported: Record<string, number> };
+        expect(result.src).toBe('assets/oleObject1.webp');
+        expect(result.pixel).toEqual([0x20, 0x80, 0xe0]);
+        // Rendered for a 2x display, not at the PDF's 200pt size.
+        expect(Math.min(...result.size)).toBeGreaterThanOrEqual(400);
+        expect(result.unsupported).toEqual({});
+      } finally {
+        await rm(out, { recursive: true, force: true });
+      }
+    }, 60_000);
+  });
 
   const fixtures = FIXTURES && existsSync(FIXTURES)
     ? FIXTURES
