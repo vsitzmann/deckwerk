@@ -1545,6 +1545,11 @@ export function measureSlides(doc: Document): MeasuredSlide[] {
         if (first && first.nodeType === 3 && (first as Text).data.startsWith('\n')) {
           (first as Text).data = (first as Text).data.slice(1);
         }
+        // `data-font-size` is the size the block renders at; CSS cannot read
+        // it, so lay the listing out at it here or the box is measured at
+        // the stylesheet's default size.
+        const size = Number.parseFloat(node.dataset.fontSize ?? '');
+        if (size > 0 && !node.style.fontSize) node.style.fontSize = `${size}px`;
       }
       // A leaf with nothing to say but paint — an empty div with a background
       // — is a rectangle, not an empty text box.

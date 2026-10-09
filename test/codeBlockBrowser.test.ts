@@ -165,7 +165,7 @@ describe.skipIf(!electronBinary)('a code block in authoring HTML', () => {
     const escaped = tricky.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
     const page = `<section class="slide" style="padding: 100px; display: flex; flex-direction: column; gap: 40px;">
   <h1>Code</h1>
-  <pre data-element="code" data-language="sh" data-scheme="nord" data-line-numbers="true"
+  <pre data-element="code" data-language="sh" data-scheme="nord" data-font-size="24" data-line-numbers="true"
        data-build-lines="1-2; highlight:4" style="width: 1200px; border-radius: 12px;"><code>
 ${escaped}
 </code></pre>
@@ -181,7 +181,7 @@ ${escaped}
     expect(shell).toMatchObject({
       // The newline after <code> was formatting; the one before </code> is the
       // file's last newline, kept (and never drawn as a line).
-      code: `${tricky}\n`, language: 'bash', scheme: 'nord', fontSize: 28, lineNumbers: true, w: 1200,
+      code: `${tricky}\n`, language: 'bash', scheme: 'nord', fontSize: 24, lineNumbers: true, w: 1200,
       style: { 'border-radius': '12px' },
     });
     // The authoring page lays a block out as the player does: its measured
