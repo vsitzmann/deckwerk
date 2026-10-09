@@ -134,6 +134,62 @@ describe('player: slide changes', () => {
     expect(play, 'the player never tried to resume the clip').toHaveBeenCalled();
   });
 
+  it('holds a pause the viewer chose until they play it again', async () => {
+    // BUG: pausing a clip from its own controls while presenting held for a
+    // moment, then the keep-alive above took the pause for Chromium's and
+    // started the clip again.
+    const deck = deckOf(
+      {
+        elements: [video({ id: 'v', autoplay: true }), text('t')],
+        timeline: [{ id: 'b', trigger: { on: 'click', ref: null, delay: 0 }, action: { type: 'appear', target: 't', value: null } }],
+      },
+      { elements: [text('other')] },
+    );
+    const { stage, player } = mount(deck);
+    const node = stage.querySelector<HTMLVideoElement>('video')!;
+    const play = vi.fn(() => Promise.resolve());
+    node.play = play as unknown as HTMLVideoElement['play'];
+
+    // The viewer presses the pause button: a press on the video, then `pause`.
+    node.dispatchEvent(new Event('pointerdown'));
+    Object.defineProperty(node, 'paused', { value: true, configurable: true });
+    node.dispatchEvent(new Event('pause'));
+    await new Promise((resolve) => setTimeout(resolve, 700));
+    expect(play, 'the clip restarted under the viewer').not.toHaveBeenCalled();
+
+    // A build step on the same slide does not overrule them either.
+    player.next();
+    await new Promise((resolve) => setTimeout(resolve, 700));
+    expect(play, 'a build step restarted the paused clip').not.toHaveBeenCalled();
+
+    // Once they play it, the keep-alive guards it again.
+    node.dispatchEvent(new Event('play'));
+    node.dispatchEvent(new Event('pause'));
+    await new Promise((resolve) => setTimeout(resolve, 700));
+    expect(play, 'a pause nobody chose went unanswered').toHaveBeenCalled();
+  });
+
+  it('plays a viewer-paused clip again when its slide is shown afresh', async () => {
+    const deck = deckOf(
+      { elements: [video({ id: 'v', autoplay: true })] },
+      { elements: [text('other')] },
+    );
+    const { stage, player } = mount(deck);
+    // After mount: its DOM shims install their own play().
+    const play = vi.spyOn(HTMLMediaElement.prototype, 'play').mockImplementation(() => Promise.resolve());
+    const node = stage.querySelector<HTMLVideoElement>('video')!;
+    // The guard on the fix: the viewer's pause belongs to that visit only.
+    node.dispatchEvent(new Event('pointerdown'));
+    node.dispatchEvent(new Event('pause'));
+
+    player.goToSlide(1);
+    play.mockClear();
+    player.goToSlide(0);
+    await new Promise((resolve) => setTimeout(resolve, 700));
+    expect(play, 'the clip stayed paused on a fresh visit').toHaveBeenCalled();
+    play.mockRestore();
+  });
+
   it('leaves a video alone once the build state stops wanting it', async () => {
     // The flip side: the reconciler must not fight a deliberate pause, or
     // stepping past a video would restart it forever.
