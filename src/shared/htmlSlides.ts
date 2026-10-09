@@ -1502,14 +1502,14 @@ export function elementFromNode(
 /**
  * `data-build="click"`, `data-build="afterPrev"`, `data-build="afterPrev+500"`.
  * `data-build-effect="dissolve"` fades the element in, `"blur"` brings it into
- * focus as it fades, and on a line or arrow
+ * focus as it fades, `"pop"` grows it in with a slight overshoot, and on a line or arrow
  * `data-build-effect="draw"` draws it in; `data-build-duration` is the time in ms.
  *
  * Builds have no CSS analogue, so they ride on data attributes rather than in
  * a side-channel the author has to keep in sync with the markup.
  */
-function isEffectName(value: unknown): value is 'draw' | 'dissolve' | 'blur' {
-  return value === 'draw' || value === 'dissolve' || value === 'blur';
+function isEffectName(value: unknown): value is 'draw' | 'dissolve' | 'blur' | 'pop' {
+  return value === 'draw' || value === 'dissolve' || value === 'blur' || value === 'pop';
 }
 
 export function buildFromNode(
@@ -1526,7 +1526,7 @@ export function buildFromNode(
   // `data-build-effect` draws a line or arrow in ("draw") or fades anything in
   // ("dissolve"); its time rides beside it.
   const effect = node.dataset.buildEffect;
-  const animated = effect === 'draw' || effect === 'dissolve' || effect === 'blur';
+  const animated = effect === 'draw' || effect === 'dissolve' || effect === 'blur' || effect === 'pop';
   const duration = Number(node.dataset.buildDuration);
   return {
     id: `${elementId}-build-${index + 1}`,

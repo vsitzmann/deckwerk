@@ -419,7 +419,8 @@ export const ActionSchema = z.object({
    * `"byParagraph"` reveals text a paragraph at a time and `"draw"` draws a
    * line or arrow in from its start to its end. On `appear` or `disappear`,
    * `"dissolve"` fades the element in or out and `"blur"` brings it into (or
-   * takes it out of) focus as it fades.
+   * takes it out of) focus as it fades. On `appear`, `"pop"` grows the
+   * element in from smaller, overshoots a little and settles.
    */
   value: z.union([z.number(), z.string()]).nullable().default(null),
   /** Milliseconds an animated build takes (`"draw"`, `"dissolve"`, `"blur"`). */
