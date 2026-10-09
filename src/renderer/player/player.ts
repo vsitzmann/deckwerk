@@ -354,8 +354,12 @@ export class Player {
    * delays and effects — the way advancing to any later step does. Builds
    * that land at once with no effect are still part of the first paint, so a
    * Morph into the slide sees them. Jumping never plays: it resolves.
+   *
+   * `morph: false` is a jump that must not animate even onto the very next
+   * slide: a deep link, or a capture that renders slides one after another in
+   * the same page and would otherwise photograph the transition in flight.
    */
-  goTo(cursor: Cursor, opts: { play?: boolean } = {}): void {
+  goTo(cursor: Cursor, opts: { play?: boolean; morph?: boolean } = {}): void {
     this.clearPending();
     // Released by the lookahead once this slide can paint.
     this.videoBlobs?.hold();
@@ -376,7 +380,7 @@ export class Player {
     // -- a rail click, goToSlide, or stepping backwards -- used to animate
     // between two slides that were never authored as a pair, which reads as
     // objects flying around at random.
-    const morph = slides.indexOf(slide) === previousSlideIndex + 1
+    const morph = opts.morph !== false && slides.indexOf(slide) === previousSlideIndex + 1
       && previousSlide !== undefined && morphEnabled;
     const steps = stepCount(slide);
     this.cursor = {
