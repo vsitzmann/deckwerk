@@ -243,7 +243,7 @@ describe('glyph matching', () => {
   /** A row of glyphs laid out left to right, one unit wide each. */
   const row = (keys: string, y = 0, x0 = 0): GlyphBox[] =>
     [...keys].map((key, index) => ({ key, x: x0 + index * 10, y, w: 10, h: 20 }));
-  const keysOf = (source: GlyphBox[], target: GlyphBox[], pairs: Array<[number, number]>) =>
+  const keysOf = (source: GlyphBox[], _target: GlyphBox[], pairs: Array<[number, number]>) =>
     pairs.map(([s, t]) => `${source[s].key}${s}>${t}`);
 
   it('matches the shared symbols in order and leaves the rest', () => {

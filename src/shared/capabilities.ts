@@ -76,6 +76,7 @@ export function capabilities(): Capability[] {
         '$…$ is inline and stays in the sentence flow; $$…$$ is display.',
         'A literal dollar sign is written \\$.',
         'The equation is part of the text element’s html — not a separate element.',
+        'Mark a term with \\step{label}{…} (or KaTeX’s \\htmlClass{step-label}{…}) so builds can reveal, colour or pulse it; see equation-builds.',
       ],
       elements: [
         text('cap-latex-title', 'Maths is text, not layout', TITLE, { class: ['role-title'] }),
@@ -328,6 +329,7 @@ export function capabilities(): Capability[] {
         'withPrev fires together with the step before it; afterPrev fires on its own after that step, with an optional delay in ms.',
         'An appear or disappear with value: \'dissolve\' fades the element in or out; an appear with value: \'draw\' on a shape is Line Draw: a line or arrow grows from its start with its head leading, and a box, ellipse or path is traced along its outline with its fill following. action.duration is the time in ms (defaults 1000 and 600), and an afterPrev build waits for an animated one before it to finish. In authoring HTML: data-build="click" data-build-effect="dissolve" data-build-duration="800". Animations play when a step is reached by advancing (including builds that run on arriving at a slide); jumping to a step shows its finished state.',
         "The other actions are disappear, play/pause (media), seek (value: seconds) and addClass/removeClass (value: the class name) — the last two are the hook for anything theme.css can animate.",
+        "type: 'pulse' briefly enlarges any object about its own centre (scale, default 1.6; duration, default 800 ms) and settles back without moving anything; type: 'terms' steps through an equation's marked terms — see equation-builds. In authoring HTML: data-pulse=\"click\" data-pulse-scale=\"1.6\".",
       ],
       elements: [
         text('cap-build-title', 'Builds', TITLE, { class: ['role-title'] }),
@@ -391,6 +393,69 @@ export function capabilities(): Capability[] {
         text('cap-morph2-title', 'The same object, moved', TITLE, { class: ['role-title'] }),
         text('cap-morph2-term', '$E = mc^2$', { x: 1000, y: 640, w: 700, h: 200 }, {
           class: ['role-title'], morphId: 'cap-morph-equation',
+        }),
+      ],
+    },
+    {
+      id: 'equation-builds',
+      what: 'Build an equation term by term: reveal or colour its marked terms one step at a time, and pulse one to point at it.',
+      when: 'A derivation or a definition you talk through part by part, rather than showing the whole equation at once.',
+      notes: [
+        'Mark terms in the TeX: \\step{1}{…}, \\step{2}{…} (KaTeX’s \\htmlClass{step-2}{…} and MathJax’s \\class{step-2}{…} mean the same). Numbers set the order; a word label (\\step{force}{f}) names a term and comes after the numbers. A label used twice is one term.',
+        "An action { type: 'terms', target, value: 'appear' } steps through every marked term in order, one click each (or a cascade when afterPrev/withPrev), like a by-paragraph build. The unmarked parts are on screen from the start; an unrevealed term keeps its place, so nothing reflows.",
+        "value: 'color' paints the terms instead (action.color, a CSS colour) and they stay painted. action.term: '2' acts on that one term only. action.duration is the fade or colour change in ms (default 400; 0 is instant).",
+        "{ type: 'pulse', target, term: '2' } enlarges that term for a moment (scale default 1.6, duration default 800 ms) and settles it back exactly; without term the whole object pulses. Any object can pulse.",
+        'In authoring HTML, on the text element: data-term-build="click" (data-term-effect="color" data-term-color="#d9480f" data-term-duration="400" data-term="2" optional) and data-pulse="click" data-pulse-term="2" (data-pulse-scale="1.6" data-pulse-duration="800" optional). A page states the first build of each kind; the Build panel can add more.',
+        'Jumping to a step, the presenter preview and PDF export show the finished state of each step; a pulse leaves no state behind.',
+      ],
+      elements: [
+        text('cap-eqb-title', 'Momentum balance, term by term', TITLE, { class: ['role-title'] }),
+        text(
+          'cap-eqb-equation',
+          '$$\\nabla \\cdot \\sigma \\step{1}{+ \\, f} = \\step{2}{\\rho \\, \\ddot{u}}$$',
+          { x: 160, y: 360, w: 1600, h: 300 },
+          { class: ['role-title'], align: 'center', valign: 'middle' },
+        ),
+      ],
+      timeline: [
+        {
+          id: 'cap-eqb-terms',
+          trigger: { on: 'click', ref: null, delay: 0 },
+          action: { type: 'terms', target: 'cap-eqb-equation', value: 'appear' },
+        },
+        {
+          id: 'cap-eqb-pulse',
+          trigger: { on: 'click', ref: null, delay: 0 },
+          action: { type: 'pulse', target: 'cap-eqb-equation', value: null, term: '2' },
+        },
+      ],
+    },
+    {
+      id: 'equation-morph',
+      what: `${MORPH_NAME} between two equations moves them glyph by glyph.`,
+      when: 'An equation that grows or is rewritten from one slide to the next: f(x) = 0 → f(x) = y → f(x) = y + 1.',
+      notes: [
+        'Pair the two text elements with the same morphId (data-morph) and set morphFromPrevious on the later slide, exactly as for any Morph.',
+        'When both sides hold maths and say different things, every KaTeX glyph they share (matched by symbol in reading order, position breaking ties) travels to its new place and grows or shrinks to its new size; glyphs only one side has fade out or in. Glyphs stay live type, so they stay crisp, and the last frame is the next slide exactly.',
+        'Nothing shared — or a rotated element — falls back to the ordinary Morph of the whole object.',
+      ],
+      elements: [
+        text('cap-eqm-title', 'Equilibrium', TITLE, { class: ['role-title'] }),
+        text('cap-eqm-equation', '$$\\nabla \\cdot \\sigma = 0$$', { x: 160, y: 360, w: 1600, h: 300 }, {
+          class: ['role-title'], align: 'center', valign: 'middle', morphId: 'cap-eqm',
+        }),
+      ],
+    },
+    {
+      id: 'equation-morph-target',
+      what: 'The second half of the equation pair: the same identity, a richer equation.',
+      when: 'Always authored together with the slide before it.',
+      notes: ['∇, ·, σ and = move to their new places; + f and ρü fade in, 0 fades out.'],
+      slide: { morphFromPrevious: true, morphDuration: 1200 },
+      elements: [
+        text('cap-eqm2-title', 'Momentum balance', TITLE, { class: ['role-title'] }),
+        text('cap-eqm2-equation', '$$\\nabla \\cdot \\sigma + f = \\rho \\, \\ddot{u}$$', { x: 160, y: 360, w: 1600, h: 300 }, {
+          class: ['role-title'], align: 'center', valign: 'middle', morphId: 'cap-eqm',
         }),
       ],
     },

@@ -173,3 +173,27 @@ function termStateOf(states: Map<string, TermState>, target: string): TermState 
   }
   return state;
 }
+
+/**
+ * The TeX a term wraps, for showing beside its number in the Build panel:
+ * the second argument of its first `\step{label}{…}` (or `\htmlClass` /
+ * `\class` with its class), braces balanced. Null when it is not written.
+ */
+export function termSource(html: string, label: string): string | null {
+  const marker = /\\(step|htmlClass|class)\s*\{([^{}]*)\}\s*\{/g;
+  for (const match of html.matchAll(marker)) {
+    const names = match[1] === 'step'
+      ? [termClass(match[2].trim())]
+      : match[2].trim().split(/\s+/);
+    if (!names.includes(termClass(label))) continue;
+    let depth = 1;
+    const start = match.index! + match[0].length;
+    for (let i = start; i < html.length; i++) {
+      if (html[i] === '\\') { i++; continue; }
+      if (html[i] === '{') depth++;
+      else if (html[i] === '}' && --depth === 0) return html.slice(start, i).trim();
+    }
+    return null;
+  }
+  return null;
+}
