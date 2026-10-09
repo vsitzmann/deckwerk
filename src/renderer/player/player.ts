@@ -14,6 +14,8 @@ import {
 } from '@shared/timeline.js';
 import { arrowHeadSize, shapeSvg } from '@shared/shapeSvg.js';
 import { followerCorrection, followerTarget, syncGroupsOf } from './videoSync.js';
+import { mountGroupScrubber } from './groupScrubber.js';
+import { mountWipeDrag } from './wipe.js';
 import {
   applyStageScale,
   fitAutoTextElement,
@@ -135,6 +137,11 @@ export class Player {
   private trimmed = new Set<string>();
   /** Sync groups whose clock is already running on the current slide. */
   private syncedGroups = new Set<string>();
+  /** Wipe dividers and group scrubbers are live for the current step. */
+  private compareMounted = false;
+  /** Sync groups the presenter paused from their scrubber, on slide `heldSlide`. */
+  private heldGroups = new Set<string>();
+  private heldSlide: string | null = null;
   /**
    * Videos the current build state says should be running, and the recovery
    * bookkeeping for keeping them that way. See `keepPlaying`.
@@ -1329,6 +1336,61 @@ export class Player {
       }
     }
     this.syncVideoGroups(slide);
+    this.mountCompareControls(slide);
+  }
+
+  /**
+   * The presenter's hands on a comparison: a draggable wipe divider, and a
+   * scrubber with play/pause for each sync group (wipe.ts, groupScrubber.ts).
+   *
+   * A group the presenter paused stays paused through the slide's later
+   * builds -- they would otherwise restart it -- until it is played again or
+   * the slide is left. Pausing withdraws the play intent `keepPlaying`
+   * records, or its recovery would start the clips again a moment later.
+   */
+  private mountCompareControls(slide: Slide): void {
+    if (this.heldSlide !== slide.id) {
+      this.heldGroups.clear();
+      this.heldSlide = slide.id;
+    }
+    const groups = syncGroupsOf(slide.elements);
+    const videoOf = (id: string) => this.stage
+      .querySelector<HTMLElement>(`[data-element-id="${CSS.escape(id)}"]`)?.querySelector('video') ?? null;
+    const setPlaying = (members: Array<{ id: string }>, playing: boolean): void => {
+      for (const el of members) {
+        const video = videoOf(el.id);
+        if (!video || video.dataset.holdFrame === 'true') continue;
+        const node = video.closest<HTMLElement>('[data-element-id]');
+        if (playing && !this.blanked && node?.style.visibility !== 'hidden') {
+          this.keepPlaying(el.id, video);
+        } else if (!playing) {
+          this.intendedPlaying.delete(el.id);
+          this.playAttempts.delete(el.id);
+          if (!video.paused) video.pause();
+        }
+      }
+    };
+    for (const [group, members] of groups) {
+      if (this.heldGroups.has(group)) setPlaying(members, false);
+    }
+    if (this.compareMounted) return;
+    const root = this.stage.firstElementChild as HTMLElement | null;
+    if (!root) return;
+    this.compareMounted = true;
+    this.mediaListeners.push(mountWipeDrag(root));
+    for (const [group, members] of groups) {
+      const leaderVideo = videoOf(members[0].id);
+      if (!leaderVideo) continue;
+      this.mediaListeners.push(mountGroupScrubber(root, {
+        members,
+        leaderVideo,
+        setPlaying: (playing) => {
+          if (playing) this.heldGroups.delete(group);
+          else this.heldGroups.add(group);
+          setPlaying(members, playing);
+        },
+      }));
+    }
   }
 
   /**
@@ -1646,6 +1708,7 @@ export class Player {
     // watcher must be attached when the slide is drawn again.
     this.trimmed.clear();
     this.syncedGroups.clear();
+    this.compareMounted = false;
   }
 
   /** Blank the screen (the `B` key) without losing position. */

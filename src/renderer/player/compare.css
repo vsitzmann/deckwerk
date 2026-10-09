@@ -1,0 +1,185 @@
+/*
+ * Comparing pictures: the before/after wipe divider (wipe.ts) and a sync
+ * group's scrubber (groupScrubber.ts). Sizes are slide pixels -- both live
+ * inside the slide, so they scale with it like everything else on it.
+ */
+
+/* --- wipe divider ----------------------------------------------------------
+   Drawn wherever the slide is drawn (canvas, thumbnails, PDF) as a plain line
+   with a round handle. Inert except while presenting (`.wipe-live`). */
+.wipe-divider {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 0;
+  /* Above the media frame overlay (z-index 1), inside the element's own
+     stacking context. */
+  z-index: 2;
+  pointer-events: none;
+}
+
+.wipe-divider::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -2px;
+  width: 4px;
+  background: #fff;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.18), 0 0 14px rgba(0, 0, 0, 0.35);
+}
+
+.wipe-handle {
+  position: absolute;
+  top: 50%;
+  left: 0;
+  width: 60px;
+  height: 60px;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  background: #fff;
+  color: #1b1b1f;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.12), 0 4px 16px rgba(0, 0, 0, 0.35);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: transform 0.12s ease;
+}
+
+.wipe-handle svg {
+  width: 30px;
+  height: 30px;
+}
+
+/* While presenting: a generous grab strip around the line, and the handle. */
+.wipe-divider.wipe-live,
+.wipe-divider.wipe-live .wipe-handle {
+  pointer-events: auto;
+  cursor: ew-resize;
+}
+
+.wipe-divider.wipe-live::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -28px;
+  width: 56px;
+}
+
+.wipe-divider.wipe-live:hover .wipe-handle,
+.wipe-divider.dragging .wipe-handle {
+  transform: translate(-50%, -50%) scale(1.08);
+}
+
+/* --- sync group scrubber --------------------------------------------------- */
+.sync-scrubber {
+  position: absolute;
+  z-index: 50;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 0 18px 0 8px;
+  border-radius: 12px;
+  background: rgba(16, 16, 20, 0.74);
+  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.3);
+  color: #fff;
+  font: 500 17px/1 system-ui, sans-serif;
+  font-variant-numeric: tabular-nums;
+  /* Hidden is fully out of the way: a press on the bottom of a video then
+     advances the deck exactly as if the bar did not exist. */
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.18s ease;
+  cursor: default;
+  user-select: none;
+}
+
+.sync-scrubber.visible {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.sync-scrubber-play {
+  flex: none;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: inherit;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.sync-scrubber-play:hover {
+  background: rgba(255, 255, 255, 0.14);
+}
+
+.sync-scrubber-play svg {
+  width: 24px;
+  height: 24px;
+}
+
+.sync-scrubber-track {
+  position: relative;
+  flex: 1;
+  height: 100%;
+  cursor: pointer;
+  touch-action: none;
+}
+
+/* The visible rail, centred in a full-height hit area. */
+.sync-scrubber-track::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  height: 6px;
+  transform: translateY(-50%);
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.28);
+}
+
+.sync-scrubber-fill {
+  position: absolute;
+  left: 0;
+  top: 50%;
+  height: 6px;
+  transform: translateY(-50%);
+  border-radius: 3px;
+  background: #fff;
+}
+
+.sync-scrubber-thumb {
+  position: absolute;
+  top: 50%;
+  width: 16px;
+  height: 16px;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.4);
+  transition: transform 0.12s ease;
+}
+
+.sync-scrubber-track:hover .sync-scrubber-thumb,
+.sync-scrubber.scrubbing .sync-scrubber-thumb {
+  transform: translate(-50%, -50%) scale(1.25);
+}
+
+.sync-scrubber-time {
+  flex: none;
+  opacity: 0.9;
+  white-space: nowrap;
+}
+
+/* Never part of a printed page, whatever the pointer was doing. */
+@media print {
+  .sync-scrubber { display: none !important; }
+}

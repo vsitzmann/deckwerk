@@ -4,6 +4,7 @@
  * player renders; a deck's own theme.css loads after both and overrides them.
  */
 @import './type.css';
+@import './compare.css';
 
 .player-root {
   position: relative;

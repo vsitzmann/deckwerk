@@ -11,6 +11,7 @@ import { quadraticPath, shapeSvg } from '@shared/shapeSvg.js';
 import { isMediaBorderPaint, typedPropertyOwnsCss } from '@shared/nativeCss.js';
 import { applyTableColumnWidths } from '@shared/paragraphs.js';
 import { isEmbeddableWebSrc, webReadinessAction } from '@shared/webBridge.js';
+import { syncWipe } from './wipe.js';
 import renderMathInElement from 'katex/contrib/auto-render';
 import 'katex/dist/katex.min.css';
 
@@ -523,6 +524,9 @@ export function syncMediaFrame(
     if (radius) mediaBody.style.borderRadius = radius;
     else mediaBody.style.removeProperty('border-radius');
   }
+  // A before/after wipe is part of the picture's framing too, so it rides
+  // the same shared path (wipe.ts).
+  syncWipe(node, el, mediaBody);
 }
 
 function renderVisualEffects(

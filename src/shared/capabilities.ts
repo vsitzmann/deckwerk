@@ -271,6 +271,36 @@ export function capabilities(): Capability[] {
       ],
     },
     {
+      id: 'video-compare',
+      what: 'Videos that play in sync, with a shared scrubber, and a before/after wipe.',
+      when: 'Real vs. simulated, before vs. after: two clips (or stills) the audience must compare frame for frame.',
+      notes: [
+        'syncGroup (data-sync-group) on two or more videos plays them from one clock while presenting: the lowest in z leads, each follower is measured from its own in-point.',
+        'While presenting, hovering a synced video shows one bar along the bottom of the group: play/pause for the group and a scrubber over the leader’s trim window. It never shows in PDFs, thumbnails or posters.',
+        'A wipe is two pictures stacked in the same box. The UPPER one (later in the HTML, higher z) carries compare: "wipe" (data-compare="wipe") and wipe: 0–1 (data-wipe, also accepts "40%"), the divider’s position across the box. It shows left of the divider; whatever is beneath shows right of it.',
+        'The lower layer needs nothing. For video pairs give both the same syncGroup so they show the same moment. Images work as either layer.',
+        'The presenter can drag the divider while presenting; that never edits the deck. The editor, thumbnails and PDF show it at the stored position.',
+        'In the editor: select two videos (or two images) → Compare → Arrange as wipe; a layer of a wipe shows a Divider slider and Turn off wipe.',
+      ],
+      elements: [
+        text('cap-compare-title', 'Real and simulated, one divider', TITLE, { class: ['role-title'] }),
+        {
+          id: 'cap-compare-sim', type: 'video', x: 460, y: 300, w: 1000, h: 563, rot: 0, z: 2,
+          opacity: 1, class: [], style: {}, src: 'assets/testclip.mp4', fit: 'cover',
+          autoplay: true, loop: true, muted: true, controls: false,
+          start: 0, end: null, poster: null, sourceBox: null, syncGroup: 'cap-compare',
+        },
+        {
+          id: 'cap-compare-real', type: 'video', x: 460, y: 300, w: 1000, h: 563, rot: 0, z: 3,
+          opacity: 1, class: [], style: {}, src: 'assets/testclip.mp4', fit: 'cover',
+          autoplay: true, loop: true, muted: true, controls: false,
+          start: 0, end: null, poster: null, sourceBox: null, syncGroup: 'cap-compare',
+          compare: 'wipe', wipe: 0.5, effects: [{ type: 'grayscale', amount: 1 }],
+        },
+        text('cap-compare-caption', 'Left of the divider is the upper clip, right is the one beneath; both run on one clock.', CAPTION, { class: ['role-caption'] }),
+      ],
+    },
+    {
       id: 'shapes',
       what: 'Rectangles, ellipses, lines and arrows, including curved ones.',
       when: 'Callouts, connectors, emphasis boxes.',
