@@ -2,6 +2,7 @@ import type { AssetImportProgress, ImportedAsset, MediaInfo, ImportedMeshPage } 
 import type { ClipboardWriteRequest } from '@shared/clipboard.js';
 import { clipboardImageName, type ClipboardImageSource } from '@shared/clipboardImages.js';
 import { pinMediaVariant } from './mediaVariants.js';
+import type { PaperCard } from '@shared/paperCard.js';
 
 /**
  * The browser collab client's stand-in for the Electron preload bridge.
@@ -169,6 +170,49 @@ export function installNetApi(options: NetApiOptions): void {
       });
       if (!response.ok) throw new Error((await response.json().catch(() => ({}))).error ?? `HTTP ${response.status}`);
       return await response.json() as ImportedMeshPage;
+    },
+
+    /**
+     * A paper card, made by the server (paperCard.ts). A PDF goes up as the
+     * raw body; a pasted id or link as JSON. The reply is NDJSON — progress
+     * lines, then the card or an error — read as it arrives so the status bar
+     * names each phase, as the desktop app's does.
+     */
+    fetchPaperCard: async (
+      request: { input: string } | { file: File },
+      _operationId?: string,
+      onProgress?: (message: string) => void,
+    ): Promise<PaperCard> => {
+      const response = 'file' in request
+        ? await fetch(`/api/paper-card?deck=${deck}&name=${encodeURIComponent(request.file.name)}`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/pdf' },
+          body: request.file,
+        })
+        : await fetch(`/api/paper-card?deck=${deck}`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ input: request.input }),
+        });
+      if (!response.ok || !response.body) {
+        throw new Error((await response.json().catch(() => ({}))).error ?? `HTTP ${response.status}`);
+      }
+      const reader = response.body.pipeThrough(new TextDecoderStream()).getReader();
+      let buffered = '';
+      for (;;) {
+        const { value, done } = await reader.read();
+        buffered += value ?? '';
+        const lines = buffered.split('\n');
+        buffered = done ? '' : lines.pop() ?? '';
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          const message = JSON.parse(line) as { progress?: string; card?: PaperCard; error?: string };
+          if (message.progress) onProgress?.(message.progress);
+          if (message.error) throw new Error(message.error);
+          if (message.card) return message.card;
+        }
+        if (done) throw new Error('The server closed the connection before the card was ready.');
+      }
     },
 
     /**

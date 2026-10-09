@@ -82,6 +82,8 @@ import { MirrorThemeRequestSchema, mirrorThemeAction, type MirrorThemeRequest } 
 import { htmlDraftWorkflow, type HtmlDraftWorkflow } from './htmlDraftWorkflow.js';
 import { injectWebBridgeRuntime } from '../shared/webBridge.js';
 import { importMeshPage } from '../main/meshPage.js';
+import { fetchPaperCard } from '../main/paperCard.js';
+import type { PaperCardJob } from '@shared/paperCard.js';
 import { isMeshName } from '@shared/meshFiles.js';
 import { CLIPBOARD_ID, ClipboardStash } from './clipboardStash.js';
 import { checkWebPage } from '../cli/renderSlides.js';
@@ -2246,6 +2248,43 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
         respondJson(response, 200, await importMeshPage(deckDirOf(deckParam), sources));
       } catch (error) {
         respondJson(response, 400, { error: String(error instanceof Error ? error.message : error) });
+      }
+      return;
+    }
+
+    // A paper card (paperCard.ts) from { input } as JSON, or from a PDF sent
+    // as the raw body with ?name=. The answer is NDJSON: { progress } lines
+    // while it works — fetching, rendering and capturing take seconds — then
+    // one { card } or { error }, so the browser shows the same phases the app does.
+    if (path === '/api/paper-card' && request.method === 'POST') {
+      if (!deckParam) return respondJson(response, 400, { error: 'missing deck' });
+      const dir = await mkdtemp(join(tmpdir(), 'collab-paper-'));
+      response.writeHead(200, { 'content-type': 'application/x-ndjson; charset=utf-8', 'cache-control': 'no-store' });
+      const send = (line: object) => {
+        if (!response.writableEnded) response.write(`${JSON.stringify(line)}\n`);
+      };
+      try {
+        let job: PaperCardJob;
+        if ((request.headers['content-type'] ?? '').startsWith('application/pdf')) {
+          const name = sanitizeFilename(url.searchParams.get('name') ?? 'paper.pdf');
+          const pdfPath = join(dir, name.toLowerCase().endsWith('.pdf') ? name : `${name}.pdf`);
+          await pipeline(request, createWriteStream(pdfPath));
+          job = { pdfPath, name };
+        } else {
+          const payload = JSON.parse((await readBody(request)).toString('utf8')) as { input?: string };
+          if (!payload.input?.trim()) throw new Error('missing input');
+          job = { input: payload.input };
+        }
+        const card = await fetchPaperCard(deckDirOf(deckParam), job, {
+          blockPrivateAddresses: true,
+          onProgress: (progress) => send({ progress }),
+        });
+        send({ card });
+      } catch (error) {
+        send({ error: String(error instanceof Error ? error.message : error) });
+      } finally {
+        response.end();
+        await rm(dir, { recursive: true, force: true });
       }
       return;
     }

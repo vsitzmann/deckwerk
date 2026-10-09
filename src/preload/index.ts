@@ -4,6 +4,7 @@ import type { DeckHistoryDocument } from '@shared/deckHistory.js';
 import type { ClipboardReadResult, ClipboardWriteRequest } from '@shared/clipboard.js';
 import type { ClipboardImageSource } from '@shared/clipboardImages.js';
 import { IPC } from '@shared/ipc.js';
+import type { PaperCard } from '@shared/paperCard.js';
 import type {
   AgentContextDraft,
   AgentPanelState,
@@ -125,6 +126,24 @@ const api = {
     ipcRenderer.invoke(
       IPC.meshImport,
       files.map((file) => webUtils.getPathForFile(file)).filter(Boolean),
+    ),
+  /**
+   * Make a paper card from a pasted arXiv id, DOI or URL, or from a PDF file.
+   * Phases arrive through onOperationProgress under `operationId`; the
+   * browser collab client streams them from the server instead (netApi.ts),
+   * which is what `onProgress` is for.
+   */
+  fetchPaperCard: (
+    request: { input: string } | { file: File },
+    operationId?: string,
+    _onProgress?: (message: string) => void,
+  ): Promise<PaperCard> =>
+    ipcRenderer.invoke(
+      IPC.paperCard,
+      'file' in request
+        ? { pdfPath: webUtils.getPathForFile(request.file), name: request.file.name }
+        : { input: request.input },
+      operationId,
     ),
   /**
    * Import an image that a drag or a paste only pointed at — a remote URL or

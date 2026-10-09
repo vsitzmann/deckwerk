@@ -235,6 +235,31 @@ export function capabilities(): Capability[] {
       ],
     },
     {
+      id: 'paper-card',
+      what: 'A related-work card: the paper\u2019s first page (or its project page) with a soft shadow, a bold title and an "Authors, Venue Year" line.',
+      when: 'Citing prior work visually. Never screenshot, crop and type it by hand.',
+      notes: [
+        '`slide-agent paper <deck> <arXiv id|DOI|url|file.pdf>` fetches the metadata (arXiv API, Crossref, or the page\u2019s citation_* tags), renders the top 55% of the PDF\u2019s first page or screenshots the page at 1440\u00d7900, imports the PNG into assets/, and answers with the metadata and a ready <figure> for an authoring page.',
+        'In the editor it is the toolbar\u2019s Paper button: paste an id or link, or choose or drop a PDF.',
+        'It is three ordinary objects, not a group: an image with borderRadius and a box-shadow in its style, a role-body text box with font-weight 700, and a role-caption byline the theme already mutes.',
+        'More than three authors become "First Author et al."; the venue is shortened (CVPR, ACM TOG) and falls back to arXiv.',
+      ],
+      elements: [
+        text('cap-paper-heading', 'Related work', TITLE, { class: ['role-title'] }),
+        {
+          id: 'cap-paper-image', type: 'image', x: 560, y: 280, w: 800, h: 450, rot: 0, z: 2,
+          opacity: 1, class: [], style: { 'box-shadow': '0px 10px 32px rgba(0, 0, 0, 0.18)' },
+          src: 'assets/swatch.png', fit: 'cover', alt: 'NeRF: Representing Scenes as Neural Radiance Fields for View Synthesis',
+          borderRadius: 6, sourceBox: null,
+        },
+        text('cap-paper-title', 'NeRF: Representing Scenes as Neural Radiance Fields for View Synthesis',
+          { x: 560, y: 754, w: 800, h: 80 }, { z: 3, style: { 'font-weight': '700' }, overrides: ['font-weight'], autoFit: true }),
+        text('cap-paper-byline', 'Ben Mildenhall et al., ECCV 2020', { x: 560, y: 840, w: 800, h: 40 }, {
+          z: 4, class: ['role-caption'], autoFit: true,
+        }),
+      ],
+    },
+    {
       id: 'video',
       what: 'Video as a first-class object, with a non-destructive trim.',
       when: 'Any result clip. This editor exists for this.',

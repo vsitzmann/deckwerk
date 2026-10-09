@@ -21,6 +21,8 @@ import { clipboardFilePaths, firstClipboardMediaPath } from '@shared/clipboardFi
 import type { ClipboardImageSource } from '@shared/clipboardImages.js';
 import { injectWebBridgeRuntime } from '@shared/webBridge.js';
 import { importMeshPage } from './meshPage.js';
+import { fetchPaperCard } from './paperCard.js';
+import type { PaperCard, PaperCardJob } from '@shared/paperCard.js';
 import { IPC } from '@shared/ipc.js';
 import type {
   AgentContextDraft,
@@ -892,6 +894,13 @@ function registerHandlers(): void {
     const s = requireSession(event);
     const sources = await Promise.all(paths.map(async (path) => ({ name: basename(path), bytes: await readFile(path) })));
     return importMeshPage(s.dir, sources);
+  });
+
+  // Paper cards (paperCard.ts): an arXiv id, a DOI, a page or a PDF in, the
+  // picture in assets/ and the card's text out, with phases as it goes.
+  ipcMain.handle(IPC.paperCard, async (event, job: PaperCardJob, operationId?: string): Promise<PaperCard> => {
+    const s = requireSession(event);
+    return fetchPaperCard(s.dir, job, { onProgress: (message) => reportOperation(event, operationId, message) });
   });
 
   // Copy: serialise the fragment onto the OS pasteboard under a private

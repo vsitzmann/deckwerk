@@ -49,6 +49,8 @@ import { adoptAuthoredIds, htmlSyncSummary, insertionAnchor, pageStampOf, stampP
 import { DECK_FILE, importAsset, importWebPage, loadDeck, loadTheme, saveDeck, saveTheme } from '../main/deckStore.js';
 import { listDeckVersions, readDeckVersion, VERSIONS_DIR, writeDeckVersion } from '../main/deckVersions.js';
 import { injectWebBridgeRuntime } from '@shared/webBridge.js';
+import { paperCardHtml } from '@shared/paperCard.js';
+import { fetchPaperCard } from '../main/paperCard.js';
 import { measureBuiltTextOverflows } from './compileHtml.js';
 import { serveBundle } from './previewServer.js';
 import { exportDeck } from '../main/exportDeck.js';
@@ -130,6 +132,11 @@ Everything else:
                                           schema, ids, references, assets, and
                                           canvas overflows (scoped to your slides)
   asset import <deck> <paths...>          copy media into assets/, probed
+  paper     <deck> <arXiv id|DOI|url|file.pdf>
+                                          a related-work card: the paper's first
+                                          page (top 55%) or the page's screenshot
+                                          in assets/, its title, authors, venue
+                                          and year, and ready authoring markup
   web import <deck> <page.html> [--after <slideId>] [--title <text>] [--no-poster]
                                           add one slide showing a complete HTML
                                           page — scripts and all — live in a
@@ -251,6 +258,8 @@ export async function runAgentCli(argv: string[], io: CliIo): Promise<number> {
         return await validateCommand(rest, io);
       case 'asset':
         return await assetCommand(rest, io);
+      case 'paper':
+        return await paperCommand(rest, io);
       case 'web':
         return await webCommand(rest, io);
       case 'theme':
@@ -819,6 +828,30 @@ async function assetCommand(argv: string[], io: CliIo): Promise<number> {
   }
   io.out(json({ assets, failures }));
   return failures.length > 0 && assets.length === 0 ? EXIT_ERROR : EXIT_OK;
+}
+
+/**
+ * `paper`: the same job as the editor's Insert › Paper card (main/paperCard.ts),
+ * without the editor. It stages the picture and answers with the metadata and
+ * a `<figure>` to paste into an authoring page; the slide is the agent's to write.
+ */
+async function paperCommand(argv: string[], io: CliIo): Promise<number> {
+  const { flags, positional } = parseFlags(argv);
+  ensureKnownFlags('paper', flags, []);
+  ensurePositionals('paper', positional, 2);
+  if (positional.length < 2) {
+    io.err('paper needs a deck folder and an arXiv id, a DOI, a URL or a PDF file');
+    return EXIT_USAGE;
+  }
+  const deckDir = resolveDeckDir(positional[0], io);
+  const target = positional[1];
+  const local = resolve(io.cwd, target);
+  const card = await fetchPaperCard(
+    deckDir,
+    /\.pdf$/i.test(target) && existsSync(local) ? { pdfPath: local, name: target.split(/[\\/]/).pop()! } : { input: target },
+  );
+  io.out(json({ card, markup: paperCardHtml(card) }));
+  return EXIT_OK;
 }
 
 /**

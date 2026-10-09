@@ -30,6 +30,7 @@ import { Inspector } from './inspector.js';
 import { HistoryPanel } from './historyPanel.js';
 import { authoredHtmlSync, fileName } from './htmlCompile.js';
 import { createShapeInsertPicker, createTableInsertPicker, insertText } from './elementCreation.js';
+import { PAPER_ICON, insertPaperCard } from './paperCardDialog.js';
 import { createToolbarPicker, createToolbarSplitButton } from './exportPicker.js';
 import { showPdfExportDialog } from './pdfExportDialog.js';
 import { showWebExportDialog } from './webExportDialog.js';
@@ -534,6 +535,11 @@ function buildToolbar(): void {
     barIconButton('Text', TEXT_ICON, () => addText()),
     createShapeInsertPicker(store),
     createTableInsertPicker(store),
+    barIconButton('Paper', PAPER_ICON, () => void insertPaperCard({
+      store,
+      beginOperation: (message) => operationProgress.begin(message),
+      setStatusMessage,
+    })),
   );
 
   const right = document.createElement('div');

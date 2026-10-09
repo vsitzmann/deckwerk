@@ -30,6 +30,7 @@ export const IPC = {
   assetImportUrl: 'asset:importUrl',
   assetImportProgress: 'asset:importProgress',
   meshImport: 'mesh:import',
+  paperCard: 'paper:card',
   clipboardWrite: 'clipboard:write',
   clipboardRead: 'clipboard:read',
   assetProbe: 'asset:probe',
