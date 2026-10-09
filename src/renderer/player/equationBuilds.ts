@@ -80,7 +80,8 @@ export function prepareEquationEffect(
   if (!node || typeof node.animate !== 'function') return null;
 
   if (type === 'pulse') {
-    return () => pulse(node, entry.action.term, entry.action.scale ?? DEFAULT_PULSE_SCALE, duration);
+    const lift = entry.action.value === 'lift';
+    return () => pulse(node, entry.action.term, entry.action.scale ?? DEFAULT_PULSE_SCALE, duration, lift);
   }
 
   const labels = termBuildLabels(entry, slide);
@@ -115,22 +116,36 @@ function pulseFrames(around: (scale: number) => string, scale: number): Keyframe
   ];
 }
 
+/** The drop shadow a lifting pulse casts at its peak. */
+const LIFT_SHADOW = 'drop-shadow(0px 14px 18px rgba(0, 0, 0, 0.35))';
+const NO_SHADOW = 'drop-shadow(0px 0px 0px rgba(0, 0, 0, 0))';
+/** How far a lifting object rises above the rest of the slide while it is up. */
+const LIFT_Z = 100000;
+
 /**
  * Briefly enlarge an object, or one marked term of its equation, about its
  * own centre. Transforms only — nothing is laid out differently at any point,
- * so when it ends the slide is exactly as it was.
+ * so when it ends the slide is exactly as it was. A whole-object pulse with
+ * `lift` also casts a drop shadow at its peak and paints over its neighbours
+ * while it is up, as if picked up off the slide and put back; objects lifted
+ * together keep their own stacking order.
  */
-function pulse(node: HTMLElement, term: string | undefined, scale: number, duration: number): () => void {
+function pulse(node: HTMLElement, term: string | undefined, scale: number, duration: number, lift = false): () => void {
   if (duration <= 0 || scale === 1) return () => {};
   const base = node.style.transform && node.style.transform !== 'none' ? `${node.style.transform} ` : '';
 
   if (term === undefined) {
     // The object's own transform (a rotation) stays first, so the swell
     // happens in its frame and the fill-none end is its settled render.
-    const animation = node.animate(
-      pulseFrames((s) => `${base}scale(${s})`, scale).map((frame) => ({ ...frame, transformOrigin: 'center' })),
-      { duration, fill: 'none' },
-    );
+    const frames: Keyframe[] = pulseFrames((s) => `${base}scale(${s})`, scale).map((frame) => ({ ...frame, transformOrigin: 'center' }));
+    if (lift) {
+      const z = (Number.parseInt(getComputedStyle(node).zIndex, 10) || 0) + LIFT_Z;
+      frames.forEach((frame, index) => {
+        frame.filter = index === 1 ? LIFT_SHADOW : NO_SHADOW;
+        frame.zIndex = String(z);
+      });
+    }
+    const animation = node.animate(frames, { duration, fill: 'none' });
     return () => animation.finish();
   }
 

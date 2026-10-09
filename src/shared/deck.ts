@@ -424,6 +424,9 @@ export const ActionSchema = z.object({
    * line or arrow in from its start to its end. On `appear` or `disappear`,
    * `"dissolve"` fades the element in or out and `"blur"` brings it into (or
    * takes it out of) focus as it fades.
+   *
+   * On `pulse` of a whole object, `"lift"` also casts a drop shadow at the
+   * peak and paints the object over its neighbours while it is up.
    */
   value: z.union([z.number(), z.string()]).nullable().default(null),
   /** Milliseconds an animated build takes (`"draw"`, `"dissolve"`, `"blur"`). */
