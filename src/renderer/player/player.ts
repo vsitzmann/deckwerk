@@ -35,6 +35,8 @@ import {
   type MorphPair,
 } from '@shared/morph.js';
 import { morphTransforms, type Rect, type TextLayout } from './morphTransform.js';
+import { prepareEquationEffect } from './equationBuilds.js';
+import { morphEquationGlyphs } from './equationMorph.js';
 import { isPendingSrc } from '@shared/media.js';
 import { WEB_BRIDGE_SOURCE, isWebBridgeAction, type WebBridgeEvent } from '@shared/webBridge.js';
 
@@ -967,6 +969,16 @@ export class Player {
         pairedSources.delete(from.id);
         continue;
       }
+      // Two equations that say different things move glyph by glyph: every
+      // symbol they share travels to its new place, and only what was added
+      // or removed fades. Nothing shared falls back to the object motion below.
+      if (morphEquationGlyphs({
+        from, to, node, source: previousNodes.get(from.id), duration, easing,
+        zIndex: domRank.get(to.id),
+      })) {
+        zIndexInUse ||= domRank.has(to.id);
+        continue;
+      }
       const {
         start: startTransform,
         final: finalTransform,
@@ -1231,10 +1243,14 @@ export class Player {
     // so the element itself is hidden at once and the state stays exact.
     const fade = effect === 'dissolve' || effect === 'blur' ? effect : null;
     if (fade && entry.action.type === 'disappear') this.dissolveOut(target, duration, fade === 'blur');
+    // An equation build animates from what is on screen now (a term's old
+    // colour), so it looks before the state lands and plays after.
+    const equation = prepareEquationEffect(this.stage, slide, entry, duration);
     applyAction(state, entry, slide);
     this.applyState(slide, state);
     if (effect === 'draw') this.drawIn(slide, entry, duration);
     else if (fade && entry.action.type === 'appear') this.dissolveIn(target, duration, fade === 'blur');
+    if (equation) this.effects.push(equation());
   }
 
   /**

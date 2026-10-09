@@ -13,6 +13,7 @@ import { applyTableColumnWidths } from '@shared/paragraphs.js';
 import { isEmbeddableWebSrc, webReadinessAction } from '@shared/webBridge.js';
 import renderMathInElement from 'katex/contrib/auto-render';
 import 'katex/dist/katex.min.css';
+import { katexTermOptions } from '@shared/equationTerms.js';
 
 /**
  * deck.json -> DOM.
@@ -701,6 +702,9 @@ function renderBody(el: SlideElement, opts: RenderOptions): HTMLElement | SVGEle
         ],
         throwOnError: false,
         strict: 'ignore',
+        // Equation terms (`\step{2}{…}`) render as classed spans that term
+        // builds and pulses address; nothing else KaTeX gates is trusted.
+        ...katexTermOptions(),
       });
       const walker = document.createTreeWalker(content, NodeFilter.SHOW_TEXT);
       while (walker.nextNode()) {
