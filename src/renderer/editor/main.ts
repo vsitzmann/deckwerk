@@ -62,6 +62,8 @@ import { setSelectionInvariantChecks } from './selectionInvariants.js';
 import { SpeakerNotesDrawer } from './speakerNotesDrawer.js';
 import { applySpeakerNotes } from '@shared/speakerNotes.js';
 import { installResponsiveToolbar } from './responsiveToolbar.js';
+import { setSlideColorSource } from './colorPicker.js';
+import { slideColors } from '@shared/slideColors.js';
 
 applyUiTheme();
 
@@ -81,6 +83,8 @@ const el = <T extends HTMLElement>(id: string): T => {
 if (navigator.userAgent.includes('Macintosh')) document.body.classList.add('mac-titlebar');
 
 const store = new EditorStore(emptyDeck());
+// The colour picker offers the colours already on the slide being edited.
+setSlideColorSource(() => slideColors(store.slide));
 // Rail and Morph thumbnails take their poster frames from the main process, so
 // this window never opens a video pipeline for a preview (see posterCache.ts).
 installWindowApiPosterProvider();
