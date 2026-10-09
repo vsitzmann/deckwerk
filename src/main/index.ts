@@ -21,6 +21,7 @@ import { clipboardFilePaths, firstClipboardMediaPath } from '@shared/clipboardFi
 import type { ClipboardImageSource } from '@shared/clipboardImages.js';
 import { injectWebBridgeRuntime } from '@shared/webBridge.js';
 import { importMeshPage } from './meshPage.js';
+import { registerDeckAssetIpc } from './deckAssetsIpc.js';
 import { IPC } from '@shared/ipc.js';
 import type {
   AgentContextDraft,
@@ -650,6 +651,8 @@ app.on('before-quit', () => {
 });
 
 function registerHandlers(): void {
+  // The Media panel: list the deck's assets, move unused ones to the Trash.
+  registerDeckAssetIpc(requireSession);
   ipcMain.handle(IPC.deckNew, async (event, operationId?: string): Promise<DeckSession | null> => {
     const res = await showSaveDialog({
       title: 'New deck',

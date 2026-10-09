@@ -685,7 +685,8 @@ function moveToTrash(path: string, what: string, onStatus: (text: string) => voi
 interface TrashEntry {
   id: string;
   originalPath: string;
-  kind: 'deck' | 'folder';
+  /** 'assets': unused media files the Media panel moved out of the deck at originalPath. */
+  kind: 'deck' | 'folder' | 'assets';
   name: string;
   title?: string;
   deletedAt: string;
@@ -703,7 +704,7 @@ function showTrashDialog(onStatus: (text: string) => void, back: () => void): vo
   title.textContent = 'Trash';
   const note = document.createElement('div');
   note.className = 'deck-picker-trail';
-  note.textContent = 'Deleted presentations and folders stay here. Restore puts one back where it was.';
+  note.textContent = 'Deleted presentations, folders and unused media files stay here. Restore puts one back where it was.';
   const head = document.createElement('div');
   head.className = 'deck-picker-head';
   head.append(title, note);
@@ -733,7 +734,7 @@ function showTrashDialog(onStatus: (text: string) => void, back: () => void): vo
           ? entry.originalPath.slice(0, entry.originalPath.lastIndexOf('/'))
           : 'All presentations';
         const row = pickerRow('div', entry.title ?? entry.name, [
-          entry.kind === 'deck' ? 'presentation' : 'folder',
+          entry.kind === 'deck' ? 'presentation' : entry.kind === 'assets' ? 'media files' : 'folder',
           entry.deletedAt ? editedAgo(entry.deletedAt) : '',
           parent,
           '',

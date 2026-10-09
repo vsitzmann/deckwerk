@@ -28,6 +28,7 @@ import { CANVAS_NOTICE_EVENT, EditorCanvas } from './canvas.js';
 import { CssEditor } from './cssEditor.js';
 import { Inspector } from './inspector.js';
 import { HistoryPanel } from './historyPanel.js';
+import { MediaPanel, installMediaDrop } from './mediaPanel.js';
 import { authoredHtmlSync, fileName } from './htmlCompile.js';
 import { createShapeInsertPicker, createTableInsertPicker, insertText } from './elementCreation.js';
 import { createToolbarPicker, createToolbarSplitButton } from './exportPicker.js';
@@ -149,6 +150,11 @@ new SpeakerNotesDrawer(el('canvas'), store, {
 const inspector = new Inspector(el('inspector'), store);
 new TimelinePanel(el('timeline'), store);
 new HistoryPanel(el('history'), store);
+const mediaPanel = new MediaPanel(el('media'), store, {
+  setStatusMessage,
+  beginOperation: (message) => operationProgress.begin(message),
+});
+installMediaDrop(el('canvas'), store, mediaPanel);
 const rail = new SlideRail(el('rail'), store);
 rail.onStatus = setStatusMessage;
 const editorBody = el('body');
@@ -987,6 +993,7 @@ const PANELS = [
   { id: 'themePanel', label: 'Design' },
   { id: 'timeline', label: 'Build' },
   { id: 'history', label: 'History' },
+  { id: 'media', label: 'Media' },
 ] as const;
 
 function buildTabs(): void {
@@ -1005,7 +1012,7 @@ function buildTabs(): void {
 let activePanelId = 'inspector';
 
 function showPanel(id: string): void {
-  if (store.get().slideSelection.size > 1 && id !== 'themePanel' && id !== 'inspector') return;
+  if (store.get().slideSelection.size > 1 && id !== 'themePanel' && id !== 'inspector' && id !== 'media') return;
   activePanelId = id;
   for (const panel of PANELS) {
     el(panel.id).hidden = panel.id !== id;
@@ -1027,9 +1034,10 @@ function syncSlideSelectionContext(): void {
   for (const button of el('side-tabs').querySelectorAll<HTMLButtonElement>('button')) {
     button.disabled = multiple
       && button.dataset.panel !== 'themePanel'
-      && button.dataset.panel !== 'inspector';
+      && button.dataset.panel !== 'inspector'
+      && button.dataset.panel !== 'media';
   }
-  if (multiple && activePanelId !== 'themePanel' && activePanelId !== 'inspector') {
+  if (multiple && activePanelId !== 'themePanel' && activePanelId !== 'inspector' && activePanelId !== 'media') {
     showPanel('themePanel');
   }
   themePanel.syncScope(count);
