@@ -831,7 +831,11 @@ function mergedTimeline(previous: Slide, compiled: Slide, theirs = new Set<strin
       claimed.add(target);
       const kept = page.trigger.on === entry.trigger.on && entry.trigger.ref && present.has(entry.trigger.ref)
         ? entry.trigger.ref : null;
-      merged.push({ ...structuredClone(entry), trigger: { ...page.trigger, ref: page.trigger.ref ?? kept } });
+      merged.push({
+        ...structuredClone(entry),
+        trigger: { ...page.trigger, ref: page.trigger.ref ?? kept },
+        action: pageEffect(entry.action, page.action),
+      });
       continue;
     }
     // Not something a page can state — another kind of step, or a second
@@ -847,6 +851,20 @@ function mergedTimeline(previous: Slide, compiled: Slide, theirs = new Set<strin
     merged.push({ ...entry, id: uniqueId(entry.id, ids) });
   }
   return merged;
+}
+
+/**
+ * A kept build's action with the effect the page states: the page names an
+ * effect and its time with `data-build-effect` / `data-build-duration`, so
+ * whatever it says (or no longer says) wins. A value a page cannot state —
+ * a by-paragraph reveal — stays as it was.
+ */
+function pageEffect(previous: TimelineEntry['action'], page: TimelineEntry['action']): TimelineEntry['action'] {
+  const { duration: _previousDuration, ...rest } = structuredClone(previous);
+  if (isEffectName(page.value)) {
+    return { ...rest, value: page.value, ...(page.duration !== undefined ? { duration: page.duration } : {}) };
+  }
+  return { ...rest, value: isEffectName(previous.value) ? null : previous.value };
 }
 
 /* --- what a page was exported from ---------------------------------------- */
@@ -914,7 +932,13 @@ function elementFingerprint(element: SlideElement, build: string): string {
 /** An object's first appearance, as `data-build` states it. */
 function buildSpec(slide: Slide, elementId: string): string {
   const entry = slide.timeline.find((candidate) => candidate.action.type === 'appear' && candidate.action.target === elementId);
-  return entry ? `${entry.trigger.on}+${entry.trigger.delay}@${entry.trigger.ref ?? ''}` : '';
+  if (!entry) return '';
+  const spec = `${entry.trigger.on}+${entry.trigger.delay}@${entry.trigger.ref ?? ''}`;
+  // An effect is part of what the page states, so a change to it is a change
+  // to the object; without one the spec is what it always was, so pages
+  // exported before effects existed still match.
+  return isEffectName(entry.action.value)
+    ? `${spec}~${entry.action.value}/${entry.action.duration ?? ''}` : spec;
 }
 
 /** cyrb53: a quick 53-bit string hash, the same in Node and in any browser. */
@@ -1476,10 +1500,17 @@ export function elementFromNode(
 
 /**
  * `data-build="click"`, `data-build="afterPrev"`, `data-build="afterPrev+500"`.
+ * `data-build-effect="dissolve"` fades the element in, `"blur"` brings it into
+ * focus as it fades, and on a line or arrow
+ * `data-build-effect="draw"` draws it in; `data-build-duration` is the time in ms.
  *
  * Builds have no CSS analogue, so they ride on data attributes rather than in
  * a side-channel the author has to keep in sync with the markup.
  */
+function isEffectName(value: unknown): value is 'draw' | 'dissolve' | 'blur' {
+  return value === 'draw' || value === 'dissolve' || value === 'blur';
+}
+
 export function buildFromNode(
   node: MeasuredNode,
   elementId: string,
@@ -1491,10 +1522,20 @@ export function buildFromNode(
   const on = (['click', 'afterPrev', 'withPrev', 'mediaEnd'] as const)
     .find((candidate) => candidate.toLowerCase() === name.trim().toLowerCase());
   if (!on) return null;
+  // `data-build-effect` draws a line or arrow in ("draw") or fades anything in
+  // ("dissolve"); its time rides beside it.
+  const effect = node.dataset.buildEffect;
+  const animated = effect === 'draw' || effect === 'dissolve' || effect === 'blur';
+  const duration = Number(node.dataset.buildDuration);
   return {
     id: `${elementId}-build-${index + 1}`,
     trigger: { on, ref: node.dataset.buildRef ?? null, delay: Number(delay ?? 0) || 0 },
-    action: { type: 'appear', target: elementId, value: null },
+    action: {
+      type: 'appear',
+      target: elementId,
+      value: animated ? effect : null,
+      ...(animated && Number.isFinite(duration) && duration >= 0 ? { duration } : {}),
+    },
   };
 }
 
@@ -1566,6 +1607,11 @@ function elementToHtml(element: SlideElement, build?: TimelineEntry, base?: stri
     base ? `data-base="${escape(base)}"` : '',
     build ? `data-build="${build.trigger.on}${build.trigger.delay ? `+${build.trigger.delay}` : ''}"` : '',
     build?.trigger.ref ? `data-build-ref="${escape(build.trigger.ref)}"` : '',
+    build && isEffectName(build.action.value)
+      ? `data-build-effect="${build.action.value}"` : '',
+    build && isEffectName(build.action.value)
+      && build.action.duration !== undefined
+      ? `data-build-duration="${build.action.duration}"` : '',
     element.type === 'text' && element.layoutPlaceholder
       ? `data-layout-slot="${element.layoutPlaceholder}"` : '',
   ].filter(Boolean).join(' ');

@@ -1,4 +1,5 @@
 import type { Slide } from '@shared/deck.js';
+import { durationField } from './durationField.js';
 import { MORPH_NAME } from '@shared/featureNames.js';
 import { makeId } from '@shared/geometry.js';
 import { explicitMorphPairs, suggestMorphPairs } from '@shared/morph.js';
@@ -90,24 +91,18 @@ export class MorphPanel {
     duration.className = 'field morph-duration';
     const durationLabel = document.createElement('span');
     durationLabel.textContent = 'Duration';
-    const durationInput = document.createElement('input');
-    durationInput.type = 'number';
-    durationInput.min = '100';
-    durationInput.max = '5000';
-    durationInput.step = '50';
-    durationInput.value = String(next?.morphDuration ?? 1000);
-    durationInput.disabled = !next;
-    durationInput.addEventListener('change', () => {
-      const value = Math.max(100, Math.min(5000, Number(durationInput.value) || 1000));
-      this.store.commit((nextDeck) => {
-        const destination = nextDeck.slides[slideIndex + 1];
-        if (destination) destination.morphDuration = value;
-      }, { label: `Change ${MORPH_NAME} duration` });
-    });
-    const suffix = document.createElement('span');
-    suffix.className = 'field-suffix';
-    suffix.textContent = 'ms';
-    duration.append(durationLabel, durationInput, suffix);
+    const durationControl = durationField(
+      next?.morphDuration ?? 1000,
+      (ms) => {
+        const value = Math.max(100, Math.min(5000, ms || 1000));
+        this.store.commit((nextDeck) => {
+          const destination = nextDeck.slides[slideIndex + 1];
+          if (destination) destination.morphDuration = value;
+        }, { label: `Change ${MORPH_NAME} duration` });
+      },
+      { inputClass: 'morph-duration-input', label: `${MORPH_NAME} duration`, disabled: !next },
+    );
+    duration.append(durationLabel, durationControl);
     this.host.appendChild(duration);
 
     const easing = document.createElement('label');
