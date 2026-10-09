@@ -1,3 +1,4 @@
+import { codeTypeSection } from './codeInspector.js';
 import type { Deck, MediaEffect, Slide, SlideElement } from '@shared/deck.js';
 import { braceDepthOf } from '@shared/brace.js';
 import { flipElement, normalizeDegrees, type FlipAxis } from '@shared/flip.js';
@@ -2594,6 +2595,11 @@ export class Inspector {
         if (hasTextBox(el.style)) wrap.appendChild(this.shadowSection([el], 'box'));
         return wrap;
       }
+
+      case 'code':
+        return codeTypeSection(el, this.store, {
+          typeSections, optionSection, textAreaField, checkboxField, numberField,
+        });
 
       case 'web': {
         const wrap = typeSections();
