@@ -8,6 +8,7 @@ import {
   syncGroupsOf,
   type MemberFrame,
 } from '../player/videoSync.js';
+import { whenCodeHighlighted } from '../player/codeRender.js';
 
 const eventOrTimeout = (target: EventTarget, event: string, timeout = 5_000): Promise<void> =>
   new Promise((resolve) => {
@@ -428,6 +429,7 @@ async function waitForPdfPage(page: HTMLElement): Promise<void> {
     await whenWebElementReady(box);
     await webStepShown.get(box);
   }));
+  await Promise.all([...page.querySelectorAll('.code-body')].map(whenCodeHighlighted));
 }
 
 /** Wait for font replacement, auto-fit, decoded media, and finite CSS motion. */

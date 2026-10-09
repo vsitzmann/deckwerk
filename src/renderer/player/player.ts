@@ -52,6 +52,7 @@ import { morphEquationGlyphs } from './equationMorph.js';
 import { isPendingSrc } from '@shared/media.js';
 import { WEB_BRIDGE_SOURCE, isWebBridgeAction, type WebBridgeEvent } from '@shared/webBridge.js';
 import { formatVideoRate, nextVideoRate, type VideoRateChange } from './videoRate.js';
+import { prepareCodeBlocks } from './codeRender.js';
 
 /**
  * The runtime that owns navigation and turns timeline entries into DOM and
@@ -228,6 +229,7 @@ export class Player {
 
   constructor(opts: PlayerOptions) {
     this.deck = opts.deck;
+    prepareCodeBlocks(opts.deck);
     this.container = opts.container;
     this.networkSrc = opts.resolveSrc;
     this.videoBlobs = opts.videoBlobs ?? null;
@@ -405,6 +407,7 @@ export class Player {
   /** Swap in a new deck, keeping the cursor where it still makes sense. */
   setDeck(deck: Deck): void {
     this.deck = deck;
+    prepareCodeBlocks(deck);
     const slide = Math.min(this.cursor.slide, Math.max(0, deck.slides.length - 1));
     const steps = deck.slides[slide] ? stepCount(deck.slides[slide]) : 1;
     this.goTo({ slide, step: Math.min(this.cursor.step, steps - 1) });

@@ -4,6 +4,7 @@ import { resolveState } from '@shared/timeline.js';
 import { revealImagesWhenDecoded } from '../player/imageDecode.js';
 import { freezePreviewVideos, releasePreviewVideos } from '../player/previewPoster.js';
 import { applyStageScale, renderSlide, rewriteCssAssetUrls } from '../player/render.js';
+import { prepareCodeBlocks } from '../player/codeRender.js';
 import { applyStaticSlideState } from '../player/staticState.js';
 import { formatElapsed, formatWallClock, presentationLabel } from './model.js';
 import { videoRateChangeForKey } from '../player/videoRate.js';
@@ -321,6 +322,7 @@ export function createSpeakerView(options: SpeakerViewOptions): SpeakerView {
   return {
     setDeck(next) {
       deck = next;
+      if (next) prepareCodeBlocks(next);
       render();
     },
     setTheme(css) {

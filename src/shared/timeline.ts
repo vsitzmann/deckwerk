@@ -11,6 +11,7 @@ import {
   termBuildLabels,
   type TermState,
 } from './equationTerms.js';
+import { isLineBuild, lineStepCount } from './codeBlocks.js';
 
 /**
  * Timeline reasoning, shared by the player and the editor's timeline panel.
@@ -125,6 +126,12 @@ export function drawDuration(entry: TimelineEntry): number {
 export function expandTimeline(slide: Slide): ExpandedEntry[] {
   const out: ExpandedEntry[] = [];
   for (const entry of slide.timeline) {
+    // A code block's line build fans out the same way, one unit per step of
+    // its spec (shared/codeBlocks.ts).
+    if (isLineBuild(entry, slide)) {
+      out.push(...lineBuildUnits(entry));
+      continue;
+    }
     // An equation's terms fan out the same way, one unit per term label, each
     // naming its term so it can be run on its own.
     if (isTermBuild(entry) && !entry.action.term) {
@@ -167,6 +174,24 @@ export function expandTimeline(slide: Slide): ExpandedEntry[] {
     }
   }
   return out;
+}
+
+/**
+ * A line build's units: one per step of its spec, triggered exactly as the
+ * parts of a by-paragraph reveal are.
+ */
+function lineBuildUnits(entry: TimelineEntry): ExpandedEntry[] {
+  const count = lineStepCount(entry);
+  return Array.from({ length: count }, (_, part) => ({
+    id: part === 0 ? entry.id : `${entry.id}#p${part}`,
+    sourceId: entry.id,
+    part,
+    partCount: count,
+    trigger: part === 0
+      ? entry.trigger
+      : { on: entry.trigger.on === 'click' ? 'click' as const : 'afterPrev' as const, ref: null, delay: entry.trigger.delay },
+    action: entry.action,
+  }));
 }
 
 /** Expanded timeline units grouped by the step they belong to. Always length >= 1. */
@@ -217,6 +242,11 @@ export interface SlideState {
   parts: Map<string, number>;
   /** For equations with term builds: which terms are still hidden, and term colours. */
   terms: Map<string, TermState>;
+  /**
+   * For code blocks with a line build: the build's spec and how many of its
+   * steps have run. A block with none shows every line at full strength.
+   */
+  lines: Map<string, { spec: string; applied: number }>;
 }
 
 /**
@@ -249,6 +279,14 @@ export function resolveState(slide: Slide, step: number): SlideState {
         .map((entry) => [entry.action.target, 0]),
     ),
     terms: initialTermStates(slide),
+    // Seeded with each block's first line build at zero steps, so its
+    // revealed-later lines are hidden from slide entry.
+    lines: new Map(
+      slide.timeline
+        .filter((entry) => isLineBuild(entry, slide))
+        .reverse()
+        .map((entry) => [entry.action.target, { spec: String(entry.action.value ?? ''), applied: 0 }]),
+    ),
   };
 
   const steps = groupIntoSteps(slide);
@@ -308,6 +346,16 @@ export function applyAction(
     case 'jiggle':
     case 'pop':
       break;
+    case 'lines': {
+      // The block follows the line build that ran last; within one build,
+      // steps only ever move forward.
+      const spec = String(value ?? '');
+      const part = (entry as Partial<ExpandedEntry>).part ?? 0;
+      const current = state.lines.get(target);
+      const applied = current && current.spec === spec ? Math.max(current.applied, part + 1) : part + 1;
+      state.lines.set(target, { spec, applied });
+      break;
+    }
   }
 }
 

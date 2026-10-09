@@ -3,6 +3,7 @@ import { applyParagraphVisibility } from '@shared/paragraphs.js';
 import type { SlideState } from '@shared/timeline.js';
 import { curvedShadowClasses } from '@shared/shapeShadow.js';
 import { applyTermStates } from './equationBuilds.js';
+import { applyCodeLineState } from './codeRender.js';
 
 /**
  * Apply the resolved, motion-free endpoint of one build state.
@@ -17,6 +18,7 @@ export function applyStaticSlideState(
 ): void {
   applyParagraphVisibility(stage, state);
   applyTermStates(stage, slide, state);
+  applyCodeLineState(stage, slide, state);
   const nodes = new Map(
     [...stage.querySelectorAll<HTMLElement>('[data-element-id]')]
       .map((node) => [node.dataset.elementId ?? '', node] as const),
