@@ -13,6 +13,7 @@ import {
   stepCount,
 } from '@shared/timeline.js';
 import { arrowHeadSize, shapeSvg } from '@shared/shapeSvg.js';
+import { followerCorrection, followerTarget, syncGroupsOf } from './videoSync.js';
 import {
   applyStageScale,
   fitAutoTextElement,
@@ -132,6 +133,8 @@ export class Player {
   private mediaListeners: Array<() => void> = [];
   /** Videos already given a trim watcher, so listeners are not stacked. */
   private trimmed = new Set<string>();
+  /** Sync groups whose clock is already running on the current slide. */
+  private syncedGroups = new Set<string>();
   /**
    * Videos the current build state says should be running, and the recovery
    * bookkeeping for keeping them that way. See `keepPlaying`.
@@ -1325,6 +1328,57 @@ export class Player {
         if (!video.paused) video.pause();
       }
     }
+    this.syncVideoGroups(slide);
+  }
+
+  /**
+   * Run one clock per sync group on the slide.
+   *
+   * The leader plays as any video does; every frame, each follower is put
+   * where the leader's elapsed time says it should be. Followers keep their
+   * own play intent (a follower hidden by a build stays paused), but while
+   * they play they are kept in step: by bending the playback rate for small
+   * drift, so nothing visibly jumps, and by seeking after a loop or a stall.
+   */
+  private syncVideoGroups(slide: Slide): void {
+    for (const [group, members] of syncGroupsOf(slide.elements)) {
+      if (this.syncedGroups.has(group)) continue;
+      const videoOf = (id: string) => this.stage
+        .querySelector<HTMLElement>(`[data-element-id="${CSS.escape(id)}"]`)?.querySelector('video') ?? null;
+      const leaderVideo = videoOf(members[0].id);
+      if (!leaderVideo) continue;
+      this.syncedGroups.add(group);
+      const leader = members[0];
+      const followers = members.slice(1);
+      let frame = 0;
+      const tick = (): void => {
+        if (!leaderVideo.isConnected) return;
+        const playing = !leaderVideo.paused;
+        for (const el of followers) {
+          const video = videoOf(el.id);
+          if (!video || video.dataset.holdFrame === 'true') continue;
+          const target = followerTarget(
+            { time: leaderVideo.currentTime, start: leader.start },
+            { start: el.start, end: el.end, duration: video.duration },
+          );
+          const followerPlaying = playing && this.intendedPlaying.has(el.id);
+          const fix = followerCorrection(video.currentTime, target, followerPlaying);
+          if (fix.seek !== undefined) video.currentTime = fix.seek;
+          if (video.playbackRate !== fix.rate) video.playbackRate = fix.rate;
+          if (!playing && !video.paused) video.pause();
+          if (followerPlaying && video.paused) void video.play().catch(() => {});
+        }
+        frame = requestAnimationFrame(tick);
+      };
+      frame = requestAnimationFrame(tick);
+      this.mediaListeners.push(() => {
+        cancelAnimationFrame(frame);
+        for (const el of followers) {
+          const video = videoOf(el.id);
+          if (video) video.playbackRate = 1;
+        }
+      });
+    }
   }
 
   /**
@@ -1591,6 +1645,7 @@ export class Player {
     // The listeners those ids refer to have just been removed, so a fresh
     // watcher must be attached when the slide is drawn again.
     this.trimmed.clear();
+    this.syncedGroups.clear();
   }
 
   /** Blank the screen (the `B` key) without losing position. */
