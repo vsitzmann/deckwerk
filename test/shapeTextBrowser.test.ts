@@ -109,7 +109,11 @@ describe.skipIf(!electronBinary)('typing into a rectangle', () => {
       `document.querySelector('${BOX} .text-content')?.isContentEditable === true`),
       'double-clicking the rectangle did not open it for typing');
     await editor.typeKeys('Agent');
-    await wait(700);
+    // Typing reaches the server on the text sync's own schedule (about 0.9s
+    // after the first key); a fixed 700ms wait read the deck before it on a
+    // machine that types quickly. Wait for the words instead.
+    await eventually(saved, 'the typed words never reached the saved deck',
+      (candidate) => candidate.type === 'text' && candidate.html.replace(/<[^>]+>/g, '') === 'Agent');
 
     const element = await saved();
     expect(element.type, 'the rectangle became a text box').toBe('text');
