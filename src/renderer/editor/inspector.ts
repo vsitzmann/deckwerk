@@ -57,6 +57,7 @@ import {
   type ShapeShadow,
 } from '@shared/shapeShadow.js';
 import { mediaNaturalSize } from './mediaNatural.js';
+import { releaseDecodedVideo } from '../player/decodedVideoPool.js';
 import { angleDial } from './angleDial.js';
 import {
   cssMediaBorder,
@@ -210,6 +211,15 @@ export class Inspector {
   videoDuration?: (elementId: string) => number | null;
   /** Seeks the sidebar trim preview; rebuilt with the panel. */
   private trimPreviewSeek: ((t: number) => void) | null = null;
+  /**
+   * The sidebar trim preview's `<video>`, kept across panel rebuilds while the
+   * panel still shows the same clip. A fresh element per rebuild had to load
+   * the file and seek to the in-point again, and the abandoned ones kept
+   * loading until they were collected; see `trimSection`.
+   */
+  private trimPreview: { elementId: string; url: string; video: HTMLVideoElement } | null = null;
+  /** The X/Y/W/H/ROT readouts, refreshed in place during a canvas gesture. */
+  private geometryInputs = new Map<'x' | 'y' | 'w' | 'h' | 'rot', HTMLInputElement>();
   /** What the panel showed last, to skip re-renders that would change nothing. */
   private lastDeck: Deck | null = null;
   private lastSelection = '';
@@ -274,6 +284,25 @@ export class Inspector {
         this.store.endTransaction();
         this.continuousEdit = false;
       }
+      // A drag or resize on the canvas replaces the deck on every pointermove.
+      // Rebuilding the whole panel for each of those frames recreated every
+      // control, and for a video the trim preview with them — a new <video>
+      // that loaded the clip and decoded its in-point frame on every frame of
+      // the gesture, so resizing a large or trimmed clip stuttered. Only the
+      // geometry readouts change during a gesture; refresh those in place.
+      // endTransaction emits once more when the gesture ends, and that emit
+      // rebuilds the panel against the finished edit (lastDeck still holds
+      // the deck from before the gesture, so it cannot read as unchanged).
+      if (
+        this.store.isTransactionActive()
+        && this.lastDeck !== null
+        && sel === this.lastSelection
+        && slideIndex === this.lastSlide
+        && slideSel === this.lastSlideSelection
+      ) {
+        this.refreshGeometryReadouts();
+        return;
+      }
       // Speaker notes are not shown here. Each keystroke in the notes drawer
       // commits a fresh deck, and rebuilding for it re-mounted the layout and
       // Morph previews — every slide picture in the panel flickered per key.
@@ -310,6 +339,13 @@ export class Inspector {
     const scrolled = shown === this.lastRenderShown ? scrolledAncestors(this.host) : [];
     this.lastRenderShown = shown;
     this.renderPanel();
+    // A rebuild that no longer shows the kept trim preview (another selection,
+    // another clip) lets it go, so it stops holding the file and its decoder.
+    if (this.trimPreview && !this.host.contains(this.trimPreview.video)) {
+      releaseDecodedVideo(this.trimPreview.video);
+      this.trimPreview = null;
+      this.trimPreviewSeek = null;
+    }
     for (const [node, top] of scrolled) node.scrollTop = top;
     this.restoreFocusedControl(focused);
   }
@@ -385,8 +421,23 @@ export class Inspector {
     }
   }
 
+  /** Write the selection's current box into the geometry readouts. */
+  private refreshGeometryReadouts(): void {
+    const selected = this.store.selectedElements();
+    if (selected.length === 0) return;
+    for (const [key, input] of this.geometryInputs) {
+      // A field being typed into keeps what the author is typing.
+      if (!input.isConnected || document.activeElement === input) continue;
+      const value = commonValue(selected.map((element) => element[key]));
+      const text = value === null ? '' : String(round(value));
+      if (input.value !== text) input.value = text;
+      input.placeholder = value === null ? '—' : '';
+    }
+  }
+
   private renderPanel(): void {
     const { deck, selection, slideIndex, slideSelection } = this.store.get();
+    this.geometryInputs.clear();
     this.lastDeck = deck;
     this.lastSelection = [...selection].sort().join(',');
     this.lastSlide = slideIndex;
@@ -705,19 +756,38 @@ export class Inspector {
     // The frame under the handle, previewed right here in the sidebar. The
     // canvas is also seeked, but this element is self-contained and cannot be
     // affected by canvas state — the preview always shows something.
-    const preview = document.createElement('video');
-    preview.className = 'trim-preview';
-    preview.muted = true;
-    preview.preload = 'auto';
-    preview.src = window.api.assetUrl(el.src);
+    //
+    // The element survives panel rebuilds while it shows the same clip: a
+    // rebuild for any other reason (a toggle, a collaborator's edit) used to
+    // create a fresh one, which fetched the file and decoded the in-point
+    // again. render() releases it once a rebuild stops showing it.
+    const url = window.api.assetUrl(el.src);
+    const kept = this.trimPreview;
+    let preview: HTMLVideoElement;
+    if (kept && kept.elementId === el.id && kept.url === url) {
+      preview = kept.video;
+    } else {
+      if (kept) releaseDecodedVideo(kept.video);
+      const created = document.createElement('video');
+      created.className = 'trim-preview';
+      created.muted = true;
+      created.preload = 'auto';
+      // The latest requested time wins, however many rebuilds asked for one
+      // before the metadata arrived.
+      created.addEventListener('loadedmetadata', () => {
+        const time = Number(created.dataset.seekTo);
+        if (Number.isFinite(time)) created.currentTime = time;
+      });
+      created.src = url;
+      preview = created;
+      this.trimPreview = { elementId: el.id, url, video: preview };
+    }
     const seekPreview = (t: number) => {
-      if (preview.readyState >= HTMLMediaElement.HAVE_METADATA) {
-        preview.currentTime = t;
-      } else {
-        preview.addEventListener('loadedmetadata', () => (preview.currentTime = t), { once: true });
-      }
+      preview.dataset.seekTo = String(t);
+      if (preview.readyState >= HTMLMediaElement.HAVE_METADATA) preview.currentTime = t;
     };
-    seekPreview(el.start);
+    // Seeking to where the preview already is would still decode a frame.
+    if (preview.dataset.seekTo !== String(el.start)) seekPreview(el.start);
     this.trimPreviewSeek = seekPreview;
 
     wrap.append(preview, range);
@@ -799,32 +869,34 @@ export class Inspector {
     const row = document.createElement('div');
     row.className = 'field-grid';
     for (const key of ['x', 'y', 'w', 'h'] as const) {
-      row.appendChild(
-        numberField(
-          key.toUpperCase(),
-          multi ? commonValue(selected.map((element) => element[key])) : first[key],
-          (v) => {
-            this.store.updateSelected((el) => {
-              if (key === 'w' || key === 'h') el[key] = Math.max(8, v);
-              else {
-                const delta = v - el[key];
-                el[key] = v;
-                if (el.type === 'shape' && el.control) el.control[key] += delta;
-              }
-            });
-          },
-        ),
+      const field = numberField(
+        key.toUpperCase(),
+        multi ? commonValue(selected.map((element) => element[key])) : first[key],
+        (v) => {
+          this.store.updateSelected((el) => {
+            if (key === 'w' || key === 'h') el[key] = Math.max(8, v);
+            else {
+              const delta = v - el[key];
+              el[key] = v;
+              if (el.type === 'shape' && el.control) el.control[key] += delta;
+            }
+          });
+        },
       );
+      const input = field.querySelector('input');
+      if (input) this.geometryInputs.set(key, input);
+      row.appendChild(field);
     }
     wrap.appendChild(row);
 
     const row2 = document.createElement('div');
     row2.className = 'field-grid field-grid-2';
-    row2.appendChild(
-      numberField('ROT', multi ? commonValue(selected.map((element) => element.rot)) : first.rot, (v) =>
-        this.store.updateSelected((el) => (el.rot = v)), { unit: '°' },
-      ),
+    const rotation = numberField('ROT', multi ? commonValue(selected.map((element) => element.rot)) : first.rot, (v) =>
+      this.store.updateSelected((el) => (el.rot = v)), { unit: '°' },
     );
+    const rotationInput = rotation.querySelector('input');
+    if (rotationInput) this.geometryInputs.set('rot', rotationInput);
+    row2.appendChild(rotation);
     row2.appendChild(
       numberField('Z', multi ? commonValue(selected.map((element) => element.z)) : first.z, (v) =>
         this.store.updateSelected((el) => (el.z = Math.round(v))),
