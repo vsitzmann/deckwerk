@@ -1288,6 +1288,9 @@ window.api.onRasterDone((result) => {
   setStatusMessage(`Painted image saved as ${result.src}`);
 });
 
+// Ending a presentation returns to the slide it was showing, not the one it
+// started from.
+window.api.onPresentEnded?.((slideIndex) => store.selectSlide(slideIndex));
 
 canvas.contextActions = makeContextActions(shellDeps, clipboard);
 

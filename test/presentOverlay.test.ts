@@ -187,6 +187,52 @@ describe('starting a browser presentation', () => {
     expect(audienceWindows[0].closed).toBe(true);
   });
 
+  it('hands the editor the slide the show ended on', () => {
+    const ended: string[] = [];
+    startPresenting('talk', 0, seed, { onEnd: (slideId) => ended.push(slideId) });
+    for (const slideId of ['slide-2', 'slide-3']) {
+      window.dispatchEvent(new MessageEvent('message', {
+        origin: location.origin,
+        data: { type: 'present-at', slideId },
+      }));
+    }
+    window.dispatchEvent(new MessageEvent('message', {
+      origin: location.origin,
+      data: { type: 'present-exit' },
+    }));
+
+    expect(ended).toEqual(['slide-3']);
+  });
+
+  it('hands over the shown slide when Escape leaves fullscreen', () => {
+    const ended: string[] = [];
+    startPresenting('talk', 0, seed, { onEnd: (slideId) => ended.push(slideId) });
+    window.dispatchEvent(new MessageEvent('message', {
+      origin: location.origin,
+      data: { type: 'present-at', slideId: 'slide-5' },
+    }));
+    // The browser consumes Escape itself; the page only sees fullscreen end.
+    document.dispatchEvent(new Event('fullscreenchange'));
+
+    expect(overlayFrame()).toBeNull();
+    expect(ended).toEqual(['slide-5']);
+  });
+
+  it('ignores a shown slide reported from another origin', () => {
+    const ended: string[] = [];
+    startPresenting('talk', 0, seed, { onEnd: (slideId) => ended.push(slideId) });
+    window.dispatchEvent(new MessageEvent('message', {
+      origin: 'https://evil.example',
+      data: { type: 'present-at', slideId: 'slide-9' },
+    }));
+    window.dispatchEvent(new MessageEvent('message', {
+      origin: location.origin,
+      data: { type: 'present-exit' },
+    }));
+
+    expect(ended).toEqual([]);
+  });
+
   it('closes the previous audience window when presenting again', () => {
     startPresenting('talk', 0, seed, { speakerView: true });
     startPresenting('talk', 4, seed, { speakerView: true });
