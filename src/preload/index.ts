@@ -186,6 +186,8 @@ const api = {
     on(IPC.presentCommand, fn),
   onPresentState: (fn: (state: PresentationState) => void): (() => void) =>
     on(IPC.presentState, fn),
+  onPresentEnded: (fn: (slideIndex: number) => void): (() => void) =>
+    on(IPC.presentEnded, fn),
 
   openTrim: (payload: { src: string; elementId: string }): Promise<void> =>
     ipcRenderer.invoke(IPC.trimOpen, payload),

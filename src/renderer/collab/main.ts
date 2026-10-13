@@ -724,7 +724,16 @@ function startPresentation(speakerView = false): void {
     deckId!,
     range?.start ?? slideIndex,
     () => ({ deck: store.get().deck, themeCss: cssEditor.getValue(), hostClientId: bridge.clientId }),
-    { endSlideIndex: range?.end, speakerView, onStatus: setStatusMessage },
+    {
+      endSlideIndex: range?.end,
+      speakerView,
+      onStatus: setStatusMessage,
+      // Leave the show where it was, not where it started.
+      onEnd: (slideId) => {
+        const index = store.get().deck.slides.findIndex((slide) => slide.id === slideId);
+        if (index >= 0) store.selectSlide(index);
+      },
+    },
   );
 }
 
