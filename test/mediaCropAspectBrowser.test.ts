@@ -78,11 +78,11 @@ describe.skipIf(!electronBinary)('cropping media with "Keep aspect ratio" off', 
     editor = await Cdp.connect(target.webSocketDebuggerUrl!);
     const cdp = editor;
 
-    const saved = (id: string, ok: (el: Saved) => boolean, what: string) => eventually(async () => {
+    const saved = async (id: string, ok: (el: Saved) => boolean, what: string): Promise<Saved> => (await eventually(async () => {
       const response = await fetch(`http://127.0.0.1:${server!.port}/api/deck?deck=${DECK_ID}`);
       const el = (await response.json() as Deck).slides[0].elements.find((e) => e.id === id) as unknown as Saved;
       return el && ok(el) ? el : null;
-    }, `${id}: ${what}`);
+    }, `${id}: ${what}`))!;
     await eventually(async () => cdp.evaluate<boolean>(`(() => {
       const img = document.querySelector('#canvas [data-element-id="pic"] img');
       const video = document.querySelector('#canvas [data-element-id="clip"] video');
@@ -100,7 +100,7 @@ describe.skipIf(!electronBinary)('cropping media with "Keep aspect ratio" off', 
         const r = (node.querySelector('input') ?? node).getBoundingClientRect();
         return r.width > 0 ? { x: r.left + r.width / 2, y: r.top + r.height / 2 } : null;
       })()`), `no visible "${text}" control`);
-      await cdp.clickAt(at.x, at.y);
+      await cdp.clickAt(at!.x, at!.y);
     };
     const mouse = (type: string, x: number, y: number, shift: boolean) => cdp.call('Input.dispatchMouseEvent', {
       type, x, y, button: 'left', buttons: type === 'mouseReleased' ? 0 : 1, clickCount: 1, modifiers: shift ? 8 : 0,
@@ -129,6 +129,14 @@ describe.skipIf(!electronBinary)('cropping media with "Keep aspect ratio" off', 
       ), 435 * scale + await cdp.evaluate<number>(
         `document.querySelector('#canvas .slide').getBoundingClientRect().top`,
       ));
+      // The inspector must be showing this element, still ticked, before the
+      // click: on a slow machine it can still be the previous one's.
+      await eventually(() => cdp.evaluate<boolean>(`(() => {
+        const selection = window.store.get().selection;
+        const box = [...document.querySelectorAll('label.field-check')]
+          .find((n) => n.textContent.trim() === 'Keep aspect ratio')?.querySelector('input');
+        return selection.length === 1 && selection[0] === ${JSON.stringify(id)} && box?.checked === true;
+      })()`), `${id} never became the inspector's only, ticked selection`);
       await clickControl('label.field-check', 'Keep aspect ratio');
       const original = await saved(id, (el) => el.fit === 'fill', 'unticking "Keep aspect ratio" never saved');
 
