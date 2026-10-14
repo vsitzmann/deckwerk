@@ -882,6 +882,11 @@ slide-agent inspect $DECK --slide results      # confirm the result
   through `theme create` and `theme apply`). Editing a default changes what new
   slides are born with; existing slides keep their size until the theme is
   applied to them. Layout masters never carry a size.
+- `line-height` is a unitless ratio of the font size wherever a deck stores
+  it (element `style`, `contentStyle`, inline styles in text `html`), so lines
+  follow every change of size, auto-fit's included. A px, em or % value is
+  converted on parse and on HTML import (`src/shared/lineHeight.ts`); write
+  `line-height: 1.3`, never `line-height: 42px`.
 - A deck may carry its own theme presets in `deck.json` (`customThemes`), which
   resolve everywhere a built-in preset id does. Write them with
   `slide-agent theme create`, never by hand.

@@ -161,6 +161,15 @@ const TAG_FORMAT_STYLES: Record<string, Array<[string, string]>> = {
 };
 
 /**
+ * A paragraph's own line spacing, as the Line spacing control writes it: a
+ * unitless ratio on a block. What Chromium copies when it restructures blocks
+ * is the computed value, which is always a length, and lands on runs too.
+ */
+function isLineSpacing(node: HTMLElement): boolean {
+  return node.matches('p, li, div') && /^\d*\.?\d+$/.test(node.style.lineHeight.trim());
+}
+
+/**
  * Drop the box-level declarations (see PASTE_LAYOUT_PROPERTIES) from every
  * styled node under `root`, and unwrap a span that has nothing left to say.
  *
@@ -170,13 +179,21 @@ const TAG_FORMAT_STYLES: Record<string, Array<[string, string]>> = {
  * hanging indent turns up as `text-indent: -1.4em` on an inline run. Node
  * identity is preserved (styles are edited, wrappers replaced by their own
  * children), so a live caret inside the text stays where it was.
+ *
+ * `keepLineSpacing` keeps a paragraph's own line spacing (see isLineSpacing):
+ * a Return in a paragraph with spacing 1.6 makes another one with spacing 1.6,
+ * and that is the author's, not Chromium's. Paste keeps none of it.
  */
-export function stripLayoutDeclarations(root: ParentNode): boolean {
+export function stripLayoutDeclarations(
+  root: ParentNode,
+  options: { keepLineSpacing?: boolean } = {},
+): boolean {
   let changed = false;
   for (const node of [...root.querySelectorAll<HTMLElement>('[style]')]) {
     if (node.matches(PASTE_LAYOUT_KEPT) || !node.style) continue;
     for (const property of PASTE_LAYOUT_PROPERTIES) {
       if (!node.style.getPropertyValue(property)) continue;
+      if (options.keepLineSpacing && property === 'line-height' && isLineSpacing(node)) continue;
       node.style.removeProperty(property);
       changed = true;
     }

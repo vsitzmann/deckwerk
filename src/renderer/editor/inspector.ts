@@ -58,6 +58,7 @@ import {
 } from '@shared/shapeShadow.js';
 import { mediaNaturalSize } from './mediaNatural.js';
 import { releaseDecodedVideo } from '../player/decodedVideoPool.js';
+import { LINE_SPACING_MAX, LINE_SPACING_MIN, lineSpacingValue } from '@shared/lineHeight.js';
 import { angleDial } from './angleDial.js';
 import {
   cssMediaBorder,
@@ -70,6 +71,7 @@ import {
   setWholeTextAlignment,
   setWholeTextColor,
   setWholeTextFormat,
+  setWholeTextLineHeight,
   setWholeTextParagraphSpacing,
   setWholeTextStyle,
   wholeTextFormatState,
@@ -169,6 +171,10 @@ export class Inspector {
   onApplyTextSelectionParagraphSpacing?: (value: number | null) => boolean;
   /** Authored spacing shared by the paragraphs in the live text selection. */
   textSelectionParagraphSpacing?: () => number | null;
+  /** Set line spacing on only the paragraphs covered by the live text selection. */
+  onApplyTextSelectionLineHeight?: (value: number | null) => boolean;
+  /** Line spacing shared by the paragraphs in the live text selection. */
+  textSelectionLineHeight?: () => number | null;
   onApplyTextSelectionColor?: (value: string | null) => boolean;
   onApplyTextSelectionAlignment?: (value: 'left' | 'center' | 'right' | 'justify') => boolean;
   /** Convert only the paragraphs covered by the live text selection. */
@@ -198,6 +204,7 @@ export class Inspector {
     fontWeightExplicit: boolean;
     fittedFontSize: number | null;
     paragraphSpacing: number | null;
+    lineHeight: number | null;
   };
   onInsertTableColumn?: (after: boolean) => void;
   onDeleteTableColumn?: () => void;
@@ -1604,6 +1611,23 @@ export class Inspector {
     );
     if (spacings.mixed) spacingField.querySelector('input')!.placeholder = 'Mixed';
     wrap.appendChild(spacingField);
+
+    const lineHeights = sharedValue(texts.map((text) => boxLineSpacing(text)));
+    const themeLineHeights = sharedValue(computedTypography.map((value) => value?.lineHeight ?? null));
+    const lineSpacing = lineSpacingField(
+      lineHeights.mixed ? null : lineHeights.value,
+      (value) => this.store.updateSelected((element) => {
+        if (element.type === 'text') setWholeTextLineHeight(element, value);
+      }, { label: 'Change line spacing' }),
+      () => this.store.updateSelected((element) => {
+        if (element.type === 'text') setWholeTextLineHeight(element, null);
+      }, { label: 'Use theme line spacing' }),
+      !lineHeights.mixed && lineHeights.value === null && !themeLineHeights.mixed
+        ? themeLineHeights.value
+        : null,
+    );
+    if (lineHeights.mixed) lineSpacing.querySelector('input')!.placeholder = 'Mixed';
+    wrap.appendChild(lineSpacing);
     return wrap;
   }
 
@@ -2280,6 +2304,26 @@ export class Inspector {
               ? computedTypography?.paragraphSpacing ?? null
               : null,
           },
+        ));
+        // Editing with a selection, the control is the selected paragraphs'
+        // spacing (as Paragraph spacing is); otherwise the box's.
+        const selectedLineHeight = this.textSelectionLineHeight?.() ?? null;
+        const shownLineHeight = selectedLineHeight ?? boxLineSpacing(el);
+        layout.content.appendChild(lineSpacingField(
+          shownLineHeight,
+          (value) => {
+            if (this.onApplyTextSelectionLineHeight?.(value)) return;
+            this.store.updateSelected((e) => {
+              if (e.type === 'text') setWholeTextLineHeight(e, value);
+            }, { label: 'Change line spacing' });
+          },
+          () => {
+            if (this.onApplyTextSelectionLineHeight?.(null)) return;
+            this.store.updateSelected((e) => {
+              if (e.type === 'text') setWholeTextLineHeight(e, null);
+            }, { label: 'Use theme line spacing' });
+          },
+          shownLineHeight === null ? computedTypography?.lineHeight ?? null : null,
         ));
         wrap.append(typography.section, layout.section, this.textBoxSection(el));
         wrap.appendChild(this.shadowSection([el], 'text'));
@@ -3163,6 +3207,46 @@ function optionalNumberField(
   controls.appendChild(clear);
   wrap.append(span, controls);
   return wrap;
+}
+
+/**
+ * The line spacing a text box declares for itself, as a ratio of its font
+ * size; null when it follows its theme (or declares a length the deck could
+ * not convert, which the computed readout then shows).
+ */
+function boxLineSpacing(element: Extract<SlideElement, { type: 'text' }>): number | null {
+  const value = Number(element.style['line-height'] || Number.NaN);
+  return Number.isFinite(value) ? value : null;
+}
+
+/**
+ * Line spacing as a multiple of the font size: 1 is set solid, 1.2 is what
+ * most fonts call single. A ratio, never a length, so the lines follow any
+ * change of size (see shared/lineHeight.ts).
+ */
+function lineSpacingField(
+  value: number | null,
+  onChange: (value: number) => void,
+  onClear: () => void,
+  themeValue: number | null,
+): HTMLElement {
+  const field = optionalNumberField(
+    'Line spacing',
+    value,
+    (typed) => onChange(lineSpacingValue(typed)),
+    onClear,
+    '',
+    {
+      min: LINE_SPACING_MIN,
+      max: LINE_SPACING_MAX,
+      step: 0.05,
+      maxFractionDigits: 2,
+      themeValue,
+    },
+  );
+  field.classList.add('text-line-spacing');
+  field.querySelector('input')!.title = 'Multiple of the font size';
+  return field;
 }
 
 function textAreaField(

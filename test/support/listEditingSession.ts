@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { expect } from 'vitest';
@@ -370,7 +370,14 @@ export interface ListEditingSession {
   undo(): Promise<void>;
 }
 
-export async function startListEditingSession(deckId: string, name: string): Promise<{
+/**
+ * `textStyle` is the list box's style as it is saved on disk before the app
+ * opens the deck -- what a deck written by an importer looks like on load,
+ * which a later `shapeBox` (a live store commit) cannot reproduce.
+ */
+export async function startListEditingSession(deckId: string, name: string, options: {
+  textStyle?: Record<string, string>;
+} = {}): Promise<{
   session: ListEditingSession;
   close: () => Promise<void>;
 }> {
@@ -393,6 +400,14 @@ export async function startListEditingSession(deckId: string, name: string): Pro
     html: OTHER_HTML, align: 'left', valign: 'top',
   } as never);
   await saveDeck(deckDir, deck);
+  if (options.textStyle) {
+    // Written past saveDeck, which would put the style through the schema:
+    // the point is the bytes an older app or an importer left on disk.
+    const saved = JSON.parse(await readFile(join(deckDir, 'deck.json'), 'utf8')) as Deck;
+    const element = saved.slides[0].elements.find((candidate) => candidate.id === TEXT_ID)!;
+    element.style = options.textStyle;
+    await writeFile(join(deckDir, 'deck.json'), `${JSON.stringify(saved, null, 2)}\n`, 'utf8');
+  }
   await writeFile(join(deckDir, 'theme.css'), [
     '.slide { background: #fff; color: #111827; }',
     '.role-body { font: 400 28px/1.4 sans-serif; }',

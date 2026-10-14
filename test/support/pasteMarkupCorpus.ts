@@ -487,11 +487,15 @@ export const MARKUP_INVARIANTS = `(root) => {
   }
   // A copied run wears the computed layout of the block it came from; on an
   // inline run those declarations are junk, and on a block they fight the
-  // box's paragraph spacing and indentation.
+  // box's paragraph spacing and indentation. A paragraph's own line spacing,
+  // a unitless ratio on a block, is the Line spacing control's and not a
+  // copy: a computed line height is always a length.
   for (const node of root.querySelectorAll('[style]')) {
     if (node.matches('img, video, svg, table, colgroup, col, td, th')) continue;
     for (const property of ['text-indent', 'line-height', 'white-space', 'margin', 'margin-top',
       'margin-bottom', 'margin-left', 'margin-right', 'display', 'float']) {
+      if (property === 'line-height' && node.matches('p, li, div')
+        && /^\\d*\\.?\\d+$/.test(node.style.lineHeight.trim())) continue;
       if (node.style.getPropertyValue(property)) {
         problems.push('pasted layout declaration ' + property + ' survived on ' + node.tagName.toLowerCase());
       }

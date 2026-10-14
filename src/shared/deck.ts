@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { renameRetiredFields } from './fieldAliases.js';
+import { normalizeHtmlLineHeights, normalizeStyleLineHeight } from './lineHeight.js';
 
 /**
  * The deck format. This schema is the single source of truth: `deck.json` is
@@ -97,8 +98,12 @@ const BaseElement = z.object({
   opacity: z.number().min(0).max(1).default(1),
   /** CSS classes hooking this element up to theme.css. */
   class: z.array(z.string()).default([]),
-  /** Inline style escape hatch, applied after classes. */
-  style: z.record(z.string()).default({}),
+  /**
+   * Inline style escape hatch, applied after classes. A `line-height` is
+   * stored as a ratio of the font size (see lineHeight.ts), so it is
+   * converted here, on every parse, from a length stated beside a px size.
+   */
+  style: z.record(z.string()).default({}).transform(normalizeStyleLineHeight),
   /** Explicit identity shared by elements manually paired for Morph. */
   morphId: z.string().nullable().optional(),
   /** Stable ancestry retained when an object is duplicated, for opt-in Auto-pair. */
@@ -125,14 +130,15 @@ export const MediaEffectSchema = z.discriminatedUnion('type', [
 const TextElement = BaseElement.extend({
   type: z.literal('text'),
   /** Inline HTML. Fonts and sizes are expected to come from theme.css. */
-  html: z.string().default(''),
+  html: z.string().default('').transform(normalizeHtmlLineHeights),
   /**
    * CSS applied directly to the inner text-content node rather than the
    * positioned element wrapper. This is the escape hatch for glyph paint
    * such as gradient text, clipping and text strokes that cannot work through
    * inherited wrapper CSS alone.
    */
-  contentStyle: z.record(z.string()).optional(),
+  contentStyle: z.record(z.string()).optional()
+    .transform((style) => style && normalizeStyleLineHeight(style)),
   /** Shrink text as needed to keep it inside its box; never enlarge past its authored size. */
   autoFit: z.boolean().optional(),
   /**

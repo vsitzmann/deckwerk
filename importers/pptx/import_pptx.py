@@ -1475,6 +1475,11 @@ def _style_attr(css: dict[str, str]) -> str:
     return ' style="' + html.escape("; ".join(f"{k}: {v}" for k, v in css.items())) + '"'
 
 
+def _ratio_css(ratio: float) -> str:
+    """A unitless CSS line-height, to three decimals with no trailing zeros."""
+    return f"{ratio:.3f}".rstrip("0").rstrip(".")
+
+
 class TextConverter:
     """Turns an `a:txBody` (or table cell) into the editor's HTML and inline style."""
 
@@ -1674,8 +1679,16 @@ class TextConverter:
         return self.importer.pt_to_px(size_pt) * self.font_scale
 
     def line_height(self, style: ParaStyle, base_size: float) -> str | None:
+        # Always a ratio of the box's own font size, never a length: a px
+        # line height is inherited as that length, so once the text was set
+        # in another size (or auto-fit shrank it) the lines kept PowerPoint's
+        # spacing for the old size. The box's size is written rounded to a
+        # whole pixel, so the ratio is taken against that same number.
         if style.line_spacing_pt:
-            return f"{self.px(style.line_spacing_pt):.0f}px"
+            size = round(base_size)
+            if size <= 0:
+                return None
+            return _ratio_css(self.px(style.line_spacing_pt) / size)
         if style.line_spacing_pct is not None and abs(style.line_spacing_pct - 1.0) > 0.01:
             return f"{SINGLE_LINE_HEIGHT * style.line_spacing_pct:.2f}"
         return None

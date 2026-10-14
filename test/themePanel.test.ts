@@ -457,6 +457,41 @@ describe('the theme editor’s type scale', () => {
     expect(panel.element.querySelector<HTMLElement>('.theme-inline-editor')!.hidden).toBe(true);
   });
 
+  it('edits one role’s line spacing, beside its size, into theme.css on Done', () => {
+    const deck = emptyDeck('Scale panel');
+    deck.themePreset = THEMES[0].id;
+    deck.themeStyle = structuredClone({
+      fonts: THEMES[0].fonts, palette: THEMES[0].palette, colors: THEMES[0].colors,
+    });
+    const store = new EditorStore(deck, '/tmp/theme-panel-scale');
+    const saveThemeCss = vi.fn();
+    const panel = createThemePanel({
+      store,
+      cssEditor: { getValue: () => '', setValue: vi.fn() } as unknown as CssEditor,
+      save: vi.fn(),
+      setStatusMessage: vi.fn(),
+      saveThemeCss,
+    });
+    document.body.appendChild(panel.element);
+    panel.element.querySelector<HTMLButtonElement>('.theme-edit-button')!.click();
+
+    const spacings = [...panel.element.querySelectorAll<HTMLElement>('.theme-role-line-spacing')];
+    expect(spacings.map((node) => node.querySelector('span')?.textContent)).toEqual([
+      'Title line spacing', 'Body line spacing', 'Caption line spacing',
+    ]);
+    // Each sits right after its role's size.
+    expect(spacings[0].previousElementSibling?.classList.contains('theme-role-size')).toBe(true);
+    const body = spacings[1].querySelector('input')!;
+    expect(Number(body.value)).toBe(THEMES[0].fonts.body.lineHeight);
+    expect(body.step).toBe('0.05');
+    body.value = '1.55';
+    body.dispatchEvent(new Event('change', { bubbles: true }));
+    [...panel.element.querySelectorAll<HTMLButtonElement>('.theme-inline-editor button')]
+      .find((node) => node.textContent === 'Done')!.click();
+    expect(store.get().deck.themeStyle?.fonts.body.lineHeight).toBe(1.55);
+    expect(saveThemeCss).toHaveBeenLastCalledWith(expect.stringMatching(/\.role-body \{[^}]*line-height: 1\.55/));
+  });
+
   it('throws a draft away on Cancel', () => {
     const deck = emptyDeck('Scale panel');
     deck.themePreset = THEMES[0].id;

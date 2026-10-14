@@ -25,6 +25,7 @@ import { colorField } from './colorPicker.js';
 import type { CssEditor } from './cssEditor.js';
 import { fontFamilyField } from './fontPicker.js';
 import { numberField } from './inspector.js';
+import { lineSpacingValue } from '@shared/lineHeight.js';
 import { FIXED_LAYOUTS, LAYOUT_LABELS_BY_ID, masterTile } from './layoutPreview.js';
 import { barButton } from './shellWiring.js';
 import type { EditorStore } from './store.js';
@@ -830,6 +831,17 @@ export function createThemePanel(deps: ThemePanelDeps): ThemePanel {
       sizeField.classList.add('theme-role-size');
       sizeField.querySelector('input')!.title = 'Value in px';
       themeEditor.appendChild(sizeField);
+      const spacingField = numberField(
+        `${ROLE_LABELS[role]} line spacing`,
+        style.fonts[role].lineHeight,
+        (value) => {
+          if (value > 0) mutate((target) => { target.fonts[role].lineHeight = lineSpacingValue(value); });
+        },
+        { step: 0.05 },
+      );
+      spacingField.classList.add('theme-role-line-spacing');
+      spacingField.querySelector('input')!.title = 'Multiple of the font size';
+      themeEditor.appendChild(spacingField);
     }
 
     themeEditor.appendChild(groupLabel('Semantic colours'));

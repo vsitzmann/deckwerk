@@ -200,6 +200,27 @@ export function setWholeTextParagraphSpacing(element: TextElement, value: number
   if (changed) element.html = serialized(template.content);
 }
 
+/**
+ * Set the whole box's line spacing, a ratio of its font size (see
+ * shared/lineHeight.ts), or hand it back to the theme with null. Spacing set
+ * on single paragraphs goes with it, as paragraph spacing does: the control
+ * reads as the box's spacing, so the box has one afterwards.
+ */
+export function setWholeTextLineHeight(element: TextElement, value: number | null): void {
+  const style = { ...element.style };
+  if (value === null) delete style['line-height'];
+  else style['line-height'] = String(value);
+  element.style = style;
+  recordTextOverride(element, 'line-height', value !== null);
+  if (element.contentStyle?.['line-height'] !== undefined) {
+    const contentStyle = { ...element.contentStyle };
+    delete contentStyle['line-height'];
+    if (Object.keys(contentStyle).length > 0) element.contentStyle = contentStyle;
+    else delete element.contentStyle;
+  }
+  element.html = setHtmlTextProperty(element.html, 'line-height', null);
+}
+
 /** One text node's effective toggle state, resolved from the inside out. */
 function textNodeState(text: Text, format: TextFormat): boolean {
   for (let node = text.parentElement; node; node = node.parentElement) {

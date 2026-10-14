@@ -5,6 +5,7 @@ import { fitAutoTextElement } from './autoFit.js';
 import { KATEX_AUTO_RENDER_JS, KATEX_CSS, KATEX_JS } from './katexInline.js';
 import { shapeSvg } from './shapeSvg.js';
 import { applyTableColumnWidths } from './paragraphs.js';
+import { normalizeHtmlLineHeights, normalizeStyleLineHeight } from './lineHeight.js';
 import { layoutMaster, placeNewPlaceholders, syncSlideWithLayoutMaster, type FixedLayout } from './layoutMasters.js';
 import {
   cssMediaBorder,
@@ -1463,11 +1464,11 @@ export function elementFromNode(
     type: 'text',
     // A list is one text object; without its own tag around the items the
     // markers and indentation would not survive into the deck.
-    html: node.tag === 'ul' || node.tag === 'ol'
+    html: normalizeHtmlLineHeights(node.tag === 'ul' || node.tag === 'ol'
       ? `<${node.tag}>${node.html.trim()}</${node.tag}>`
       // A deck text box's own markup is kept exactly: the player shows it
       // pre-wrap, so even a trailing space is something it holds.
-      : node.preformatted ? node.html : node.html.trim(),
+      : node.preformatted ? node.html : node.html.trim()),
     align: alignFrom(node.attrs.textAlign),
     valign: valignFrom(node.dataset.valign),
     ...(contentStyle ? { contentStyle } : {}),
@@ -1989,7 +1990,10 @@ function pickStyle(style: Record<string, string>): Record<string, string> {
     // `--curl-*` are a curved (paper) shadow's settings, read by player.css.
     if ((PRESENTATIONAL_STYLE.has(property) || property.startsWith('--curl-')) && value) kept[property] = value;
   }
-  return kept;
+  // A foreign page is measured from its computed style, which states every
+  // line height in px: kept as a length, the box's lines would stop following
+  // its type size the moment someone changed it.
+  return normalizeStyleLineHeight(kept);
 }
 
 function valignFrom(value: string | undefined): 'top' | 'middle' | 'bottom' {

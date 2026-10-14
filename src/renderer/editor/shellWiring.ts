@@ -107,6 +107,8 @@ export function wireCanvasInspector(
   inspector.onApplyTextSelectionParagraphSpacing = (value) =>
     canvas.applyTextSelectionParagraphSpacing(value);
   inspector.textSelectionParagraphSpacing = () => canvas.textSelectionParagraphSpacing();
+  inspector.onApplyTextSelectionLineHeight = (value) => canvas.applyTextSelectionLineHeight(value);
+  inspector.textSelectionLineHeight = () => canvas.textSelectionLineHeight();
   inspector.onApplyTextSelectionColor = (value) => {
     if (targetsTableCells()) {
       canvas.applyTableCellColor('color', value);

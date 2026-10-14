@@ -1,6 +1,7 @@
 import { openContextMenu } from './contextMenuPlacement.js';
 import type { Deck, Slide, SlideElement, TextEl } from '@shared/deck.js';
 import { NEW_MEDIA_FIT } from '@shared/deck.js';
+import { lineSpacingValue } from '@shared/lineHeight.js';
 import { canHoldText, shapeToTextBox } from '@shared/shapeText.js';
 import { moveCorner, polygonPoints } from '@shared/polygonShape.js';
 import { braceDepthToward, bracePolyline, braceTip } from '@shared/brace.js';
@@ -553,6 +554,80 @@ function relativeRunFontSize(text: Text, root: HTMLElement): string | null {
     if (declared) return isRelativeFontSize(declared) ? declared : null;
   }
   return null;
+}
+
+/**
+ * The paragraphs and list items of a text box that hold lines of their own:
+ * blocks with no block inside them. These are what paragraph and line spacing
+ * apply to, and what a font size can be written on.
+ */
+function leafTextBlocks(root: HTMLElement): HTMLElement[] {
+  return [...root.querySelectorAll<HTMLElement>('p, li, div')]
+    .filter((block) => !block.querySelector('p, li, div'));
+}
+
+/**
+ * Move a size the selection gave every character of a block onto the block.
+ *
+ * A line is as tall as the larger of its block's own font size (the "strut")
+ * and the runs on it, each times the line height. Sizing only the runs of a
+ * paragraph left its strut at the old size, so a paragraph shrunk from 28px
+ * to 14px kept 28px lines: small text on wide lines. Where every character of
+ * a block is selected, the block takes the size and its runs drop theirs, so
+ * the lines follow. A block only partly selected keeps its own size: one small
+ * word does not tighten the line it sits on, as in any typesetting program.
+ *
+ * Empty lines strictly inside the selection (`<p><br></p>` between two sized
+ * paragraphs) take the size too, or they would stay tall between them.
+ * Proportional runs (`0.7em` superscripts) keep their declaration and now
+ * scale with the block, which is the size they sit next to.
+ */
+function sizeWholeBlocks(root: HTMLElement, selected: Set<Text>, size: string): void {
+  if (selected.size === 0) return;
+  const ordered = [...selected].sort((a, b) =>
+    (a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1));
+  const first = ordered[0];
+  const last = ordered[ordered.length - 1];
+  const inside = (node: Node): boolean =>
+    Boolean(first.compareDocumentPosition(node) & Node.DOCUMENT_POSITION_FOLLOWING)
+    && Boolean(node.compareDocumentPosition(last) & Node.DOCUMENT_POSITION_FOLLOWING);
+  for (const block of leafTextBlocks(root)) {
+    const texts: Text[] = [];
+    const walker = document.createTreeWalker(block, NodeFilter.SHOW_TEXT);
+    for (let current = walker.nextNode(); current; current = walker.nextNode()) {
+      const text = current as Text;
+      if (text.data.replace(/[\s\u200b\u2060]+/g, '')) texts.push(text);
+    }
+    const whole = texts.length > 0
+      ? texts.every((text) => selected.has(text))
+      : inside(block);
+    if (!whole) continue;
+    block.style.fontSize = size;
+    for (const node of block.querySelectorAll<HTMLElement>('[style]')) {
+      // The pending typing run belongs to the caret, not to this selection.
+      if (node.closest('[data-editor-typing-style]')) continue;
+      if (!node.style.fontSize || isRelativeFontSize(node.style.fontSize)) continue;
+      node.style.removeProperty('font-size');
+      if (!node.getAttribute('style')?.trim()) node.removeAttribute('style');
+    }
+  }
+}
+
+/**
+ * The line spacing a text renders with, as a ratio of its font size: read on
+ * the block holding `target`, since a line's height is its block's. Chromium
+ * reports a unitless line height resolved to px; either form reads back as
+ * the ratio. Null for `normal`, which is the font's own and has no number.
+ */
+function lineSpacingOf(target: HTMLElement, root: HTMLElement): number | null {
+  const block = target.closest<HTMLElement>('p, li, div, td, th');
+  const style = getComputedStyle(block && root.contains(block) ? block : root);
+  const declared = style.lineHeight.trim();
+  if (/^\d*\.?\d+$/.test(declared)) return Number(declared);
+  const lineHeight = Number.parseFloat(declared);
+  const fontSize = Number.parseFloat(style.fontSize);
+  if (!declared.endsWith('px') || !(lineHeight > 0) || !(fontSize > 0)) return null;
+  return Math.round((lineHeight / fontSize) * 100) / 100;
 }
 
 /** True for the anonymous inline wrappers created by character formatting. */
@@ -4093,7 +4168,7 @@ export class EditorCanvas {
         // declarations on the way in; every other structural input has to as
         // well, or the box saves an indent no control can reach. Plain typing
         // is left alone: it never restructures anything, and it is hot.
-        stripLayoutDeclarations(body);
+        stripLayoutDeclarations(body, { keepLineSpacing: true });
         // In an auto-fit box the computed style a join copies includes the
         // fitted size, which would freeze the moved text at it.
         if (body.dataset.fittedFontSize !== undefined && body.style.fontSize) {
@@ -5243,32 +5318,48 @@ export class EditorCanvas {
     return this.applyTextSelectionStyle('fontSize', `${size}px`);
   }
 
-  /** Apply paragraph spacing to the blocks touched by the live selection. */
-  applyTextSelectionParagraphSpacing(value: number | null): boolean {
-    if (!this.editingId || this.tableSelection) return false;
+  /**
+   * The editing box's content and the blocks a text selection touches, for
+   * the controls that set a block property (paragraph and line spacing). The
+   * live selection is preferred; the remembered one serves while focus sits
+   * in the inspector field being typed into.
+   */
+  private selectedTextBlocks(live: boolean): { content: HTMLElement; blocks: HTMLElement[] } | null {
+    if (!this.editingId || this.tableSelection) return null;
     const content = this.slideLayer.querySelector<HTMLElement>(
       `[data-element-id="${CSS.escape(this.editingId)}"] .text-content`,
     );
-    const live = window.getSelection();
-    const range = live && live.rangeCount > 0 && !live.getRangeAt(0).collapsed
-      ? live.getRangeAt(0)
+    const selection = live ? window.getSelection() : null;
+    const range = selection && selection.rangeCount > 0 && !selection.getRangeAt(0).collapsed
+      ? selection.getRangeAt(0)
       : this.textSelectionRange;
     if (!content || !range || range.collapsed || !content.contains(range.commonAncestorContainer)) {
-      return false;
+      return null;
     }
-    const blocks = [...content.querySelectorAll<HTMLElement>('p, li, div')]
-      .filter((block) => {
-        try { return range.intersectsNode(block); } catch { return false; }
-      })
-      .filter((block) => !block.querySelector('p, li, div'));
-    if (blocks.length === 0) return false;
+    const blocks = leafTextBlocks(content).filter((block) => {
+      try { return range.intersectsNode(block); } catch { return false; }
+    });
+    return blocks.length > 0 ? { content, blocks } : null;
+  }
 
-    const spacing = value === null ? null : `${Math.max(0, value)}px`;
+  /**
+   * Write `property` on every block the selection touches (or clear it with
+   * null), keep those blocks selected, and commit the change as one step.
+   */
+  private applyTextSelectionBlockStyle(
+    property: 'margin-bottom' | 'line-height',
+    value: string | null,
+    label: string,
+  ): boolean {
+    const target = this.selectedTextBlocks(true);
+    if (!target) return false;
+    const { content, blocks } = target;
     blocks.forEach((block) => {
-      if (spacing === null) block.style.removeProperty('margin-bottom');
-      else block.style.marginBottom = spacing;
+      if (value === null) block.style.removeProperty(property);
+      else block.style.setProperty(property, value);
       if (!block.getAttribute('style')?.trim()) block.removeAttribute('style');
     });
+    const live = window.getSelection();
     const next = document.createRange();
     next.setStartBefore(blocks[0]);
     next.setEndAfter(blocks[blocks.length - 1]);
@@ -5278,29 +5369,45 @@ export class EditorCanvas {
     this.focusTextSurface(content);
     const node = content.closest<HTMLElement>('.element');
     if (node) scheduleAutoFit(node);
-    this.commitLiveTextDom(
-      spacing === null ? 'Use theme spacing for selected paragraphs' : 'Change selected paragraph spacing',
-    );
+    this.commitLiveTextDom(label);
     return true;
+  }
+
+  /** Apply paragraph spacing to the blocks touched by the live selection. */
+  applyTextSelectionParagraphSpacing(value: number | null): boolean {
+    return this.applyTextSelectionBlockStyle(
+      'margin-bottom',
+      value === null ? null : `${Math.max(0, value)}px`,
+      value === null ? 'Use theme spacing for selected paragraphs' : 'Change selected paragraph spacing',
+    );
   }
 
   /** Return a shared authored spacing for the paragraphs in the live selection. */
   textSelectionParagraphSpacing(): number | null {
-    if (!this.editingId || this.tableSelection) return null;
-    const content = this.slideLayer.querySelector<HTMLElement>(
-      `[data-element-id="${CSS.escape(this.editingId)}"] .text-content`,
+    const target = this.selectedTextBlocks(false);
+    if (!target) return null;
+    const values = target.blocks.map((block) => Number.parseFloat(block.style.marginBottom));
+    if (values.some((value) => !Number.isFinite(value))) return null;
+    return values.every((value) => value === values[0]) ? values[0] : null;
+  }
+
+  /**
+   * Set the line spacing (a ratio of the font size) of the paragraphs the
+   * live selection touches; null hands them back to the box's spacing.
+   */
+  applyTextSelectionLineHeight(value: number | null): boolean {
+    return this.applyTextSelectionBlockStyle(
+      'line-height',
+      value === null ? null : String(lineSpacingValue(value)),
+      value === null ? 'Use box line spacing for selected paragraphs' : 'Change selected line spacing',
     );
-    const range = this.textSelectionRange;
-    if (!content || !range || range.collapsed || !content.contains(range.commonAncestorContainer)) {
-      return null;
-    }
-    const blocks = [...content.querySelectorAll<HTMLElement>('p, li, div')]
-      .filter((block) => {
-        try { return range.intersectsNode(block); } catch { return false; }
-      })
-      .filter((block) => !block.querySelector('p, li, div'));
-    if (blocks.length === 0) return null;
-    const values = blocks.map((block) => Number.parseFloat(block.style.marginBottom));
+  }
+
+  /** The line spacing the paragraphs in the selection share, if they declare one. */
+  textSelectionLineHeight(): number | null {
+    const target = this.selectedTextBlocks(false);
+    if (!target) return null;
+    const values = target.blocks.map((block) => Number(block.style.lineHeight || Number.NaN));
     if (values.some((value) => !Number.isFinite(value))) return null;
     return values.every((value) => value === values[0]) ? values[0] : null;
   }
@@ -6052,18 +6159,22 @@ export class EditorCanvas {
       : [];
     const keepProportional = absoluteSize && proportional.some((value) => !value);
 
+    const selectedTexts = new Set<Text>();
     slices.forEach(({ text, start, end }, index) => {
+      if (end < text.data.length) text.splitText(end);
+      const selected = start > 0 ? text.splitText(start) : text;
+      selectedTexts.add(selected);
       const applied = keepProportional && proportional[index]
         ? declarations.filter(([property]) => property !== 'fontSize')
         : declarations;
       if (applied.length === 0) return;
-      if (end < text.data.length) text.splitText(end);
-      const selected = start > 0 ? text.splitText(start) : text;
       const span = document.createElement('span');
       for (const [property, value] of applied) span.style[property] = value;
       selected.replaceWith(span);
       span.appendChild(selected);
     });
+    const size = declarations.find(([property]) => property === 'fontSize')?.[1];
+    if (absoluteSize && size) sizeWholeBlocks(content, selectedTexts, size);
     normalizeInlineStyleSpans(content);
     // Chromium can move a selected trailing space out of its inline wrapper.
     // When that wrapper sits beside a block (notably a paragraph pasted into a
@@ -6368,6 +6479,7 @@ export class EditorCanvas {
     fontWeightExplicit: boolean;
     fittedFontSize: number | null;
     paragraphSpacing: number | null;
+    lineHeight: number | null;
   } {
     const element = this.slideLayer.querySelector<HTMLElement>(
       `[data-element-id="${CSS.escape(elementId)}"]`,
@@ -6397,6 +6509,7 @@ export class EditorCanvas {
         fontWeightExplicit: false,
         fittedFontSize: null,
         paragraphSpacing: null,
+        lineHeight: null,
       };
     }
     const style = getComputedStyle(target);
@@ -6445,6 +6558,7 @@ export class EditorCanvas {
       fontWeightExplicit: explicit('fontWeight'),
       fittedFontSize: Number.isFinite(fittedFontSize) ? fittedFontSize : null,
       paragraphSpacing: Number.isFinite(paragraphSpacing) ? paragraphSpacing : 0,
+      lineHeight: lineSpacingOf(target, node),
     };
   }
 

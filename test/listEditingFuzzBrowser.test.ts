@@ -353,6 +353,7 @@ async function runWalk(seed: number, box: string): Promise<void> {
     'backspace at start', 'type', 'indent', 'outdent', 'undo',
     'other box', 'escape and re-enter', 'cut words', 'cut bullet', 'paste',
     'format and type', 'format and type', 'dash bullet', 'indent selection', 'outdent selection',
+    'line spacing',
   ] as const;
   // The clipboard holds whatever the last cut put there; a paste before any
   // cut would paste another test's leftovers, which reproduces nothing.
@@ -426,6 +427,9 @@ async function runWalk(seed: number, box: string): Promise<void> {
         await moveCaret(next);
         await session.cdp.chord('Tab', 'Tab', 9, 8);
         break;
+      case 'line spacing':
+        await lineSpacing(next, label);
+        break;
       case 'undo':
         // The restoration oracle: undo must actually restore the previous
         // persisted state, and redo must re-reach the undone state.
@@ -492,8 +496,10 @@ async function runWalk(seed: number, box: string): Promise<void> {
         // The repair runs on the input event; the seal and the store follow.
         await wait(150);
         const markup = await session.markup();
+        // A ratio is a paragraph's own line spacing (the 'line spacing' step
+        // sets it); what a paste copies is the computed value, a length.
         expect(markup, `${label}: pasted layout style survived`)
-          .not.toMatch(/text-indent|line-height:|white-space:/);
+          .not.toMatch(/text-indent|line-height:\s*[\d.]+(?:px|em|%)|white-space:/);
         break;
       }
       case 'escape and re-enter': {
@@ -502,7 +508,7 @@ async function runWalk(seed: number, box: string): Promise<void> {
         // Its first character, not its centre: a long walk grows the box down
         // over the other text box, whose paragraph then owns the centre point
         // (seed 20261013) -- the same overlap the 'other box' step skips.
-        await session.caretAt(0);
+        await session.caretAt(await reachableGlyph(0));
         await session.cdp.key('Escape', 27);
         await eventually(async () => session.cdp.evaluate<boolean>(
           `document.querySelector('${CONTENT}')?.isContentEditable !== true`,
@@ -802,6 +808,90 @@ async function shiftSelection(next: () => number, direction: 'in' | 'out', label
     .toBe(textBefore);
 }
 
+const LINE_SPACINGS = ['1', '1.25', '1.6', '2'];
+
+/** Type a value into a Props number field and commit it with Enter. */
+async function setNumberField(label: string, value: string): Promise<void> {
+  const id = `fuzz-${label.replace(/\s+/g, '-').toLowerCase()}`;
+  const found = await session.cdp.evaluate<boolean>(`(() => {
+    const field = [...document.querySelectorAll('#inspector .field-number')]
+      .find((node) => node.querySelector('span')?.textContent === ${JSON.stringify(label)});
+    const input = field?.querySelector('input');
+    if (!input) return false;
+    input.id = ${JSON.stringify(id)};
+    return true;
+  })()`);
+  expect(found, `no "${label}" field in Props`).toBe(true);
+  await session.cdp.click(`#${id}`, label);
+  await session.cdp.evaluate(`document.querySelector('#${id}').select()`);
+  await session.cdp.typeKeys(value);
+  await session.cdp.key('Enter', 13);
+  await wait(120);
+}
+
+/**
+ * Line spacing on the lines a selection touches: a line and maybe the next,
+ * spaced through the Props field. The oracle is what the reader sees: every
+ * touched paragraph is set at the chosen multiple of its own size (and the
+ * lines it renders are that tall), every other paragraph keeps the spacing it
+ * had, and the words are exactly where they were.
+ */
+async function lineSpacing(next: () => number, label: string): Promise<void> {
+  if ((await session.text()).length === 0) return;
+  await moveCaret(next, 'start');
+  await session.cdp.chord('End', 'End', 35, SHIFT);
+  if (next() < 0.5) await session.cdp.chord('ArrowDown', 'ArrowDown', 40, SHIFT);
+  const value = LINE_SPACINGS[Math.floor(next() * LINE_SPACINGS.length)];
+  const leaves = `[...document.querySelector('${CONTENT}').querySelectorAll('p, li, div')]
+    .filter((block) => !block.querySelector('p, li, div'))`;
+  const before = await session.cdp.evaluate<{ touched: number[]; spacing: string[] } | null>(`(() => {
+    const selection = window.getSelection();
+    if (!selection.rangeCount || selection.getRangeAt(0).collapsed) return null;
+    const range = selection.getRangeAt(0);
+    const blocks = ${leaves};
+    return {
+      touched: blocks.flatMap((block, index) => range.intersectsNode(block) ? [index] : []),
+      spacing: blocks.map((block) => block.style.lineHeight),
+    };
+  })()`);
+  // An empty line selects nothing; the box-wide control is a different test.
+  if (!before || before.touched.length === 0) return;
+  const textBefore = compact(await session.text());
+  await setNumberField('Line spacing', value);
+  const after = await session.cdp.evaluate<Array<{
+    spacing: string; lineHeight: number; fontSize: number; height: number;
+  }>>(`(() => {
+    return ${leaves}.map((block) => {
+      const style = getComputedStyle(block);
+      const scale = block.getBoundingClientRect().width / (block.offsetWidth || 1);
+      return {
+        spacing: block.style.lineHeight,
+        lineHeight: parseFloat(style.lineHeight),
+        fontSize: parseFloat(style.fontSize),
+        height: block.getBoundingClientRect().height / scale,
+      };
+    });
+  })()`);
+  const picture = `${JSON.stringify(before)} -> ${JSON.stringify(after)} in ${await session.markup()}`;
+  expect(after.length, `${label}: spacing changed the paragraphs; ${picture}`).toBe(before.spacing.length);
+  after.forEach((block, index) => {
+    if (!before.touched.includes(index)) {
+      expect(block.spacing, `${label}: paragraph ${index} was not selected; ${picture}`)
+        .toBe(before.spacing[index]);
+      return;
+    }
+    expect(block.spacing, `${label}: paragraph ${index} took the spacing; ${picture}`).toBe(value);
+    expect(block.lineHeight, `${label}: paragraph ${index} is spaced ${value} times its size; ${picture}`)
+      .toBeCloseTo(Number(value) * block.fontSize, 0);
+    // Its lines are that tall: a whole number of them fills the paragraph.
+    const lines = Math.max(1, Math.round(block.height / block.lineHeight));
+    expect(Math.abs(block.height - lines * block.lineHeight),
+      `${label}: paragraph ${index} renders ${block.height}px for lines of ${block.lineHeight}px; ${picture}`)
+      .toBeLessThan(1.5);
+  });
+  expect(compact(await session.text()), `${label}: spacing changed the words`).toBe(textBefore);
+}
+
 /** A nonce no other step has typed anywhere, so "landed only there" is exact. */
 let nonceCounter = 0;
 function nextNonce(): string {
@@ -831,7 +921,7 @@ async function runUndoCheckpoint(next: () => number, label: string): Promise<voi
   }
   // Its first character: in a short box the text's centre sits below the
   // box, on its resize handle.
-  if ((await session.text()).length > 0) await cdp.clickTextAtOffset(CONTENT, 0, 'the text box before undoing');
+  if ((await session.text()).length > 0) await session.caretAt(await reachableGlyph(0));
   else await cdp.click(CONTENT, 'the text box before undoing');
   await session.undo();
   const undone = await deckSnapshotEventually(cdp, port, DECK_ID, before);
@@ -864,11 +954,20 @@ async function moveCaret(next: () => number, where: 'start' | 'end' | 'middle' =
     return;
   }
   const chosen = Math.min(length - 1, Math.floor(next() * length));
-  // The glyph a click aims at can sit under the box's own resize handle
-  // (a long box's text runs past its corner); clicking there grabs the
-  // handle, which ends editing — correctly — rather than placing a caret.
-  // Take the first glyph from the chosen one on that a click really reaches.
-  const offset = await session.cdp.evaluate<number>(`(() => {
+  await session.caretAt(await reachableGlyph(chosen));
+  if (where === 'start') await session.cdp.key('Home', 36);
+  if (where === 'end') await session.cdp.key('End', 35);
+}
+
+/**
+ * The first glyph from `chosen` on that a click really reaches. The glyph a
+ * click aims at can sit under the box's own resize handle (a long box's text
+ * runs past its corner, and small fitted text set solid starts in it);
+ * clicking there grabs the handle, which ends editing -- correctly -- rather
+ * than placing a caret.
+ */
+async function reachableGlyph(chosen: number): Promise<number> {
+  return session.cdp.evaluate<number>(`(() => {
     const root = document.querySelector('${CONTENT}');
     const glyphs = [];
     const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
@@ -888,9 +987,6 @@ async function moveCaret(next: () => number, where: 'start' | 'end' | 'middle' =
     }
     return ${chosen};
   })()`);
-  await session.caretAt(offset);
-  if (where === 'start') await session.cdp.key('Home', 36);
-  if (where === 'end') await session.cdp.key('End', 35);
 }
 
 async function runSweepCase({ kind, length, at, route }: SweepCase, box: string): Promise<void> {

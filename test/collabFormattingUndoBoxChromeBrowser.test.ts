@@ -63,6 +63,12 @@ describe.skipIf(!electronBinary)('box-level formatting scope and undo in the col
       'paragraph spacing did not apply');
     await session.undoChrome(OL_ID);
 
+    const lineSpacing = await session.idField('Line spacing', 'test-line-spacing', '.field-number');
+    await editor.typeInto(lineSpacing, '1.6', 'Line spacing');
+    await eventually(async () => (await session!.liveElement(OL_ID)).style['line-height'] === '1.6',
+      'line spacing did not apply');
+    await session.undoChrome(OL_ID);
+
     for (const [label, property] of [
       ['Auto-fit text to box', 'autoFit'],
       ['Disable automatic line breaks', 'noWrap'],
