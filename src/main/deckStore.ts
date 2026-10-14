@@ -1,10 +1,10 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { createReadStream, existsSync, realpathSync } from 'node:fs';
+import { createReadStream, existsSync, realpathSync, statSync } from 'node:fs';
 import { cp, mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { basename, dirname, extname, join, resolve, sep } from 'node:path';
 import { type Deck, emptyDeck, parseDeck } from '@shared/deck.js';
 import type { ImportedAsset } from '@shared/ipc.js';
-import { classifyMediaName, CONVERTED_IMAGE_EXTS } from '@shared/media.js';
+import { classifyMediaName, CONVERTED_IMAGE_EXTS, importedAssetName, originalAssetCandidates } from '@shared/media.js';
 import { serializeSpeakerNotes, SPEAKER_NOTES_FILE } from '@shared/speakerNotes.js';
 import { HISTORY_FILES } from '@shared/editHistory.js';
 import { VERSIONS_DIR } from './deckVersions.js';
@@ -257,7 +257,7 @@ export async function importAsset(
   const hash = await hashFile(sourcePath);
   const ext = extname(sourcePath).toLowerCase();
   const stem = sanitize(basename(sourcePath, extname(sourcePath)));
-  const name = `${stem}.${hash}${ext}`;
+  const name = importedAssetName.original(stem, hash, ext);
   const dest = join(assetsDir, name);
 
   // The hashed name is only a cache hit when the bytes behind it are really
@@ -274,7 +274,7 @@ export async function importAsset(
   // iPhone photos: HEIC out to PNG. Decoding is not free, and there is no
   // duration to measure it against, so the placeholder just spins.
   if (kind === 'image' && CONVERTED_IMAGE_EXTS.has(ext)) {
-    const converted = `${stem}.${hash}.png`;
+    const converted = importedAssetName.convertedImage(stem, hash);
     const convertedPath = join(assetsDir, converted);
     onProgress?.(null);
     const convert = ext === '.heic' || ext === '.heif' ? convertHeicToPng : convertImageToPng;
@@ -286,7 +286,7 @@ export async function importAsset(
   if (kind === 'video') {
     const codec = await videoCodec(dest);
     if (!isWebSafeCodec(codec)) {
-      const converted = `${stem}.${hash}.h264.mp4`;
+      const converted = importedAssetName.h264(stem, hash);
       const convertedPath = join(assetsDir, converted);
       if (!(await hasContent(convertedPath))) {
         await produceAtomically(convertedPath, (tmp) => transcodeToH264(dest, tmp, onProgress));
@@ -298,7 +298,7 @@ export async function importAsset(
       // protocol, for every thumbnail that shows the clip. Move the index up
       // front with a byte-exact rewrite (no ffmpeg, nothing re-timed) and
       // serve that copy under the same stem and extension.
-      const relocated = `${stem}.${hash}.fs${ext}`;
+      const relocated = importedAssetName.fastStart(stem, hash, ext);
       const relocatedPath = join(assetsDir, relocated);
       onProgress?.(null);
       if (!(await hasContent(relocatedPath))) await writeFastStart(dest, relocatedPath);
@@ -334,7 +334,7 @@ export async function importImageBuffer(
   await mkdir(assetsDir, { recursive: true });
   const hash = createHash('sha256').update(data).digest('hex').slice(0, 8);
   const stem = sanitize(basename(sourceName, extname(sourceName)));
-  const name = `${stem}.${hash}${ext}`;
+  const name = importedAssetName.original(stem, hash, ext);
   const dest = join(assetsDir, name);
   if (!existsSync(dest)) await writeFile(dest, data);
   return {
@@ -389,6 +389,31 @@ export function resolveAsset(deckDir: string, src: string): string {
     throw new Error(`Asset path escapes the deck folder through a symlink: ${src}`);
   }
   return abs;
+}
+
+/**
+ * The untouched file behind an image or video element's `src`: the one the
+ * author dropped, not the PNG or H.264 copy the importer made for Chromium
+ * (`originalAssetCandidates`). Falls back to `src` itself when no original
+ * sits beside it, as for a file that never needed converting.
+ *
+ * Only files in `assets/` qualify, the same subtree the collab server
+ * streams: a src naming `deck.json` or anything else in the folder throws.
+ */
+export function originalAssetPath(deckDir: string, src: string): string {
+  const assetsRoot = resolve(deckDir, ASSETS_DIR);
+  const candidates = originalAssetCandidates(src).map((candidate) => {
+    const absolute = resolveAsset(deckDir, candidate);
+    if (!absolute.startsWith(assetsRoot + sep)) throw new Error(`Not a deck asset: ${src}`);
+    return absolute;
+  });
+  return candidates.find((absolute) => {
+    try {
+      return statSync(absolute).isFile();
+    } catch {
+      return false;
+    }
+  }) ?? candidates[candidates.length - 1];
 }
 
 function contains(root: string, target: string): boolean {

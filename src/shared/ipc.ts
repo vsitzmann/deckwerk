@@ -32,6 +32,7 @@ export const IPC = {
   clipboardWrite: 'clipboard:write',
   clipboardRead: 'clipboard:read',
   assetProbe: 'asset:probe',
+  assetSaveOriginal: 'asset:saveOriginal',
   presentOpen: 'present:open',
   displayList: 'display:list',
   presentCursor: 'present:cursor',

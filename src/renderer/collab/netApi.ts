@@ -68,13 +68,27 @@ function isOwnDeckAsset(raw: string): boolean {
   }
 }
 
+/** The server's route for one of a deck's assets, unpinned. */
+function deckAssetPath(deckId: string, src: string): string {
+  return `/decks/${encodeURIComponent(deckId)}/${src.replace(/^\/+/, '').split('/').map(encodeURIComponent).join('/')}`;
+}
+
+/**
+ * Download the file the author dropped behind an image or video src: the
+ * server finds it beside the copy the slide shows, never a rendition, and
+ * names it (`Content-Disposition`), so the anchor leaves the name blank.
+ */
+export function downloadOriginalAsset(deckId: string, src: string): void {
+  const link = document.createElement('a');
+  link.href = `${deckAssetPath(deckId, src)}?download=original`;
+  link.download = '';
+  link.click();
+}
+
 export function installNetApi(options: NetApiOptions): void {
   const deck = encodeURIComponent(options.deckId);
   const api = {
-    assetUrl: (src: string): string => pinMediaVariant(
-      src,
-      `/decks/${deck}/${src.replace(/^\/+/, '').split('/').map(encodeURIComponent).join('/')}`,
-    ),
+    assetUrl: (src: string): string => pinMediaVariant(src, deckAssetPath(options.deckId, src)),
 
     importAssetFiles: async (files: File[], progressToken?: string): Promise<ImportedAsset[]> => {
       const imported: ImportedAsset[] = [];

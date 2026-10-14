@@ -2,9 +2,9 @@ import { mkdtemp, readdir, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { createDeck, importAsset } from '../src/main/deckStore.js';
+import { createDeck, importAsset, originalAssetPath } from '../src/main/deckStore.js';
 import { probeMedia, videoCodec } from '../src/main/ffmpeg.js';
-import { classifyMediaName } from '../src/shared/media.js';
+import { classifyMediaName, originalDownloadName } from '../src/shared/media.js';
 import { MEDIA_FIXTURES, writeMediaFixtures } from './support/mediaFixtures.js';
 
 /**
@@ -62,6 +62,12 @@ describe('media import formats', () => {
       // the source the author dropped; a pass-through has nothing else to
       // leave. Either way the asset folder holds no third file.
       expect(await readdir(join(deckDir, 'assets'))).toHaveLength(entry.converted ? 2 : 1);
+
+      // "Download original" reads that naming back: whatever the slide shows,
+      // it hands over the dropped bytes under the dropped name.
+      const original = originalAssetPath(deckDir, asset.src);
+      expect(Buffer.compare(await readFile(original), await readFile(source))).toBe(0);
+      expect(originalDownloadName(original)).toBe(entry.name);
 
       if (entry.sized) {
         expect(asset.width).toBe(64);

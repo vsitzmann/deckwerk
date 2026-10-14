@@ -636,6 +636,19 @@ async function exportPdf(): Promise<void> {
   }
 }
 
+/** "Download original…": the dropped file, copied wherever the author picks. */
+async function saveOriginalAsset(src: string): Promise<void> {
+  try {
+    const saved = await runOperation('Preparing download…', async (operation) => {
+      operation.update('Waiting for a destination');
+      return window.api.saveOriginalAsset(src, operation.id);
+    });
+    if (saved) setStatusMessage(`Saved the original to ${saved}`);
+  } catch (err) {
+    setStatusMessage(`Download failed: ${err instanceof Error ? err.message : err}`);
+  }
+}
+
 async function toggleAgentPanel(): Promise<void> {
   if (!agentPanel.element.hidden) {
     agentPanel.hide();
@@ -1146,6 +1159,7 @@ const shellDeps: ShellDeps = {
   currentThemeCss: () => cssEditor.getValue(),
   openTrim,
   openRaster,
+  downloadOriginal: { label: 'Download original…', run: (element) => void saveOriginalAsset(element.src) },
   undo: () => {
     if (agentSessionReady && agentSessionBridge) agentSessionBridge.undo(store.get().deck);
     else store.undo();

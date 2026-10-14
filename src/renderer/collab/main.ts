@@ -42,7 +42,7 @@ import { TimelinePanel } from '../editor/timelinePanel.js';
 import { CollabBridge } from './collabBridge.js';
 import { createConnectionNotice } from './connectionNotice.js';
 import { createDeckOnServer, folderOf, importKeynoteToServer, importPowerPointToServer, showDeckPicker, showShareDialog } from './deckPicker.js';
-import { installNetApi } from './netApi.js';
+import { downloadOriginalAsset, installNetApi } from './netApi.js';
 import { PresenceOverlay } from './presenceOverlay.js';
 import { PresenceBar, isAgentPeer } from './presenceBar.js';
 import { ChatPanel } from './chatPanel.js';
@@ -534,6 +534,8 @@ const shellDeps: ShellDeps = {
   setStatusMessage,
   runOperation,
   currentThemeCss: () => cssEditor.getValue(),
+  // The browser's own downloads show progress and where the file went.
+  downloadOriginal: { label: 'Download original', run: (element) => downloadOriginalAsset(deckId!, element.src) },
   undo: () => bridge.undo(store.get().deck),
   redo: () => bridge.redo(store.get().deck),
 };

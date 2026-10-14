@@ -56,6 +56,7 @@ import {
   importImageBuffer,
   loadDeck,
   loadTheme,
+  originalAssetPath,
   resolveAsset,
   saveDeck,
   saveSpeakerNotes,
@@ -72,6 +73,8 @@ import { importKeynote } from './keynoteImport.js';
 import { importPowerPoint } from './pptxImport.js';
 import { loadDeckHistory, saveDeckHistory } from './deckHistoryStore.js';
 import { serializeSpeakerNotes, SPEAKER_NOTES_FILE } from '@shared/speakerNotes.js';
+import { originalDownloadName } from '@shared/media.js';
+import { copyFileStreamed } from './copyFileStreamed.js';
 import { HTML_EDIT_DIR, isAuthoringFileName, readSettledFile, writeHtmlScope } from './htmlAuthoring.js';
 import { AGENT_GUIDE_FILE, defaultLauncherPath, writeAgentGuide } from './agentGuide.js';
 import { replaceFileAtomically } from './agentRuntime.js';
@@ -993,6 +996,27 @@ function registerHandlers(): void {
   ipcMain.handle(IPC.assetProbe, async (event, src: string) => {
     const s = requireSession(event);
     return probeMedia(resolveAsset(s.dir, src));
+  });
+
+  // "Download original…": the file the author dropped, not the PNG or H.264
+  // copy the slide shows, and never cropped or masked — those are display.
+  ipcMain.handle(IPC.assetSaveOriginal, async (
+    event,
+    src: string,
+    operationId?: string,
+  ): Promise<string | null> => {
+    const s = requireSession(event);
+    const original = originalAssetPath(s.dir, src);
+    const name = originalDownloadName(original);
+    const target = await showSaveDialog({
+      title: 'Download original',
+      buttonLabel: 'Save',
+      defaultPath: name,
+    });
+    if (target.canceled || !target.filePath) return null;
+    reportOperation(event, operationId, `Copying ${name} to ${basename(target.filePath)}`);
+    await copyFileStreamed(original, target.filePath);
+    return target.filePath;
   });
 
   ipcMain.handle(IPC.displayList, () => {

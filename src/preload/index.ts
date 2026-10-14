@@ -127,6 +127,12 @@ const api = {
   probeAsset: (src: string): Promise<MediaInfo> =>
     ipcRenderer.invoke(IPC.assetProbe, src),
   /**
+   * Save the untouched file behind an image or video src where the author
+   * picks; the saved path, or null when they cancel the panel.
+   */
+  saveOriginalAsset: (src: string, operationId?: string): Promise<string | null> =>
+    ipcRenderer.invoke(IPC.assetSaveOriginal, src, operationId),
+  /**
    * One frame of a deck video as an image URL, cut in the main process, so a
    * thumbnail never has to open a video pipeline in this window.
    */

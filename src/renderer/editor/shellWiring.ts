@@ -5,7 +5,7 @@ import { elementFollowsLayout, layoutGeometryFor, realignElementToLayout } from 
 import { EditorCanvas } from './canvas.js';
 import { ARRANGE_LABELS, arrangeSelection } from './arrange.js';
 import { setCircularMask } from '@shared/mediaMask.js';
-import { classifyMediaName } from '@shared/media.js';
+import { classifyMediaName, isPendingSrc } from '@shared/media.js';
 import { mediaNaturalSize } from './mediaNatural.js';
 import { Inspector } from './inspector.js';
 import { SlideRail } from './slideRail.js';
@@ -52,6 +52,12 @@ export interface ShellDeps {
   openTrim?: (element: VideoElement) => void;
   /** Desktop only: open the destructive raster paint window. */
   openRaster?: (element: ImageElement) => void;
+  /**
+   * Save the untouched file behind one image or video: the desktop asks where
+   * through a save panel ("Download original…"), the web hands it to the
+   * browser's downloads ("Download original"), so each shell names its row.
+   */
+  downloadOriginal?: { label: string; run: (element: ImageElement | VideoElement) => void };
   /**
    * Undo/redo overrides. The Electron shell uses the store's snapshot stacks;
    * the collab shell substitutes op-based selective undo, because restoring a
@@ -461,7 +467,7 @@ export function makeContextActions(
   deps: ShellDeps,
   clipboard: ClipboardActions,
 ): (el: SlideElement | null) => ContextItems {
-  const { store, canvas, openTrim, openRaster } = deps;
+  const { store, canvas, openTrim, openRaster, downloadOriginal } = deps;
   return (el) => {
     const sel = store.get().selection.size;
     const items: ContextItems = [];
@@ -531,6 +537,11 @@ export function makeContextActions(
       }
       if (el.type === 'image' && openRaster && !/\.pdf(?:$|[?#])/i.test(el.src)) {
         items.push({ label: 'Rasterize & paint…', action: () => openRaster(el) });
+      }
+      // One file at a time, and only once it is one: a drop still uploading
+      // has no bytes on the host yet.
+      if ((el.type === 'image' || el.type === 'video') && downloadOriginal && sel === 1 && !isPendingSrc(el.src)) {
+        items.push({ label: downloadOriginal.label, action: () => downloadOriginal.run(el) });
       }
       if (el.type === 'text' && sel === 1) {
         items.unshift({ label: 'Edit text', action: () => canvas.beginTextEdit(el.id) }, 'separator');

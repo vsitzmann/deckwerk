@@ -39,3 +39,7 @@ Under **Props → Effects**, choose **Blur**, **Posterize**, or **Greyscale**. A
 Effects work on both images and videos.
 
 > Screenshot placeholder: Media with two effects applied.
+
+### Download the original
+
+Right-click an image or video and choose **Download original…** to save the file you dropped, exactly as it was: an iPhone photo comes back as its HEIC and a screen recording as its own movie, not the PNG or H.264 copy DeckWerk shows on the slide. Crops, masks and effects are not applied. In the web editor the item is **Download original** and the file goes to the browser's downloads.

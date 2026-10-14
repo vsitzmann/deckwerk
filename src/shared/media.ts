@@ -82,3 +82,73 @@ export function pendingName(src: string): string {
   const sep = rest.indexOf(':');
   return sep === -1 ? '' : decodeURIComponent(rest.slice(sep + 1));
 }
+
+/**
+ * The names `importAsset` gives a file it copies into `assets/`: the dropped
+ * original under its stem and an 8-hex content hash, and the browser-ready
+ * copies it derives from that original when Chromium cannot use it as-is.
+ * The importer writes through these and `originalAssetCandidates` reads them
+ * back, so "Download original" cannot drift from what the import produced.
+ */
+export const importedAssetName = {
+  original: (stem: string, hash: string, ext: string): string => `${stem}.${hash}${ext}`,
+  /** An image format Chromium cannot decode (`CONVERTED_IMAGE_EXTS`), as PNG. */
+  convertedImage: (stem: string, hash: string): string => `${stem}.${hash}.png`,
+  /** A video in a codec Chromium cannot play, transcoded to H.264. */
+  h264: (stem: string, hash: string): string => `${stem}.${hash}.h264.mp4`,
+  /** A playable video with its index moved to the front, byte for byte otherwise. */
+  fastStart: (stem: string, hash: string, ext: string): string => `${stem}.${hash}.fs${ext}`,
+};
+
+const HASH = '[0-9a-f]{8}';
+
+/** Each derived name, and the originals it can have been made from. */
+const DERIVED_NAMES: Array<{
+  pattern: RegExp;
+  originals: (stem: string, hash: string, ext: string) => string[];
+}> = [
+  {
+    pattern: new RegExp(`^(.+)\\.(${HASH})\\.h264\\.mp4$`),
+    originals: (stem, hash) => [...VIDEO_EXTS].map((ext) => importedAssetName.original(stem, hash, ext)),
+  },
+  {
+    pattern: new RegExp(`^(.+)\\.(${HASH})\\.fs(\\.[a-z0-9]+)$`),
+    originals: (stem, hash, ext) => [importedAssetName.original(stem, hash, ext)],
+  },
+  {
+    pattern: new RegExp(`^(.+)\\.(${HASH})\\.png$`),
+    originals: (stem, hash) => [...CONVERTED_IMAGE_EXTS].map((ext) => importedAssetName.original(stem, hash, ext)),
+  },
+];
+
+/**
+ * The deck-relative paths that may hold the untouched file an element's `src`
+ * was imported from, best first, ending with `src` itself.
+ *
+ * An element shows the importer's browser-ready copy (`photo.<hash>.png` for
+ * an iPhone HEIC, `clip.<hash>.h264.mp4` for an HEVC recording), while the
+ * file the author dropped stays beside it as `<stem>.<hash><ext>`. Which
+ * extension it had is recorded nowhere but the folder, so the caller takes
+ * the first candidate that exists. A src no derived name matches is its own
+ * original, and so is a plain PNG import, whose hash names no HEIC.
+ */
+export function originalAssetCandidates(src: string): string[] {
+  const slash = src.lastIndexOf('/');
+  const dir = src.slice(0, slash + 1);
+  const name = src.slice(slash + 1);
+  for (const derived of DERIVED_NAMES) {
+    const match = derived.pattern.exec(name);
+    if (match) return [...derived.originals(match[1], match[2], match[3] ?? '').map((n) => dir + n), src];
+  }
+  return [src];
+}
+
+/**
+ * The file name an original is saved under: the author's own name, without
+ * the content hash the importer added (`photo.1a2b3c4d.heic` → `photo.heic`).
+ */
+export function originalDownloadName(originalSrc: string): string {
+  const name = originalSrc.slice(originalSrc.lastIndexOf('/') + 1);
+  const match = new RegExp(`^(.+)\\.${HASH}(\\.[^./]+)$`).exec(name);
+  return match ? match[1] + match[2] : name;
+}
