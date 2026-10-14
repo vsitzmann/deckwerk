@@ -479,6 +479,8 @@ describe.skipIf(!electronBinary)('editor shell in the collaboration browser', ()
     // other deck reloads the page, which emptied the in-page copy.
     await clickRail(0);
     await selectOnCanvas(IMAGE_ID);
+    // Earlier tests nudge it; the paste lands wherever it is now.
+    const source = (await snapshot()).slides[0].find((el) => el.id === IMAGE_ID)!;
     // With Chromium's `copy` command, as a real Cmd+C has: its copy event is
     // what puts the copy's token on the OS clipboard.
     await cdp().chord('c', 'KeyC', 67, MOD, ['copy']);
@@ -500,7 +502,7 @@ describe.skipIf(!electronBinary)('editor shell in the collaboration browser', ()
     expect(pasted.type).toBe('image');
     // The other deck's own copy of the file, not a path into this one.
     expect(pasted.src).toMatch(/^assets\/swatch\.[0-9a-f]{8}\.png$/);
-    expect([pasted.x, pasted.y]).toEqual([1200, 500]);
+    expect([pasted.x, pasted.y]).toEqual([source.x, source.y]);
     const painted = await eventually(async () => cdp().evaluate<boolean>(`(() => {
       const img = document.querySelector(${JSON.stringify(`${ON_CANVAS(pasted.id)} img`)});
       return Boolean(img?.complete && img.naturalWidth > 0);
