@@ -7,11 +7,16 @@ import { diffDecks } from '@shared/deckDiff.js';
 import { carryComments, withoutCommentOps } from '@shared/comments.js';
 import { applyOpsLenient } from '@shared/collabApply.js';
 import {
+  CLIPBOARD_FORMAT,
+  type ClipboardPayload,
   type ClipboardReadResult,
   type ClipboardWriteRequest,
+  collectAssetSrcs,
+  parseClipboardPayload,
   pinSlidesToTheme,
   remapElementIds,
   remapSlideIds,
+  rewriteAssetSrcs,
   slideThemeStylesDiffer,
 } from '@shared/clipboard.js';
 import { effectiveThemeStyle } from '@shared/themes.js';
@@ -1141,23 +1146,112 @@ export function isInAppClipboardToken(text: string | null | undefined): boolean 
   return Boolean(fallbackClipboardToken && fallbackClipboard && text?.trim() === fallbackClipboardToken);
 }
 
+/**
+ * The browser client's bridge to copies made in *other* tabs (netApi.ts; the
+ * server side is clipboardStash.ts). The token a copy leaves on the OS
+ * clipboard names a copy the server keeps, so a paste in another tab — another
+ * deck, or this one after a reload, which empties the in-page fallback — can
+ * fetch it back and bring the assets it shows into its own deck.
+ */
+export interface WebClipboardBridge {
+  stashClipboard: (id: string, request: ClipboardWriteRequest) => Promise<void>;
+  fetchClipboard: (id: string) => Promise<{ sourceDeck: string; request: unknown } | null>;
+  /** This deck's src for `src` in `sourceDeck` (itself, in the same deck), or null. */
+  importDeckAsset: (sourceDeck: string, src: string) => Promise<string | null>;
+}
+
+function webClipboardBridge(): WebClipboardBridge | null {
+  if (typeof window === 'undefined') return null;
+  const api = window.api as Partial<WebClipboardBridge> | undefined;
+  return api?.stashClipboard && api.fetchClipboard && api.importDeckAsset
+    ? api as WebClipboardBridge
+    : null;
+}
+
+/**
+ * The server-side copy a clipboard token names, when it is a token some
+ * *other* page wrote (this page's own token pastes from memory).
+ */
+export function stashedClipboardId(text: string | null | undefined): string | null {
+  const trimmed = text?.trim() ?? '';
+  if (!trimmed.startsWith(IN_APP_CLIPBOARD_TOKEN_PREFIX) || isInAppClipboardToken(trimmed)) return null;
+  const id = trimmed.slice(IN_APP_CLIPBOARD_TOKEN_PREFIX.length);
+  return /^[A-Za-z0-9_-]{16,64}$/.test(id) ? id : null;
+}
+
+/** 128 random bits: the token is the only key to the server's copy. */
+function clipboardId(): string {
+  const bytes = new Uint8Array(16);
+  if (typeof crypto !== 'undefined' && crypto.getRandomValues) crypto.getRandomValues(bytes);
+  else for (let i = 0; i < bytes.length; i++) bytes[i] = Math.floor(Math.random() * 256);
+  return [...bytes].map((b) => b.toString(16).padStart(2, '0')).join('');
+}
+
 async function writeSystemClipboard(request: ClipboardWriteRequest): Promise<void> {
   fallbackClipboard = request;
-  fallbackClipboardToken = `${IN_APP_CLIPBOARD_TOKEN_PREFIX}${Math.random().toString(36).slice(2)}`;
+  const id = clipboardId();
+  // Set before the first await: the `copy` event that writes it to the OS
+  // clipboard fires right after the keydown that started this copy.
+  fallbackClipboardToken = `${IN_APP_CLIPBOARD_TOKEN_PREFIX}${id}`;
+  const token = fallbackClipboardToken;
   try {
     if (typeof window !== 'undefined' && window.api?.writeClipboard) {
       await window.api.writeClipboard(request);
-    } else if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
-      // Secure origins only; on plain HTTP the `copy` event in shellWiring
-      // writes the same token.
-      await navigator.clipboard.writeText(fallbackClipboardToken);
+    } else {
+      const bridge = webClipboardBridge();
+      const stashed = bridge?.stashClipboard(id, request).catch((err: unknown) => {
+        // This tab still pastes from memory; only other tabs miss out.
+        console.error('Could not share the copy with other tabs:', err);
+      });
+      if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+        // Secure origins only; on plain HTTP the `copy` event in shellWiring
+        // writes the same token.
+        await navigator.clipboard.writeText(token);
+      }
+      await stashed;
     }
   } catch (err) {
     console.error('Could not write the system clipboard:', err);
   }
 }
 
-async function readSystemClipboard(): Promise<ClipboardReadResult | ClipboardWriteRequest | null> {
+/** A copy made in another tab, still to be fetched from the server. */
+export interface StashedClipboard {
+  kind: 'stashed';
+  id: string;
+}
+
+/**
+ * Fetch a copy another tab parked on the server and make it this deck's: each
+ * asset it shows is copied over from the deck it came from (a no-op within one
+ * deck), and anything whose file could not be brought over is left out rather
+ * than pasted pointing at a file this deck lacks.
+ */
+async function resolveStashedClipboard(
+  id: string,
+): Promise<{ payload: ClipboardPayload; dropped: number } | null> {
+  const bridge = webClipboardBridge();
+  const stashed = await bridge?.fetchClipboard(id);
+  if (!bridge || !stashed || typeof stashed.request !== 'object' || stashed.request === null) return null;
+  // Another tab may run an older build: the deck schemas fill in what it
+  // did not know about and rename what it still calls by an old name.
+  const payload = parseClipboardPayload({ ...stashed.request, format: CLIPBOARD_FORMAT, version: 1 });
+  if (!payload) return null;
+  const map = new Map<string, string>();
+  for (const src of collectAssetSrcs(payload)) {
+    // Only deck-relative paths live in the other deck's folder.
+    if (/^[a-z][a-z0-9+.-]*:/i.test(src)) {
+      map.set(src, src);
+      continue;
+    }
+    const local = await bridge.importDeckAsset(stashed.sourceDeck, src);
+    if (local) map.set(src, local);
+  }
+  const dropped = rewriteAssetSrcs(payload, map, { dropUnmapped: true });
+  return { payload, dropped };
+}
+
+async function readSystemClipboard(): Promise<ClipboardReadResult | ClipboardWriteRequest | StashedClipboard | null> {
   if (typeof window !== 'undefined' && window.api?.readClipboard) {
     try {
       const payload = await window.api.readClipboard();
@@ -1182,6 +1276,8 @@ async function readSystemClipboard(): Promise<ClipboardReadResult | ClipboardWri
         }
       }
       if (isInAppClipboardToken(text)) return fallbackClipboard;
+      const stashed = stashedClipboardId(text);
+      if (stashed) return { kind: 'stashed', id: stashed };
       if (/<table\b/i.test(html) || text.includes('\t')) {
         return { kind: 'external-html', html, text };
       }
@@ -1252,6 +1348,13 @@ export interface PasteOptions {
   }) => Promise<SlidePasteThemeChoice | null>;
 }
 
+/** What a paste did, for the status bar. `notice` is said after it. */
+export interface PasteResult {
+  kind: 'elements' | 'slides';
+  count: number;
+  notice?: string;
+}
+
 /**
  * Paste whatever fragment is on the clipboard: elements land on the current
  * slide, slides land after it. Returns a summary for the status bar, or null
@@ -1259,12 +1362,47 @@ export interface PasteOptions {
  */
 export async function pasteFromClipboard(
   store: EditorStore,
-  providedPayload?: ClipboardReadResult | ClipboardWriteRequest | null,
+  providedPayload?: ClipboardReadResult | ClipboardWriteRequest | StashedClipboard | null,
   options: PasteOptions = {},
-): Promise<{ kind: 'elements' | 'slides'; count: number } | null> {
+): Promise<PasteResult | null> {
   const payload = providedPayload ?? await readSystemClipboard();
   if (!payload) return null;
+  if (payload.kind === 'stashed') return pasteStashedClipboard(store, payload.id, options);
+  return pasteFragment(store, payload, options);
+}
 
+/**
+ * Paste a copy made in another browser tab (see WebClipboardBridge), into
+ * this deck or — with its pictures, videos and pages copied across — into
+ * another one. A copy whose files could not all be brought over still pastes
+ * the rest, and says what it left out.
+ */
+export async function pasteStashedClipboard(
+  store: EditorStore,
+  id: string,
+  options: PasteOptions = {},
+): Promise<PasteResult | null> {
+  const resolved = await resolveStashedClipboard(id);
+  if (!resolved) {
+    return { kind: 'elements', count: 0, notice: 'Nothing pasted: that copy is no longer available. Copy it again.' };
+  }
+  const { payload, dropped } = resolved;
+  const notice = dropped > 0
+    ? `${dropped} picture${dropped === 1 ? '' : 's'} or video${dropped === 1 ? '' : 's'} could not be copied `
+      + `from the other presentation and ${dropped === 1 ? 'was' : 'were'} left out.`
+    : undefined;
+  if (payload.kind === 'elements' && payload.elements.length === 0) {
+    return { kind: 'elements', count: 0, notice };
+  }
+  const pasted = await pasteFragment(store, payload, options);
+  return pasted && notice ? { ...pasted, notice } : pasted;
+}
+
+async function pasteFragment(
+  store: EditorStore,
+  payload: ClipboardReadResult | ClipboardWriteRequest,
+  options: PasteOptions,
+): Promise<PasteResult | null> {
   if (payload.kind === 'external-image') {
     return insertClipboardMedia(store, payload.asset);
   }
@@ -1379,7 +1517,7 @@ export async function pasteFromClipboard(
 export async function pasteInAppClipboard(
   store: EditorStore,
   options: PasteOptions = {},
-): Promise<{ kind: 'elements' | 'slides'; count: number } | null> {
+): Promise<PasteResult | null> {
   if (!fallbackClipboard) return null;
   return pasteFromClipboard(store, fallbackClipboard, options);
 }

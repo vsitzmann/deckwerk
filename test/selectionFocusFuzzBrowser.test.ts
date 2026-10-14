@@ -25,7 +25,8 @@ import {
  *
  * The random walk then throws the rest of the vocabulary at it in a seeded
  * order — clicks, shift-clicks, double-clicks, cell drags, rail clicks,
- * typing, arrows, Tab, undo, select-all, delete — and checks the same
+ * typing, arrows, Tab, undo, select-all, delete, selecting a word, and
+ * formatting from the sidebar's Font size field — and checks the same
  * invariants after every single step. The step list is reported on failure, so
  * a fault found here is a recipe, not a mystery.
  *
@@ -197,10 +198,45 @@ describe.skipIf(!electronBinary)('every way into and out of a text box', () => {
   }
 });
 
-/** One step of the walk: a name for the trace, and the input it delivers. */
+/**
+ * One step of the walk: a name for the trace, and the input it delivers. A
+ * step with an oracle of its own returns what it found wrong.
+ */
 interface Step {
   name: string;
-  run: () => Promise<void>;
+  run: () => Promise<void | string[]>;
+}
+
+/**
+ * Format the selected characters from the sidebar: click the Font size field,
+ * select its value, type a new one, press Enter. The oracle is David's
+ * report: with characters selected in a box being edited, the edit, the
+ * selection, and its paint all survive — the browser's own selection moved
+ * into the field, so the editor has to show it.
+ */
+async function sizeFromSidebar(size: string): Promise<string[]> {
+  const before = await session.state();
+  const selected = await session.selectedText();
+  await session.setField('Font size', size);
+  if (before.editing === null || !selected) return [];
+  const problems: string[] = [];
+  const after = await session.state();
+  if (after.editing !== before.editing) {
+    problems.push(`sizing from the sidebar ended the edit of ${before.editing}`
+      + ` (now ${after.editing ?? 'nothing'})`);
+    return problems;
+  }
+  const still = await session.selectedText();
+  if (still !== selected) {
+    problems.push(`sizing from the sidebar changed the selection from`
+      + ` ${JSON.stringify(selected)} to ${JSON.stringify(still)}`);
+  }
+  const painted = await session.paintedSelection();
+  if (painted.join('') !== selected) {
+    problems.push(`the selection ${JSON.stringify(selected)} shows as`
+      + ` ${JSON.stringify(painted)} while the Font size field has focus`);
+  }
+  return problems;
 }
 
 function stepsFor(state: SelectionState, next: () => number): Step[] {
@@ -226,6 +262,26 @@ function stepsFor(state: SelectionState, next: () => number): Step[] {
   steps.push({ name: 'select all', run: () => session.chord('a', 'KeyA', 65, MOD, ['selectAll']) });
   steps.push({ name: 'undo', run: () => session.chord('z', 'KeyZ', 90, MOD) });
   steps.push({ name: 'bold', run: () => session.chord('b', 'KeyB', 66, MOD) });
+  if (state.editing === TEXT_A || state.editing === TEXT_B) {
+    const editing = state.editing;
+    // "alpha one": 2 is inside "alpha", 7 inside "one".
+    const offset = pick([2, 7]);
+    steps.push({ name: `select the word at ${offset} of ${editing}`,
+      run: () => session.selectWord(editing, offset) });
+  }
+  const size = pick(['36', '44']);
+  if (state.editing === TEXT_A || state.editing === TEXT_B) {
+    const editing = state.editing;
+    // The whole gesture as one step, so the oracle below runs on most walks
+    // rather than only when the dice happen to line up a selection first.
+    steps.push({ name: `select "one" in ${editing} and set Font size ${size} in the sidebar`,
+      run: async () => {
+        await session.selectWord(editing, 7);
+        return sizeFromSidebar(size);
+      } });
+  }
+  steps.push({ name: `set Font size ${size} in the sidebar`, run: () => sizeFromSidebar(size) });
+  steps.push({ name: 'click into the Font size field', run: () => session.clickField('Font size') });
   if (state.elements.includes(TABLE)) {
     const row = 1 + Math.floor(next() * 3) % 3;
     const column = 1 + Math.floor(next() * 3) % 3;
@@ -244,7 +300,7 @@ function stepsFor(state: SelectionState, next: () => number): Step[] {
  */
 function missingTarget(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
-  return /cannot click|no element matches|no .* is labelled/.test(message);
+  return /cannot click|cannot locate|no element matches|no .* is labelled/.test(message);
 }
 
 describe.skipIf(!electronBinary)('a random walk through selection and focus', () => {
@@ -262,15 +318,16 @@ describe.skipIf(!electronBinary)('a random walk through selection and focus', ()
         const state = await session.state();
         const choices = stepsFor(state, next);
         const chosen = choices[Math.floor(next() * choices.length) % choices.length];
+        let found: string[] = [];
         try {
-          await chosen.run();
+          found = (await chosen.run()) ?? [];
           trace.push(chosen.name);
         } catch (error) {
           if (!missingTarget(error)) throw error;
           trace.push(`${chosen.name} (target gone)`);
           continue;
         }
-        const problems = await session.problems();
+        const problems = [...found, ...await session.problems()];
         expect(
           problems,
           `seed ${SEED}, round ${round}, after: ${trace.join(' → ')}`,

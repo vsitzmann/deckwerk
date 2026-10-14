@@ -88,6 +88,7 @@ type ContextMenuEntry =
   | 'separator';
 import { isWebBridgeAction } from '@shared/webBridge.js';
 import { reportSelectionViolations } from './selectionInvariants.js';
+import { KeptSelectionHighlight, TEXT_EDIT_PANEL_CHROME } from './keptSelection.js';
 import {
   HANDLES,
   type SizeGuide,
@@ -826,7 +827,32 @@ export class EditorCanvas {
     end: Element | null;
   } | null = null;
   /** Last non-collapsed browser selection inside the active text element. */
-  private textSelectionRange: Range | null = null;
+  private textSelectionBookmark: Range | null = null;
+  private get textSelectionRange(): Range | null {
+    return this.textSelectionBookmark;
+  }
+  /** Every move of the bookmark re-derives whether the sidebar shows it. */
+  private set textSelectionRange(range: Range | null) {
+    this.textSelectionBookmark = range;
+    this.keptSelection.schedule();
+  }
+  /**
+   * Paints the bookmark while focus is in the sidebar, where the browser's
+   * own highlight cannot reach it (keptSelection.ts).
+   */
+  private readonly keptSelection = new KeptSelectionHighlight(() => {
+    const selection = window.getSelection();
+    return {
+      content: this.editingId
+        ? this.slideLayer.querySelector<HTMLElement>(
+          `[data-element-id="${CSS.escape(this.editingId)}"] .text-content`,
+        )
+        : null,
+      bookmark: this.textSelectionBookmark,
+      live: selection?.rangeCount ? selection.getRangeAt(0) : null,
+      active: document.activeElement,
+    };
+  });
   /** Rectangular cell range currently targeted in the live table editor. */
   private tableSelection: TableSelection | null = null;
   /** Shared paint used by table border presets and the explicit edge tool. */
@@ -936,7 +962,14 @@ export class EditorCanvas {
     });
     this.bindViewportGestures();
     this.bindDrop();
-    document.addEventListener('selectionchange', () => this.captureTextSelection());
+    document.addEventListener('selectionchange', () => {
+      this.captureTextSelection();
+      this.keptSelection.schedule();
+    });
+    // Focus moving between the text and the sidebar decides whether the
+    // bookmarked selection needs painting by hand.
+    document.addEventListener('focusin', () => this.keptSelection.schedule());
+    document.addEventListener('focusout', () => this.keptSelection.schedule());
 
     store.subscribe(() => this.render());
     onCommentHighlightsChange(() => {
@@ -960,6 +993,9 @@ export class EditorCanvas {
    * test for "did the content change".
    */
   render(): void {
+    // A render can replace the edited box's nodes out from under the
+    // bookmark, or end the edit: either way the kept highlight is re-derived.
+    this.keptSelection.schedule();
     const { deck, slideIndex, selection } = this.store.get();
     const slide = deck.slides[slideIndex];
     if (!slide) {
@@ -3308,10 +3344,7 @@ export class EditorCanvas {
     return active instanceof HTMLElement
       && active !== content && !content.contains(active)
       && active.matches('input, select, textarea')
-      && Boolean(active.closest(
-        '.editor-inspector, .font-family-field, .text-table-options,'
-        + ' .text-list-toggle, .color-picker-popover',
-      ));
+      && Boolean(active.closest(TEXT_EDIT_PANEL_CHROME));
   }
 
   private focusTextSurface(content: HTMLElement): void {
@@ -4003,15 +4036,14 @@ export class EditorCanvas {
       if (event.isTrusted && !event.relatedTarget && !document.hasFocus()) return;
       // Native selects need focus in order to open. Keep the live Range while
       // the font picker is used; its change handler restores focus afterward.
+      // A table row/column selection is a formatting target in its own right:
+      // typography fields take focus without ending the edit and clearing
+      // that target before their change handlers run. While focus is there
+      // the bookmarked characters stay painted (keptSelection.ts), from the
+      // same list, so what keeps the edit alive and what keeps it visible
+      // cannot drift apart.
       if (event.relatedTarget instanceof Element
-        && event.relatedTarget.closest(
-          '.font-family-field, .text-table-options, .text-list-toggle, .color-picker-popover',
-        )) return;
-      // A table row/column selection is a formatting target in its own right.
-      // Let typography fields take focus without ending the edit and clearing
-      // that target before their change handlers run.
-      if (event.relatedTarget instanceof Element
-        && event.relatedTarget.closest('.editor-inspector')) return;
+        && event.relatedTarget.closest(TEXT_EDIT_PANEL_CHROME)) return;
       finish(true);
     };
     /**

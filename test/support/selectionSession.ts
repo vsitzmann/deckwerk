@@ -14,6 +14,7 @@ import {
   type RunningBrowser,
 } from './browserSession.js';
 import { collabClientDir } from './collabClient.js';
+import { TEXT_EDIT_PANEL_CHROME } from '../../src/renderer/editor/keptSelection.js';
 
 /**
  * One real editor for the selection and focus tests, driven only through
@@ -80,6 +81,44 @@ export interface SelectionState {
   /** Number of selection outlines the overlay is drawing. */
   outlines: number;
 }
+
+/**
+ * The kept-selection checks, spliced into both copies of the invariant set
+ * (here and crossContextSession) so neither can drift. Reads the
+ * surrounding `problems`, `canvas`, `editing`, `layer`, `active` and
+ * `nativeSelection`.
+ */
+export const KEPT_SELECTION_INVARIANTS = `
+  // --- the selection kept visible while focus is in the sidebar -------------
+  // Chromium has one selection per frame, so focusing a sidebar field takes
+  // the highlight off the characters that field formats; the editor paints
+  // them itself (keptSelection.ts). That paint must exist exactly then.
+  const kept = window.CSS && CSS.highlights ? CSS.highlights.get('deckwerk-kept-selection') : null;
+  const keptRanges = kept ? [...kept].filter((range) => !range.collapsed) : [];
+  const editedContent = editing === null ? null
+    : layer.querySelector('[data-element-id="' + CSS.escape(editing) + '"] .text-content');
+  if (keptRanges.length > 0) {
+    if (editing === null) {
+      problems.push('a kept text selection is painted with no edit session');
+    } else if (!editedContent || keptRanges.some((range) =>
+      !editedContent.contains(range.commonAncestorContainer))) {
+      problems.push('a kept text selection is painted outside ' + editing);
+    } else if (active && editedContent.contains(active)) {
+      problems.push('a kept text selection is painted over the live one in ' + editing);
+    }
+  }
+  if (editing !== null && editedContent && window.CSS && CSS.highlights && active
+    && !editedContent.contains(active)
+    && active.closest(${JSON.stringify(TEXT_EDIT_PANEL_CHROME)})
+    && canvas.hasExpandedTextSelection()) {
+    const live = nativeSelection && nativeSelection.rangeCount ? nativeSelection.getRangeAt(0) : null;
+    const nativePaints = live && !live.collapsed && editedContent.contains(live.commonAncestorContainer);
+    if (!nativePaints && keptRanges.length === 0) {
+      problems.push('the text selected in ' + editing
+        + ' looks deselected while focus is in the sidebar');
+    }
+  }
+`;
 
 /**
  * The invariants that must hold between the element selection, the live text
@@ -164,6 +203,7 @@ const INVARIANTS = `() => {
     }
   }
 
+${KEPT_SELECTION_INVARIANTS}
   // --- the table cell range -------------------------------------------------
   const highlighted = [...layer.querySelectorAll('.editor-table-selected')];
   const highlightOwners = [...new Set(highlighted.map((cell) =>
@@ -267,7 +307,7 @@ const STATE = `() => {
   };
 }`;
 
-export interface SelectionSession {
+export interface SelectionSession extends SidebarSelectionProbes {
   cdp: Cdp;
   /** Put the deck back to its starting shape with nothing selected. */
   reset(): Promise<void>;
@@ -304,6 +344,109 @@ export interface SelectionSession {
 
 export function elementSelector(elementId: string): string {
   return `.slide-layer [data-element-id="${elementId}"]`;
+}
+
+/**
+ * Real-input probes for a text selection kept while the author works in the
+ * sidebar, shared by the selection suites and the cross-context fuzz.
+ */
+export interface SidebarSelectionProbes {
+  /** Real double-click on the word at a flat text offset of a box. */
+  selectWord(elementId: string, offset: number): Promise<void>;
+  /** The characters the edit session targets, or null outside an edit. */
+  selectedText(): Promise<string | null>;
+  /** The text under the editor's kept-selection highlight, range by range. */
+  keptHighlight(): Promise<string[]>;
+  /**
+   * What shows as selected in the box being edited: the browser's own
+   * expanded selection there if it has one, otherwise the editor's kept paint.
+   */
+  paintedSelection(): Promise<string[]>;
+  /** The label of the sidebar field holding focus, or null. */
+  focusedField(): Promise<string | null>;
+  /** Real click into a sidebar number field, found by its label. */
+  clickField(label: string): Promise<void>;
+  /**
+   * Real input into a sidebar number field: click it, select its value with
+   * Cmd/Ctrl+A, type the new one, and commit with Enter.
+   */
+  setField(label: string, value: string): Promise<void>;
+}
+
+export function sidebarSelectionProbes(cdp: Cdp): SidebarSelectionProbes {
+  const probes: SidebarSelectionProbes = {
+    async selectWord(elementId, offset) {
+      await cdp.doubleClickTextAtOffset(`${elementSelector(elementId)} .text-content`, offset,
+        `word at ${offset} of ${elementId}`);
+      await wait(120);
+    },
+    selectedText() {
+      return cdp.evaluate<string | null>(`(() => {
+        const editing = window.canvas.editingElementId();
+        const offsets = window.canvas.editingSelectionOffsets();
+        if (editing === null || !offsets) return null;
+        const content = document.querySelector(
+          '.slide-layer [data-element-id="' + CSS.escape(editing) + '"] .text-content');
+        return content ? (content.textContent ?? '').slice(offsets.start, offsets.end) : null;
+      })()`);
+    },
+    keptHighlight() {
+      return cdp.evaluate<string[]>(`(() => {
+        const kept = CSS.highlights ? CSS.highlights.get('deckwerk-kept-selection') : null;
+        return kept ? [...kept].map((range) => range.toString()) : [];
+      })()`);
+    },
+    paintedSelection() {
+      return cdp.evaluate<string[]>(`(() => {
+        const editing = window.canvas.editingElementId();
+        const content = editing === null ? null : document.querySelector(
+          '.slide-layer [data-element-id="' + CSS.escape(editing) + '"] .text-content');
+        const live = getSelection();
+        const range = live && live.rangeCount ? live.getRangeAt(0) : null;
+        if (content && range && !range.collapsed && content.contains(range.commonAncestorContainer)) {
+          return [range.toString()];
+        }
+        const kept = CSS.highlights ? CSS.highlights.get('deckwerk-kept-selection') : null;
+        return kept ? [...kept].map((painted) => painted.toString()) : [];
+      })()`);
+    },
+    focusedField() {
+      return cdp.evaluate<string | null>(`(() => {
+        const active = document.activeElement;
+        const field = active && active.closest ? active.closest('.editor-inspector .field') : null;
+        return field ? field.querySelector('span')?.textContent ?? null : null;
+      })()`);
+    },
+    async clickField(label) {
+      const id = fieldInputId(label);
+      const found = await cdp.evaluate<boolean>(`(() => {
+        const field = [...document.querySelectorAll('.editor-inspector .field-number')]
+          .find((node) => node.querySelector('span')?.textContent === ${JSON.stringify(label)}
+            && node.getClientRects().length > 0);
+        const input = field?.querySelector('input');
+        if (!input) return false;
+        input.id = ${JSON.stringify(id)};
+        return true;
+      })()`);
+      // Worded like the other missing-target errors: the walk skips a step
+      // whose control the current selection does not show.
+      if (!found) throw new Error(`no element matches the "${label}" field`);
+      await cdp.click(`#${id}`, label);
+      await wait(60);
+    },
+    async setField(label, value) {
+      await probes.clickField(label);
+      await cdp.chord('a', 'KeyA', 65, MOD, ['selectAll']);
+      await cdp.typeKeys(value);
+      await cdp.key('Enter', 13);
+      await wait(150);
+    },
+  };
+  return probes;
+}
+
+function fieldInputId(label: string): string {
+  return `selection-field-${label.replace(/\W+/g, '-').toLowerCase()}`;
 }
 
 function cellSelector(row: number, column: number): string {
@@ -373,6 +516,7 @@ export async function startSelectionSession(deckId: string, name: string): Promi
 function buildSession(cdp: Cdp): SelectionSession {
   const session: SelectionSession = {
     cdp,
+    ...sidebarSelectionProbes(cdp),
     async reset() {
       // Leave whatever state the last case ended in the way an author would,
       // then write the starting deck back. Escape is a real key press; the
@@ -381,11 +525,19 @@ function buildSession(cdp: Cdp): SelectionSession {
         const editing = await cdp.evaluate<string | null>(
           'window.canvas.editingElementId()');
         if (editing === null) break;
-        await cdp.key('Escape', 27);
+        // Escape reaches the edit only from the text; from a sidebar field
+        // the way out is a click on the canvas.
+        if (attempt === 0) await cdp.key('Escape', 27);
+        else await session.clickEmpty();
         await wait(80);
       }
       await cdp.evaluate(`(() => {
         window.store.commit((deck) => {
+          // A walk can delete the second slide (the rail takes Backspace).
+          while (deck.slides.length < 2) {
+            deck.slides.push({ ...structuredClone(deck.slides[0]),
+              id: 'slide-restored-' + deck.slides.length, elements: [] });
+          }
           deck.slides[0].elements = ${JSON.stringify(startingElements())};
           deck.slides[1].elements = ${JSON.stringify([secondSlideElement()])};
         }, { label: 'Selection fixture' });

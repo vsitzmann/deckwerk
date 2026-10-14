@@ -1,4 +1,5 @@
 import { copyFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -37,6 +38,7 @@ import { collabClientDir } from './support/collabClient.js';
  */
 
 const DECK_ID = 'shell-browser';
+const OTHER_DECK_ID = 'shell-browser-other';
 const USER = 'Shell Browser';
 const MP4 = join(process.cwd(), 'decks', 'demo-deck', 'assets', 'testclip.mp4');
 const PNG = join(process.cwd(), 'decks', 'demo-deck', 'assets', 'swatch.png');
@@ -116,6 +118,11 @@ async function openEditor(): Promise<Cdp> {
     '.role-body { font: 400 40px/1.3 sans-serif; }',
     '',
   ].join('\n'), 'utf8');
+
+  // A second presentation on the same server, to paste into from this one.
+  await mkdir(join(decksRoot, OTHER_DECK_ID), { recursive: true });
+  await saveDeck(join(decksRoot, OTHER_DECK_ID), emptyDeck('Other talk'));
+  await copyFile(join(deckDir, 'theme.css'), join(decksRoot, OTHER_DECK_ID, 'theme.css'));
 
   server = await startCollabServer({ rootDir: decksRoot, clientDir, host: '127.0.0.1', port: 0 });
   browser = await launchBrowser(
@@ -464,6 +471,44 @@ describe.skipIf(!electronBinary)('editor shell in the collaboration browser', ()
       return { rows: holder.querySelectorAll('tr').length, cells: holder.querySelectorAll('td').length };
     })()`);
     expect(table).toEqual({ rows: 2, cells: 4 });
+  }, 60_000);
+
+  // Last: it leaves this deck for the other one.
+  it('copies an image with Cmd+C and pastes it into another presentation with Cmd+V', async () => {
+    // Reported: "you can't copy-paste images between slideshows". Opening the
+    // other deck reloads the page, which emptied the in-page copy.
+    await clickRail(0);
+    await selectOnCanvas(IMAGE_ID);
+    // Earlier tests nudge it; the paste lands wherever it is now.
+    const source = (await snapshot()).slides[0].find((el) => el.id === IMAGE_ID)!;
+    // With Chromium's `copy` command, as a real Cmd+C has: its copy event is
+    // what puts the copy's token on the OS clipboard.
+    await cdp().chord('c', 'KeyC', 67, MOD, ['copy']);
+    await expectStatus('Copied 1 element.');
+
+    await cdp().evaluate(`void setTimeout(() => {
+      location.href = ${JSON.stringify(`/?deck=${OTHER_DECK_ID}&name=${encodeURIComponent(USER)}`)};
+    }, 0)`);
+    await eventually(async () => cdp().evaluate<boolean>(`(() => (
+      new URLSearchParams(location.search).get('deck') === ${JSON.stringify(OTHER_DECK_ID)}
+      && document.getElementById('status')?.textContent?.includes(${JSON.stringify(`connected as ${USER}`)}) === true
+      && Boolean(document.querySelector('#canvas .slide'))
+    ))()`).catch(() => false), 'the other presentation did not open', (ok) => ok);
+    await focusCanvasBackground();
+    await pasteChord();
+    await expectStatus('Pasted 1 element.');
+
+    const [pasted] = (await snapshot()).slides[0];
+    expect(pasted.type).toBe('image');
+    // The other deck's own copy of the file, not a path into this one.
+    expect(pasted.src).toMatch(/^assets\/swatch\.[0-9a-f]{8}\.png$/);
+    expect([pasted.x, pasted.y]).toEqual([source.x, source.y]);
+    const painted = await eventually(async () => cdp().evaluate<boolean>(`(() => {
+      const img = document.querySelector(${JSON.stringify(`${ON_CANVAS(pasted.id)} img`)});
+      return Boolean(img?.complete && img.naturalWidth > 0);
+    })()`), 'the pasted image did not render', (ok) => ok);
+    expect(painted).toBe(true);
+    expect(existsSync(join(workDir, 'decks', OTHER_DECK_ID, pasted.src!))).toBe(true);
   }, 60_000);
 });
 
