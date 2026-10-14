@@ -311,6 +311,15 @@ body.panel-resizing iframe { pointer-events: none; }
 
 .canvas-host.drop-active { box-shadow: inset 0 0 0 3px var(--accent); }
 
+/* Hand-panning: an open hand while Space is held, a closed one while a
+   Space or middle-button drag moves the view. Over every handle and box, so
+   nothing suggests the press will select or resize; the zoom bar, which a
+   press does not pan from, keeps its own. */
+.canvas-host.space-pan,
+.canvas-host.space-pan .stage * { cursor: grab !important; }
+.canvas-host.is-panning,
+.canvas-host.is-panning * { cursor: grabbing !important; }
+
 .canvas-host .stage {
   position: absolute;
   box-shadow: 0 8px 40px rgb(0 0 0 / 50%);

@@ -23,8 +23,9 @@ import {
  * mid-typing, Escape and empty-canvas clicks mid-edit, shift-click
  * multi-select, marquee drags, rail hops mid-edit, double-clicking the image,
  * Cmd+B mid-word, undo/redo at random points, Backspace with an element
- * selection, Cmd+A in both contexts, and Backspace on a multi-slide rail
- * selection (which must ask first; cancelled, or confirmed and undone).
+ * selection, Cmd+A in both contexts, Backspace on a multi-slide rail
+ * selection (which must ask first; cancelled, or confirmed and undone), and
+ * panning and zooming the view with a plain mouse and the keyboard.
  *
  * After EVERY step five oracles run: the whole-editor invariant set from
  * selectionSession, keystroke routing via per-step nonce strings, an element
@@ -148,7 +149,8 @@ type OpName =
   | 'click' | 'shift-click' | 'double-click text' | 'double-click image then text'
   | 'type nonce' | 'bold mid-word' | 'escape' | 'click empty' | 'marquee'
   | 'rail hop' | 'undo' | 'redo' | 'undo round-trip' | 'delete selection'
-  | 'cmd+a' | 'click with stray hover' | 'rail multi-delete' | 'stack key' | 'spelling fix';
+  | 'cmd+a' | 'click with stray hover' | 'rail multi-delete' | 'stack key' | 'spelling fix'
+  | 'viewport gesture';
 
 interface Violation { seed: number; step: number; op: OpName; oracle: string; detail: string }
 
@@ -402,6 +404,7 @@ function chooseOp(next: () => number, pre: CrossState): OpName {
   add('cmd+a', 1);
   add('rail multi-delete', 1);
   add('stack key', 1);
+  add('viewport gesture', 2);
   return pick(next, ops);
 }
 
@@ -571,6 +574,9 @@ async function performOp(
     case 'cmd+a':
       await session.chord('a', 'KeyA', 65, MOD, pre.editing !== null ? ['selectAll'] : undefined);
       return 'same';
+    case 'viewport gesture':
+      await viewportGesture(next, pre, flag);
+      return 'same';
     case 'rail multi-delete': {
       // Select both slides in the rail with real clicks, then a deletion key.
       // More than one slide must never go without a confirmation: Escape
@@ -681,6 +687,104 @@ async function checkRouting(
     flag('routing', `typed "${nonce}" into ${editing} but it also appears in `
       + `[${strays.join(', ')}]`);
   }
+}
+
+/**
+ * Pan or zoom the view the way a plain mouse and the keyboard do it — a
+ * Ctrl/Cmd wheel notch, Shift and the wheel, a middle-button drag, Space and
+ * a drag, Ctrl/Cmd + or - — over a random object or the empty slide, mid-edit
+ * or not. None of it is an edit: every object stays where it was, and the
+ * selection, the text edit and the slide are as they were. Nor may the page
+ * itself zoom. Ctrl/Cmd+0 then fits the view again, so later ops aim at an
+ * unpanned slide.
+ */
+async function viewportGesture(
+  next: () => number,
+  pre: CrossState,
+  flag: (oracle: 'routing' | 'census', detail: string) => void,
+): Promise<void> {
+  const { cdp } = session;
+  const snapshot = () => cdp.evaluate<string>(`(() => {
+    const state = window.store.get();
+    return JSON.stringify({
+      geometry: state.deck.slides.map((slide) => slide.elements.map((element) =>
+        [element.id, element.x, element.y, element.w, element.h, element.rot])),
+      slide: state.slideIndex,
+      selection: [...state.selection].sort(),
+      editing: window.canvas.editingElementId(),
+    });
+  })()`);
+  const before = await snapshot();
+  const ratio = await cdp.evaluate<number>('window.devicePixelRatio');
+  const targets = targetsOn(pre);
+  const aim = targets.length > 0 && next() < 0.7
+    ? await session.boxOf(elementSelector(pick(next, targets)))
+    : await session.boxOf('.slide-layer');
+  const x = aim.left + aim.width * (0.2 + 0.6 * next());
+  const y = aim.top + aim.height * (0.2 + 0.6 * next());
+  const mouse = (type: string, at: { x: number; y: number }, button: string, buttons: number) =>
+    cdp.call('Input.dispatchMouseEvent', {
+      type, x: at.x, y: at.y, button, buttons, clickCount: type === 'mouseMoved' ? 0 : 1,
+    });
+  const drag = async (button: 'left' | 'middle', buttons: number) => {
+    const dx = (next() - 0.5) * 300;
+    const dy = (next() - 0.5) * 200;
+    await mouse('mouseMoved', { x, y }, 'none', 0);
+    await mouse('mousePressed', { x, y }, button, buttons);
+    for (let i = 1; i <= 4; i++) {
+      await mouse('mouseMoved', { x: x + (dx * i) / 4, y: y + (dy * i) / 4 }, button, buttons);
+      await wait(16);
+    }
+    await mouse('mouseReleased', { x: x + dx, y: y + dy }, button, 0);
+  };
+  // Space pans only from the canvas or from nothing in particular; with the
+  // rail or a field focused, it is theirs, and a Space drag would be a plain
+  // drag. Mid-edit, Space is a typed space.
+  const spaceIsFree = pre.editing === null && await cdp.evaluate<boolean>(`(() => {
+    const focus = document.activeElement;
+    return !focus || focus === document.body || Boolean(focus.closest('#canvas'));
+  })()`);
+  const gestures = ['notch', 'shift wheel', 'middle drag', 'zoom keys', ...(spaceIsFree ? ['space drag'] : [])];
+  const gesture = pick(next, gestures);
+  switch (gesture) {
+    case 'notch':
+      await cdp.call('Input.dispatchMouseEvent', {
+        type: 'mouseWheel', x, y, deltaX: 0, deltaY: next() < 0.5 ? -120 : 100, modifiers: MOD,
+      });
+      break;
+    case 'shift wheel':
+      await cdp.call('Input.dispatchMouseEvent', {
+        type: 'mouseWheel', x, y, deltaX: 0, deltaY: (next() - 0.5) * 240, modifiers: SHIFT,
+      });
+      break;
+    case 'middle drag':
+      await drag('middle', 4);
+      break;
+    case 'zoom keys':
+      if (next() < 0.5) await session.chord('=', 'Equal', 187, MOD);
+      else await session.chord('-', 'Minus', 189, MOD);
+      break;
+    case 'space drag': {
+      const space = { key: ' ', code: 'Space', windowsVirtualKeyCode: 32, nativeVirtualKeyCode: 32 };
+      await cdp.call('Input.dispatchKeyEvent', { type: 'rawKeyDown', ...space });
+      await cdp.call('Input.dispatchKeyEvent', { type: 'char', text: ' ', unmodifiedText: ' ', ...space });
+      await drag('left', 1);
+      await cdp.call('Input.dispatchKeyEvent', { type: 'keyUp', ...space });
+      break;
+    }
+  }
+  await wait(120);
+  const after = await snapshot();
+  if (after !== before) {
+    flag('census', `${gesture} changed the deck or the editing state; diff: ${firstDiff(before, after)}`);
+  }
+  await session.chord('0', 'Digit0', 48, MOD);
+  const view = await cdp.evaluate<{ zoom: string; ratio: number }>(`({
+    zoom: document.querySelector('#canvas .zoom-value').value,
+    ratio: window.devicePixelRatio,
+  })`);
+  if (view.ratio !== ratio) flag('routing', `${gesture} zoomed the page itself: ${ratio} -> ${view.ratio}`);
+  if (view.zoom !== '100%') flag('routing', `Ctrl/Cmd+0 after ${gesture} left the canvas at ${view.zoom}`);
 }
 
 function firstDiff(a: string, b: string): string {
