@@ -226,8 +226,9 @@ installNetApi({ deckId, saveTheme: (css) => bridge.sendTheme(css) });
 const store = new EditorStore(emptyDeck('Connecting…'));
 // Development builds verify after every in-place patch that the canvas DOM
 // still matches a fresh render of the deck, and report any property the two
-// paths disagree about. See renderInvariants.ts.
-setRenderInvariantChecks(import.meta.env.DEV);
+// paths disagree about. See renderInvariants.ts. The test builds turn it on
+// too (VITE_RENDER_INVARIANTS), so the fuzz walks fail on what it reports.
+setRenderInvariantChecks(import.meta.env.DEV || import.meta.env.VITE_RENDER_INVARIANTS === '1');
 setSelectionInvariantChecks(import.meta.env.DEV);
 const canvas = new EditorCanvas(el('canvas'), store);
 el('canvas').addEventListener(CANVAS_NOTICE_EVENT, (event) => {

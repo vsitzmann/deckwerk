@@ -19,8 +19,9 @@ let pending: Promise<string> | null = null;
 export function collabClientDir(): Promise<string> {
   pending ??= sharedBuild({
     cacheName: 'slide-editor-vitest-collab',
-    inputs: ['src', 'vite.collab.config.ts', 'package-lock.json'],
+    inputs: ['src', 'vite.collab.config.ts', 'package-lock.json', 'test/support/collabClient.ts'],
     produce: async (outDir, checkout) => {
+      enableRenderInvariants();
       await build({
         configFile: join(checkout, 'vite.collab.config.ts'),
         logLevel: 'silent',
@@ -29,6 +30,16 @@ export function collabClientDir(): Promise<string> {
     },
   });
   return pending;
+}
+
+/**
+ * Test builds check, after every in-place canvas patch, that the DOM matches a
+ * fresh render (renderInvariants.ts), as development builds do. A production
+ * build would leave that checker off, and a test could never see what it
+ * reports. Vite reads `VITE_*` variables from the environment.
+ */
+export function enableRenderInvariants(): void {
+  process.env.VITE_RENDER_INVARIANTS = '1';
 }
 
 /**

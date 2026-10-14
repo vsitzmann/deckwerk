@@ -3,7 +3,7 @@ import { mkdir, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { build } from 'electron-vite';
 import { collectProcessOutput, electronBinary, reportedPorts, type DevToolsTarget } from './browserSession.js';
-import { collabClientDir, sharedBuild } from './collabClient.js';
+import { collabClientDir, enableRenderInvariants, sharedBuild } from './collabClient.js';
 
 /**
  * The REAL desktop app for the integration tests: built once per source
@@ -46,8 +46,12 @@ let pending: Promise<string> | null = null;
 export function desktopBuildDir(): Promise<string> {
   pending ??= sharedBuild({
     cacheName: 'slide-editor-vitest-desktop',
-    inputs: ['src', 'electron.vite.config.ts', 'package-lock.json', 'tsconfig.json'],
+    inputs: [
+      'src', 'electron.vite.config.ts', 'package-lock.json', 'tsconfig.json',
+      'test/support/collabClient.ts', 'test/support/desktopApp.ts',
+    ],
     produce: async (outDir, checkout) => {
+      enableRenderInvariants();
       await build({
         root: checkout,
         configFile: join(checkout, 'electron.vite.config.ts'),

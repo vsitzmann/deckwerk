@@ -2,11 +2,13 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { electronBinary, eventually, wait } from './support/browserSession.js';
 import { extraFuzzSeeds } from './support/fuzzSeeds.js';
 import {
+  BOX_DEFAULTS,
   CONTENT,
   MOD,
   OTHER_CONTENT,
   startListEditingSession,
   TEXT_BLOCKS,
+  type BoxShape,
   type ListEditingSession,
   type TextRun,
 } from './support/listEditingSession.js';
@@ -61,6 +63,19 @@ const SEED = Number.parseInt(process.env.LIST_FUZZ_SEED ?? '', 10) || 9012026;
  */
 const WALK_SEEDS = [...new Set([SEED, ...extraFuzzSeeds()])];
 const DECK_ID = 'list-editing-fuzz';
+/**
+ * The boxes the sweep and the walks run in. The shared box is so tall that no
+ * edit ever overflows it, and a box with room to spare shows no type-size bug:
+ * an auto-fit pass wrongly run on it lands on the size it already has. Slide 4
+ * of 2610_TRI_site_visit was a box without auto-fit, too short for its lines,
+ * at a fixed line height -- there that same wrong pass fell to 6px. So the
+ * vocabulary also runs in that box, and in a short box that does auto-fit.
+ */
+const BOXES: Array<{ name: string; shape: BoxShape }> = [
+  { name: 'roomy box', shape: BOX_DEFAULTS },
+  { name: 'short box, fixed line height', shape: { h: 120, style: { 'line-height': '39.2px' }, autoFit: false } },
+  { name: 'short auto-fit box', shape: { h: 120, style: {}, autoFit: true } },
+];
 const WORDS = ['alpha', 'beta', 'gamma', 'delta', 'epsilon', 'zeta'];
 
 let session: ListEditingSession;
@@ -133,20 +148,76 @@ async function expectSound(label: string): Promise<void> {
     .toEqual([]);
   expect(await selectionProblems(session.cdp), `${label}: selection/editing invariants`)
     .toEqual([]);
+  expect(await session.typeSizeProblems(), `${label}: type size`).toEqual([]);
+  expect(await session.typeSizeProblems(OTHER_CONTENT), `${label}: the other box's type size`)
+    .toEqual([]);
+  expect(await session.renderDivergences(), `${label}: canvas DOM against a fresh render`)
+    .toEqual([]);
+}
+
+/** Run `body` in a box of `shape`, putting the shared box back afterwards. */
+async function inBox(shape: BoxShape, body: () => Promise<void>): Promise<void> {
+  await session.shapeBox(shape);
+  try {
+    await body();
+  } finally {
+    await session.shapeBox(BOX_DEFAULTS);
+  }
 }
 
 const compact = (value: string) => value.replace(/\s+/g, '');
 
 describe.skipIf(!electronBinary)('list editing under a sweep of real edits', () => {
-  it('opens, deletes and replaces an empty bullet at every position', {
-    timeout: RUN_EXHAUSTIVE ? 60 * 60_000 : 600_000,
+  // The oracles that read the page are only worth their silence if they can
+  // speak. Each control breaks what one of them guards, through the page.
+  it('the type-size oracle and the render checker both report what they guard', {
+    timeout: 120_000,
   }, async () => {
-    const cases = sweepCases();
-    expect(cases.length, 'the sweep has cases to run').toBeGreaterThan(0);
-    for (const testCase of cases) {
-      await runSweepCase(testCase);
-    }
+    await session.reset('<p>alpha</p><p>beta</p>');
+    await session.renderDivergences();
+    // A fit residue on a box without auto-fit: what slide 4's Backspace left.
+    await session.cdp.evaluate(`(() => {
+      const root = document.querySelector('${CONTENT}');
+      root.style.fontSize = '6px';
+      root.dataset.fittedFontSize = '6';
+      return true;
+    })()`);
+    const sizes = await session.typeSizeProblems();
+    expect(sizes, 'the type-size oracle saw the residue').toContain('a box without auto-fit was fitted to 6px');
+    expect(sizes.join('\n')).toContain('"alpha" is 6px');
+    // A stray attribute on the other box, then a patch elsewhere: the checker
+    // compares the whole slide against a fresh render after every patch.
+    await session.cdp.evaluate(`(() => {
+      document.querySelector('${OTHER_CONTENT}').parentElement.setAttribute('data-stray', '1');
+      return true;
+    })()`);
+    await session.reset('<p>alpha</p><p>beta</p><p>gamma</p>');
+    const reports = await eventually(() => session.renderDivergences(),
+      'the render checker never reported the stray attribute', (found) => found.length > 0);
+    expect(reports.join('\n')).toContain('data-stray');
+    await session.cdp.evaluate(`(() => {
+      document.querySelector('${OTHER_CONTENT}').parentElement.removeAttribute('data-stray');
+      return true;
+    })()`);
+    // Re-rendering the list box clears the residue written on it above.
+    await session.reset('<p>alpha</p>');
+    await session.renderDivergences();
+    expect(await session.typeSizeProblems()).toEqual([]);
   });
+
+  for (const box of BOXES) {
+    it(`opens, deletes and replaces an empty bullet at every position (${box.name})`, {
+      timeout: RUN_EXHAUSTIVE ? 60 * 60_000 : 600_000,
+    }, async () => {
+      const cases = sweepCases();
+      expect(cases.length, 'the sweep has cases to run').toBeGreaterThan(0);
+      await inBox(box.shape, async () => {
+        for (const testCase of cases) {
+          await runSweepCase(testCase, box.name);
+        }
+      });
+    });
+  }
 
   // Minimised from the walk (seed 9012026, step 179). Chromium's deletion
   // merges the two items and wraps the surviving text in a span carrying the
@@ -262,17 +333,19 @@ describe.skipIf(!electronBinary)('list editing under a sweep of real edits', () 
   });
 
   for (const walkSeed of WALK_SEEDS) {
-    it(`survives a seeded walk through the list vocabulary (seed ${walkSeed})`, {
-      timeout: RUN_EXHAUSTIVE ? 60 * 60_000 : 600_000,
-    }, async () => {
-      await runWalk(walkSeed);
-    });
+    for (const box of BOXES) {
+      it(`survives a seeded walk through the list vocabulary (seed ${walkSeed}, ${box.name})`, {
+        timeout: RUN_EXHAUSTIVE ? 60 * 60_000 : 600_000,
+      }, async () => {
+        await inBox(box.shape, () => runWalk(walkSeed, box.name));
+      });
+    }
   }
 });
 
-async function runWalk(seed: number): Promise<void> {
+async function runWalk(seed: number, box: string): Promise<void> {
   const steps = RUN_EXHAUSTIVE ? 200 : 40;
-  console.log(`walking ${steps} steps from seed ${seed}`);
+  console.log(`walking ${steps} steps from seed ${seed} in the ${box}`);
   const next = random(seed);
   const actions = [
     'bullet all', 'number all', 'free all', 'caret', 'return', 'empty bullet',
@@ -289,7 +362,7 @@ async function runWalk(seed: number): Promise<void> {
   let typed = 0;
   for (let step = 0; step < steps; step++) {
     const action = actions[Math.floor(next() * actions.length)];
-    const label = `seed ${seed}, step ${step + 1} (${action})`;
+    const label = `seed ${seed}, ${box}, step ${step + 1} (${action})`;
     const before = compact(await session.text());
     if (process.env.LIST_FUZZ_TRACE === '1') {
       console.log(label, 'BEFORE', await session.markup());
@@ -816,9 +889,9 @@ async function moveCaret(next: () => number, where: 'start' | 'end' | 'middle' =
   if (where === 'end') await session.cdp.key('End', 35);
 }
 
-async function runSweepCase({ kind, length, at, route }: SweepCase): Promise<void> {
+async function runSweepCase({ kind, length, at, route }: SweepCase, box: string): Promise<void> {
   const words = WORDS.slice(0, length);
-  const where = `${kind.toLowerCase()} ${length} items, empty bullet after ${words[at]}, `
+  const where = `${box}, ${kind.toLowerCase()} ${length} items, empty bullet after ${words[at]}, `
     + `deleted with ${route === 'return' ? 'Return' : 'Backspace'}`;
   const tag = kind === 'Bulleted' ? 'ul' : 'ol';
   const marked = (list: string[]) => list.map((word) => `- ${word}`);
@@ -853,6 +926,7 @@ async function runSweepCase({ kind, length, at, route }: SweepCase): Promise<voi
     ...(tail.length > 0 ? [tailTag, ...marked(tail)] : []),
   ];
   expect(await session.outline(), `${where}: the bullet is gone`).toEqual(expected(''));
+  await expectSound(`${where}: with the bullet deleted`);
 
   // Write plain text where the bullet was.
   const note = `note ${at}`;
