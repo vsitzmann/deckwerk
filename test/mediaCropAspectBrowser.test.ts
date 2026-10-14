@@ -132,7 +132,7 @@ describe.skipIf(!electronBinary)('cropping media with "Keep aspect ratio" off', 
       // The inspector must be showing this element, still ticked, before the
       // click: on a slow machine it can still be the previous one's.
       await eventually(() => cdp.evaluate<boolean>(`(() => {
-        const selection = window.store.get().selection;
+        const selection = [...window.store.get().selection];
         const box = [...document.querySelectorAll('label.field-check')]
           .find((n) => n.textContent.trim() === 'Keep aspect ratio')?.querySelector('input');
         return selection.length === 1 && selection[0] === ${JSON.stringify(id)} && box?.checked === true;
