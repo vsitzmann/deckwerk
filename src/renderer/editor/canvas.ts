@@ -89,6 +89,7 @@ type ContextMenuEntry =
   | 'separator';
 import { isWebBridgeAction } from '@shared/webBridge.js';
 import { reportSelectionViolations } from './selectionInvariants.js';
+import { KeptSelectionHighlight, TEXT_EDIT_PANEL_CHROME } from './keptSelection.js';
 import {
   HANDLES,
   type SizeGuide,
@@ -705,6 +706,55 @@ function normalizeInlineStyleSpans(root: HTMLElement): void {
 const MIN_ZOOM = 0.25;
 const MAX_ZOOM = 8;
 const ZOOM_STEP = 0.25;
+/** Zoom ratio of one mouse-wheel notch with Ctrl/Cmd held, in either direction. */
+const WHEEL_NOTCH_ZOOM = 1.1;
+/**
+ * A pixel-mode wheel event at least this large is a mouse notch: Chromium
+ * reports 100 px a notch on Windows and 120 on Linux (less on a scaled
+ * display), and sums notches that arrive within one frame. A trackpad pinch
+ * frame is -100·ln(scale): a few fractional pixels.
+ */
+const WHEEL_NOTCH_MIN_PX = 50;
+const WHEEL_NOTCH_PX = 100;
+/** Firefox reports a notch in lines; three is every platform's default. */
+const WHEEL_LINES_PER_NOTCH = 3;
+
+/**
+ * The zoom ratio a Ctrl/Cmd wheel event asks for. A mouse notch is a fixed
+ * ×1.1 (notches in one event compound); a trackpad pinch keeps its smooth
+ * exponential curve, capped at one notch per event, so the 40 px that
+ * Chromium on macOS reports for a mouse tick cannot leap either. Both are
+ * symmetric: the same delta the other way is the exact inverse.
+ */
+export function wheelZoomFactor(deltaY: number, deltaMode: number): number {
+  if (deltaY === 0) return 1;
+  const direction = deltaY < 0 ? 1 : -1;
+  const size = Math.abs(deltaY);
+  let notches: number;
+  if (deltaMode === WheelEvent.DOM_DELTA_LINE) {
+    notches = Math.max(1, Math.round(size / WHEEL_LINES_PER_NOTCH));
+  } else if (deltaMode === WheelEvent.DOM_DELTA_PAGE) {
+    notches = Math.max(1, Math.round(size));
+  } else if (size >= WHEEL_NOTCH_MIN_PX) {
+    notches = Math.max(1, Math.round(size / WHEEL_NOTCH_PX));
+  } else {
+    return Math.exp(direction * Math.min(size * 0.01, Math.log(WHEEL_NOTCH_ZOOM)));
+  }
+  return WHEEL_NOTCH_ZOOM ** (direction * notches);
+}
+
+/**
+ * The canvas zoom a key chord asks for: Cmd/Ctrl with = or + zooms in, with
+ * - or _ zooms out, with 0 fits. Matched by character, so a layout with its
+ * own + key works unshifted, as it does for the browser's page zoom.
+ */
+export function zoomShortcut(e: KeyboardEvent): 'in' | 'out' | 'fit' | null {
+  if (!(e.metaKey || e.ctrlKey) || e.altKey) return null;
+  if (e.key === '=' || e.key === '+') return 'in';
+  if (e.key === '-' || e.key === '_') return 'out';
+  if (e.key === '0' && !e.shiftKey) return 'fit';
+  return null;
+}
 const HANDLE_NAMES = Object.keys(HANDLES);
 type MoveOrigin = Rect & { control?: { x: number; y: number } };
 type ResizeOrigin = Rect & {
@@ -781,6 +831,10 @@ export class EditorCanvas {
   private zoom = 1;
   /** Screen-pixel displacement from the centred stage position. */
   private pan = { x: 0, y: 0 };
+  /** A hand-pan in progress: a middle-button drag, or a drag with Space held. */
+  private viewportPan: { pointerId: number; x: number; y: number } | null = null;
+  /** Space is held over the canvas, so the primary button pans; see bindSpacePan. */
+  private spacePan = false;
   /** Height of chrome covering the bottom of the host; see setBottomInset. */
   private bottomInset = 0;
   private drag: DragMode = { kind: 'none' };
@@ -901,7 +955,32 @@ export class EditorCanvas {
     end: Element | null;
   } | null = null;
   /** Last non-collapsed browser selection inside the active text element. */
-  private textSelectionRange: Range | null = null;
+  private textSelectionBookmark: Range | null = null;
+  private get textSelectionRange(): Range | null {
+    return this.textSelectionBookmark;
+  }
+  /** Every move of the bookmark re-derives whether the sidebar shows it. */
+  private set textSelectionRange(range: Range | null) {
+    this.textSelectionBookmark = range;
+    this.keptSelection.schedule();
+  }
+  /**
+   * Paints the bookmark while focus is in the sidebar, where the browser's
+   * own highlight cannot reach it (keptSelection.ts).
+   */
+  private readonly keptSelection = new KeptSelectionHighlight(() => {
+    const selection = window.getSelection();
+    return {
+      content: this.editingId
+        ? this.slideLayer.querySelector<HTMLElement>(
+          `[data-element-id="${CSS.escape(this.editingId)}"] .text-content`,
+        )
+        : null,
+      bookmark: this.textSelectionBookmark,
+      live: selection?.rangeCount ? selection.getRangeAt(0) : null,
+      active: document.activeElement,
+    };
+  });
   /** Rectangular cell range currently targeted in the live table editor. */
   private tableSelection: TableSelection | null = null;
   /** Shared paint used by table border presets and the explicit edge tool. */
@@ -1011,7 +1090,14 @@ export class EditorCanvas {
     });
     this.bindViewportGestures();
     this.bindDrop();
-    document.addEventListener('selectionchange', () => this.captureTextSelection());
+    document.addEventListener('selectionchange', () => {
+      this.captureTextSelection();
+      this.keptSelection.schedule();
+    });
+    // Focus moving between the text and the sidebar decides whether the
+    // bookmarked selection needs painting by hand.
+    document.addEventListener('focusin', () => this.keptSelection.schedule());
+    document.addEventListener('focusout', () => this.keptSelection.schedule());
 
     store.subscribe(() => this.render());
     onCommentHighlightsChange(() => {
@@ -1035,6 +1121,9 @@ export class EditorCanvas {
    * test for "did the content change".
    */
   render(): void {
+    // A render can replace the edited box's nodes out from under the
+    // bookmark, or end the edit: either way the kept highlight is re-derived.
+    this.keptSelection.schedule();
     const { deck, slideIndex, selection } = this.store.get();
     const slide = deck.slides[slideIndex];
     if (!slide) {
@@ -1784,12 +1873,36 @@ export class EditorCanvas {
     });
 
     controls.append(
-      button('−', 'Zoom out', () => this.setZoom(this.zoom - ZOOM_STEP)),
+      button('−', 'Zoom out', () => this.stepZoom(-1)),
       input,
-      button('+', 'Zoom in', () => this.setZoom(this.zoom + ZOOM_STEP)),
+      button('+', 'Zoom in', () => this.stepZoom(1)),
       button('⌖', 'Re-center slide', () => this.recenter()),
     );
     return controls;
+  }
+
+  /**
+   * One step of the zoom bar (and of Cmd/Ctrl +/-): to the next multiple of
+   * 25% that way, so a view the wheel left at 110% steps to 125%, not 135%.
+   */
+  private stepZoom(direction: 1 | -1): void {
+    const steps = this.zoom / ZOOM_STEP;
+    const next = direction > 0 ? Math.floor(steps + 1e-6) + 1 : Math.ceil(steps - 1e-6) - 1;
+    this.setZoom(next * ZOOM_STEP);
+  }
+
+  /**
+   * Answer a Cmd/Ctrl zoom chord (see `zoomShortcut`) in place of the
+   * browser's page zoom and the desktop menu's zoom roles, which would scale
+   * the whole interface. Returns whether the key was taken.
+   */
+  handleZoomShortcut(e: KeyboardEvent): boolean {
+    const action = zoomShortcut(e);
+    if (!action) return false;
+    e.preventDefault();
+    if (action === 'fit') this.recenter();
+    else this.stepZoom(action === 'in' ? 1 : -1);
+    return true;
   }
 
   private commitZoomInput(input: HTMLInputElement): void {
@@ -1846,16 +1959,13 @@ export class EditorCanvas {
       if ((event.target as HTMLElement).closest('.zoom-controls, .notes-drawer')) return;
 
       // Chromium represents a macOS trackpad pinch as a wheel event with the
-      // control modifier set. Anchoring it at the pointer makes the gesture
-      // feel native and keeps the detail the user is inspecting under hand.
+      // control modifier set, and a mouse wheel with Ctrl/Cmd held arrives
+      // the same way. Anchoring it at the pointer makes the gesture feel
+      // native and keeps the detail the user is inspecting under hand.
       if (event.ctrlKey || event.metaKey) {
         event.preventDefault();
-        const unit = event.deltaMode === WheelEvent.DOM_DELTA_LINE ? 16
-          : event.deltaMode === WheelEvent.DOM_DELTA_PAGE ? this.host.clientHeight
-            : 1;
-        const factor = Math.exp(-event.deltaY * unit * 0.01);
         const hostRect = this.viewportRect();
-        this.setZoom(this.zoom * factor, {
+        this.setZoom(this.zoom * wheelZoomFactor(event.deltaY, event.deltaMode), {
           x: event.clientX - hostRect.left,
           y: event.clientY - hostRect.top,
         });
@@ -1868,10 +1978,98 @@ export class EditorCanvas {
       const unit = event.deltaMode === WheelEvent.DOM_DELTA_LINE ? 16
         : event.deltaMode === WheelEvent.DOM_DELTA_PAGE ? this.host.clientHeight
           : 1;
-      this.pan.x -= event.deltaX * unit;
-      this.pan.y -= event.deltaY * unit;
+      // Shift turns a mouse wheel sideways. macOS does that itself (deltaX
+      // arrives filled in); elsewhere the vertical delta is taken as it is.
+      const sideways = event.shiftKey && event.deltaX === 0;
+      this.pan.x -= (sideways ? event.deltaY : event.deltaX) * unit;
+      this.pan.y -= (sideways ? 0 : event.deltaY) * unit;
       this.rescale();
     }, { passive: false });
+
+    // A middle click on Linux pastes the primary selection into whatever has
+    // focus (the text being edited), and on Windows starts autoscroll. On the
+    // canvas the middle button only ever pans.
+    for (const type of ['mousedown', 'mouseup', 'auxclick'] as const) {
+      this.host.addEventListener(type, (event) => {
+        if (event.button === 1) event.preventDefault();
+      });
+    }
+    this.bindSpacePan();
+  }
+
+  /**
+   * Holding Space over the canvas turns the primary button into a hand, as in
+   * Figma and Photoshop: the way to pan with a mouse that has no free wheel
+   * axis. Only while nothing that takes typed text has focus, and nothing on
+   * the canvas answers Space by itself, so a press without a drag does
+   * nothing.
+   */
+  private bindSpacePan(): void {
+    const isSpace = (ev: KeyboardEvent) => ev.code === 'Space' || ev.key === ' ';
+    const release = () => {
+      this.spacePan = false;
+      this.host.classList.remove('space-pan');
+    };
+    window.addEventListener('keydown', (ev) => {
+      if (!isSpace(ev)) return;
+      if (this.spacePan) {
+        ev.preventDefault(); // auto-repeat while held
+        return;
+      }
+      if (ev.metaKey || ev.ctrlKey || ev.altKey || this.editingId) return;
+      if (document.querySelector('[aria-modal="true"]')) return;
+      // The canvas, or nothing in particular (a canvas click blurs whatever
+      // had focus). A focused button or field keeps its own Space.
+      const target = ev.target instanceof Element ? ev.target : null;
+      const onCanvas = !target || target === document.body
+        || target === document.documentElement || this.host.contains(target);
+      const takesSpace = target?.closest(
+        'input, textarea, select, button, [contenteditable]:not([contenteditable="false"]), .cm-editor',
+      );
+      if (!onCanvas || takesSpace) return;
+      ev.preventDefault();
+      this.spacePan = true;
+      this.host.classList.add('space-pan');
+    });
+    window.addEventListener('keyup', (ev) => {
+      if (isSpace(ev)) release();
+    });
+    window.addEventListener('blur', release);
+  }
+
+  /** Start a hand-pan for a middle-button press, or a primary press with Space held. */
+  private beginViewportPan(ev: PointerEvent): boolean {
+    if (ev.button !== 1 && !(ev.button === 0 && this.spacePan)) return false;
+    const target = ev.target instanceof Element ? ev.target : null;
+    if (target?.closest('.welcome-screen, .zoom-controls, .notes-toggle, .notes-drawer')) return false;
+    // No selection, no text selection, no focus change: a text box being
+    // edited stays in its edit.
+    ev.preventDefault();
+    this.viewportPan = { pointerId: ev.pointerId, x: ev.clientX, y: ev.clientY };
+    this.host.setPointerCapture(ev.pointerId);
+    this.host.classList.add('is-panning');
+    return true;
+  }
+
+  private moveViewportPan(ev: PointerEvent): boolean {
+    const pan = this.viewportPan;
+    if (!pan || pan.pointerId !== ev.pointerId) return false;
+    this.pan.x += ev.clientX - pan.x;
+    this.pan.y += ev.clientY - pan.y;
+    pan.x = ev.clientX;
+    pan.y = ev.clientY;
+    this.rescale();
+    return true;
+  }
+
+  private endViewportPan(ev: PointerEvent): boolean {
+    const pan = this.viewportPan;
+    if (!pan || pan.pointerId !== ev.pointerId) return false;
+    ev.preventDefault();
+    this.viewportPan = null;
+    this.host.classList.remove('is-panning');
+    if (this.host.hasPointerCapture?.(ev.pointerId)) this.host.releasePointerCapture(ev.pointerId);
+    return true;
   }
 
   /**
@@ -2245,8 +2443,12 @@ export class EditorCanvas {
   }
 
   private bindPointer(): void {
-    this.host.addEventListener('pointerdown', (ev) => this.onPointerDown(ev));
+    this.host.addEventListener('pointerdown', (ev) => {
+      if (this.beginViewportPan(ev)) return;
+      this.onPointerDown(ev);
+    });
     this.host.addEventListener('pointermove', (ev) => {
+      if (this.moveViewportPan(ev)) return;
       // Covers entering the canvas with Command already held, when this window
       // did not receive the original keydown.
       if (this.drag.kind === 'none') this.setRotationModifier(commandModifier(ev));
@@ -2260,8 +2462,14 @@ export class EditorCanvas {
     this.host.addEventListener('mousemove', (ev) => {
       this.onPointerSample?.(this.toCanvas(ev));
     });
-    this.host.addEventListener('pointerup', (ev) => this.onPointerUp(ev));
-    this.host.addEventListener('pointercancel', () => this.endDrag());
+    this.host.addEventListener('pointerup', (ev) => {
+      if (this.endViewportPan(ev)) return;
+      this.onPointerUp(ev);
+    });
+    this.host.addEventListener('pointercancel', (ev) => {
+      if (this.endViewportPan(ev)) return;
+      this.endDrag();
+    });
     this.host.addEventListener('dblclick', (ev) => this.onDoubleClick(ev));
     // A web font that finishes loading after the slide was measured changes
     // the size of every box sized to its contents.
@@ -3383,10 +3591,7 @@ export class EditorCanvas {
     return active instanceof HTMLElement
       && active !== content && !content.contains(active)
       && active.matches('input, select, textarea')
-      && Boolean(active.closest(
-        '.editor-inspector, .font-family-field, .text-table-options,'
-        + ' .text-list-toggle, .color-picker-popover',
-      ));
+      && Boolean(active.closest(TEXT_EDIT_PANEL_CHROME));
   }
 
   private focusTextSurface(content: HTMLElement): void {
@@ -4078,15 +4283,14 @@ export class EditorCanvas {
       if (event.isTrusted && !event.relatedTarget && !document.hasFocus()) return;
       // Native selects need focus in order to open. Keep the live Range while
       // the font picker is used; its change handler restores focus afterward.
+      // A table row/column selection is a formatting target in its own right:
+      // typography fields take focus without ending the edit and clearing
+      // that target before their change handlers run. While focus is there
+      // the bookmarked characters stay painted (keptSelection.ts), from the
+      // same list, so what keeps the edit alive and what keeps it visible
+      // cannot drift apart.
       if (event.relatedTarget instanceof Element
-        && event.relatedTarget.closest(
-          '.font-family-field, .text-table-options, .text-list-toggle, .color-picker-popover',
-        )) return;
-      // A table row/column selection is a formatting target in its own right.
-      // Let typography fields take focus without ending the edit and clearing
-      // that target before their change handlers run.
-      if (event.relatedTarget instanceof Element
-        && event.relatedTarget.closest('.editor-inspector')) return;
+        && event.relatedTarget.closest(TEXT_EDIT_PANEL_CHROME)) return;
       finish(true);
     };
     /**
@@ -4350,6 +4554,9 @@ export class EditorCanvas {
         this.toggleTextSelectionFormat(
           e.key === '=' || e.key === '+' ? 'superscript' : 'subscript',
         );
+      } else if (this.handleZoomShortcut(e)) {
+        // The unshifted chords zoom the canvas here too: they mean nothing to
+        // the text, and would otherwise zoom the whole page.
       } else if ((e.metaKey || e.ctrlKey) && ['b', 'i', 'u'].includes(e.key.toLowerCase())) {
         e.preventDefault();
         const format = e.key.toLowerCase() === 'b'

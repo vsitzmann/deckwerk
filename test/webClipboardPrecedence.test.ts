@@ -55,7 +55,7 @@ function wire() {
   } as unknown as ClipboardActions;
   const deps = {
     store, rail: {}, save: vi.fn(), setStatusMessage: vi.fn(),
-    canvas: { isEditing: () => false },
+    canvas: { isEditing: () => false, handleZoomShortcut: () => false },
   } as unknown as ShellDeps;
   bindEditorKeys(deps, clipboard);
   return { store, clipboard };

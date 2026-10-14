@@ -304,6 +304,265 @@ describe('canvas zoom viewport', () => {
   });
 });
 
+/**
+ * setup()'s deck (a text box and a video) in a host with a real size, so the
+ * stage is placed and panning shows up in its position.
+ */
+function setupSizedViewport() {
+  const parts = setup();
+  parts.host.getBoundingClientRect = () => ({
+    x: 40, y: 20, left: 40, top: 20, right: 1320, bottom: 820,
+    width: 1280, height: 800, toJSON: () => ({}),
+  }) as DOMRect;
+  parts.canvas.recenter();
+  const stage = parts.host.querySelector<HTMLElement>('.stage')!;
+  return { ...parts, stage };
+}
+
+const stagePosition = (stage: HTMLElement) => ({
+  left: Number.parseFloat(stage.style.left),
+  top: Number.parseFloat(stage.style.top),
+});
+
+describe('canvas zoom and pan without a trackpad', () => {
+  beforeEach(() => document.body.replaceChildren());
+
+  const wheel = (host: HTMLElement, init: WheelEventInit) => {
+    const event = new WheelEvent('wheel', {
+      clientX: 600, clientY: 400, bubbles: true, cancelable: true, ...init,
+    });
+    host.dispatchEvent(event);
+    return event;
+  };
+
+  it('zooms one mouse-wheel notch by a tenth, however the wheel reports it', () => {
+    const notches: WheelEventInit[] = [
+      { deltaY: -100 }, // Chromium on Windows
+      { deltaY: -120 }, // Chromium on Linux
+      { deltaY: -53 }, // a high-DPI Linux display
+      { deltaY: -40 }, // Chromium on macOS: 40 px a tick
+      { deltaY: -3, deltaMode: WheelEvent.DOM_DELTA_LINE }, // Firefox
+      { deltaY: -1, deltaMode: WheelEvent.DOM_DELTA_PAGE },
+    ];
+    for (const notch of notches) {
+      const { canvas, host } = setupViewport();
+      const event = wheel(host, { ...notch, ctrlKey: true });
+      expect(event.defaultPrevented).toBe(true);
+      expect(canvas.zoomPercent(), JSON.stringify(notch)).toBe(110);
+      // Zooming out is the exact inverse, so one notch each way is home.
+      wheel(host, { ...notch, deltaY: -(notch.deltaY ?? 0), ctrlKey: true });
+      expect(canvas.zoomPercent(), JSON.stringify(notch)).toBe(100);
+    }
+  });
+
+  it('zooms out by the same ratio it zooms in, and compounds notches in one event', () => {
+    const { canvas, host } = setupViewport();
+    wheel(host, { deltaY: 100, ctrlKey: true });
+    expect(canvas.zoomPercent()).toBe(91); // 1 / 1.1
+    canvas.recenter();
+    wheel(host, { deltaY: -240, ctrlKey: true }); // two notches coalesced
+    expect(canvas.zoomPercent()).toBe(121);
+    canvas.recenter();
+    wheel(host, { deltaY: -6, deltaMode: WheelEvent.DOM_DELTA_LINE, ctrlKey: true });
+    expect(canvas.zoomPercent()).toBe(121);
+  });
+
+  it('keeps a trackpad pinch on its smooth curve', () => {
+    const { canvas, host } = setupViewport();
+    // A pinch frame: Chromium reports -100·ln(scale), a few fractional pixels.
+    wheel(host, { deltaY: -2.5, ctrlKey: true });
+    expect(canvas.zoomPercent()).toBe(Math.round(100 * Math.exp(0.025)));
+    wheel(host, { deltaY: 2.5, ctrlKey: true });
+    expect(canvas.zoomPercent()).toBe(100);
+  });
+
+  it('pans sideways with Shift and the wheel', () => {
+    const { host, stage } = setupViewport();
+    const before = stagePosition(stage);
+    const event = wheel(host, { deltaY: 40, shiftKey: true });
+    expect(event.defaultPrevented).toBe(true);
+    expect(stagePosition(stage).left).toBeCloseTo(before.left - 40);
+    expect(stagePosition(stage).top).toBeCloseTo(before.top);
+    // A platform that already turned Shift+wheel sideways is taken as it is.
+    wheel(host, { deltaX: 30, shiftKey: true });
+    expect(stagePosition(stage).left).toBeCloseTo(before.left - 70);
+    expect(stagePosition(stage).top).toBeCloseTo(before.top);
+  });
+
+  it('pans with a middle-button drag anywhere, touching nothing on the slide', () => {
+    const { store, host, stage } = setupSizedViewport();
+    const before = stagePosition(stage);
+    const target = host.querySelector<HTMLElement>('[data-element-id="text-1"]')!;
+    const down = new PointerEvent('pointerdown', {
+      button: 1, buttons: 4, clientX: 300, clientY: 200, bubbles: true, cancelable: true,
+    });
+    target.dispatchEvent(down);
+    expect(down.defaultPrevented).toBe(true);
+    expect(host.classList.contains('is-panning')).toBe(true);
+    target.dispatchEvent(new PointerEvent('pointermove', {
+      button: -1, buttons: 4, clientX: 340, clientY: 260, bubbles: true,
+    }));
+    target.dispatchEvent(new PointerEvent('pointermove', {
+      button: -1, buttons: 4, clientX: 380, clientY: 230, bubbles: true,
+    }));
+    const up = new PointerEvent('pointerup', {
+      button: 1, buttons: 0, clientX: 380, clientY: 230, bubbles: true, cancelable: true,
+    });
+    target.dispatchEvent(up);
+    // Linux pastes the primary selection on a middle click; this was a pan.
+    expect(up.defaultPrevented).toBe(true);
+    const aux = new MouseEvent('auxclick', { button: 1, bubbles: true, cancelable: true });
+    target.dispatchEvent(aux);
+    expect(aux.defaultPrevented).toBe(true);
+
+    expect(host.classList.contains('is-panning')).toBe(false);
+    expect(stagePosition(stage).left).toBeCloseTo(before.left + 80);
+    expect(stagePosition(stage).top).toBeCloseTo(before.top + 30);
+    expect(store.get().selection.size).toBe(0);
+    const text = store.slide!.elements.find((element) => element.id === 'text-1')!;
+    expect([text.x, text.y]).toEqual([100, 100]);
+  });
+
+  it('pans with a middle-button drag while text is being edited, and keeps the edit', () => {
+    const { canvas, host, stage } = setupSizedViewport();
+    canvas.beginTextEdit('text-1');
+    const before = stagePosition(stage);
+    host.dispatchEvent(new PointerEvent('pointerdown', {
+      button: 1, buttons: 4, clientX: 300, clientY: 200, bubbles: true, cancelable: true,
+    }));
+    host.dispatchEvent(new PointerEvent('pointermove', {
+      button: -1, buttons: 4, clientX: 290, clientY: 150, bubbles: true,
+    }));
+    host.dispatchEvent(new PointerEvent('pointerup', {
+      button: 1, buttons: 0, clientX: 290, clientY: 150, bubbles: true, cancelable: true,
+    }));
+    expect(stagePosition(stage).left).toBeCloseTo(before.left - 10);
+    expect(stagePosition(stage).top).toBeCloseTo(before.top - 50);
+    expect(canvas.editingElementId()).toBe('text-1');
+  });
+
+  it('pans with Space held and the primary button, touching nothing on the slide', () => {
+    const { store, host, stage } = setupSizedViewport();
+    const before = stagePosition(stage);
+    const target = host.querySelector<HTMLElement>('[data-element-id="text-1"]')!;
+    const space = (type: 'keydown' | 'keyup', repeat = false) => {
+      const event = new KeyboardEvent(type, {
+        key: ' ', code: 'Space', repeat, bubbles: true, cancelable: true,
+      });
+      document.body.dispatchEvent(event);
+      return event;
+    };
+    expect(space('keydown').defaultPrevented).toBe(true);
+    space('keydown', true);
+    expect(host.classList.contains('space-pan')).toBe(true);
+
+    target.dispatchEvent(new PointerEvent('pointerdown', {
+      button: 0, buttons: 1, clientX: 300, clientY: 200, bubbles: true, cancelable: true,
+    }));
+    expect(host.classList.contains('is-panning')).toBe(true);
+    target.dispatchEvent(new PointerEvent('pointermove', {
+      button: -1, buttons: 1, clientX: 250, clientY: 260, bubbles: true,
+    }));
+    target.dispatchEvent(new PointerEvent('pointerup', {
+      button: 0, buttons: 0, clientX: 250, clientY: 260, bubbles: true, cancelable: true,
+    }));
+    space('keyup');
+    expect(host.classList.contains('space-pan')).toBe(false);
+    expect(host.classList.contains('is-panning')).toBe(false);
+    expect(stagePosition(stage).left).toBeCloseTo(before.left - 50);
+    expect(stagePosition(stage).top).toBeCloseTo(before.top + 60);
+    expect(store.get().selection.size).toBe(0);
+    const text = store.slide!.elements.find((element) => element.id === 'text-1')!;
+    expect([text.x, text.y]).toEqual([100, 100]);
+
+    // With Space let go, a press selects again. (jsdom lays nothing out, so
+    // the hit test reads client coordinates straight as stage coordinates:
+    // this point is on the text box.)
+    target.dispatchEvent(new PointerEvent('pointerdown', {
+      button: 0, buttons: 1, clientX: 200, clientY: 100, bubbles: true, cancelable: true,
+    }));
+    target.dispatchEvent(new PointerEvent('pointerup', {
+      button: 0, buttons: 0, clientX: 200, clientY: 100, bubbles: true, cancelable: true,
+    }));
+    expect([...store.get().selection]).toEqual(['text-1']);
+  });
+
+  it('leaves Space to the text being edited and to focused fields', () => {
+    const { canvas, host } = setupSizedViewport();
+    canvas.beginTextEdit('text-1');
+    const body = bodyOf(host, 'text-1');
+    body.dispatchEvent(new KeyboardEvent('keydown', {
+      key: ' ', code: 'Space', bubbles: true, cancelable: true,
+    }));
+    expect(host.classList.contains('space-pan')).toBe(false);
+    canvas.endTextEditing(true);
+
+    const field = document.createElement('input');
+    document.body.append(field);
+    const inField = new KeyboardEvent('keydown', {
+      key: ' ', code: 'Space', bubbles: true, cancelable: true,
+    });
+    field.dispatchEvent(inField);
+    expect(inField.defaultPrevented).toBe(false);
+    expect(host.classList.contains('space-pan')).toBe(false);
+  });
+
+  it('zooms with Cmd/Ctrl = + - and fits with Cmd/Ctrl 0, in place of page zoom', () => {
+    const { canvas, host, stage } = setupViewport();
+    const store = new EditorStore(emptyDeck('Keys'), '/tmp/keys');
+    bindEditorKeys({ ...shellDeps(store), canvas }, noopClipboard());
+    const fitted = stagePosition(stage);
+    const press = (key: string, init: KeyboardEventInit = {}) => {
+      const event = new KeyboardEvent('keydown', {
+        key, ctrlKey: true, bubbles: true, cancelable: true, ...init,
+      });
+      document.body.dispatchEvent(event);
+      expect(event.defaultPrevented, key).toBe(true);
+    };
+    press('=');
+    expect(canvas.zoomPercent()).toBe(125);
+    press('+', { shiftKey: true });
+    expect(canvas.zoomPercent()).toBe(150);
+    press('-');
+    expect(canvas.zoomPercent()).toBe(125);
+    press('-', { ctrlKey: false, metaKey: true });
+    expect(canvas.zoomPercent()).toBe(100);
+    // Off the bar's 25% grid (after a wheel notch), a step lands back on it.
+    wheel(host, { deltaY: -100, ctrlKey: true });
+    expect(canvas.zoomPercent()).toBe(110);
+    press('=');
+    expect(canvas.zoomPercent()).toBe(125);
+    wheel(host, { deltaY: 100, clientX: 900, clientY: 100, ctrlKey: true });
+    press('0');
+    expect(canvas.zoomPercent()).toBe(100);
+    expect(stagePosition(stage).left).toBeCloseTo(fitted.left);
+    expect(stagePosition(stage).top).toBeCloseTo(fitted.top);
+  });
+
+  it('zooms with the unshifted keys while editing text, and keeps Shift for superscript', () => {
+    const { store, canvas, host } = setupSizedViewport();
+    bindEditorKeys({ ...shellDeps(store), canvas }, noopClipboard());
+    canvas.beginTextEdit('text-1');
+    const body = bodyOf(host, 'text-1');
+    const html = body.innerHTML;
+    const zoomIn = new KeyboardEvent('keydown', {
+      key: '=', ctrlKey: true, bubbles: true, cancelable: true,
+    });
+    body.dispatchEvent(zoomIn);
+    expect(zoomIn.defaultPrevented).toBe(true);
+    expect(canvas.zoomPercent()).toBe(125);
+    expect(canvas.editingElementId()).toBe('text-1');
+    expect(body.innerHTML).toBe(html);
+
+    const superscript = new KeyboardEvent('keydown', {
+      key: '+', ctrlKey: true, shiftKey: true, bubbles: true, cancelable: true,
+    });
+    body.dispatchEvent(superscript);
+    expect(superscript.defaultPrevented).toBe(true);
+    expect(canvas.zoomPercent()).toBe(125);
+  });
+});
+
 describe('inline text editing', () => {
   beforeEach(() => {
     document.body.replaceChildren();
