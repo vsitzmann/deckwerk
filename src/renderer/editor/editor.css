@@ -4688,6 +4688,14 @@ button.ghost:hover:not(:disabled) { color: var(--text); background: transparent;
   pointer-events: none;
 }
 
+/* The characters selected in the box being edited, while focus is in the
+   sidebar (keptSelection.ts), drawn as an inactive selection: over white it
+   is Chromium's own inactive grey (#c8c8c8), and being translucent it keeps
+   light text on a dark slide readable where an opaque grey would not. */
+::highlight(deckwerk-kept-selection) {
+  background-color: rgb(140 140 140 / 0.45);
+}
+
 /* Harper spelling/grammar marks on the box being edited (spellcheck.ts). */
 ::highlight(deckwerk-spelling) {
   text-decoration: underline wavy #e5484d;

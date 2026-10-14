@@ -5,10 +5,11 @@
  * slide selections, the canvas's edit session (`editingId`), crop session
  * (`maskingId`) and table cell range, the browser's own Selection, keyboard
  * focus, and the DOM chrome that renders each of them (`.editing`,
- * contenteditable, `.editor-table-selected`, `.sel-box`, the rail rows). No
- * type ties them together, so every gesture handler has to reconcile them by
- * hand — and the recurring "typing goes to one box while another looks
- * selected" family of bugs is exactly those reconciliations being missed.
+ * contenteditable, `.editor-table-selected`, the kept-selection highlight,
+ * `.sel-box`, the rail rows). No type ties them together, so every gesture
+ * handler has to reconcile them by hand — and the recurring "typing goes to
+ * one box while another looks selected" family of bugs is exactly those
+ * reconciliations being missed.
  *
  * This module makes that class of bug loud instead of latent, the same way
  * `renderInvariants` does for model/DOM drift: after the dust of a render
@@ -26,6 +27,7 @@
  */
 import type { Deck } from '../../shared/deck.js';
 import type { TableSelection } from './canvas.js';
+import { KEPT_SELECTION_HIGHLIGHT } from './keptSelection.js';
 
 /** Everything the checker needs, read at one moment. */
 export interface SelectionSnapshot {
@@ -115,6 +117,27 @@ export function findSelectionViolations(snap: SelectionSnapshot): string[] {
       problems.push(`a text highlight survives in ${owner} with no edit session`);
     } else if (editingId !== null && owner !== editingId) {
       problems.push(`the caret is in ${owner} while ${editingId} is being edited`);
+    }
+  }
+
+  // --- the selection kept visible while focus is in the sidebar ---------------
+  // keptSelection.ts paints the bookmarked characters itself while a sidebar
+  // control has focus. That paint belongs to the live edit and nothing else.
+  const kept = typeof CSS !== 'undefined' && 'highlights' in CSS
+    ? CSS.highlights.get(KEPT_SELECTION_HIGHLIGHT)
+    : undefined;
+  const keptRanges = kept ? [...kept].filter((range) => !range.collapsed) : [];
+  if (keptRanges.length > 0) {
+    const editedContent = editingId === null ? null : slideLayer.querySelector(
+      `[data-element-id="${CSS.escape(editingId)}"] .text-content`,
+    );
+    if (editingId === null) {
+      problems.push('a kept text selection is painted with no edit session');
+    } else if (!editedContent || keptRanges.some((range) =>
+      !(range instanceof Range) || !editedContent.contains(range.commonAncestorContainer))) {
+      problems.push(`a kept text selection is painted outside ${editingId}`);
+    } else if (active && editedContent.contains(active)) {
+      problems.push(`a kept text selection is painted over the live one in ${editingId}`);
     }
   }
 
