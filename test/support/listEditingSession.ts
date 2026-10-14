@@ -509,9 +509,36 @@ function buildSession(cdp: Cdp, port: number, deckId: string): ListEditingSessio
     async edit() {
       // A box whose every line is empty has no glyph to aim at; its own box
       // is still there to double-click.
-      const hasGlyphs = await cdp.evaluate<boolean>(
-        `((document.querySelector('${CONTENT}')?.textContent ?? '').trim().length > 0)`);
-      if (hasGlyphs) await cdp.doubleClickText(CONTENT, 'text box');
+      // The first click selects the box and puts its resize handles up, so
+      // the glyph aimed at must be clear of where they will be: in a short
+      // box the first glyph sits right on the top-left handle.
+      const offset = await cdp.evaluate<number>(`(() => {
+        const root = document.querySelector('${CONTENT}');
+        const box = root?.closest('.element')?.getBoundingClientRect();
+        if (!root || !box) return -1;
+        const handles = [0, 0.5, 1].flatMap((fx) => [0, 0.5, 1]
+          .filter((fy) => fx !== 0.5 || fy !== 0.5)
+          .map((fy) => [box.left + box.width * fx, box.top + box.height * fy]));
+        const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+        let flat = 0;
+        let first = -1;
+        for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+          for (let i = 0; i < node.data.length; i++) {
+            if (/\\s/.test(node.data[i])) continue;
+            if (first < 0) first = flat + i;
+            const range = document.createRange();
+            range.setStart(node, i);
+            range.setEnd(node, i + 1);
+            const r = range.getBoundingClientRect();
+            const x = r.left + r.width / 2;
+            const y = r.top + r.height / 2;
+            if (handles.every(([hx, hy]) => Math.hypot(hx - x, hy - y) > 20)) return flat + i;
+          }
+          flat += node.data.length;
+        }
+        return first;
+      })()`);
+      if (offset >= 0) await cdp.doubleClickTextAtOffset(CONTENT, offset, 'text box');
       else await cdp.doubleClick(CONTENT, 'text box with no text');
       try {
         await eventually(async () => cdp.evaluate<boolean>(
