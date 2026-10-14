@@ -19,6 +19,8 @@ import {
   inAppClipboardToken,
   isInAppClipboardToken,
   pasteInAppClipboard,
+  pasteStashedClipboard,
+  stashedClipboardId,
 } from './store.js';
 import {
   setWholeTextFormat,
@@ -158,6 +160,8 @@ export interface ClipboardActions {
   pasteClipboardFiles?: (files: File[]) => Promise<void>;
   /** Paste the in-window copy when the native paste event holds nothing of ours. */
   pasteInAppClipboard?: () => Promise<void>;
+  /** Paste a copy another tab made, by the id its clipboard token carries. */
+  pasteStashedClipboard?: (id: string) => Promise<void>;
 }
 
 /**
@@ -188,9 +192,12 @@ export function createClipboardActions(deps: ShellDeps): ClipboardActions {
     const pasted = deps.runOperation
       ? await deps.runOperation('Pasting clipboard content', paste)
       : await paste();
-    if (pasted) {
+    if (pasted && pasted.count > 0) {
       const noun = pasted.kind === 'slides' ? 'slide' : 'element';
-      setStatusMessage(`Pasted ${pasted.count} ${noun}${pasted.count > 1 ? 's' : ''}.`);
+      const said = `Pasted ${pasted.count} ${noun}${pasted.count > 1 ? 's' : ''}.`;
+      setStatusMessage(pasted.notice ? `${said} ${pasted.notice}` : said);
+    } else if (pasted?.notice) {
+      setStatusMessage(pasted.notice);
     }
   };
   const pasteOptions = () => ({
@@ -199,6 +206,7 @@ export function createClipboardActions(deps: ShellDeps): ClipboardActions {
   });
   const pasteClipboard = () => pasteAndReport(() => pasteFromClipboard(store, undefined, pasteOptions()));
   const pasteInApp = () => pasteAndReport(() => pasteInAppClipboard(store, pasteOptions()));
+  const pasteStashed = (id: string) => pasteAndReport(() => pasteStashedClipboard(store, id, pasteOptions()));
   const pasteClipboardData = (html: string, text: string) =>
     pasteAndReport(() => pasteFromClipboard(store, { kind: 'external-html', html, text }));
 
@@ -217,6 +225,7 @@ export function createClipboardActions(deps: ShellDeps): ClipboardActions {
     pasteClipboardData,
     pasteClipboardFiles,
     pasteInAppClipboard: pasteInApp,
+    pasteStashedClipboard: pasteStashed,
   };
 }
 
@@ -272,6 +281,15 @@ export function bindEditorKeys(deps: ShellDeps, clipboard: ClipboardActions): vo
     if (isInAppClipboardToken(text) && clipboard.pasteInAppClipboard) {
       event.preventDefault();
       void clipboard.pasteInAppClipboard();
+      return;
+    }
+    // The newest copy was made in the app, but in another tab — another
+    // deck, or this one before a reload. Its token names the copy the server
+    // keeps for exactly this.
+    const stashed = stashedClipboardId(text);
+    if (stashed && clipboard.pasteStashedClipboard) {
+      event.preventDefault();
+      void clipboard.pasteStashedClipboard(stashed);
       return;
     }
     if (/<table\b/i.test(html) || text.includes('\t')) {

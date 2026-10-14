@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { electronBinary, eventually } from './support/browserSession.js';
+import { electronBinary, eventually, wait } from './support/browserSession.js';
 import {
   MOD,
   SHAPE,
@@ -190,6 +190,139 @@ describe.skipIf(!electronBinary)('selection and text editing', () => {
     expect(state.selection, 'clicking an object selects it').toEqual([TEXT_A]);
     expect(state.slideSelection.length, 'and collapses the slide selection to one').toBe(1);
     await expectSound('after selecting an object from a slide selection');
+  });
+});
+
+describe.skipIf(!electronBinary)('a text selection while the author works in the sidebar', () => {
+  // Reported (David): in Figma you can select text on the canvas, then select
+  // the font size in the sidebar and change it, and the text stays selected
+  // throughout. Here the edit and its bookmarked range did survive, but
+  // Chromium has one selection per frame: focusing the field moved it there,
+  // so the word lost its highlight and looked deselected.
+  it('keeps a selected word selected, and visibly so, through a font size change', {
+    timeout: 120_000,
+  }, async () => {
+    await session.reset();
+    await session.doubleClick(TEXT_A);
+    // "alpha one": offset 7 is inside "one".
+    await session.selectWord(TEXT_A, 7);
+    expect(await session.selectedText(), 'the double-click took the word').toBe('one');
+    const before = await session.cdp.evaluate<string>(`getComputedStyle(
+      [...document.querySelectorAll('.slide-layer [data-element-id="${TEXT_A}"] .text-content *')]
+        .find((node) => node.textContent === 'alpha one')).fontSize`);
+
+    await session.clickField('Font size');
+    // Select the field's own text the way an author does before typing over it.
+    await session.chord('a', 'KeyA', 65, MOD, ['selectAll']);
+    let state = await session.state();
+    expect(state.editing, 'focusing the field keeps the edit').toBe(TEXT_A);
+    expect(await session.focusedField(), 'the keyboard is in the field').toBe('Font size');
+    expect(await session.selectedText(), 'the word is still the target').toBe('one');
+    expect(await session.keptHighlight(), 'and it is still painted as selected').toEqual(['one']);
+    expect(await session.paintedSelection(), 'by the editor, not the browser').toEqual(['one']);
+    await expectSound('font size field focused with a word selected');
+
+    await session.type('48');
+    await session.key('Enter', 13);
+    await eventually(async () => session.cdp.evaluate<string | null>(`(() => {
+      const content = document.querySelector('.slide-layer [data-element-id="${TEXT_A}"] .text-content');
+      const walker = document.createTreeWalker(content, NodeFilter.SHOW_TEXT);
+      for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+        if (node.data === 'one') return getComputedStyle(node.parentElement).fontSize;
+      }
+      return null;
+    })()`), 'the word was not resized to 48px', (size) => size === '48px');
+    expect(before, 'control: the rest of the paragraph was not 48px').not.toBe('48px');
+    state = await session.state();
+    expect(state.editing, 'Enter in the field keeps the edit').toBe(TEXT_A);
+    expect(await session.focusedField(), 'and the keyboard in the field').toBe('Font size');
+    expect(await session.selectedText(), 'the resized word is still the target').toBe('one');
+    expect(await session.keptHighlight(), 'and still painted as selected').toEqual(['one']);
+    await expectSound('after changing the font size from the field');
+
+    // Tab moves on through the sidebar; the word stays selected.
+    await session.key('Tab', 9);
+    expect((await session.state()).editing, 'Tab out of the field keeps the edit').toBe(TEXT_A);
+    expect(await session.keptHighlight(), 'the word stays painted after Tab').toEqual(['one']);
+    await expectSound('after tabbing out of the font size field');
+
+    // Back in the text, the browser's own selection takes over again.
+    await session.selectWord(TEXT_A, 2);
+    state = await session.state();
+    expect(state.editing, 'clicking back into the text keeps editing it').toBe(TEXT_A);
+    expect(state.focus, 'with the keyboard in the box').toBe(`inside ${TEXT_A}`);
+    expect(await session.selectedText(), 'the new word is the target').toBe('alpha');
+    expect(await session.keptHighlight(), 'the kept paint is gone').toEqual([]);
+    await session.type('X');
+    expect(await session.textOf(TEXT_A), 'typing replaced the selected word')
+      .toBe('X onealpha two');
+    await expectSound('after returning to the text');
+  });
+
+  it('drops the kept selection when the edit ends from the sidebar', {
+    timeout: 120_000,
+  }, async () => {
+    await session.reset();
+    await session.doubleClick(TEXT_A);
+    await session.selectWord(TEXT_A, 7);
+    await session.clickField('Font size');
+    expect(await session.keptHighlight(), 'painted while the field has focus').toEqual(['one']);
+    await session.clickEmpty();
+    expect((await session.state()).editing, 'clicking the canvas ends the edit').toBeNull();
+    expect(await session.keptHighlight(), 'and takes the kept paint with it').toEqual([]);
+    await expectSound('after leaving the edit from the sidebar');
+
+    await session.doubleClick(TEXT_A);
+    await session.selectWord(TEXT_A, 7);
+    await session.clickField('Font size');
+    await session.clickRail(1);
+    expect((await session.state()).editing, 'changing slides ends the edit').toBeNull();
+    expect(await session.keptHighlight(), 'no kept paint survives the slide change').toEqual([]);
+    await expectSound('after changing slides from the sidebar');
+  });
+
+  it('keeps a selected word painted while the colour and font family are chosen', {
+    timeout: 120_000,
+  }, async () => {
+    await session.reset();
+    await session.doubleClick(TEXT_A);
+    await session.selectWord(TEXT_A, 7);
+    await session.cdp.click(
+      '.editor-inspector .field-color .color-picker-trigger[aria-label^="Colour"]', 'Colour');
+    await wait(120);
+    const found = await session.cdp.evaluate<boolean>(`(() => {
+      const swatch = [...document.querySelectorAll('.color-picker-popover .color-picker-palette-button')]
+        .find((node) => !['#ffffff', '#000000'].includes(node.title.toLowerCase()));
+      if (!swatch) return false;
+      swatch.id = 'selection-swatch';
+      return true;
+    })()`);
+    expect(found, 'the colour palette has a coloured swatch').toBe(true);
+    await session.cdp.click('#selection-swatch', 'colour swatch');
+    await wait(150);
+    let state = await session.state();
+    expect(state.editing, 'picking a colour keeps the edit').toBe(TEXT_A);
+    expect(await session.selectedText(), 'and the word selected').toBe('one');
+    await expectSound('after picking a colour for a selected word');
+
+    const family = '.editor-inspector .font-family-field select';
+    // Whatever this machine has installed: the first real family listed.
+    const target = await eventually(async () => session.cdp.evaluate<string | null>(`(() => {
+      const select = document.querySelector(${JSON.stringify(family)});
+      const option = select && [...select.options].find((candidate) =>
+        !candidate.disabled && candidate.value && !candidate.value.startsWith('__'));
+      return option ? option.value : null;
+    })()`), 'the font family list never loaded', (value) => value !== null);
+    const walk = await session.cdp.chooseByKeys(family, target!, 'Font family');
+    expect(walk.at(-1), 'type-ahead chose the family').toBe(target);
+    await wait(150);
+    state = await session.state();
+    expect(state.editing, 'choosing a family keeps the edit').toBe(TEXT_A);
+    expect(await session.selectedText(), 'and the word selected').toBe('one');
+    // A <select> is no text control, so Chromium leaves its selection in the
+    // box and paints it there itself; either way the word must show.
+    expect(await session.paintedSelection(), 'the word shows as selected').toEqual(['one']);
+    await expectSound('after choosing a family for a selected word');
   });
 });
 

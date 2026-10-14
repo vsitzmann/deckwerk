@@ -12,6 +12,7 @@ import {
   type CrossSession,
   type CrossState,
 } from './support/crossContextSession.js';
+import { sidebarSelectionProbes } from './support/selectionSession.js';
 
 /**
  * Cross-context fuzz: a seeded random walk over a slide holding THREE
@@ -25,6 +26,7 @@ import {
  * Cmd+B mid-word, undo/redo at random points, Backspace with an element
  * selection, Cmd+A in both contexts, Backspace on a multi-slide rail
  * selection (which must ask first; cancelled, or confirmed and undone), and
+ * resizing a selected word from the sidebar's Font size field, and
  * panning and zooming the view with a plain mouse and the keyboard.
  *
  * After EVERY step five oracles run: the whole-editor invariant set from
@@ -150,7 +152,7 @@ type OpName =
   | 'type nonce' | 'bold mid-word' | 'escape' | 'click empty' | 'marquee'
   | 'rail hop' | 'undo' | 'redo' | 'undo round-trip' | 'delete selection'
   | 'cmd+a' | 'click with stray hover' | 'rail multi-delete' | 'stack key' | 'spelling fix'
-  | 'viewport gesture';
+  | 'size from sidebar' | 'viewport gesture';
 
 interface Violation { seed: number; step: number; op: OpName; oracle: string; detail: string }
 
@@ -392,6 +394,7 @@ function chooseOp(next: () => number, pre: CrossState): OpName {
     add('bold mid-word', 2);
     add('click', 2); // click the other box mid-typing, no Escape first
     add('spelling fix', 1);
+    add('size from sidebar', 2);
   }
   add('escape', 1);
   add('click empty', 1);
@@ -471,6 +474,54 @@ async function performOp(
       await wait(120);
       await checkRouting(pre, head, flag);
       await checkRouting(pre, tail, flag);
+      return 'same';
+    }
+    case 'size from sidebar': {
+      // Select a word, resize it from the sidebar's Font size field, and click
+      // back into the text. While the field has focus the edit, the selection
+      // and its paint survive (the browser's own selection moved into the
+      // field, so the editor shows it); back in the text the paint is gone.
+      const editing = pre.editing!;
+      const probes = sidebarSelectionProbes(session.cdp);
+      const length = (await session.textOf(editing)).length;
+      if (length > 0) await probes.selectWord(editing, Math.min(6, length - 1));
+      const selected = await probes.selectedText();
+      await probes.setField('Font size', pick(next, ['36', '44']));
+      const after = await session.state();
+      if (after.editing !== editing) {
+        flag('routing', `sizing from the sidebar ended the edit of ${editing}`
+          + ` (now ${after.editing ?? 'nothing'})`);
+        return 'same';
+      }
+      if (selected) {
+        const still = await probes.selectedText();
+        if (still !== selected) {
+          flag('routing', `sizing from the sidebar changed the selection from`
+            + ` ${JSON.stringify(selected)} to ${JSON.stringify(still)}`);
+        }
+        const painted = await probes.paintedSelection();
+        if (painted.join('') !== selected) {
+          flag('routing', `the selection ${JSON.stringify(selected)} shows as`
+            + ` ${JSON.stringify(painted)} while the Font size field has focus`);
+        }
+      }
+      if (length > 0) {
+        await session.cdp.clickTextAtOffset(`${elementSelector(editing)} .text-content`, 0,
+          `the start of ${editing}`);
+        await wait(80);
+      } else {
+        await session.click(editing);
+      }
+      const back = await session.state();
+      if (back.editing !== editing || back.focus !== `inside ${editing}`) {
+        flag('routing', `clicking back into ${editing} from the sidebar left editing`
+          + ` ${back.editing ?? 'nothing'} with focus ${back.focus}`);
+      }
+      const kept = await probes.keptHighlight();
+      if (kept.length > 0) {
+        flag('routing', `the kept selection ${JSON.stringify(kept)} survived the click back`
+          + ` into ${editing}`);
+      }
       return 'same';
     }
     case 'escape':

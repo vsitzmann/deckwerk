@@ -14,6 +14,7 @@ import {
   type RunningBrowser,
 } from './browserSession.js';
 import { collabClientDir } from './collabClient.js';
+import { KEPT_SELECTION_INVARIANTS } from './selectionSession.js';
 
 /**
  * A three-element editor for the cross-context fuzz walk: one textbox holding
@@ -129,6 +130,7 @@ const INVARIANTS = `() => {
     }
   }
 
+${KEPT_SELECTION_INVARIANTS}
   const highlighted = [...layer.querySelectorAll('.editor-table-selected')];
   if (table === null && highlighted.length > 0) {
     problems.push(highlighted.length + ' table cells stay highlighted with no cell range');

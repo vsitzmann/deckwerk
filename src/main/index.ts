@@ -19,6 +19,7 @@ import {
 import { importClipboardImageUrl, importImageSource } from './clipboardImageFetch.js';
 import { clipboardFilePaths, firstClipboardMediaPath } from '@shared/clipboardFiles.js';
 import type { ClipboardImageSource } from '@shared/clipboardImages.js';
+import { injectWebBridgeRuntime } from '@shared/webBridge.js';
 import { IPC } from '@shared/ipc.js';
 import type {
   AgentContextDraft,
@@ -54,6 +55,7 @@ import {
   derivedAssetPath,
   importAsset,
   importImageBuffer,
+  importWebPage,
   loadDeck,
   loadTheme,
   resolveAsset,
@@ -969,7 +971,11 @@ function registerHandlers(): void {
         // Foreign-shaped src; fall through to import.
       }
       try {
-        const imported = await importAsset(s.dir, asset.absPath);
+        // A web element's page is a document, not media: importAsset
+        // refuses it, and it belongs under assets/web/.
+        const imported = /^assets\/web\/[^/]+\.x?html?$/i.test(asset.src)
+          ? await importWebPage(s.dir, asset.absPath, injectWebBridgeRuntime)
+          : await importAsset(s.dir, asset.absPath);
         map.set(asset.src, imported.src);
       } catch (err) {
         // Source deck gone since the copy. The element still pastes; its

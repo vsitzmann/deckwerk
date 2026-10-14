@@ -80,6 +80,7 @@ import { planHtmlReplacement } from './htmlReplacement.js';
 import { MirrorThemeRequestSchema, mirrorThemeAction, type MirrorThemeRequest } from './mirrorTheme.js';
 import { htmlDraftWorkflow, type HtmlDraftWorkflow } from './htmlDraftWorkflow.js';
 import { injectWebBridgeRuntime } from '../shared/webBridge.js';
+import { CLIPBOARD_ID, ClipboardStash } from './clipboardStash.js';
 import { checkWebPage } from '../cli/renderSlides.js';
 import {
   canAccessDeck,
@@ -423,6 +424,8 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
    * exists at the old id, and forgotten with the process.
    */
   const movedDecks = new Map<string, { id: string; title: string }>();
+  /** Browser copies, so another tab or deck on this server can paste them. */
+  const clipboardStash = new ClipboardStash();
   const htmlDrafts = new Map<string, HttpHtmlDraft>();
   const latestHtmlDrafts = new Map<string, string>();
   const htmlIdempotency = new Map<string, { revision: string; slideIds: string[]; label: string }>();
@@ -2187,6 +2190,41 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
       return;
     }
 
+    // A copy made in a browser tab, parked for a paste in another tab or deck
+    // (see clipboardStash.ts). PUT carries ?deck=, so the gate above already
+    // checked that this person may edit the deck the copy came from.
+    const clipboardMatch = /^\/api\/clipboard\/([^/]+)$/.exec(path);
+    if (clipboardMatch) {
+      const id = clipboardMatch[1];
+      if (!CLIPBOARD_ID.test(id)) return respondJson(response, 400, { error: 'invalid clipboard id' });
+      const owner = identity?.login ?? null;
+      if (request.method === 'PUT') {
+        if (!deckParam) return respondJson(response, 400, { error: 'missing deck' });
+        const body = await readBody(request, clipboardStash.maxEntryBytes).catch(() => null);
+        if (!body) return respondJson(response, 413, { error: 'the copy is too large to share between tabs' });
+        if (!clipboardStash.put(id, owner, deckParam, body)) {
+          return respondJson(response, 409, { error: 'clipboard id in use' });
+        }
+        return respondJson(response, 200, { ok: true });
+      }
+      if (request.method === 'GET') {
+        const stashed = clipboardStash.get(id, owner);
+        // Access may have been withdrawn since the copy: then the copy is
+        // gone too, rather than a way to keep reading a deck.
+        if (!stashed || !(await deckAllowed(identity, stashed.deck))) {
+          return respondJson(response, 404, { error: 'no such copy' });
+        }
+        response.writeHead(200, {
+          'content-type': 'application/json',
+          'cache-control': 'no-store',
+          'x-deckwerk-source-deck': encodeURIComponent(stashed.deck),
+        });
+        response.end(stashed.body);
+        return;
+      }
+      return respondJson(response, 405, { error: 'method not allowed' });
+    }
+
     if (path === '/api/import-url' && request.method === 'POST') {
       if (!deckParam) return respondJson(response, 400, { error: 'missing deck' });
       const payload = JSON.parse((await readBody(request)).toString('utf8')) as {
@@ -2206,6 +2244,13 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
           const sourceDir = deckDirOf(local[1]);
           const absolute = resolveAsset(sourceDir, local[2]);
           if (!absolute.startsWith(join(sourceDir, 'assets') + '/')) throw new Error('outside assets');
+          // A `web` element pasted from another deck brings its page along.
+          // It is a document, not media: importAsset refuses it, and it
+          // belongs under assets/web/ with the bridge runtime it already has.
+          if (/^assets\/web\/[^/]+\.x?html?$/i.test(local[2])) {
+            const page = await importWebPage(deckDirOf(deckParam), absolute, injectWebBridgeRuntime);
+            return respondJson(response, 200, { src: page.src });
+          }
           respondJson(response, 200, await importAsset(deckDirOf(deckParam), absolute));
         } catch (error) {
           respondJson(response, 400, { error: String(error instanceof Error ? error.message : error) });
@@ -3842,10 +3887,21 @@ function respondJson(response: ServerResponse, status: number, payload: unknown)
   response.end(JSON.stringify(payload));
 }
 
-function readBody(request: IncomingMessage): Promise<Buffer> {
+/** The request body; rejects once it passes `limit` bytes, when given. */
+function readBody(request: IncomingMessage, limit = Infinity): Promise<Buffer> {
   return new Promise((resolvePromise, reject) => {
     const chunks: Buffer[] = [];
-    request.on('data', (chunk) => chunks.push(chunk));
+    let length = 0;
+    request.on('data', (chunk: Buffer) => {
+      length += chunk.length;
+      if (length > limit) {
+        request.removeAllListeners('data');
+        request.resume();
+        reject(new Error('request body too large'));
+        return;
+      }
+      chunks.push(chunk);
+    });
     request.on('end', () => resolvePromise(Buffer.concat(chunks)));
     request.on('error', reject);
   });

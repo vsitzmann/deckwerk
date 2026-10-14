@@ -11,10 +11,11 @@ import { EditorStore, pasteFromClipboard } from '../src/renderer/editor/store.js
  * Edit mask button, and pointer drags on the canvas handles.
  *
  * Vincent unticked "Keep aspect ratio" on a video and the crop window still
- * kept its proportions: since #62 a media drag was locked unless Shift was
- * held, whatever the box said. The rule now is one rule for crops and resizes
- * alike — the checkbox decides, Shift inverts it, a circle never frees — and
- * new media starts with the box unticked.
+ * kept its proportions: since #62 every media drag was locked unless Shift
+ * was held. The rule now: a crop reshapes the window, never the picture, so
+ * it is free whatever the box says and Shift locks it; a resize follows the
+ * box, Shift inverting it; a circle never frees. New media starts with the
+ * box ticked, so a resize keeps its proportions.
  */
 
 type Media = Extract<SlideElement, { type: 'image' | 'video' }>;
@@ -159,7 +160,7 @@ describe('cropping media in mask mode', () => {
   for (const type of ['video', 'image'] as const) {
     for (const keepAspect of [false, true]) {
       for (const shift of [false, true]) {
-        const free = keepAspect === shift;
+        const free = !shift;
         const name = `${type}, "Keep aspect ratio" ${keepAspect ? 'on' : 'off'}${shift ? ', Shift held' : ''}`;
 
         it(`${name}: every handle crops ${free ? 'freely' : 'in proportion'}, the picture stays put`, () => {
@@ -189,25 +190,23 @@ describe('cropping media in mask mode', () => {
       }
     }
 
-    it(`${type}: cover counts as keeping the aspect ratio`, () => {
+    it(`${type}: cover crops freely too, and Shift locks it`, () => {
       const t = setup(media(type, 'cover'));
       expect(t.keepAspectBox().checked).toBe(true);
       t.toggleMask();
-      const locked = t.drag('se', -200, -60);
-      expect(ratio(locked)).toBeCloseTo(16 / 9, 1);
-      expect(t.drag('se', -100, -80, true)).toMatchObject({ w: locked.w - 100, h: locked.h - 80 });
+      const free = t.drag('se', -200, -60);
+      expect(free).toMatchObject({ w: 440, h: 300 });
+      expect(ratio(t.drag('se', -100, -80, true))).toBeCloseTo(440 / 300, 1);
     });
 
-    it(`${type}: ticking the box mid-session locks the next crop, unticking frees it again`, () => {
+    it(`${type}: ticking or unticking the box mid-session changes nothing about the crop`, () => {
       const t = setup(media(type, 'contain'));
-      t.setKeepAspect(false);
       t.toggleMask();
       expect(t.drag('se', -200, -60)).toMatchObject({ w: 440, h: 300 });
-      t.setKeepAspect(true);
-      const locked = t.drag('se', -40, -100);
-      expect(ratio(locked)).toBeCloseTo(440 / 300, 1);
       t.setKeepAspect(false);
-      expect(t.drag('e', -100, 0)).toMatchObject({ w: locked.w - 100, h: locked.h });
+      expect(t.drag('se', -40, -100)).toMatchObject({ w: 400, h: 200 });
+      t.setKeepAspect(true);
+      expect(t.drag('e', -100, 0)).toMatchObject({ w: 300, h: 200 });
     });
 
     it(`${type}: an existing crop keeps cropping freely, and its picture never moves`, () => {
@@ -289,12 +288,12 @@ describe('resizing media outside mask mode', () => {
   }
 });
 
-describe('new media starts with "Keep aspect ratio" off', () => {
+describe('new media starts with "Keep aspect ratio" on', () => {
   it('is the default the editor uses for every new picture and video', () => {
-    expect(NEW_MEDIA_FIT).toBe('fill');
+    expect(NEW_MEDIA_FIT).toBe('contain');
   });
 
-  it('a pasted video lands unticked and crops freely straight away', async () => {
+  it('a pasted video lands with the box ticked', async () => {
     const t = setup(media('image', 'contain', { id: 'other', x: 0, y: 0, w: 100, h: 100 }));
     window.api.readClipboard = async () => ({
       kind: 'external-image',
@@ -302,7 +301,7 @@ describe('new media starts with "Keep aspect ratio" off', () => {
     });
     expect(await pasteFromClipboard(t.store)).toEqual({ kind: 'elements', count: 1 });
     const [pasted] = t.store.selectedElements() as Media[];
-    expect(pasted).toMatchObject({ type: 'video', fit: 'fill' });
-    expect(t.keepAspectBox().checked).toBe(false);
+    expect(pasted).toMatchObject({ type: 'video', fit: 'contain' });
+    expect(t.keepAspectBox().checked).toBe(true);
   });
 });

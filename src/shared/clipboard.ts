@@ -110,7 +110,9 @@ export function collectAssetSrcs(request: ClipboardWriteRequest): string[] {
   const fromElements = (elements: SlideElement[]) => {
     for (const el of elements) {
       if (el.type === 'image') srcs.add(el.src);
-      if (el.type === 'video') {
+      // A web element's page is an asset like a video's file: without it the
+      // pasted box shows nothing.
+      if (el.type === 'video' || el.type === 'web') {
         srcs.add(el.src);
         if (el.poster) srcs.add(el.poster);
       }
@@ -126,33 +128,68 @@ export function collectAssetSrcs(request: ClipboardWriteRequest): string[] {
   return [...srcs];
 }
 
+export interface RewriteAssetOptions {
+  /**
+   * Remove what an unmapped src belongs to instead of leaving it pointing at
+   * a file the destination deck does not have: the element, when the src is
+   * what it shows; just the reference, for a poster or a slide background.
+   * The browser's paste into another deck uses this, because there a stale
+   * `assets/x.png` is not merely broken — the destination may hold a
+   * different file under that very name.
+   */
+  dropUnmapped?: boolean;
+}
+
 /**
  * Point the payload at the destination deck's copies of each asset.
- * Unmapped srcs are left alone: a dangling reference renders as a broken
- * image, which is visible and fixable, unlike a silently dropped element.
+ * Unmapped srcs are left alone by default: a dangling reference renders as a
+ * broken image, which is visible and fixable, unlike a silently dropped
+ * element. Returns how many references `dropUnmapped` removed (otherwise 0),
+ * so the caller can say so.
  */
 export function rewriteAssetSrcs(
-  payload: ClipboardPayload,
+  payload: ClipboardWriteRequest,
   map: Map<string, string>,
-): void {
-  const rewriteElements = (elements: SlideElement[]) => {
-    for (const el of elements) {
-      if (el.type === 'image') el.src = map.get(el.src) ?? el.src;
-      if (el.type === 'video') {
-        el.src = map.get(el.src) ?? el.src;
-        if (el.poster) el.poster = map.get(el.poster) ?? el.poster;
-      }
-    }
+  options: RewriteAssetOptions = {},
+): number {
+  let dropped = 0;
+  const optional = (src: string | null): string | null => {
+    if (!src) return src;
+    const mapped = map.get(src);
+    if (mapped !== undefined) return mapped;
+    if (!options.dropUnmapped) return src;
+    dropped++;
+    return null;
   };
-  if (payload.kind === 'elements') rewriteElements(payload.elements);
-  else {
-    for (const slide of payload.slides) {
-      if (slide.background.image) {
-        slide.background.image = map.get(slide.background.image) ?? slide.background.image;
+  const rewriteElements = (elements: SlideElement[], timeline: TimelineEntry[]) => {
+    const removed = new Set<string>();
+    for (const el of elements) {
+      if (el.type !== 'image' && el.type !== 'video' && el.type !== 'web') continue;
+      const src = map.get(el.src);
+      if (src === undefined && options.dropUnmapped) {
+        removed.add(el.id);
+        dropped++;
+        continue;
       }
-      rewriteElements(slide.elements);
+      el.src = src ?? el.src;
+      if (el.type !== 'image') el.poster = optional(el.poster);
+    }
+    if (removed.size === 0) return { elements, timeline };
+    return {
+      elements: elements.filter((el) => !removed.has(el.id)),
+      // A build that animates a dropped element has nothing left to animate.
+      timeline: timeline.filter((entry) => !removed.has(entry.action.target)),
+    };
+  };
+  if (payload.kind === 'elements') {
+    Object.assign(payload, rewriteElements(payload.elements, payload.timeline));
+  } else {
+    for (const slide of payload.slides) {
+      slide.background.image = optional(slide.background.image);
+      Object.assign(slide, rewriteElements(slide.elements, slide.timeline));
     }
   }
+  return dropped;
 }
 
 /**
