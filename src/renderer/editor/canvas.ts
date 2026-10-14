@@ -28,7 +28,8 @@ import { expandTimeline } from '@shared/timeline.js';
 import { mapTextOffset, mergeTextHtml } from '@shared/textMerge.js';
 import {
   BASELINE_RUN_FONT_SIZE, isRelativeFontSize, restoreKatexSourceHtml,
-  pastedHtmlHasMedia, sanitizePastedTextHtml, stripLayoutDeclarations, stripTextMediaPayloads,
+  pastedHtmlHasMedia, sanitizePastedTextHtml, stripFittedFontSize, stripLayoutDeclarations,
+  stripTextMediaPayloads,
   textOnlyPastedHtml,
 } from '@shared/htmlSafety.js';
 import { isBaselineFormat, type BaselineFormat, type InlineTextFormat } from './textFormatting.js';
@@ -4077,6 +4078,11 @@ export class EditorCanvas {
         // well, or the box saves an indent no control can reach. Plain typing
         // is left alone: it never restructures anything, and it is hot.
         stripLayoutDeclarations(body);
+        // In an auto-fit box the computed style a join copies includes the
+        // fitted size, which would freeze the moved text at it.
+        if (body.dataset.fittedFontSize !== undefined && body.style.fontSize) {
+          stripFittedFontSize(body, body.style.fontSize);
+        }
       }
       if (typed?.inputType.startsWith('delete')) {
         repairEmptiedBox();

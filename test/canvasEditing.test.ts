@@ -353,6 +353,32 @@ describe('inline text editing', () => {
     expect(bodyOf(host, 'text-1').querySelector('.katex-display')).not.toBeNull();
   });
 
+  it('does not store the fitted size a join copies onto text in an auto-fit box', () => {
+    // Found by the list fuzz's short auto-fit box: Backspace at the start of a
+    // paragraph, and Chromium wraps the joined text in the box's fitted size.
+    const { store, canvas, host } = setup();
+    store.select(['text-1']);
+    store.updateSelected((el) => {
+      if (el.type === 'text') {
+        el.html = '<p>gamma</p><p>delta</p>';
+        el.autoFit = true;
+      }
+    });
+    canvas.beginTextEdit('text-1');
+    const body = bodyOf(host, 'text-1');
+    // What a fit leaves on the box, then what Chromium's join leaves in it.
+    body.style.fontSize = '13.8px';
+    body.dataset.fittedFontSize = '13.8';
+    body.innerHTML = '<p>gamma<span style="font-size: 13.8px;">delta</span>'
+      + '<span style="font-size: 20px;">authored</span></p>';
+    body.dispatchEvent(new InputEvent('input', { inputType: 'deleteContentBackward', bubbles: true }));
+    body.dispatchEvent(new FocusEvent('blur'));
+
+    const saved = store.slide!.elements.find((element) => element.id === 'text-1')!;
+    expect(saved.type === 'text' && saved.html)
+      .toBe('<p>gammadelta<span style="font-size: 20px;">authored</span></p>');
+  });
+
   it('never stores data: media in a text element, whatever put it in the DOM', () => {
     // The backstop under every input path (paste, drop, execCommand): a
     // 10 MB data: video pasted into a title once made deck.json 13.5 MB.

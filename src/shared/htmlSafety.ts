@@ -187,6 +187,33 @@ export function stripLayoutDeclarations(root: ParentNode): boolean {
   return changed;
 }
 
+/**
+ * Drop the size auto-fit wrote on a box (`fitted`, the `font-size` on its
+ * `.text-content`) wherever a run below `root` repeats it, and unwrap a span
+ * that has nothing left to say.
+ *
+ * Chromium's block joins wrap the text they move in the computed style it had,
+ * and in an auto-fit box that includes the fitted size: Backspace at the start
+ * of a paragraph left the joined text at `font-size: 13.8px` while the box
+ * fitted itself to 16.5px, and saved it so. No author writes the exact
+ * fitted size, so a run that repeats it is the fit baked in by a join.
+ */
+export function stripFittedFontSize(root: ParentNode, fitted: string): boolean {
+  const size = Number.parseFloat(fitted);
+  if (!Number.isFinite(size) || !fitted.trim().endsWith('px')) return false;
+  let changed = false;
+  for (const node of [...root.querySelectorAll<HTMLElement>('[style]')]) {
+    const own = node.style.getPropertyValue('font-size').trim();
+    if (!own.endsWith('px') || Math.abs(Number.parseFloat(own) - size) > 0.05) continue;
+    node.style.removeProperty('font-size');
+    changed = true;
+    if (node.getAttribute('style')?.trim()) continue;
+    node.removeAttribute('style');
+    if (node.tagName === 'SPAN' && node.attributes.length === 0) node.replaceWith(...node.childNodes);
+  }
+  return changed;
+}
+
 /** Recover authored delimiters from KaTeX's generated HTML/MathML render tree. */
 export function restoreKatexSourceHtml(html: string): string {
   const template = document.createElement('template');
