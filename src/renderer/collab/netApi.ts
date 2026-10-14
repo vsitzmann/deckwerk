@@ -1,4 +1,5 @@
 import type { AssetImportProgress, ImportedAsset, MediaInfo } from '@shared/ipc.js';
+import type { ClipboardWriteRequest } from '@shared/clipboard.js';
 import { clipboardImageName, type ClipboardImageSource } from '@shared/clipboardImages.js';
 import { pinMediaVariant } from './mediaVariants.js';
 
@@ -68,9 +69,64 @@ function isOwnDeckAsset(raw: string): boolean {
   }
 }
 
+/** A deck id is a path; each segment is encoded on its own. */
+function deckPath(deckId: string): string {
+  return deckId.split('/').map(encodeURIComponent).join('/');
+}
+
 export function installNetApi(options: NetApiOptions): void {
   const deck = encodeURIComponent(options.deckId);
   const api = {
+    /**
+     * The browser's half of cross-tab copy and paste (see the server's
+     * clipboardStash.ts): a copy is parked on the server under the id its
+     * clipboard token carries, and a paste anywhere on this server fetches it
+     * back and brings the assets it names into this deck.
+     */
+    stashClipboard: async (id: string, request: ClipboardWriteRequest): Promise<void> => {
+      const response = await fetch(`/api/clipboard/${encodeURIComponent(id)}?deck=${deck}`, {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(request),
+      });
+      if (!response.ok) throw new Error(`could not share the copy with other tabs (${response.status})`);
+    },
+
+    fetchClipboard: async (id: string): Promise<{ sourceDeck: string; request: unknown } | null> => {
+      try {
+        const response = await fetch(`/api/clipboard/${encodeURIComponent(id)}`, { cache: 'no-store' });
+        const sourceDeck = response.headers.get('x-deckwerk-source-deck');
+        if (!response.ok || sourceDeck === null) return null;
+        return { sourceDeck: decodeURIComponent(sourceDeck), request: await response.json() as unknown };
+      } catch (err) {
+        console.error('Could not fetch the copied objects:', err);
+        return null;
+      }
+    },
+
+    /**
+     * This deck's copy of an asset another deck on this server references:
+     * the server copies the file across (as for a drag between tabs) and
+     * answers with the new deck-relative src. Null when the file is gone or
+     * this person may not see the other deck.
+     */
+    importDeckAsset: async (sourceDeck: string, src: string): Promise<string | null> => {
+      if (sourceDeck === options.deckId) return src;
+      try {
+        const url = new URL(`/decks/${deckPath(sourceDeck)}/${deckPath(src.replace(/^\/+/, ''))}`, location.href);
+        const response = await fetch(`/api/import-url?deck=${deck}`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ url: url.href, deckAsset: true }),
+        });
+        if (!response.ok) return null;
+        return (await response.json() as { src?: string }).src ?? null;
+      } catch (err) {
+        console.error(`Could not bring ${src} over from ${sourceDeck}:`, err);
+        return null;
+      }
+    },
+
     assetUrl: (src: string): string => pinMediaVariant(
       src,
       `/decks/${deck}/${src.replace(/^\/+/, '').split('/').map(encodeURIComponent).join('/')}`,
