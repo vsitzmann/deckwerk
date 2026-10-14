@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { electronBinary } from './support/browserSession.js';
 import {
   CONTENT,
+  TEXT_ID,
   MOD,
   startListEditingSession,
   type ListEditingSession,
@@ -176,6 +177,60 @@ describe.skipIf(!electronBinary)('editing bulleted lists', () => {
       (lines) => lines.join('|') === 'ul|- alpha|- beta|- gamma|p: plain|ul|- delta',
       'plain text between the halves');
     await expectSoundMarkup('after deleting an empty bullet');
+  });
+
+  it('leaves the type size alone in a box without auto-fit that a list edit overflows', {
+    timeout: 120_000,
+  }, async () => {
+    // The reported bug, slide 4 of 2610_TRI_site_visit: a box two lines tall
+    // with a fixed line height and an empty third bullet. Backspace on that
+    // bullet ran the auto-fit on a box that never asked for it, and since a
+    // fixed line height does not shrink with the type, the fit bottomed out
+    // at 6px. The stored deck kept its size, so the text came back on reload.
+    // The auto-fit box afterwards is the control: it must still shrink.
+    const shape = (patch: string) => session.cdp.evaluate(`(() => {
+      window.store.commit((deck) => {
+        const element = deck.slides[0].elements.find(
+          (candidate) => candidate.id === ${JSON.stringify(TEXT_ID)});
+        ${patch}
+      }, { label: 'List editing fixture' });
+      return true;
+    })()`);
+    /** Each block's painted size, read after two frames so a scheduled fit has run. */
+    const sizes = () => session.cdp.evaluate<string[]>(`new Promise((resolve) => {
+      requestAnimationFrame(() => requestAnimationFrame(() => {
+        const root = document.querySelector('${CONTENT}');
+        resolve([...root.querySelectorAll('li, p')].map((block) => getComputedStyle(block).fontSize));
+      }));
+    })`);
+    const backspaceOnEmptyBullet = async () => {
+      await session.reset('<ul><li>alpha</li><li>beta</li><li><br></li></ul>');
+      await session.edit();
+      await session.caretIn('beta', 'end');
+      await session.cdp.key('ArrowDown', 40);
+      await session.cdp.key('Backspace', 8);
+      expect(await session.outline(), 'Backspace took the empty bullet off')
+        .toEqual(['ul', '- alpha', '- beta', 'p: ']);
+    };
+    try {
+      await session.reset('<p>Text</p>');
+      await shape(`element.h = 80; element.style = { 'line-height': '39.2px' }; delete element.autoFit;`);
+      await backspaceOnEmptyBullet();
+      expect(await sizes(), 'a box without auto-fit kept its type size').toEqual(['28px', '28px', '28px']);
+      expect(await session.cdp.evaluate<string | null>(
+        `document.querySelector('${CONTENT}').dataset.fittedFontSize ?? null`,
+      ), 'no fit ran on it').toBeNull();
+
+      await session.reset('<p>Text</p>');
+      await shape(`element.h = 80; element.style = {}; element.autoFit = true;`);
+      await backspaceOnEmptyBullet();
+      const fitted = (await sizes()).map((size) => Number.parseFloat(size));
+      expect(fitted.every((size) => size < 28 && size > 6), `an auto-fit box still shrinks: ${fitted}`)
+        .toBe(true);
+    } finally {
+      await session.reset('<p>Text</p>');
+      await shape(`element.h = 860; element.style = {}; delete element.autoFit;`);
+    }
   });
 
   it('takes the bullet off an item with Backspace at its start', {

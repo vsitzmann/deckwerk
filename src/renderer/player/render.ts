@@ -645,13 +645,20 @@ export function fitAutoText(root: ParentNode): void {
   }
 }
 
-/** Defer until the rendered node has been attached and therefore has layout. */
+/**
+ * Defer until the rendered node has been attached and therefore has layout.
+ *
+ * Only a box that opted in (`data-auto-fit`, set from autoFit or noWrap) is
+ * fitted, checked when the fit runs. Editing code schedules a fit after every
+ * list edit whatever the box, and fitting a fixed-size box shrank its text:
+ * taking an empty bullet off a box saved one line too short sent it to 6px.
+ */
 export function scheduleAutoFit(node: HTMLElement): void {
   if (pendingTextFits.has(node)) return;
   pendingTextFits.add(node);
   const run = () => {
     pendingTextFits.delete(node);
-    if (node.isConnected) fitAutoTextElement(node);
+    if (node.isConnected && node.dataset.autoFit === 'true') fitAutoTextElement(node);
   };
   if (typeof requestAnimationFrame === 'function') requestAnimationFrame(run);
   else setTimeout(run, 0);
