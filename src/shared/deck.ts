@@ -197,12 +197,12 @@ const TextElement = BaseElement.extend({
 });
 
 /**
- * The fit media gets when it is put on a slide: 'fill', i.e. "Keep aspect
- * ratio" off, so handles crop and resize freely and Shift locks proportions.
- * The box starts at the picture's own aspect ratio, so nothing is stretched
- * until the author drags it. Decks that omit `fit` still load as 'contain'.
+ * The fit media gets when it is put on a slide: 'contain', i.e. "Keep aspect
+ * ratio" on, so a resize keeps the picture's proportions and Shift frees
+ * them. Cropping is free whatever this says (Shift locks it), since a crop
+ * reshapes the window, never the picture.
  */
-export const NEW_MEDIA_FIT = 'fill' as const;
+export const NEW_MEDIA_FIT = 'contain' as const;
 
 const ImageElement = BaseElement.extend({
   type: z.literal('image'),

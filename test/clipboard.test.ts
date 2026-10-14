@@ -396,7 +396,7 @@ describe('cross-instance copy/paste', () => {
     expect(selected).toMatchObject({
       type: 'image',
       src: 'assets/Screenshot.abc12345.png',
-      fit: 'fill',
+      fit: 'contain',
       alt: 'Pasted screenshot',
     });
     expect(selected.w).toBeLessThanOrEqual(store.get().deck.canvas.w * 0.8);

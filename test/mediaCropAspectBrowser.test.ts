@@ -19,11 +19,11 @@ import {
 import { collabClientDir } from './support/collabClient.js';
 
 /**
- * Unticking "Keep aspect ratio" frees the crop window. It did not: Vincent
- * unticked it on a video in 2610_TRI_site_visit and every crop handle still
- * kept the window's proportions, because a media drag ignored the checkbox and
- * only Shift freed it. Real media, the real inspector checkbox and Edit mask
- * button, real pointer input; test/mediaCrop.test.ts walks every option.
+ * A crop is free and Shift locks it; a resize keeps proportions. Vincent could
+ * not crop a video in 2610_TRI_site_visit to a new shape: every crop handle
+ * kept the window's proportions unless Shift was held, and unticking "Keep
+ * aspect ratio" did nothing. Real media, the real Edit mask button, real
+ * pointer input; test/mediaCrop.test.ts walks every option.
  */
 const DECK_ID = 'crop-aspect';
 
@@ -53,8 +53,8 @@ const media = (id: string, type: 'image' | 'video', x: number, src: string) => (
 
 type Saved = { x: number; y: number; w: number; h: number; fit: string; sourceBox: { x: number; y: number; w: number; h: number } | null };
 
-describe.skipIf(!electronBinary)('cropping media with "Keep aspect ratio" off', () => {
-  it('crops freely once the box is unticked, and in proportion once it is ticked', { timeout: 120_000 }, async () => {
+describe.skipIf(!electronBinary)('cropping and resizing media', () => {
+  it('crops freely, in proportion with Shift, and resizes in proportion', { timeout: 120_000 }, async () => {
     workDir = await mkdtemp(join(tmpdir(), 'crop-aspect-'));
     const decksRoot = join(workDir, 'decks');
     const deckDir = join(decksRoot, DECK_ID);
@@ -140,28 +140,32 @@ describe.skipIf(!electronBinary)('cropping media with "Keep aspect ratio" off', 
         const settled = !document.querySelector('#inspector')?.textContent.includes('Reading clip length');
         return selection.length === 1 && selection[0] === ${JSON.stringify(id)} && box?.checked === true && settled;
       })()`), `${id} never became the inspector's only, ticked selection`);
-      await clickControl('label.field-check', 'Keep aspect ratio');
-      const original = await saved(id, (el) => el.fit === 'fill', 'unticking "Keep aspect ratio" never saved');
+      const original = await saved(id, (el) => el.fit === 'contain', 'the fixture never loaded');
 
       await clickControl('.mask-action-row .panel-action', 'Edit mask');
       await eventually(() => cdp.evaluate<boolean>(`!!document.querySelector('#canvas .sel-box.masking')`), 'mask mode never began');
 
-      // Unticked: the window follows the pointer, wider than it is tall now.
+      // With the box ticked, the window still follows the pointer: wider than
+      // it is tall now.
       await dragCorner(id, -80, -120, false);
       const free = await saved(id, (el) => el.h < 200, 'the free crop never saved');
       expect(free.w, `${id} crop width`).toBeGreaterThan(390);
       expect(free.w / free.h, `${id} crop kept its proportions`).toBeGreaterThan(2.3);
       expect(picture(free), `${id} picture moved or reshaped`).toEqual(picture(original));
 
-      // Ticked again: the next crop keeps the window's new proportions.
-      await clickControl('label.field-check', 'Keep aspect ratio');
-      await saved(id, (el) => el.fit === 'contain', 'ticking "Keep aspect ratio" never saved');
-      await dragCorner(id, -120, -60, false);
+      // Shift locks the crop to the window's new proportions.
+      await dragCorner(id, -120, -60, true);
       const locked = await saved(id, (el) => el.w < free.w - 60, 'the locked crop never saved');
       expect(locked.w / locked.h, `${id} locked crop`).toBeCloseTo(free.w / free.h, 1);
       expect(picture(locked), `${id} picture moved or reshaped`).toEqual(picture(original));
 
       await clickControl('.mask-action-row .panel-action', 'Done editing mask');
+      await eventually(() => cdp.evaluate<boolean>(`!document.querySelector('#canvas .sel-box.masking')`), 'mask mode never ended');
+
+      // Outside mask mode a corner drag resizes, keeping the proportions.
+      await dragCorner(id, 90, -20, false);
+      const resized = await saved(id, (el) => el.w > locked.w + 30, 'the resize never saved');
+      expect(resized.w / resized.h, `${id} resize kept its proportions`).toBeCloseTo(locked.w / locked.h, 1);
     }
   });
 });

@@ -2729,16 +2729,18 @@ export class EditorCanvas {
           if (edges.bottom) rect.h = o.h + dy;
         }
 
-        // Media follows its "Keep aspect ratio" box (any fit but 'fill'), for
-        // a crop in mask mode as much as for a resize; everything else resizes
-        // freely. Shift inverts either. The fit is read from the drag's origin,
-        // since a Shift-freed resize writes 'fill' mid-drag. A circular mask is
-        // square by construction, so it never frees: a free resize would
-        // stretch it back into an ellipse.
+        // A crop changes the window's shape, never the picture's, so it is
+        // free and Shift locks it. A resize of media follows its "Keep aspect
+        // ratio" box (any fit but 'fill'), and Shift inverts it; everything
+        // else resizes freely, Shift locking. The fit is read from the drag's
+        // origin, since a Shift-freed resize writes 'fill' mid-drag. A
+        // circular mask is square by construction, so it never frees: a free
+        // drag would stretch it back into an ellipse.
         const media = resizing?.type === 'image' || resizing?.type === 'video';
+        const cropping = this.maskingId === drag.elementId;
         const keepsAspect = drag.origins.get(drag.elementId)?.fit !== 'fill';
         const constrained = media
-          ? resizing.maskShape === 'circle' || keepsAspect !== ev.shiftKey
+          ? resizing.maskShape === 'circle' || (cropping ? ev.shiftKey : keepsAspect !== ev.shiftKey)
           : ev.shiftKey;
         // Where the pointer is: the box a free resize would make.
         const pointerRect = rect;
