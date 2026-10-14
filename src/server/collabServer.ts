@@ -77,6 +77,7 @@ import { deckOutline } from '../shared/deckDigest.js';
 import type { AgentPanelState } from '../shared/ipc.js';
 import type { LocalAgentLink, LocalAgentRegistry } from './localAgents.js';
 import { planHtmlReplacement } from './htmlReplacement.js';
+import { trackAssetResponse } from './assetRequestLog.js';
 import { MirrorThemeRequestSchema, mirrorThemeAction, type MirrorThemeRequest } from './mirrorTheme.js';
 import { htmlDraftWorkflow, type HtmlDraftWorkflow } from './htmlDraftWorkflow.js';
 import { injectWebBridgeRuntime } from '../shared/webBridge.js';
@@ -1455,6 +1456,7 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
         response.end('forbidden');
         return;
       }
+      trackAssetResponse(request, response, identity?.login ?? null, `${assetMatch[1]}/${assetMatch[2]}`);
       // An oversized clip is served as its rendition once one exists, and as
       // itself until then — a slide that waits for a transcode is worse than
       // one that streams the original. The request is also what triggers the
