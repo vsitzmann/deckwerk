@@ -148,7 +148,8 @@ async function expectSound(label: string): Promise<void> {
     .toEqual([]);
   expect(await selectionProblems(session.cdp), `${label}: selection/editing invariants`)
     .toEqual([]);
-  expect(await session.typeSizeProblems(), `${label}: type size`).toEqual([]);
+  const sizes = await session.typeSizeProblems();
+  expect(sizes, `${label}: type size ${sizes.length > 0 ? await session.markup() : ''}`).toEqual([]);
   expect(await session.typeSizeProblems(OTHER_CONTENT), `${label}: the other box's type size`)
     .toEqual([]);
   expect(await session.renderDivergences(), `${label}: canvas DOM against a fresh render`)
@@ -828,7 +829,10 @@ async function runUndoCheckpoint(next: () => number, label: string): Promise<voi
     // nothing to hold); there is no entry to undo, so nothing to check.
     return;
   }
-  await cdp.click(CONTENT, 'the text box before undoing');
+  // Its first character: in a short box the text's centre sits below the
+  // box, on its resize handle.
+  if ((await session.text()).length > 0) await cdp.clickTextAtOffset(CONTENT, 0, 'the text box before undoing');
+  else await cdp.click(CONTENT, 'the text box before undoing');
   await session.undo();
   const undone = await deckSnapshotEventually(cdp, port, DECK_ID, before);
   if (!sameDeckSnapshot(undone, before)) {

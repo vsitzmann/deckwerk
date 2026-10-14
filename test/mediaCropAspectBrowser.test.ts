@@ -129,13 +129,16 @@ describe.skipIf(!electronBinary)('cropping media with "Keep aspect ratio" off', 
       ), 435 * scale + await cdp.evaluate<number>(
         `document.querySelector('#canvas .slide').getBoundingClientRect().top`,
       ));
-      // The inspector must be showing this element, still ticked, before the
-      // click: on a slow machine it can still be the previous one's.
+      // The inspector must be showing this element, still ticked and settled,
+      // before the click: on a slow machine it can still be the previous one's.
       await eventually(() => cdp.evaluate<boolean>(`(() => {
         const selection = [...window.store.get().selection];
         const box = [...document.querySelectorAll('label.field-check')]
           .find((n) => n.textContent.trim() === 'Keep aspect ratio')?.querySelector('input');
-        return selection.length === 1 && selection[0] === ${JSON.stringify(id)} && box?.checked === true;
+        // A video's panel renders again once its clip length is probed,
+        // shifting everything under a click aimed before that.
+        const settled = !document.querySelector('#inspector')?.textContent.includes('Reading clip length');
+        return selection.length === 1 && selection[0] === ${JSON.stringify(id)} && box?.checked === true && settled;
       })()`), `${id} never became the inspector's only, ticked selection`);
       await clickControl('label.field-check', 'Keep aspect ratio');
       const original = await saved(id, (el) => el.fit === 'fill', 'unticking "Keep aspect ratio" never saved');
