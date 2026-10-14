@@ -1,5 +1,6 @@
 import { openContextMenu } from './contextMenuPlacement.js';
 import type { Deck, Slide, SlideElement, TextEl } from '@shared/deck.js';
+import { NEW_MEDIA_FIT } from '@shared/deck.js';
 import { canHoldText, shapeToTextBox } from '@shared/shapeText.js';
 import { moveCorner, polygonPoints } from '@shared/polygonShape.js';
 import { braceDepthToward, bracePolyline, braceTip } from '@shared/brace.js';
@@ -622,7 +623,8 @@ type MoveOrigin = Rect & { control?: { x: number; y: number } };
 type ResizeOrigin = Rect & {
   rot: number;
   sourceBox?: Rect | null;
-  /** Media's `fit` when the drag began, put back if Shift is let go mid-drag. */
+  /** Media's `fit` when the drag began: it decides whether the drag keeps
+   * proportions, and is put back if Shift is let go mid-drag. */
   fit?: 'cover' | 'contain' | 'fill';
   control?: { x: number; y: number } | null;
 };
@@ -2715,13 +2717,16 @@ export class EditorCanvas {
           if (edges.bottom) rect.h = o.h + dy;
         }
 
-        // Pictures and videos keep their proportions unless Shift is held, the
-        // way Keynote and Figma resize media; everything else resizes freely
-        // unless Shift is held. A circular mask is square by construction, so
-        // it never frees: a free resize would stretch it back into an ellipse.
+        // Media follows its "Keep aspect ratio" box (any fit but 'fill'), for
+        // a crop in mask mode as much as for a resize; everything else resizes
+        // freely. Shift inverts either. The fit is read from the drag's origin,
+        // since a Shift-freed resize writes 'fill' mid-drag. A circular mask is
+        // square by construction, so it never frees: a free resize would
+        // stretch it back into an ellipse.
         const media = resizing?.type === 'image' || resizing?.type === 'video';
+        const keepsAspect = drag.origins.get(drag.elementId)?.fit !== 'fill';
         const constrained = media
-          ? resizing.maskShape === 'circle' || !ev.shiftKey
+          ? resizing.maskShape === 'circle' || keepsAspect !== ev.shiftKey
           : ev.shiftKey;
         // Where the pointer is: the box a free resize would make.
         const pointerRect = rect;
@@ -2803,11 +2808,12 @@ export class EditorCanvas {
               w: Math.max(1, Math.round(origin.sourceBox.w * fx)),
               h: Math.max(1, Math.round(origin.sourceBox.h * fy)),
             };
-          } else if ((el.type === 'image' || el.type === 'video') && origin.fit) {
-            // Shift frees a picture's proportions, and a freed picture squashes
-            // with its box: it fills the box exactly, so the box is the picture.
-            // Letting go of Shift mid-drag gives it back the fit it had.
-            el.fit = ev.shiftKey ? 'fill' : origin.fit;
+          }
+          if ((el.type === 'image' || el.type === 'video') && origin.fit) {
+            // A freed picture squashes with its box: it fills the box (or its
+            // scaled crop) exactly instead of letterboxing inside it. Letting
+            // go of Shift mid-drag gives it back the fit it had.
+            el.fit = media && !constrained ? 'fill' : origin.fit;
           }
           if (el.type === 'shape' && origin.control) {
             const control = resizePointByScale(origin.control, origin, resized, scaleX, scaleY);
@@ -6747,7 +6753,7 @@ export class EditorCanvas {
                   ...base,
                   type: 'video',
                   src,
-                  fit: 'contain',
+                  fit: NEW_MEDIA_FIT,
                   autoplay: true,
                   loop: true,
                   muted: true,
@@ -6761,7 +6767,7 @@ export class EditorCanvas {
                   ...base,
                   type: 'image',
                   src,
-                  fit: 'contain',
+                  fit: NEW_MEDIA_FIT,
                   alt: drop.file.name,
                   sourceBox: null,
                 },
@@ -6835,7 +6841,7 @@ export class EditorCanvas {
         class: [],
         style: {},
         src: makePendingSrc(id, webImageName(source)),
-        fit: 'contain',
+        fit: NEW_MEDIA_FIT,
         alt: webImageName(source),
         sourceBox: null,
       });

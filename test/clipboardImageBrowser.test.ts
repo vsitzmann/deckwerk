@@ -261,7 +261,7 @@ describe.skipIf(!runnable)('clipboard screenshot paste in the headless-server We
       deck.slides[0].elements.some((element) => element.id === pasted.id)
     ));
     const image = liveDeck.slides[0].elements.find((element) => element.id === pasted.id);
-    expect(image).toMatchObject({ type: 'image', fit: 'contain', alt: 'Pasted screenshot' });
+    expect(image).toMatchObject({ type: 'image', fit: 'fill', alt: 'Pasted screenshot' });
     if (!image || image.type !== 'image') throw new Error('server did not store the pasted image');
     expect(image.src).toMatch(/^assets\/Screenshot\.[a-f0-9]{8}\.png$/);
 

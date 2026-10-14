@@ -1,5 +1,5 @@
 import type { Deck, Slide, SlideElement } from '@shared/deck.js';
-import { DeckSchema, SlideSchema, parseDeck } from '@shared/deck.js';
+import { DeckSchema, NEW_MEDIA_FIT, SlideSchema, parseDeck } from '@shared/deck.js';
 import { renameRetiredFields } from '@shared/fieldAliases.js';
 import { cloneJson, jsonEqual } from '@shared/jsonData.js';
 import { applyAgentOperations, type AgentOperation } from '@shared/agent.js';
@@ -1464,7 +1464,7 @@ function insertClipboardMedia(
       class: [],
       style: {},
       src: asset.src,
-      fit: 'contain' as const,
+      fit: NEW_MEDIA_FIT,
       sourceBox: null,
     };
     // Same defaults as a video dropped onto the slide.

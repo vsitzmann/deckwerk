@@ -196,6 +196,14 @@ const TextElement = BaseElement.extend({
   overrides: z.array(z.string()).optional(),
 });
 
+/**
+ * The fit media gets when it is put on a slide: 'fill', i.e. "Keep aspect
+ * ratio" off, so handles crop and resize freely and Shift locks proportions.
+ * The box starts at the picture's own aspect ratio, so nothing is stretched
+ * until the author drags it. Decks that omit `fit` still load as 'contain'.
+ */
+export const NEW_MEDIA_FIT = 'fill' as const;
+
 const ImageElement = BaseElement.extend({
   type: z.literal('image'),
   /** Deck-relative path, e.g. "assets/fig.png". */
