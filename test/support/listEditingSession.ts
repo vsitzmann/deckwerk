@@ -454,7 +454,12 @@ function buildSession(cdp: Cdp, port: number, deckId: string): ListEditingSessio
     if (!await cdp.evaluate<boolean>(
       `document.querySelector('${CONTENT}')?.isContentEditable === true`,
     )) return;
-    await cdp.click(CONTENT, 'the text box before leaving editing');
+    // Its first character, not its centre: text that overflows a short box
+    // centres below the box's bottom edge, on the resize handle there.
+    const hasGlyphs = await cdp.evaluate<boolean>(
+      `((document.querySelector('${CONTENT}')?.textContent ?? '').trim().length > 0)`);
+    if (hasGlyphs) await cdp.clickTextAtOffset(CONTENT, 0, 'the text box before leaving editing');
+    else await cdp.click(CONTENT, 'the text box before leaving editing');
     await cdp.key('Escape', 27);
     await eventually(async () => cdp.evaluate<boolean>(
       `document.querySelector('${CONTENT}')?.isContentEditable !== true`,
