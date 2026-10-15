@@ -133,6 +133,15 @@ describe('followThemeOnText', () => {
     expect(el.overrides).toBeUndefined();
     expect(hasOwnTextType(el)).toBe(false);
   });
+
+  it('drops the importer class that a theme.css may restyle, and keeps the role', () => {
+    const el = body('kn');
+    el.class = ['kn-text', 'role-title'];
+    expect(hasOwnTextType(el)).toBe(true);
+    followThemeOnText(el);
+    expect(el.class).toEqual(['role-title']);
+    expect(hasOwnTextType(el)).toBe(false);
+  });
 });
 
 describe('the Role control and Follow theme in the Props panel', () => {
@@ -165,8 +174,25 @@ describe('the Role control and Follow theme in the Props panel', () => {
     document.body.replaceChildren();
     const pinnedPanel = panelFor(pinned);
     expect(pinnedPanel.roleSelect().selectedOptions[0].textContent).toBe('Body');
-    // Nothing the author chose, nothing to give up: Reset to theme is idle.
-    expect(pinnedPanel.host.querySelector<HTMLButtonElement>('.follow-theme-button')!.disabled).toBe(true);
+    // Not the author's choice, so no "+", but it still keeps the box off the
+    // theme's look: Reset to theme can take it back.
+    expect(pinnedPanel.host.querySelector<HTMLButtonElement>('.follow-theme-button')!.disabled).toBe(false);
+
+    const themed = body('themed');
+    document.body.replaceChildren();
+    // Only a box the theme already decides entirely leaves it idle.
+    expect(panelFor(themed).host.querySelector<HTMLButtonElement>('.follow-theme-button')!.disabled).toBe(true);
+  });
+
+  it('resets a Keynote-imported box, whose look the deck\'s theme.css restyles through .kn-text', () => {
+    const el = body('imported');
+    el.class = ['kn-text', 'role-body'];
+    const { store, host } = panelFor(el);
+    const button = host.querySelector<HTMLButtonElement>('.follow-theme-button')!;
+    expect(button.disabled).toBe(false);
+    button.click();
+    expect((store.get().deck.slides[0].elements[0] as TextEl).class).toEqual(['role-body']);
+    expect(host.querySelector<HTMLButtonElement>('.follow-theme-button')!.disabled).toBe(true);
   });
 
   it('enables Reset to theme for a customised box, previews it, and clears as one undo step', () => {

@@ -25,6 +25,7 @@ import {
   deckTheme,
   deckThemes,
   followThemeOnText,
+  hasOwnTextType,
   newObjectColors,
   textOverrides,
   themeById,
@@ -2044,10 +2045,12 @@ export class Inspector {
         roleSelect.classList.add('text-role');
         typography.content.prepend(roleSelect);
 
-        // One click to drop every customisation (and any pinned copy with it),
-        // so the theme decides all of the box's type again: the "+" comes off.
-        // Always in the same place, idle while there is no "+", like Reset to
-        // layout position under Geometry.
+        // One click to drop every customisation (and any pinned copy or
+        // importer class with it), so the theme decides all of the box's type
+        // again: the "+" comes off. Always in the same place, idle only while
+        // the theme already decides everything, like Reset to layout position
+        // under Geometry. A pinned copy is no "+" -- the author did not choose
+        // it -- but it still keeps the box from looking like the theme.
         {
           const followRow = document.createElement('div');
           followRow.className = 'follow-theme-row';
@@ -2055,10 +2058,10 @@ export class Inspector {
           follow.type = 'button';
           follow.className = 'follow-theme-button';
           follow.textContent = 'Reset to theme';
-          follow.disabled = overridden.length === 0;
+          follow.disabled = !hasOwnTextType(el);
           follow.title = follow.disabled
             ? 'This box has no customisations; the theme decides its type'
-            : 'Remove this box’s customisations so the theme decides its face, size, weight and colour';
+            : 'Remove this box’s own type so the theme decides its face, size, weight and colour';
           const id = el.id;
           const previewFollow = () => {
             if (follow.disabled) return;

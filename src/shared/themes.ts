@@ -663,22 +663,34 @@ export function textOverrides(el: Extract<SlideElement, { type: 'text' }>): stri
 }
 
 /**
- * Whether the box carries any type of its own -- an author override, or a
- * copy the app pinned on it -- that "Follow theme" would remove.
+ * The Keynote/PowerPoint importer's class. A deck's theme.css may restyle it
+ * above the role rules (to keep an imported deck's look), so a box carrying
+ * it does not take its type from the theme even with no style of its own.
+ */
+export const IMPORTED_TEXT_CLASS = 'kn-text';
+
+/**
+ * Whether the box carries any type of its own -- an author override, a copy
+ * the app pinned on it, or the importer's class -- that "Reset to theme"
+ * would remove.
  */
 export function hasOwnTextType(el: Extract<SlideElement, { type: 'text' }>): boolean {
   return THEME_TEXT_PROPERTIES.some((property) => (
     el.style[property] !== undefined || el.contentStyle?.[property] !== undefined
-  )) || (el.overrides?.length ?? 0) > 0;
+  )) || (el.overrides?.length ?? 0) > 0 || el.class.includes(IMPORTED_TEXT_CLASS);
 }
 
 /**
- * Put the box back on the theme entirely: drop every override and every
- * pinned copy, so the stylesheet decides all of its type. The "+" comes off.
+ * Put the box back on the theme entirely: drop every override, every pinned
+ * copy and the importer's class, so the theme's role rules decide all of its
+ * type. The "+" comes off.
  */
 export function followThemeOnText(el: Extract<SlideElement, { type: 'text' }>): void {
   clearTextProperties(el, [...THEME_TEXT_PROPERTIES]);
   delete el.overrides;
+  if (el.class.includes(IMPORTED_TEXT_CLASS)) {
+    el.class = el.class.filter((name) => name !== IMPORTED_TEXT_CLASS);
+  }
 }
 
 /**
