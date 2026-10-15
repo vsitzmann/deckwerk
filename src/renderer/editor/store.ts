@@ -13,6 +13,7 @@ import {
   type ClipboardWriteRequest,
   collectAssetSrcs,
   parseClipboardPayload,
+  matchSlidesToTheme,
   pinSlidesToTheme,
   remapElementIds,
   remapSlideIds,
@@ -1458,6 +1459,7 @@ async function pasteFragment(
         : 'destination';
       if (choice === null) return null;
       if (choice === 'source') pinSlidesToTheme(slides, source);
+      else matchSlidesToTheme(slides, source);
     }
     for (const slide of slides) remapSlideIds(slide);
     const at = store.get().slideIndex + 1;

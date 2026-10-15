@@ -310,6 +310,33 @@ describe('cross-instance copy/paste', () => {
     expect(dest.get().deck.slides[1].elements[0].style['font-family']).toBeUndefined();
   });
 
+  it('matching the destination releases imported inline typography', async () => {
+    const sourceDeck = sampleDeck();
+    sourceDeck.themeStyle = themeStyle('Charter, Georgia, serif');
+    const title = sourceDeck.slides[0].elements[0];
+    title.class = ['kn-text', 'role-title'];
+    title.style = {
+      'font-family': '"Avenir-Book", "Avenir", sans-serif',
+      'font-size': '80px',
+      color: '#ffffff',
+    };
+    const source = new EditorStore(sourceDeck, '/src-deck');
+    source.selectSlide(0);
+    await copySlidesToClipboard(source);
+
+    const destDeck = sampleDeck();
+    destDeck.themeStyle = themeStyle('Inter, sans-serif');
+    const dest = new EditorStore(destDeck, '/dest-deck');
+    await pasteFromClipboard(dest, undefined, {
+      chooseSlideTheme: async () => 'destination',
+    });
+
+    const pasted = dest.get().deck.slides[1].elements[0];
+    expect(pasted.class).toEqual(['role-title']);
+    expect(pasted.style).toEqual({ color: '#ffffff' });
+    expect(pasted.type === 'text' && pasted.autoFit).toBe(true);
+  });
+
   it('does not interrupt same-theme slide paste', async () => {
     const sourceDeck = sampleDeck();
     sourceDeck.themeStyle = themeStyle('Inter, sans-serif');

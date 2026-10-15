@@ -235,6 +235,38 @@ function textRole(element: SlideElement): ThemeTextRole {
   return (role?.slice(5) as ThemeTextRole | undefined) ?? 'base';
 }
 
+/** Typography a semantic role takes from the deck theme. */
+const THEME_TYPE_PROPERTIES = ['font-family', 'font-size', 'font-weight', 'line-height', 'letter-spacing'];
+
+/**
+ * Hand pasted slides' role text over to the destination theme. Text imported
+ * from Keynote or PowerPoint pins its face and size inline and carries the
+ * importer's `.kn-text` class, which a deck's theme.css may restyle above the
+ * role rules; either one would keep the source look after "Match destination".
+ * So role text loses both. Colours stay unless they are just the source
+ * theme's own, since white type over a picture is authored, not themed. A box
+ * whose size now comes from the theme shrinks to fit rather than overflow.
+ */
+export function matchSlidesToTheme(slides: Slide[], source: ThemeStyle): void {
+  for (const slide of slides) {
+    for (const element of slide.elements) {
+      if (element.type !== 'text') continue;
+      if (!element.class.some((name) => /^role-(title|heading|body|caption)$/.test(name))) continue;
+      const font = source.fonts[textRole(element)];
+      const themeColors = [font.color, source.colors.text, source.colors.muted]
+        .filter((color): color is string => typeof color === 'string')
+        .map((color) => color.toLowerCase());
+      const style = { ...element.style };
+      const hadSize = style['font-size'] !== undefined;
+      for (const property of THEME_TYPE_PROPERTIES) delete style[property];
+      if (style.color && themeColors.includes(style.color.toLowerCase())) delete style.color;
+      element.style = style;
+      element.class = element.class.filter((name) => name !== 'kn-text');
+      if (hadSize && !element.autoSize) element.autoFit = true;
+    }
+  }
+}
+
 /** Whether adopting the destination theme can visibly change pasted slides. */
 export function slideThemeStylesDiffer(source: ThemeStyle, destination: ThemeStyle): boolean {
   return JSON.stringify(source.fonts) !== JSON.stringify(destination.fonts)
