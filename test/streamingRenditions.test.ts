@@ -155,6 +155,20 @@ describe.skipIf(!ffmpeg)('streaming renditions', () => {
     expect(await store.ensure(source)).toBeNull();
   }, 60_000);
 
+  it('pins a small clip to its exact bytes, so browsers can cache it', async () => {
+    // A small clip once had no variant, so its URL pinned a bare `o` and was
+    // served `no-cache`; Safari refetched it on every load of a looping slide.
+    const source = await clip('small-pin.mp4', ['-b:v', '200k', '-vf', 'scale=640:360']);
+    const info = await stat(source);
+    const store = new RenditionStore({ cacheDir });
+    const variant = store.variant(source, info.size, info.mtimeMs);
+    expect(variant).toMatch(/^o[0-9a-f]{24}$/);
+    expect(store.pinned(source, info.size, info.mtimeMs, variant!)).toBe(source);
+    // An edit changes the key, so a stale pin is served as if unpinned.
+    expect(store.pinned(source, info.size + 1, info.mtimeMs, variant!)).toBeNull();
+    expect(store.variant('/x/still.png', 10, 0)).toBeNull();
+  }, 60_000);
+
   it('forgets renditions nothing has needed for a season', async () => {
     const source = await clip('aged.mp4', ['-b:v', '40M']);
     const store = new RenditionStore({ cacheDir });

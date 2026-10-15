@@ -146,6 +146,28 @@ describe('media delivery from the collab server', () => {
     expect(bare.headers.get('cache-control')).toBe('public, no-cache');
   });
 
+  it('lets browsers cache a small clip instead of refetching it on every loop', async () => {
+    // Oct 2026: clips under the rendition floor had no variant, so clients
+    // pinned a bare `o`, the server said `no-cache`, and Safari downloaded
+    // each looping 1–8 MB clip again on every load — ~10 MB/s for one open tab.
+    await writeFile(join(deckDir, 'assets', 'loop.ed0360bf.mp4'), Buffer.alloc(1024 * 1024, 3));
+    const base = await start([{ id: 's1', elements: [video('v1', 'assets/loop.ed0360bf.mp4')] }]);
+
+    const { socket, welcome } = await welcomeOf(server.port);
+    sockets.push(socket);
+    const pin = welcome.mediaVariants?.['assets/loop.ed0360bf.mp4'];
+    expect(pin).toMatch(/^o[0-9a-f]{24}$/);
+    const pinned = await fetch(`${base}/loop.ed0360bf.mp4?v=${pin}`, { headers: { range: 'bytes=0-1' } });
+    expect(pinned.headers.get('cache-control')).toContain('immutable');
+    await pinned.arrayBuffer();
+
+    // A tab opened before this fix still asks for a bare `o`. The content
+    // hash in the name already fixes the bytes, so that answer is cacheable too.
+    const bare = await fetch(`${base}/loop.ed0360bf.mp4?v=o`, { headers: { range: 'bytes=0-1' } });
+    expect(bare.headers.get('cache-control')).toContain('immutable');
+    await bare.arrayBuffer();
+  });
+
   it.skipIf(!ffmpeg)('tells connected clients when a rendition finishes', async () => {
     // 2 s at ~45 Mbit/s and 2560 wide: oversized on both counts.
     const source = join(deckDir, 'assets', 'screen.mp4');

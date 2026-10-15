@@ -1493,10 +1493,12 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
           const pinnedFile = pin ? renditions.pinned(absolute, info.size, info.mtimeMs, pin) : null;
           if (pinnedFile) {
             served = pinnedFile;
-            // A bare `o` names no particular revision of the file, so it stays
-            // revalidated; a keyed pin names exact bytes.
-            pinned = pin !== 'o';
-            revalidate = pin === 'o';
+            // A keyed pin names exact bytes. A bare `o` names none, so it stays
+            // revalidated, unless the filename's content hash already does:
+            // Safari refetches a `no-cache` video on every load, and tabs opened
+            // before small clips got keys still ask for a bare `o`.
+            pinned = pin !== 'o' || CONTENT_HASHED_NAME.test(basename(absolute));
+            revalidate = !pinned;
             if (pinnedFile === absolute && !ready) void renditions.ensure(absolute).catch(() => null);
           } else if (ready) {
             served = ready;

@@ -174,8 +174,7 @@ export class RenditionStore {
 
   /**
    * Which bytes this file's URL answers with right now: `o<key>` for the
-   * original, `r<key>` for its rendition, null for a file the store never
-   * replaces (whose URL is stable anyway).
+   * original, `r<key>` for its rendition, null for a file that is not a video.
    *
    * A <video> reads its source in many range requests and never revalidates
    * between them, so the bytes behind one URL must not change under it. When
@@ -183,9 +182,15 @@ export class RenditionStore {
    * the rendition's bytes laid out against the original's index, and Chromium
    * failed it with PIPELINE_ERROR_DECODE. Clients pin a variant into the URL
    * (`?v=`) and the server answers that URL with exactly that variant.
+   *
+   * A clip too small for a rendition still gets a keyed `o`. Without one its
+   * client pinned a bare `o`, which is served `no-cache`, and Safari answers
+   * `no-cache` on media by downloading the file again on every load: in Oct
+   * 2026 one open deck of looping 1–8 MB clips held the server's uplink at
+   * ~10 MB/s. A keyed pin names exact bytes, so it is cached for good.
    */
   variant(absolute: string, size: number, mtimeMs: number): string | null {
-    if (!isVideoAsset(absolute) || size < MIN_SOURCE_BYTES) return null;
+    if (!isVideoAsset(absolute)) return null;
     const key = sourceKey(absolute, size, mtimeMs);
     return `${this.ready(absolute, size, mtimeMs) ? 'r' : 'o'}${key}`;
   }
@@ -199,7 +204,7 @@ export class RenditionStore {
    */
   pinned(absolute: string, size: number, mtimeMs: number, variant: string): string | null {
     if (variant === 'o') return absolute;
-    if (!isVideoAsset(absolute) || size < MIN_SOURCE_BYTES) return null;
+    if (!isVideoAsset(absolute)) return null;
     if (variant.slice(1) !== sourceKey(absolute, size, mtimeMs)) return null;
     if (variant[0] === 'o') return absolute;
     if (variant[0] === 'r') return this.ready(absolute, size, mtimeMs);
