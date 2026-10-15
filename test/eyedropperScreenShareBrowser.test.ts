@@ -110,9 +110,14 @@ describe.skipIf(!electronBinary)('the eyedropper in a browser without EyeDropper
       buttons: type === 'mousePressed' ? 1 : 0, clickCount: 1,
     });
     const pickAt = async (x: number, y: number) => {
-      await cdp.evaluate(`[...document.querySelectorAll('.field-color')]
-        .find((field) => field.getBoundingClientRect().width > 0 && field.querySelector('span')?.textContent === 'Fill')
-        .querySelector('.color-picker-trigger').click()`);
+      // The inspector draws the selected shape's fields a moment after it is inserted.
+      await eventually(async () => cdp.evaluate<boolean>(`(() => {
+        const trigger = [...document.querySelectorAll('.field-color')]
+          .find((field) => field.getBoundingClientRect().width > 0 && field.querySelector('span')?.textContent === 'Fill')
+          ?.querySelector('.color-picker-trigger');
+        trigger?.click();
+        return Boolean(trigger);
+      })()`), 'the inspector never showed a Fill colour field');
       await eventually(async () => cdp.evaluate<boolean>(
         `Boolean(document.querySelector('.color-picker-popover .color-picker-eyedropper'))`),
       'the colour picker offers no eyedropper without EyeDropper');
