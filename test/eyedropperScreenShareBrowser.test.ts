@@ -136,7 +136,6 @@ describe.skipIf(!electronBinary)('the eyedropper in a browser without EyeDropper
     await eventually(async () => (await shapeFill())?.toLowerCase() === LEFT, 'the left half never became the fill');
     expect(await cdp.evaluate<string>(`document.querySelector('.color-picker-popover input[aria-label="Hex color"]').value`))
       .toBe(LEFT);
-    await cdp.key('Escape', 27);
 
     await pickAt(viewport.w * 0.75, viewport.h / 2);
     await eventually(async () => (await shapeFill())?.toLowerCase() === RIGHT, 'the right half never became the fill');
