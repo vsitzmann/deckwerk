@@ -20,6 +20,7 @@ import { PlayerPaintReadiness } from './playerReadiness.js';
 import { createPresentationBus, type PresentationRole } from './presentationBus.js';
 import { mediaVariantsSnapshot, pinMediaVariant, setMediaVariants } from './mediaVariants.js';
 import { trackVideoLoading } from '../player/videoLoadingProgress.js';
+import { VideoBlobCache } from '../player/videoBlobCache.js';
 import { eventOnInteractiveWeb, slideLinkFromEvent } from '../player/links.js';
 import { selectionPreventsAdvance } from '../player/presentationPointer.js';
 
@@ -115,6 +116,15 @@ let role: PresentationRole = params.get('role') === 'speaker' ? 'speaker' : 'aud
 // two-window setup; giving it a bus would let it answer a real presenter's
 // hello with its own state.
 const bus = agentViewer ? null : createPresentationBus(deckId);
+
+/**
+ * The talk's clips, downloaded once and played from memory. Safari keeps no
+ * media bytes from one <video> to the next, so without this every visit to a
+ * slide fetched its clips again (videoBlobCache.ts). Page-owned rather than
+ * Player-owned, so a role swap hands the audience over with its clips. An
+ * agent viewer takes screenshots, not a talk, and streams as before.
+ */
+const videoBlobs = agentViewer ? undefined : new VideoBlobCache();
 
 const stageHost = document.getElementById('stage')!;
 const speakerHost = document.getElementById('speaker')!;
@@ -247,6 +257,7 @@ function mountAudience(): void {
     container: stageHost,
     resolveSrc,
     onCursor: publishState,
+    videoBlobs,
   });
   // Opening on a slide's first step plays what runs on arriving there, as
   // starting the show does; opening mid-slide resolves to that step.
@@ -275,6 +286,8 @@ function unmountAudience(): void {
   unbindAudienceKeys = null;
   player?.destroy();
   player = null;
+  // Speaker View plays nothing: keep what is in memory, fetch nothing more.
+  videoBlobs?.want([]);
   stageHost.replaceChildren();
   stageHost.hidden = true;
 }

@@ -26,6 +26,7 @@ import {
   releaseDecodedVideo,
 } from './decodedVideoPool.js';
 import { applyStaticSlideState } from './staticState.js';
+import type { VideoBlobCache } from './videoBlobCache.js';
 import {
   essentialMorphPairs,
   explicitMorphPairs,
@@ -53,6 +54,11 @@ export interface PlayerOptions {
   resolveSrc: (src: string) => string;
   /** Notified on every cursor change, for slide counters and the editor rail. */
   onCursor?: (cursor: Cursor, steps: number) => void;
+  /**
+   * Hold the deck's video files in memory and play them from there. The
+   * browser presentation passes one; see videoBlobCache.ts for why.
+   */
+  videoBlobs?: VideoBlobCache;
 }
 
 /**
@@ -107,7 +113,12 @@ function textLayout(element: Extract<SlideElement, { type: 'text' }>): string {
 export class Player {
   private deck: Deck;
   private container: HTMLElement;
+  /** Deck src → URL, preferring a clip's in-memory copy once there is one. */
   private resolveSrc: (src: string) => string;
+  /** Deck src → URL on the network, whatever the blob cache holds. */
+  private networkSrc: (src: string) => string;
+  private videoBlobs: VideoBlobCache | null;
+  private offBlobReady: (() => void) | null = null;
   private onCursor?: (cursor: Cursor, steps: number) => void;
 
   private stage: HTMLElement;
@@ -128,6 +139,8 @@ export class Player {
   private intendedPlaying = new Set<string>();
   private playAttempts = new Map<string, number>();
   private playWatched = new WeakSet<HTMLVideoElement>();
+  /** Videos whose retry budget ran out mid-load, waiting for `canplay` to try again. */
+  private resumeArmed = new WeakSet<HTMLVideoElement>();
   private resizeObserver: ResizeObserver;
   /**
    * Decoded-but-idle <video> nodes rescued from slides that left the screen,
@@ -158,8 +171,22 @@ export class Player {
   constructor(opts: PlayerOptions) {
     this.deck = opts.deck;
     this.container = opts.container;
-    this.resolveSrc = opts.resolveSrc;
+    this.networkSrc = opts.resolveSrc;
+    this.videoBlobs = opts.videoBlobs ?? null;
+    // Every URL the player renders, pools or warms goes through here, so a
+    // clip's presentation key names the same URL everywhere at any moment.
+    this.resolveSrc = (src) => {
+      const url = this.networkSrc(src);
+      return this.videoBlobs?.objectUrl(url) ?? url;
+    };
     this.onCursor = opts.onCursor;
+    if (this.videoBlobs) {
+      this.videoBlobs.setInUse((objectUrl) => this.readsUrl(objectUrl));
+      // A clip landing in memory is one the lookahead was waiting for.
+      this.offBlobReady = this.videoBlobs.onReady(() => {
+        if (!this.lookaheadHold) this.warmUpcomingMedia();
+      });
+    }
 
     this.container.classList.add('player-root');
     this.stage = document.createElement('div');
@@ -254,6 +281,9 @@ export class Player {
 
   destroy(): void {
     this.clearPending();
+    this.offBlobReady?.();
+    this.offBlobReady = null;
+    this.videoBlobs?.setInUse(null);
     this.resizeObserver.disconnect();
     if (typeof document !== 'undefined') {
       document.removeEventListener('visibilitychange', this.onVisibilityChange);
@@ -325,6 +355,8 @@ export class Player {
    */
   goTo(cursor: Cursor, opts: { play?: boolean } = {}): void {
     this.clearPending();
+    // Released by the lookahead once this slide can paint.
+    this.videoBlobs?.hold();
     const slides = this.deck.slides;
     if (slides.length === 0) {
       this.stage.replaceChildren();
@@ -379,6 +411,7 @@ export class Player {
       src: string;
       key: string;
       playing: boolean;
+      failed: boolean;
     }> = [];
     for (const video of this.stage.querySelectorAll('video')) {
       carried.push({
@@ -387,6 +420,7 @@ export class Player {
         src: video.getAttribute('src') ?? '',
         key: video.dataset.mediaKey ?? '',
         playing: !video.paused && video.currentTime > 0,
+        failed: Boolean(video.error),
       });
     }
     const previousNodes = new Map<string, HTMLElement>();
@@ -459,8 +493,8 @@ export class Player {
         const src = video.getAttribute('src') ?? '';
         const match = pass === 'id'
           ? carried.find((c) =>
-            !adopted.has(c.video) && c.playing && c.id !== null && c.id === id)
-          : carried.find((c) => !adopted.has(c.video) && c.playing && c.src === src);
+            !adopted.has(c.video) && !c.failed && c.playing && c.id !== null && c.id === id)
+          : carried.find((c) => !adopted.has(c.video) && !c.failed && c.playing && c.src === src);
         if (!match || match.video === video) continue;
         adopt(video, match.video, true);
       }
@@ -480,9 +514,13 @@ export class Player {
         // just move the black box, so leave the fresh element to load. The
         // pool is checked before taking from it, so an unusable entry is not
         // silently dropped on the floor still holding an open fetch.
+        // Nor is one whose load failed, even with a frame on screen: a media
+        // element never recovers from an error by itself, so reusing it made
+        // a clip that lost its connection once dead on every later visit.
         const usable = (candidate: HTMLVideoElement | undefined): boolean =>
           candidate !== undefined
           && candidate !== video
+          && !candidate.error
           && candidate.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA;
         let match: HTMLVideoElement | undefined;
         if (source) {
@@ -508,7 +546,7 @@ export class Player {
     for (const { video, key } of carried) {
       if (adopted.has(video) || video.isConnected) continue;
       video.pause();
-      if (key && video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) {
+      if (key && !video.error && video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) {
         this.videoPool.add(key, video);
       } else {
         releaseDecodedVideo(video);
@@ -592,6 +630,7 @@ export class Player {
   }
 
   private warmUpcomingMedia(): void {
+    this.videoBlobs?.want(this.videoBlobOrder());
     const onCurrentSlide = new Set<string>();
     for (const el of this.deck.slides[this.cursor.slide]?.elements ?? []) {
       if (el.type === 'video' && !isPendingSrc(el.src)) onCurrentSlide.add(this.resolveSrc(el.src));
@@ -609,6 +648,11 @@ export class Player {
       upcomingSlides.push(upcoming);
       for (const el of upcoming.elements) {
         if (el.type !== 'video' || isPendingSrc(el.src)) continue;
+        // A clip on its way into memory is decoded once it lands (the cache's
+        // ready listener calls back here); warming it from the network now
+        // would download it twice.
+        const network = this.networkSrc(el.src);
+        if (this.videoBlobs?.covers(network) && !this.videoBlobs.objectUrl(network)) continue;
         const src = this.resolveSrc(el.src);
         if (onCurrentSlide.has(src)) continue;
         // A decoded element is strictly better than cached bytes, so the
@@ -621,13 +665,48 @@ export class Player {
           }
           continue;
         }
-        if (this.warmedSrcs.has(src)) continue;
+        // Bytes already in memory need no HTTP cache.
+        if (this.warmedSrcs.has(src) || src !== network) continue;
         if (!this.warmQueue.includes(src)) this.warmQueue.push(src);
       }
     }
     this.warmUpcomingVideoElements(videoTargets);
     this.warmUpcomingImages(upcomingSlides);
     this.pumpWarmQueue();
+  }
+
+  /**
+   * The deck's clips in the order the blob cache should fetch them: the next
+   * two slides first (what the talk reaches soonest), then the slide on
+   * screen, whose elements are already streaming it but whose revisits and
+   * loops should not have to, then the rest of the talk ahead, then what lies
+   * behind, nearest first. Skipped slides are not part of the talk.
+   */
+  private videoBlobOrder(): string[] {
+    const slides = this.deck.slides;
+    const here = this.cursor.slide;
+    const ahead: number[] = [];
+    const behind: number[] = [];
+    for (let i = here + 1; i < slides.length; i += 1) if (!slides[i].skipped) ahead.push(i);
+    for (let i = here - 1; i >= 0; i -= 1) if (!slides[i].skipped) behind.push(i);
+    const order = [...ahead.slice(0, WARM_AHEAD_SLIDES), here, ...ahead.slice(WARM_AHEAD_SLIDES), ...behind];
+    const urls: string[] = [];
+    for (const index of order) {
+      for (const el of slides[index]?.elements ?? []) {
+        if (el.type === 'video' && !isPendingSrc(el.src)) urls.push(this.networkSrc(el.src));
+      }
+    }
+    return urls;
+  }
+
+  /** Whether any element this player owns, on the stage or parked, reads `url`. */
+  private readsUrl(url: string): boolean {
+    const videos = [
+      ...this.stage.querySelectorAll('video'),
+      ...this.videoPool.values(),
+      ...(this.videoWarmInFlight ? [this.videoWarmInFlight.video] : []),
+    ];
+    return videos.some((video) => video.getAttribute('src') === url);
   }
 
   /**
@@ -1291,7 +1370,29 @@ export class Player {
   private retryPlayback(id: string, video: HTMLVideoElement): void {
     if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
     const attempts = this.playAttempts.get(id) ?? 0;
-    if (attempts >= PLAY_RETRY_LIMIT) return;
+    if (attempts >= PLAY_RETRY_LIMIT) {
+      // The budget is for a browser that keeps pausing a clip it could play.
+      // A clip still loading is not that case. Giving up on it left a slide's
+      // clips frozen once their bytes did arrive, until the presenter stepped
+      // back and forward. So start it again once it can play.
+      if (video.readyState < HTMLMediaElement.HAVE_FUTURE_DATA && !video.error
+        && !this.resumeArmed.has(video)) {
+        this.resumeArmed.add(video);
+        const resume = (): void => {
+          this.resumeArmed.delete(video);
+          if (!this.intendedPlaying.has(id) || this.blanked || !video.isConnected
+            || video.dataset.holdFrame === 'true') return;
+          this.playAttempts.delete(id);
+          void video.play().catch(() => this.retryPlayback(id, video));
+        };
+        video.addEventListener('canplay', resume, { once: true });
+        this.mediaListeners.push(() => {
+          video.removeEventListener('canplay', resume);
+          this.resumeArmed.delete(video);
+        });
+      }
+      return;
+    }
     this.playAttempts.set(id, attempts + 1);
     const timer = setTimeout(() => {
       if (!this.intendedPlaying.has(id) || this.blanked || !video.isConnected

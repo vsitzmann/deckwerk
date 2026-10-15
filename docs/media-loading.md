@@ -302,6 +302,42 @@ letting it start immediately is the difference between clicking Present and
 seeing the opening clip, and clicking Present and watching a black rectangle
 while bytes for a slide nobody has reached yet come down the same pipe.
 
+### Safari: the browser presentation plays clips from memory
+
+Everything above assumes the browser reuses media bytes it already has, and
+Chromium does. Safari does not. Its media loader (AVFoundation) reads a clip
+in range requests of its own and keeps nothing for the next element, so the
+HTTP-cache warm and the pooled elements did nothing for it: every visit to a
+slide downloaded that slide's clips again from byte zero. The server's asset
+log of the Oct 2026 TRI site visit shows it. A slide with four clips (31 MB)
+was fetched again on every pass, over a link that delivered about 7 MB/s.
+The clips spun, then showed without playing, until the presenter stepped
+back and forward. None of the tests caught it because every browser tier is
+Chromium.
+
+So the browser presentation (`src/renderer/collab/present.ts`) hands the
+Player a `VideoBlobCache` (`src/renderer/player/videoBlobCache.ts`). It
+downloads each of the talk's clips once, whole, one at a time, and the Player
+renders a clip's `blob:` URL instead of its network URL once the file is in
+memory. Order: the next two slides, then the slide on screen, then the rest of
+the talk ahead, then what lies behind, nearest first. The cache holds (starts
+no new transfer) from each slide change until the visible slide can paint,
+exactly like the lookahead. The lookahead decodes an upcoming clip only once
+its blob has landed, so a clip is never downloaded twice. The budget is 1 GB.
+Past it, the cache drops the files the talk reaches last, but never one an
+element still reads. A file it cannot hold, or that fails twice, streams the
+old way.
+
+Two smaller rules came out of the same session:
+
+- **A failed element is never reused.** A media element never recovers from
+  an error by itself, and the pool used to adopt one that had a frame on
+  screen, so a clip that lost its connection once stayed dead on every visit.
+- **A play-retry budget that runs out mid-load waits for `canplay`.** The
+  budget exists for a browser that keeps pausing a clip it could play. A clip
+  still loading is not that case, and giving up on it left the clip frozen
+  once its bytes arrived.
+
 Images are loaded and decoded as `<img>` elements, then the decoded element
 is adopted into the slide when it appears. This distinction
 matters for large JPEGs: cached bytes can still paint as a thin band of decoded
@@ -346,6 +382,11 @@ accumulates decoded bitmaps from the rest of the deck.
   adopts, opens one element for a clip two slides share, respects skipped
   slides and the decode budget, and gives up a decode the deck navigated away
   from.
+- `test/presentVideosFromMemory.test.ts` — the blob cache's order, hold,
+  budget and fallbacks, and the Player with it: a revisited slide fetches
+  nothing, an upcoming clip is decoded from memory rather than downloaded
+  twice, a failed element is not reused, and a clip whose retries ran out
+  mid-load starts once it can play.
 - `test/editorImageWarmup.test.ts` — the editor decodes a next-slide image once
   and adopts that exact node on navigation.
 - `test/canvasVideoReuseBrowser.test.ts` — the same rule through the real rail
