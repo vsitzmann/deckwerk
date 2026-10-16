@@ -82,7 +82,11 @@ async function captureSlides(request: RenderRequest, bundleDir: string): Promise
     debug: process.env.SLIDE_AGENT_DEBUG === '1',
   }), 'utf8');
 
-  const stdout = await runElectron(captureScript(), jobPath);
+  const stdout = await runElectron(captureScript(), jobPath, {
+    timeoutMs: captureTimeoutMs(request.slides.length),
+    describe: (seconds) => `Capturing ${request.slides.length} slide(s) exceeded ${seconds} seconds; `
+      + 'render fewer slides at a time with --slide, or set SLIDE_AGENT_DEBUG=1 to see where it stalls.',
+  });
   const parsed = JSON.parse(stdout) as { images: RenderedImage[]; contactSheet?: string | null };
   return { images: parsed.images, contactSheet: parsed.contactSheet ?? null };
 }
@@ -156,7 +160,7 @@ export async function checkWebPage(request: {
   const script = fileURLToPath(new URL('../../scripts/check-web-page.cjs', import.meta.url));
   let checked: WebPageCheck;
   try {
-    checked = JSON.parse(await runElectron(script, jobPath)) as WebPageCheck;
+    checked = JSON.parse(await runElectron(script, jobPath, WEB_CHECK_BUDGET)) as WebPageCheck;
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -183,7 +187,38 @@ export interface WebPageCheck {
   durationMs: number;
 }
 
-function runElectron(script: string, jobPath: string): Promise<string> {
+/** How long one Electron child may run before it is killed, and what to say when it is. */
+interface ElectronBudget {
+  timeoutMs: number;
+  describe: (seconds: number) => string;
+}
+
+// A malformed or unlucky page must not strand an agent behind an unbounded
+// Chromium await. Healthy checks finish in ~1–2 seconds; keep a generous
+// ceiling and fail with an actionable message instead of making the whole
+// authoring turn appear hung. Browser startup can be heavily contended in the
+// full CI tiers, so CI gets more room without turning runner load into a false
+// failure in browser and bridge integration tests.
+const WEB_CHECK_BUDGET: ElectronBudget = {
+  timeoutMs: process.env.CI ? 60_000 : 20_000,
+  describe: (seconds) => `Interactive page check exceeded ${seconds} seconds; simplify the page and retry.`,
+};
+
+/**
+ * The ceiling for capturing `slideCount` slides in one Electron run.
+ *
+ * Capture cost grows with the deck: every slide is laid out, its fonts and
+ * media awaited and its PNG encoded, and a video-heavy slide takes seconds on
+ * its own. A whole-deck render once ran under the web check's 20-second
+ * ceiling and was killed partway through any long talk (about 40 slides in),
+ * reported as an "interactive page check" the deck did not have.
+ */
+export function captureTimeoutMs(slideCount: number, ci = Boolean(process.env.CI)): number {
+  const perSlideMs = ci ? 30_000 : 10_000;
+  return 60_000 + Math.max(1, slideCount) * perSlideMs;
+}
+
+function runElectron(script: string, jobPath: string, budget: ElectronBudget): Promise<string> {
   return new Promise((resolvePromise, reject) => {
     const child = spawn(electronBinary(), [script, jobPath, ...headlessElectronArgs()], {
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -192,20 +227,12 @@ function runElectron(script: string, jobPath: string): Promise<string> {
     let out = '';
     let err = '';
     let settled = false;
-    // A malformed or unlucky page must not strand an agent behind an
-    // unbounded Chromium await. Healthy checks finish in ~1–2 seconds; keep a
-    // generous ceiling and fail with an actionable message instead of making
-    // the whole authoring turn appear hung.
-    // Browser startup can be heavily contended in the full CI tiers even
-    // though an isolated agent check normally finishes in ~1–2 seconds.
-    // Preserve the fast local failure bound without turning runner load into
-    // a false failure in browser and bridge integration tests.
-    const timeoutMs = process.env.CI ? 60_000 : 20_000;
+    const { timeoutMs } = budget;
     const timer = setTimeout(() => {
       if (settled) return;
       settled = true;
       child.kill('SIGKILL');
-      reject(new Error(`Interactive page check exceeded ${timeoutMs / 1000} seconds; simplify the page and retry.`));
+      reject(new Error(budget.describe(Math.round(timeoutMs / 1000))));
     }, timeoutMs);
     child.stdout.on('data', (chunk) => (out += chunk));
     child.stderr.on('data', (chunk) => {
