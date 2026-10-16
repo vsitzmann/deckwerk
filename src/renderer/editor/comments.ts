@@ -123,6 +123,12 @@ export interface OpenCommentsOptions {
   threadId?: string;
   /** Select an object when its label in a thread is clicked. */
   reveal?: (target: CommentTarget) => void;
+  /**
+   * Show the threads inside this element instead of floating beside
+   * `anchor`: a panel that stays until it is closed, not a popover that a
+   * click elsewhere or Escape dismisses. The phone client's Comments panel.
+   */
+  host?: HTMLElement;
 }
 
 interface ThreadEntry {
@@ -142,6 +148,12 @@ export function closeCommentsPopover(): void {
   active?.close();
 }
 
+/** A slide's threads in a panel of their own (`options.host`); close it to remove it. */
+export function mountComments(options: OpenCommentsOptions & { host: HTMLElement }): { close: () => void } {
+  const panel = new CommentsPopover(options);
+  return { close: () => panel.close() };
+}
+
 class CommentsPopover {
   private readonly pop = document.createElement('div');
   private readonly unsubscribe: () => void;
@@ -159,7 +171,8 @@ class CommentsPopover {
   private closed = false;
 
   constructor(private readonly options: OpenCommentsOptions) {
-    this.pop.id = 'comments-popover';
+    if (options.host) this.pop.className = 'comments-docked';
+    else this.pop.id = 'comments-popover';
     this.pop.addEventListener('pointerdown', (event) => event.stopPropagation());
     this.pop.addEventListener('contextmenu', (event) => event.stopPropagation());
     const threadId = options.threadId;
@@ -168,8 +181,11 @@ class CommentsPopover {
       if (entry?.thread.root.resolved) this.showResolved = true;
     }
     this.render();
-    document.body.appendChild(this.pop);
-    this.place();
+    if (options.host) options.host.appendChild(this.pop);
+    else {
+      document.body.appendChild(this.pop);
+      this.place();
+    }
     setFocus(this.target());
 
     // Re-render when the threads change (a reply arriving from a
@@ -183,7 +199,7 @@ class CommentsPopover {
       this.render();
     });
     setTimeout(() => {
-      if (this.closed) return;
+      if (this.closed || options.host) return;
       document.addEventListener('pointerdown', this.onOutside);
       document.addEventListener('keydown', this.onKey);
       document.addEventListener('fullscreenchange', this.onFullscreen);
@@ -193,8 +209,9 @@ class CommentsPopover {
       const card = this.pop.querySelector<HTMLElement>(`.cthread[data-thread-id="${CSS.escape(this.threadRootId(threadId) ?? '')}"]`);
       card?.classList.add('flash');
       card?.scrollIntoView({ block: 'nearest' });
-      card?.querySelector<HTMLTextAreaElement>('.creply textarea')?.focus();
-    } else if (options.compose || this.entries().every((entry) => entry.thread.root.resolved)) {
+      // A panel opened on a thread shows it; it does not pull up a keyboard.
+      if (!options.host) card?.querySelector<HTMLTextAreaElement>('.creply textarea')?.focus();
+    } else if (options.host ? options.compose : options.compose || this.entries().every((entry) => entry.thread.root.resolved)) {
       this.pop.querySelector<HTMLTextAreaElement>('.cnew textarea')?.focus();
     }
   }
@@ -500,7 +517,7 @@ class CommentsPopover {
       if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
         event.preventDefault();
         post();
-      } else if (event.key === 'Escape') {
+      } else if (event.key === 'Escape' && !this.options.host) {
         this.close();
       }
       // Typing here must never reach the editor's shortcuts (Delete, arrows).

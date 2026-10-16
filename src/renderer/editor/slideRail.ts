@@ -58,9 +58,19 @@ export interface RailPresence {
   selectedElementIds: string[];
 }
 
+export interface SlideRailOptions {
+  /**
+   * A list to look at and pick from, nothing more: no reordering, no context
+   * menu, no slide buttons, no Return-to-add or Delete. The phone client's
+   * rail, where a long press or a drifting thumb must never edit the deck.
+   */
+  readOnly?: boolean;
+}
+
 export class SlideRail {
   private host: HTMLElement;
   private store: EditorStore;
+  private readonly readOnly: boolean;
   /** Keeps cached slide surfaces scaled to the fluid thumbnail frame. */
   private thumbResizeObserver: ResizeObserver | null = null;
   /** Mount full slide DOM only near the scroll viewport. */
@@ -122,9 +132,10 @@ export class SlideRail {
   /** A keyboard deletion waiting on its confirmation dialog. */
   private confirmingDelete = false;
 
-  constructor(host: HTMLElement, store: EditorStore) {
+  constructor(host: HTMLElement, store: EditorStore, options: SlideRailOptions = {}) {
     this.host = host;
     this.store = store;
+    this.readOnly = options.readOnly === true;
     if (typeof ResizeObserver !== 'undefined') {
       this.thumbResizeObserver = new ResizeObserver((entries) => {
         for (const entry of entries) this.scaleThumb(entry.target as HTMLElement);
@@ -318,6 +329,10 @@ export class SlideRail {
       i = end + 1;
     }
 
+    if (this.readOnly) {
+      this.patchChildren(children);
+      return;
+    }
     const actions = document.createElement('div');
     actions.className = 'rail-actions';
     actions.append(
@@ -680,11 +695,11 @@ export class SlideRail {
       const item = document.createElement('button');
       item.className = `rail-item${slideSelection.has(slide.id) ? ' selected' : ''}${i === slideIndex ? ' active' : ''}${slide.skipped ? ' skipped' : ''}`;
       item.setAttribute('aria-selected', String(slideSelection.has(slide.id)));
-      item.draggable = true;
+      item.draggable = !this.readOnly;
       item.dataset.index = String(i);
       item.dataset.slideId = slide.id;
       this.rowBySlideId.set(slide.id, item);
-      this.bindReorder(item, i);
+      if (!this.readOnly) this.bindReorder(item, i);
 
       const num = document.createElement('span');
       num.className = 'rail-num';
@@ -718,9 +733,17 @@ export class SlideRail {
       // Selection runs on pointerdown, not click: the row is draggable for
       // reorder, and Chromium starts a native drag on a few pixels of drift,
       // which suppresses the click entirely — every real (slightly wobbly)
-      // click on a thumbnail then did nothing.
+      // click on a thumbnail then did nothing. A read-only rail is not
+      // draggable, and is scrolled by a finger that lands on a row first: it
+      // selects on the click a tap makes and a scroll does not.
+      if (this.readOnly) {
+        item.addEventListener('click', () => {
+          this.store.selectSlide(i);
+          this.onSlideActivate?.(i);
+        });
+      }
       item.addEventListener('pointerdown', (event) => {
-        if (event.button !== 0) return;
+        if (event.button !== 0 || this.readOnly) return;
         // Shift extends a range from the anchor; Cmd/Ctrl picks or drops this
         // one row on its own, so a scattered set of slides can be deleted,
         // hidden or duplicated in one go.
@@ -733,7 +756,7 @@ export class SlideRail {
         // slides then pressing Backspace appears to do nothing at all.
         this.host.focus({ preventScroll: true });
       });
-      item.addEventListener('contextmenu', (event) => this.onContextMenu(event, i));
+      if (!this.readOnly) item.addEventListener('contextmenu', (event) => this.onContextMenu(event, i));
       this.rowCache.set(slide, { row: item, index: i });
       return item;
     }
@@ -824,6 +847,7 @@ export class SlideRail {
   private bindKeys(): void {
     this.host.tabIndex = 0;
     this.host.addEventListener('keydown', (e) => {
+      if (this.readOnly && (e.key === 'Enter' || e.key === 'Backspace' || e.key === 'Delete')) return;
       if (e.key === 'Enter') {
         // Suppress the focused button's synthetic click: Return inserts once.
         e.preventDefault();

@@ -136,21 +136,27 @@ runs in a terminal. Nothing runs on the server on your behalf, and each person
 uses their own account.
 
 1. Open the presentation in the browser and click **Agent…** in the toolbar.
-   The panel shows one command, for example:
+   That copies a prompt to your clipboard and opens the Agent panel, which
+   shows the prompt too. The phone client's **Agent** button copies the same
+   prompt.
+
+2. Paste the prompt into your agent, and add what you want done. The prompt
+   tells the agent to set up the mirror itself: download the server's own
+   bridge (`/deckwerk-connect.mjs`), start it in the background with the
+   session URL for this presentation (it pairs the agent with your browser),
+   wait until it prints `Deck mirrored at <folder>`, and read that folder's
+   `AGENTS.md`. The bridge needs only Node 22 or newer. It mirrors the
+   presentation under `~/.deckwerk/mirrors/` unless it is given `--dir`. You
+   never run a command yourself. The panel says **Connected** once the bridge
+   is in.
+
+   The same bridge still works by hand, for example to start an agent with it:
 
    ```bash
-   curl -fsSL http://deck-server:5800/deckwerk-connect.mjs -o deckwerk-connect.mjs && node deckwerk-connect.mjs 'http://deck-server:5800/?deck=weekly-meeting&agent=participant-…'
+   node deckwerk-connect.mjs 'http://deck-server:5800/?deck=weekly-meeting&agent=participant-…' --agent claude
    ```
 
-2. Run it in a terminal on your machine. It needs only Node 22 or newer: the
-   first half downloads the server's own bridge, the second runs it. The
-   bridge mirrors the presentation folder to your computer, under
-   `~/.deckwerk/mirrors/` unless you pass `--dir`, and starts your agent inside
-   it — `claude` or `codex`, whichever is on your PATH, or the command you give
-   with `--agent`. `--no-agent` runs only the bridge so you can start something
-   else in that folder yourself.
-
-3. Work with the agent in that terminal exactly as you would with the desktop
+3. Work with the agent exactly as you would with the desktop
    editor open on the folder. It sees `deck.json`, `theme.css`, `notes.md`,
    `assets/` and the `AGENTS.md` brief, and a `./deck` command in the folder
    that takes the same commands as `slide-agent` (context, inspect, new,

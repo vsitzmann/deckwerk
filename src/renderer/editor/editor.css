@@ -3269,6 +3269,17 @@ button.morph-object-hit.selected-source:hover:not(:disabled) {
 
 .agent-chat-connect-copy { flex: none; align-self: center; }
 
+/* A hosted deck hands over a prompt, not a one-line command: let it wrap. */
+.agent-chat-connect-prompt .agent-chat-connect-row { flex-direction: column; }
+.agent-chat-connect-prompt .agent-chat-connect-row code {
+  max-height: 220px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+.agent-chat-connect-prompt .agent-chat-connect-copy { align-self: flex-end; }
+
 .agent-chat-connect-alt {
   display: flex;
   align-items: center;

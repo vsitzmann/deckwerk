@@ -43,6 +43,14 @@ export const PresenceStateSchema = z.object({
   participant: z.string().optional(),
   /** True for a peer that is somebody's local agent rather than a person. */
   agent: z.boolean().optional(),
+  /**
+   * True for a presentation surface (the audience view or Speaker View)
+   * rather than somebody's editor. It is the peer a presenter's remote talks
+   * to, and never itself offered the remote.
+   */
+  presenting: z.boolean().optional(),
+  /** 'phone' for the phone client, so "Vincent" and "Vincent's phone" can be told apart. */
+  device: z.literal('phone').optional(),
 });
 
 export type CursorPosition = z.infer<typeof CursorPositionSchema>;
@@ -58,6 +66,10 @@ export const ClientHelloSchema = z.object({
   participant: z.string().regex(PARTICIPANT_ID_PATTERN).optional(),
   /** Sent by a local agent bridge: the participant whose agent this peer is. */
   agentFor: z.string().regex(PARTICIPANT_ID_PATTERN).optional(),
+  /** Sent by a presentation surface; see PresenceState.presenting. */
+  presenting: z.boolean().optional(),
+  /** Sent by the phone client; see PresenceState.device. */
+  device: z.literal('phone').optional(),
 });
 
 export const ClientTxnSchema = z.object({
@@ -113,6 +125,43 @@ export const ClientChatPostSchema = z.object({
   ref: ChatRefSchema.optional(),
 });
 
+/*
+ * The remote: a presenter hands a slide clicker to somebody else in the room,
+ * usually their own phone. Every message is relayed by the server between
+ * exactly two peers — the presentation surface that offered the remote and
+ * the peer it offered it to — and the server only relays a command from a
+ * peer that accepted an offer the presenter made. Nothing here is persisted
+ * or shown to anyone else.
+ */
+
+/** What a remote may ask of a presentation: never to end it or swap its windows. */
+export const RemoteCommandSchema = z.discriminatedUnion('type', [
+  z.object({ type: z.literal('next') }),
+  z.object({ type: z.literal('prev') }),
+  z.object({ type: z.literal('toggleBlank') }),
+  z.object({ type: z.literal('goTo'), slide: z.number().int().nonnegative() }),
+]);
+
+/** Where the show is, for the remote's view of it (PresentationState in ipc.ts). */
+export const RemoteStateSchema = z.object({
+  cursor: z.object({ slide: z.number().int().nonnegative(), step: z.number().int().nonnegative() }),
+  steps: z.number().int().nonnegative(),
+  startedAt: z.number(),
+  slideStartedAt: z.number(),
+  range: z.object({ start: z.number().int().nonnegative(), end: z.number().int().nonnegative() }).optional(),
+});
+
+/** Presenter → server: offer the remote to `to`. */
+export const ClientRemoteOfferSchema = z.object({ kind: z.literal('remote-offer'), to: z.string() });
+/** Remote → server: take (or turn down) the remote `to` offered. */
+export const ClientRemoteAnswerSchema = z.object({ kind: z.literal('remote-answer'), to: z.string(), accept: z.boolean() });
+/** Remote → server: a click for the presentation `to`. */
+export const ClientRemoteCommandSchema = z.object({ kind: z.literal('remote-command'), to: z.string(), command: RemoteCommandSchema });
+/** Presenter → server: where the show is now, for every remote it granted. */
+export const ClientRemoteStateSchema = z.object({ kind: z.literal('remote-state'), state: RemoteStateSchema });
+/** Either side → server: the remote is over between this peer and `to`. */
+export const ClientRemoteEndSchema = z.object({ kind: z.literal('remote-end'), to: z.string() });
+
 export const ClientMessageSchema = z.discriminatedUnion('kind', [
   ClientHelloSchema,
   ClientTxnSchema,
@@ -121,6 +170,11 @@ export const ClientMessageSchema = z.discriminatedUnion('kind', [
   ClientThemeSchema,
   ClientAgentEventSchema,
   ClientChatPostSchema,
+  ClientRemoteOfferSchema,
+  ClientRemoteAnswerSchema,
+  ClientRemoteCommandSchema,
+  ClientRemoteStateSchema,
+  ClientRemoteEndSchema,
 ]);
 
 export type ClientMessage = z.infer<typeof ClientMessageSchema>;
@@ -220,6 +274,40 @@ export const ServerDeckMovedSchema = z.object({
   title: z.string(),
 });
 
+/** To the peer a presenter offered the remote: whose, so it can ask its person. */
+export const ServerRemoteOfferSchema = z.object({
+  kind: z.literal('remote-offer'),
+  from: z.string(),
+  name: z.string(),
+});
+/** To the presenter: what the peer it offered the remote to said. */
+export const ServerRemoteAnswerSchema = z.object({
+  kind: z.literal('remote-answer'),
+  from: z.string(),
+  accept: z.boolean(),
+});
+/** To the presenter: a click from a remote it granted. */
+export const ServerRemoteCommandSchema = z.object({
+  kind: z.literal('remote-command'),
+  from: z.string(),
+  command: RemoteCommandSchema,
+});
+/** To a remote: where the show it drives is now. */
+export const ServerRemoteStateSchema = z.object({
+  kind: z.literal('remote-state'),
+  from: z.string(),
+  state: RemoteStateSchema,
+});
+/**
+ * To either side: the remote between it and `from` is over — taken back,
+ * put down, or `from` left the room (the presentation ended, the phone
+ * closed the page).
+ */
+export const ServerRemoteEndSchema = z.object({
+  kind: z.literal('remote-end'),
+  from: z.string(),
+});
+
 export const ServerMessageSchema = z.discriminatedUnion('kind', [
   ServerWelcomeSchema,
   ServerTxnSchema,
@@ -232,6 +320,11 @@ export const ServerMessageSchema = z.discriminatedUnion('kind', [
   ServerMediaSchema,
   ServerDeckMovedSchema,
   ServerChatSchema,
+  ServerRemoteOfferSchema,
+  ServerRemoteAnswerSchema,
+  ServerRemoteCommandSchema,
+  ServerRemoteStateSchema,
+  ServerRemoteEndSchema,
 ]);
 
 /**
@@ -251,3 +344,7 @@ export type ServerTxnMessage = z.infer<typeof ServerTxnSchema>;
 export type ServerWelcomeMessage = z.infer<typeof ServerWelcomeSchema>;
 export type ClientChatPostMessage = z.infer<typeof ClientChatPostSchema>;
 export type ServerDeckMovedMessage = z.infer<typeof ServerDeckMovedSchema>;
+export type RemoteCommand = z.infer<typeof RemoteCommandSchema>;
+export type RemoteState = z.infer<typeof RemoteStateSchema>;
+export type ServerRemoteMessage = Extract<ServerMessage, { kind: `remote-${string}` }>;
+export type ClientRemoteMessage = Extract<ClientMessage, { kind: `remote-${string}` }>;

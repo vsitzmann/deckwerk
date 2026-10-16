@@ -10,6 +10,11 @@ export interface AgentPanelOptions {
   /** Hosted decks report a connected mirror here. A local deck needs no transport. */
   api?: AgentPanelApi;
   currentDeckPath: () => string | null;
+  /**
+   * What a person hands their agent: the deck folder for a local deck, the
+   * prompt that has the agent set up its own mirror for a hosted one
+   * (collab/agentPrompt.ts).
+   */
   connectCommand: string;
   mode?: 'local' | 'hosted';
   onClose?: () => void;
@@ -24,6 +29,7 @@ export class AgentPanel {
   private readonly status: HTMLElement;
   private readonly connect: HTMLElement;
   private readonly connectCode: HTMLElement;
+  private readonly connectCopy: HTMLButtonElement;
   private connectCommand: string;
   private readonly messages: HTMLElement;
   private readonly error: HTMLElement;
@@ -85,6 +91,7 @@ export class AgentPanel {
     );
     this.connect = connect.card;
     this.connectCode = connect.code;
+    this.connectCopy = connect.copy;
     this.scratchpadBar = document.createElement('div');
     this.scratchpadBar.className = 'agent-chat-scratchpad-bar';
     this.scratchpadBar.hidden = true;
@@ -151,7 +158,17 @@ export class AgentPanel {
   setConnectCommand(command: string): void {
     this.connectCommand = command;
     this.connectCode.textContent = command;
-    this.connectCode.title = command;
+    if (this.options.mode === 'local') this.connectCode.title = command;
+  }
+
+  /**
+   * Copy what the person hands their agent and show the panel with the
+   * outcome on its Copy button. Call it from the click itself: a browser
+   * only lets a page write the clipboard inside a user gesture.
+   */
+  copyConnectCommand(): Promise<boolean> {
+    this.show();
+    return copyWithFeedback(this.connectCopy, this.connectCommand, this.options.mode ?? 'hosted');
   }
   show(): void {
     this.element.hidden = false;
@@ -269,26 +286,40 @@ function connectCard(
   command: string,
   currentCommand: () => string,
   mode: 'local' | 'hosted',
-): { card: HTMLElement; code: HTMLElement } {
+): { card: HTMLElement; code: HTMLElement; copy: HTMLButtonElement } {
   const card = document.createElement('div');
   card.className = 'agent-chat-connect';
   const lead = document.createElement('p');
   lead.textContent = mode === 'local'
     ? 'Open your agent here:'
-    : 'Run this command:';
+    : 'Paste this prompt into your agent (Claude Code, Codex, …). It sets up a live folder mirror of this deck by itself.';
   const row = document.createElement('div');
   row.className = 'agent-chat-connect-row';
   const code = document.createElement('code');
   code.textContent = command;
-  code.title = command;
-  const copy = smallButton('Copy', () => void copyToClipboard(currentCommand()).then(
-    () => { copy.textContent = 'Copied'; setTimeout(() => { copy.textContent = 'Copy'; }, 1500); },
-    () => { copy.textContent = 'Select and copy'; },
-  ));
+  if (mode === 'local') code.title = command;
+  else card.classList.add('agent-chat-connect-prompt');
+  const copy = smallButton(copyLabel(mode), () => void copyWithFeedback(copy, currentCommand(), mode));
   copy.classList.add('agent-chat-connect-copy');
   row.append(code, copy);
   card.append(lead, row);
-  return { card, code };
+  return { card, code, copy };
+}
+
+function copyLabel(mode: 'local' | 'hosted'): string {
+  return mode === 'local' ? 'Copy' : 'Copy prompt';
+}
+
+async function copyWithFeedback(button: HTMLButtonElement, text: string, mode: 'local' | 'hosted'): Promise<boolean> {
+  try {
+    await copyToClipboard(text);
+    button.textContent = 'Copied';
+    setTimeout(() => { button.textContent = copyLabel(mode); }, 1500);
+    return true;
+  } catch {
+    button.textContent = 'Select and copy';
+    return false;
+  }
 }
 
 function smallButton(label: string, action: () => void): HTMLButtonElement {

@@ -23,6 +23,7 @@ export default defineConfig({
     rollupOptions: {
       input: {
         index: resolve(__dirname, 'src/renderer/collab/index.html'),
+        mobile: resolve(__dirname, 'src/renderer/collab/mobile.html'),
         present: resolve(__dirname, 'src/renderer/collab/present.html'),
         print: resolve(__dirname, 'src/renderer/collab/print.html'),
       },

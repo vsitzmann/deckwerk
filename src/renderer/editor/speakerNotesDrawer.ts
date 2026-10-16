@@ -25,6 +25,11 @@ export interface SpeakerNotesDrawerOptions {
   /** Report the drawer's visible height so the canvas can fit the slide above it. */
   onInsetChange?: (px: number) => void;
   onStatus?: (message: string) => void;
+  /**
+   * Always open, filling `host`: no toggle, no close, no resize edge. The
+   * phone client's Notes panel, where the notes are the one thing to edit.
+   */
+  docked?: boolean;
 }
 
 export class SpeakerNotesDrawer {
@@ -84,7 +89,8 @@ export class SpeakerNotesDrawer {
     close.setAttribute('aria-label', 'Close speaker notes');
     close.addEventListener('click', () => this.close());
 
-    header.append(this.title, this.hint, openFile, close);
+    if (options.docked) header.append(this.title);
+    else header.append(this.title, this.hint, openFile, close);
 
     this.textarea = document.createElement('textarea');
     this.textarea.className = 'notes-drawer-text';
@@ -104,13 +110,22 @@ export class SpeakerNotesDrawer {
       // slides or delete elements. Undo is left alone: the shell routes it.
       const mod = event.metaKey || event.ctrlKey;
       if (!(mod && (event.key === 'z' || event.key === 'Z'))) event.stopPropagation();
-      if (event.key === 'Escape') {
+      if (event.key === 'Escape' && !options.docked) {
         event.preventDefault();
         this.close();
       }
     });
 
     this.element.append(header, this.textarea);
+    if (options.docked) {
+      this.element.classList.add('notes-drawer-docked');
+      host.append(this.element);
+      this.open = true;
+      this.element.hidden = false;
+      store.subscribe(() => this.render());
+      this.render();
+      return;
+    }
     host.append(this.toggleButton, this.element);
 
     makePanelResizable(this.element, {
@@ -155,7 +170,7 @@ export class SpeakerNotesDrawer {
   }
 
   close(): void {
-    if (!this.open) return;
+    if (!this.open || this.options.docked) return;
     this.endEditing();
     this.open = false;
     this.element.hidden = true;

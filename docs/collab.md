@@ -47,8 +47,9 @@ ship it in `dist/collab`.
 
 The **Agent…** toolbar button is onboarding for an agent the user already runs.
 On desktop it shows the open deck folder and the `slide-agent` starting
-commands. In a browser collaboration session it shows a `slide-agent connect`
-command that creates a local mirror of the live deck. DeckWerk has no embedded
+commands. In a browser collaboration session it copies a prompt
+(`src/renderer/collab/agentPrompt.ts`) that tells the agent to fetch and
+start the bridge below itself, which creates a local mirror of the live deck. DeckWerk has no embedded
 chat, model picker, login, or server-owned agent account.
 
 After that small difference in setup, both surfaces use the same loop:
@@ -255,7 +256,7 @@ desktop app's Collaborate/Agent flows never pass it.
 ### Filesystem agents (`slide-agent connect`)
 
 The standalone server uses the same *bring your own filesystem agent* model as
-desktop. The toolbar's **Agent…** button shows a command that downloads the
+desktop. The toolbar's **Agent…** button copies a prompt that has the agent download the
 server's bridge (`/deckwerk-connect.mjs`, built by `vite.bridge.config.ts` into
 `dist/collab`, source `src/cli/agentConnect.ts` + `connectMain.ts`) and runs it
 with Node 22+ against `'<origin>/?deck=<id>&agent=<participant>'`. Nothing is
@@ -500,3 +501,34 @@ would take, is in [Desktop → web feature parity](desktop-web-parity.md).
   keep every letter and every word whole, but whose space sits between the
   two runs is not decided. The presence badge shows who is editing what.
 - Presence and edits are unauthenticated by design — trusted networks only.
+
+## The phone client
+
+A phone that opens a hosted deck gets `mobile.html` (`src/renderer/collab/mobile.ts`)
+instead of the editor: `main.ts` redirects when `mobileShell.ts` decides it is
+a phone (a coarse pointer and a screen under 600 px on its short side), and
+`?desktop=1` / `?mobile=1` or the shells' own menu entries choose for good.
+It edits nothing on a slide. It reads the deck through the same store and
+bridge as the editor, so the only things it writes are speaker notes (the
+notes drawer, docked) and comments (the comment threads, docked, plus an
+overview of every thread in the deck). Its rail is the editor's `SlideRail`
+with `readOnly`. On its side the rail is down the left and the notes or
+comments sit beside the slide; held upright the rail is a strip under the
+slide. It presents through the same overlay as the editor, and its **Agent**
+button copies the same prompt. Its hello carries `device: 'phone'`.
+
+## The remote
+
+Whoever presents can hand a slide clicker to anybody else who has the deck
+open, usually their own phone (`src/renderer/collab/remoteControl.ts`).
+A presentation surface says `presenting: true` in its hello. **Remote…** in
+Speaker View, or the button that shows in the audience view while the mouse
+moves (also the R key), lists the people in the room. Choosing one sends
+`remote-offer`. Their page asks them, and a yes (`remote-answer`) turns it
+into the remote view: the shared Speaker View with thumb-sized buttons,
+swipes and the screen kept awake. Its clicks (`remote-command`: next, prev,
+blank, go to) go to the offering surface, which runs them as its own keys
+would. Every move goes back as `remote-state`. The server keeps the pairs
+(`Room.remotes`) and relays a command only along one the presenter offered
+and the remote accepted. `remote-end` from either side, or either socket
+closing, ends it. Nothing about it is persisted.

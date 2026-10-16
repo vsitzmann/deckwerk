@@ -23,6 +23,8 @@ import { trackVideoLoading } from '../player/videoLoadingProgress.js';
 import { VideoBlobCache } from '../player/videoBlobCache.js';
 import { eventOnInteractiveWeb, slideLinkFromEvent } from '../player/links.js';
 import { selectionPreventsAdvance } from '../player/presentationPointer.js';
+import type { PresenceState, RemoteCommand, RemoteState } from '@shared/collab.js';
+import { bindSwipe, PresenterRemotes } from './remoteControl.js';
 
 /**
  * The collab presentation page, in either of its two roles.
@@ -165,6 +167,7 @@ function announceExit(): void {
 }
 
 function exitPresentation(): void {
+  remotes?.endAll();
   announceExit();
   bus?.close();
   if (embedded) window.parent.postMessage({ type: 'present-exit' }, location.origin);
@@ -205,6 +208,7 @@ function publishState(cursor: Cursor, steps: number): void {
     ...(range ? { range } : {}),
   };
   bus?.post({ kind: 'state', state: lastState });
+  remotes?.publish();
 }
 
 function advance(): void {
@@ -328,6 +332,7 @@ function mountSpeaker(): void {
     // surface plays which role instead of moving either of them.
     swapLabel: 'Switch views',
     swapTitle: 'Swap which window shows the audience and which shows Speaker View',
+    extraActions: remotes ? [remoteButton('speaker-remote')] : [],
   });
   if (themeCss) speaker.setTheme(themeCss);
   if (deck) speaker.setDeck(deck);
@@ -392,7 +397,7 @@ function applyDeck(nextDeck: Deck, nextThemeCss: string | null, source: 'seed' |
     // Hand the deck to the other surface unasked. Its own hello went out
     // before this one existed — Speaker View opens the audience window first
     // — so without this it sat black for the length of its own handshake.
-    bus?.post({ kind: 'seed', deck: nextDeck, themeCss, mediaVariants: mediaVariantsSnapshot() });
+    bus?.post({ kind: 'seed', deck: nextDeck, themeCss, mediaVariants: mediaVariantsSnapshot(), hostClientId: hostClientId ?? undefined });
     return;
   }
   if (player) {
@@ -409,12 +414,13 @@ bus?.subscribe((message) => {
     // Whichever surface already has the deck seeds the other, so the second
     // window paints from memory instead of waiting out its own handshake.
     if (!deck) return;
-    bus.post({ kind: 'seed', deck, themeCss, mediaVariants: mediaVariantsSnapshot() });
+    bus.post({ kind: 'seed', deck, themeCss, mediaVariants: mediaVariantsSnapshot(), hostClientId: hostClientId ?? undefined });
     // Only the audience owns the cursor, so only it reports where the show is.
     if (role === 'audience') bus.post({ kind: 'state', state: lastState });
     return;
   }
   if (message.kind === 'seed') {
+    if (message.hostClientId) hostClientId = message.hostClientId;
     if (deck) return;
     setMediaVariants(message.mediaVariants);
     applyDeck(message.deck, message.themeCss, 'seed');
@@ -424,6 +430,7 @@ bus?.subscribe((message) => {
     if (role !== 'speaker') return;
     lastState = message.state;
     speaker?.setState(message.state);
+    remotes?.publish();
     return;
   }
   if (message.kind === 'swap') {
@@ -447,13 +454,9 @@ bus?.subscribe((message) => {
   // A command is the speaker's; only the audience acts on it.
   if (role !== 'audience' || !player) return;
   const command = message.command;
-  if (command.type === 'next') advance();
-  else if (command.type === 'prev') retreat();
-  else if (command.type === 'toggleBlank') player.toggleBlank();
-  else if (command.type === 'goTo') {
-    player.goToSlide(range
-      ? Math.min(Math.max(command.slide, range.start), range.end)
-      : command.slide, { play: true });
+  if (command.type === 'goTo') runCommand(command);
+  else if (command.type === 'next' || command.type === 'prev' || command.type === 'toggleBlank') {
+    runCommand({ type: command.type });
   } else if (command.type === 'exit') {
     if (embedded) window.parent.postMessage({ type: 'present-exit' }, location.origin);
     else window.close();
@@ -464,6 +467,124 @@ bus?.subscribe((message) => {
     setRole('speaker');
   }
 });
+
+/** A move of the show, from this surface's own keys, its Speaker View, or a remote. */
+function runCommand(command: RemoteCommand): void {
+  // The audience owns the cursor; a Speaker View passes the move on to it.
+  if (role !== 'audience' || !player) {
+    bus?.post({ kind: 'command', command });
+    return;
+  }
+  if (command.type === 'next') advance();
+  else if (command.type === 'prev') retreat();
+  else if (command.type === 'toggleBlank') player.toggleBlank();
+  else {
+    player.goToSlide(range
+      ? Math.min(Math.max(command.slide, range.start), range.end)
+      : command.slide, { play: true });
+  }
+}
+
+/* --- the remote ------------------------------------------------------------ */
+
+/** Everybody else in the room, as presence reports them: whom the remote can go to. */
+const peers = new Map<string, PresenceState>();
+/** The editor tab that mounted this presentation: its own person, never offered the remote. */
+let hostClientId: string | null = null;
+
+const remotes = agentViewer ? null : new PresenterRemotes({
+  send: (message) => bridge.sendRemote(message),
+  peers: () => [...peers.values()],
+  exclude: () => new Set(hostClientId ? [hostClientId] : []),
+  state: (): RemoteState => ({
+    cursor: lastState.cursor,
+    steps: lastState.steps,
+    startedAt: lastState.startedAt,
+    slideStartedAt: lastState.slideStartedAt,
+    ...(lastState.range ? { range: lastState.range } : {}),
+  }),
+  onCommand: runCommand,
+  onNotice: (text) => showRemoteNotice(text),
+});
+
+/** "Remote…": the presenter's way to hand the clicker to someone. */
+function remoteButton(className: string): HTMLButtonElement {
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = className;
+  button.textContent = 'Remote…';
+  button.title = 'Give someone who has this presentation open a remote for it (R)';
+  for (const type of ['pointerdown', 'dblclick'] as const) button.addEventListener(type, (event) => event.stopPropagation());
+  button.addEventListener('click', (event) => {
+    // Not a click on the slide: it must not advance the show.
+    event.stopPropagation();
+    remotes?.togglePicker(button);
+  });
+  return button;
+}
+
+/**
+ * The audience view's way in. It is on the projector, so it stays out of
+ * sight until the presenter moves the mouse, and goes again a moment later.
+ */
+const launcher = remotes ? remoteButton('remote-launcher') : null;
+if (launcher) document.body.append(launcher);
+let launcherTimer = 0;
+window.addEventListener('pointermove', (event) => {
+  if (!launcher || role !== 'audience' || event.pointerType === 'touch') return;
+  launcher.classList.add('visible');
+  clearTimeout(launcherTimer);
+  launcherTimer = window.setTimeout(() => {
+    if (!remotes?.pickerOpen()) launcher.classList.remove('visible');
+  }, 2500);
+});
+window.addEventListener('keydown', (event) => {
+  if ((event.key !== 'r' && event.key !== 'R') || event.metaKey || event.ctrlKey || event.altKey || !remotes) return;
+  event.preventDefault();
+  remotes.togglePicker(role === 'speaker'
+    ? speakerHost.querySelector<HTMLElement>('.speaker-remote') ?? undefined
+    : launcher ?? undefined);
+});
+
+/** What the remote just did, briefly, in a corner of whichever role this surface plays. */
+let noticeTimer = 0;
+function showRemoteNotice(text: string): void {
+  let node = document.getElementById('remote-notice');
+  if (!node) {
+    node = document.createElement('div');
+    node.id = 'remote-notice';
+    node.setAttribute('role', 'status');
+    document.body.append(node);
+  }
+  node.textContent = text;
+  launcher?.setAttribute('data-active', String(remotes?.granted() ?? false));
+  clearTimeout(noticeTimer);
+  noticeTimer = window.setTimeout(() => node.remove(), 3500);
+}
+
+/*
+ * A phone presenting by itself: swipe to move, and a way out — it has no
+ * Escape key, and a double tap is not something to discover mid-talk.
+ */
+if (!agentViewer && matchMedia('(pointer: coarse)').matches) {
+  // A tap is already a click, which advances; a swipe goes either way.
+  bindSwipe(stageHost, (type) => {
+    if (role !== 'audience') return;
+    if (type === 'prev') retreat();
+    else advance();
+  }, { tap: false });
+  const end = document.createElement('button');
+  end.type = 'button';
+  end.className = 'present-touch-exit';
+  end.textContent = '×';
+  end.setAttribute('aria-label', 'End presentation');
+  end.addEventListener('pointerdown', (event) => event.stopPropagation());
+  end.addEventListener('click', (event) => {
+    event.stopPropagation();
+    exitPresentation();
+  });
+  document.body.append(end);
+}
 
 /* --- transports ------------------------------------------------------------ */
 
@@ -477,9 +598,10 @@ if (embedded) {
   window.addEventListener('message', (event: MessageEvent) => {
     if (event.origin !== location.origin) return;
     const data = event.data as {
-      type?: string; deck?: unknown; themeCss?: string; mediaVariants?: Record<string, string>;
+      type?: string; deck?: unknown; themeCss?: string; mediaVariants?: Record<string, string>; hostClientId?: string;
     } | null;
     if (data?.type !== 'present-seed' || !data.deck) return;
+    if (data.hostClientId) hostClientId = data.hostClientId;
     if (deck) return;
     setMediaVariants(data.mediaVariants);
     applyDeck(data.deck as Deck, data.themeCss ?? null, 'seed');
@@ -506,11 +628,21 @@ const bridge = new CollabBridge(wsUrl, name ? `${name} (${label.toLowerCase()})`
   onWelcome: (welcome) => {
     applyDeck(welcome.deck, welcome.themeCss, 'session');
     retitle();
+    peers.clear();
+    for (const peer of welcome.peers) peers.set(peer.clientId, peer);
+    remotes?.peersChanged();
   },
   onDeckReplaced: (nextDeck) => applyDeck(nextDeck, null, 'session'),
-  onPeerPresence: () => {},
+  onPeerPresence: (state) => {
+    peers.set(state.clientId, state);
+    remotes?.peersChanged();
+  },
   onPeerCursor: () => {},
-  onPeerLeft: () => {},
+  onPeerLeft: (clientId) => {
+    peers.delete(clientId);
+    remotes?.peersChanged();
+  },
+  onRemote: (message) => remotes?.handle(message),
   onThemeCss: (css) => {
     themeCss = css;
     themeTag.textContent = css;
@@ -538,4 +670,6 @@ window.addEventListener('pagehide', () => {
   bus?.close();
 });
 
+// A presentation surface is what a remote drives, and never itself offered one.
+if (!agentViewer) bridge.setSurface({ presenting: true });
 bridge.connect();

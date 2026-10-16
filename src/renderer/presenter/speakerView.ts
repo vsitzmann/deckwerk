@@ -33,6 +33,10 @@ export interface SpeakerViewOptions {
   /** Label for the swap control, which differs between window and tab shells. */
   swapLabel?: string;
   swapTitle?: string;
+  /** Label for the button that sends `exit`; a remote leaves rather than ending the show. */
+  endLabel?: string;
+  /** Further buttons for the footer, placed before End show (the browser's Remote…). */
+  extraActions?: HTMLElement[];
   /** Injectable clock, so timer formatting is testable without waiting. */
   now?: () => number;
 }
@@ -99,6 +103,9 @@ export function createSpeakerView(options: SpeakerViewOptions): SpeakerView {
   const wallClock = pick('.speaker-wall-clock');
   const notes = pick('.speaker-notes');
   const swap = pick<HTMLButtonElement>('.speaker-swap');
+  const end = pick<HTMLButtonElement>('.speaker-end');
+  if (options.endLabel) end.textContent = options.endLabel;
+  for (const action of options.extraActions ?? []) end.before(action);
 
   if (options.canSwapDisplays === false) {
     swap.remove();
@@ -166,7 +173,7 @@ export function createSpeakerView(options: SpeakerViewOptions): SpeakerView {
   pick('.speaker-prev').addEventListener('click', send({ type: 'prev' }));
   pick('.speaker-next-button').addEventListener('click', send({ type: 'next' }));
   pick('.speaker-blank').addEventListener('click', send({ type: 'toggleBlank' }));
-  pick('.speaker-end').addEventListener('click', send({ type: 'exit' }));
+  end.addEventListener('click', send({ type: 'exit' }));
   if (swap.isConnected) swap.addEventListener('click', send({ type: 'swapDisplays' }));
 
   tick();

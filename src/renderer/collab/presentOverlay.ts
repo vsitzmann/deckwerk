@@ -20,6 +20,8 @@ import { mediaVariantsSnapshot } from './mediaVariants.js';
 export interface PresentSeed {
   deck: Deck;
   themeCss: string;
+  /** The editor tab's own peer id: its person is presenting, so is never offered the remote. */
+  hostClientId?: string;
 }
 
 export interface PresentOptions {
@@ -62,7 +64,13 @@ function onMessage(event: MessageEvent): void {
     const seed = seedProvider?.();
     if (seed && overlay?.contentWindow) {
       overlay.contentWindow.postMessage(
-        { type: 'present-seed', deck: seed.deck, themeCss: seed.themeCss, mediaVariants: mediaVariantsSnapshot() },
+        {
+          type: 'present-seed',
+          deck: seed.deck,
+          themeCss: seed.themeCss,
+          mediaVariants: mediaVariantsSnapshot(),
+          hostClientId: seed.hostClientId,
+        },
         location.origin,
       );
     }

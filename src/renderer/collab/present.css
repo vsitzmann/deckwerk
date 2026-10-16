@@ -11,3 +11,34 @@ html, body { margin: 0; height: 100%; background: #000; overflow: hidden; }
 /* The Speaker View surface: app chrome, not stage black. */
 #speaker { position: absolute; inset: 0; overflow: hidden; background: var(--bg); }
 #speaker[hidden] { display: none; }
+
+/* What the remote just did (present.ts), in the corner, for a few seconds. */
+#remote-notice {
+  position: fixed;
+  z-index: 10001;
+  left: 18px;
+  bottom: 62px;
+  padding: 6px 12px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  color: var(--text);
+  font: 12px var(--mono);
+  pointer-events: none;
+}
+
+/* A phone presenting by itself has no Escape key. */
+.present-touch-exit {
+  position: fixed;
+  z-index: 10000;
+  top: max(10px, env(safe-area-inset-top));
+  right: max(10px, env(safe-area-inset-right));
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border-color: transparent;
+  border-radius: 50%;
+  background: rgb(0 0 0 / 35%);
+  color: rgb(255 255 255 / 70%);
+  font-size: 20px;
+  line-height: 1;
+}

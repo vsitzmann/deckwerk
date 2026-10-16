@@ -51,6 +51,9 @@ import { openEndCollaborationPopover } from './endCollaborationPopover.js';
 import { captureEditorView, decodeEditorView, encodeEditorView, restoreEditorView } from '@shared/editorView.js';
 import { createDeckNameField, type DeckNameField } from './deckNameField.js';
 import { AgentPanel } from '../editor/agentPanel.js';
+import { agentConnectPrompt } from './agentPrompt.js';
+import { RemoteReceiver } from './remoteControl.js';
+import { isPhone, rememberShell, shellUrl, wantsMobileShell } from './mobileShell.js';
 import { startPresenting } from './presentOverlay.js';
 import { rangeForSlideSelection } from '@shared/presentationRange.js';
 import { setRenderInvariantChecks } from '../editor/renderInvariants.js';
@@ -168,6 +171,11 @@ async function fetchServerConfig(deck?: string | null): Promise<ServerConfig> {
 /* --- deck selection -------------------------------------------------------- */
 
 const deckId = new URLSearchParams(location.search).get('deck');
+// A phone opens a deck in the phone client, unless its person chose this editor.
+if (deckId && wantsMobileShell()) {
+  location.replace(shellUrl('mobile'));
+  throw new Error('a phone — opening the phone client');
+}
 const initialView = decodeEditorView(new URLSearchParams(location.search).get('view'));
 let initialViewPending = initialView !== null;
 
@@ -499,6 +507,7 @@ const bridge = new CollabBridge(wsUrl, undefined, {
     } else {
       delete document.documentElement.dataset.collabReady;
       connectionNotice.showDisconnected();
+      remote.disconnected();
     }
   },
   onEditsDiscarded: (count) => {
@@ -519,9 +528,20 @@ const bridge = new CollabBridge(wsUrl, undefined, {
     setStatusMessage(reason);
     connectionNotice.showEnded(reason);
   },
+  onRemote: (message) => remote.handle(message),
 });
 
 store.onLocalEdit = bridge.localEdit;
+
+// Somebody presenting can hand this tab their remote (remoteControl.ts).
+const remote = new RemoteReceiver({
+  send: (message) => bridge.sendRemote(message),
+  deck: () => store.get().deck,
+  subscribeDeck: (listener) => store.subscribe(listener),
+  themeCss: () => cssEditor.getValue(),
+  resolveSrc: (src) => window.api.assetUrl(src),
+  onStatus: setStatusMessage,
+});
 
 /* --- shared shell wiring --------------------------------------------------- */
 
@@ -637,22 +657,14 @@ canvas.onTextEditModeChange = (elementId) => {
  * navigator.clipboard only exists in secure contexts; joiners load this page
  * over plain http on the LAN, so fall back to the legacy execCommand path.
  */
-/**
- * The one line a person runs to bring their own agent into this deck: fetch
- * the server's own bridge and run it with Node. The page's origin is the
- * address that reaches the server from their machine — the tailnet name they
- * opened, not a loopback the server prints.
- */
-function localAgentConnectCommand(deck: string, participantId: string): string {
-  return `curl -fsSL ${location.origin}/deckwerk-connect.mjs -o deckwerk-connect.mjs `
-    + `&& node deckwerk-connect.mjs '${localAgentSessionUrl(deck, participantId)}'`;
-}
-
-function localAgentSessionUrl(deck: string, participantId: string): string {
-  const session = new URL(location.origin);
-  session.searchParams.set('deck', deck);
-  session.searchParams.set('agent', participantId);
-  return session.href;
+/** The Agent prompt for this deck as it is titled now. */
+function currentAgentPrompt(): string {
+  return agentConnectPrompt({
+    origin: location.origin,
+    deckId: deckId!,
+    title: welcomed ? store.get().deck.title : deckId!,
+    participantId: agentPanelBrowserApi?.participantId ?? '',
+  });
 }
 
 async function copyText(text: string): Promise<void> {
@@ -711,7 +723,7 @@ function startPresentation(speakerView = false): void {
   startPresenting(
     deckId!,
     range?.start ?? slideIndex,
-    () => ({ deck: store.get().deck, themeCss: cssEditor.getValue() }),
+    () => ({ deck: store.get().deck, themeCss: cssEditor.getValue(), hostClientId: bridge.clientId }),
     { endSlideIndex: range?.end, speakerView, onStatus: setStatusMessage },
   );
 }
@@ -951,10 +963,25 @@ function buildToolbar(): void {
     compactSecondaryEntries.push({ label: 'Share…', action: share });
   }
   if (serverConfig.agentPanel?.enabled) {
-    const toggleAgentPanel = (): void => agentPanel?.toggle();
-    const agentLabel = serverConfig.agentPanel.personal || serverConfig.agentPanel.mode === 'local'
-      ? 'Agent…'
-      : 'Shared Agent';
+    const local = serverConfig.agentPanel.personal || serverConfig.agentPanel.mode === 'local';
+    // A person's own agent: the click copies the prompt that has the agent
+    // connect itself, and opens the panel that shows when it has.
+    const toggleAgentPanel = (): void => {
+      if (!agentPanel) return;
+      if (!local) {
+        agentPanel.toggle();
+        return;
+      }
+      if (!agentPanel.element.hidden) {
+        agentPanel.hide();
+        return;
+      }
+      agentPanel.setConnectCommand(currentAgentPrompt());
+      void agentPanel.copyConnectCommand().then((copied) => setStatusMessage(copied
+        ? 'Agent prompt copied — paste it into your agent, and it connects itself to this deck.'
+        : 'Could not copy the agent prompt — select it in the Agent panel and copy it from there.'));
+    };
+    const agentLabel = local ? 'Agent…' : 'Shared Agent';
     const agent = barButton(
       agentLabel,
       toggleAgentPanel,
@@ -1004,6 +1031,16 @@ function buildToolbar(): void {
       action: () => requestEndCollaboration(
         compactSecondary?.querySelector<HTMLButtonElement>('.shape-menu-trigger') ?? endCollaboration,
       ),
+    });
+  }
+  // The editor on a phone is a choice somebody made; offer the way back.
+  if (isPhone()) {
+    compactSecondaryEntries.push({
+      label: 'Phone view',
+      action: () => {
+        rememberShell('mobile');
+        location.assign(shellUrl('mobile'));
+      },
     });
   }
   if (compactSecondaryEntries.length > 0) {
@@ -1114,7 +1151,7 @@ void fetchServerConfig(deckId).then((config) => {
       api: agentPanelBrowserApi.api,
       currentDeckPath: () => deckId,
       title: config.agentPanel.name,
-      connectCommand: localAgentConnectCommand(deckId!, agentPanelBrowserApi.participantId),
+      connectCommand: currentAgentPrompt(),
     });
     // The bridge a person starts from that panel pairs with this browser's
     // selection through the participant id announced in the hello.

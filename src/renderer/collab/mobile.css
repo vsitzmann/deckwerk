@@ -1,0 +1,287 @@
+/*
+ * The phone client (mobile.ts). On its side: the bar, then the slide list,
+ * the slide and — when one is open — the notes or comments panel side by
+ * side. Upright: the slide, a strip of slides under it, and the panel below.
+ * Everything else (rail rows, comment threads, notes) is the editor's own
+ * chrome from editor.css, given room for a thumb.
+ */
+
+html,
+body {
+  height: 100%;
+  overflow: hidden;
+  overscroll-behavior: none;
+  -webkit-text-size-adjust: 100%;
+}
+
+#m-app {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  padding: env(safe-area-inset-top) env(safe-area-inset-right) 0 env(safe-area-inset-left);
+  background: var(--bg);
+}
+
+#m-app:has(#collab-name-prompt) { grid-template-rows: auto auto minmax(0, 1fr); }
+
+#m-app button { min-height: 34px; padding: 4px 12px; font-size: 13px; }
+
+/* --- the bar ---------------------------------------------------------------- */
+
+#m-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 46px;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel);
+}
+
+.m-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text);
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#m-bar button.active { border-color: var(--accent); color: var(--accent); }
+#m-bar button.has-open:not(.active) { border-color: var(--comment, var(--yellow)); color: var(--comment, var(--yellow)); }
+#m-bar button.m-agent-connected { border-color: var(--green); color: var(--green); }
+#m-bar .m-more .shape-menu-trigger { min-width: 40px; }
+
+/* --- the body: on its side ------------------------------------------------------- */
+
+#m-body {
+  display: grid;
+  grid-template-columns: 132px minmax(0, 1fr);
+  min-height: 0;
+}
+
+#m-app:not([data-panel="none"]) #m-body { grid-template-columns: 132px minmax(0, 1fr) minmax(280px, 42%); }
+#m-app[data-panel="none"] #m-panel { display: none; }
+
+#m-rail {
+  display: flex;
+  overflow-y: auto;
+  flex-direction: column;
+  padding: 6px 0 calc(6px + env(safe-area-inset-bottom));
+  border-right: 1px solid var(--line);
+  background: var(--panel);
+  -webkit-overflow-scrolling: touch;
+}
+
+#m-rail:focus { outline: none; }
+#m-rail .rail-item { cursor: pointer; margin: 0 6px 4px; padding: 4px; }
+
+#m-main {
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto;
+  min-width: 0;
+  min-height: 0;
+}
+
+#m-slide {
+  position: relative;
+  overflow: hidden;
+  margin: 8px 8px 0;
+  touch-action: pan-y;
+}
+
+#m-nav {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 6px 8px calc(6px + env(safe-area-inset-bottom));
+}
+
+#m-nav button { min-width: 52px; font-size: 18px; line-height: 1; }
+.m-position { min-width: 64px; color: var(--muted); text-align: center; font-variant-numeric: tabular-nums; }
+
+/* --- notes and comments ------------------------------------------------------------ */
+
+#m-panel {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  border-left: 1px solid var(--line);
+  background: var(--panel);
+}
+
+/* On its side the bar's Notes and Comments buttons are the tabs. */
+#m-tabs { display: none; }
+#m-tabs button { flex: 1; border: 0; border-bottom: 2px solid transparent; background: transparent; }
+#m-tabs button.active { border-bottom-color: var(--accent); color: var(--accent); }
+
+#m-notes,
+#m-comments {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+}
+
+#m-notes[hidden],
+#m-comments[hidden] { display: none; }
+
+#m-notes .notes-drawer-docked {
+  position: static;
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  height: auto;
+  min-height: 0;
+  border: 0;
+  background: var(--panel);
+  box-shadow: none;
+}
+
+#m-notes .notes-drawer-docked .notes-drawer-header { height: 32px; }
+
+#m-notes .notes-drawer-docked .notes-drawer-text {
+  flex: 1;
+  min-height: 0;
+  padding: 10px 12px calc(10px + env(safe-area-inset-bottom));
+  /* 16px or more, or iOS zooms the page when the field takes focus. */
+  font-size: 16px;
+  line-height: 1.45;
+  resize: none;
+}
+
+.m-comments-head {
+  display: flex;
+  gap: 6px;
+  padding: 8px;
+  border-bottom: 1px solid var(--line);
+}
+
+.m-comments-head button { flex: 1; }
+.m-comments-head button.active { border-color: var(--accent); color: var(--accent); }
+
+.m-comments-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding-bottom: env(safe-area-inset-bottom);
+  -webkit-overflow-scrolling: touch;
+}
+
+.m-comments-body .comments-docked {
+  display: flex;
+  flex-direction: column;
+  min-height: 100%;
+  border-top: 2px solid var(--comment, var(--yellow));
+}
+
+.m-comments-body .comments-docked .comments-list { flex: 1; max-height: none; }
+/* No hover on a phone: a person's own Edit and Delete are always there. */
+.m-comments-body .cmsg-tools { opacity: 1; }
+.m-comments-body .comment-compose textarea { font-size: 16px; }
+
+.m-overview-slide { padding: 8px 10px 4px; }
+.m-overview-slide h3 {
+  margin: 4px 0 6px;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: .06em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.m-overview-thread {
+  display: grid;
+  gap: 2px;
+  width: 100%;
+  margin-bottom: 6px;
+  padding: 8px 10px;
+  border-left: 2px solid var(--comment, var(--yellow));
+  text-align: left;
+}
+
+#m-app .m-overview-thread { padding: 8px 10px; }
+.m-overview-thread.resolved { border-left-color: var(--line); opacity: .7; }
+.m-overview-meta { color: var(--muted); font-size: 11px; }
+.m-overview-text {
+  display: -webkit-box;
+  overflow: hidden;
+  color: var(--text);
+  white-space: pre-wrap;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+}
+
+.m-comments-body > .comments-empty,
+.m-comments-body > .comments-resolved-toggle { margin: 10px; }
+
+/* --- upright ------------------------------------------------------------------------- */
+
+@media (orientation: portrait) {
+  #m-body,
+  #m-app:not([data-panel="none"]) #m-body {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto auto minmax(0, 1fr);
+  }
+
+  #m-app[data-panel="none"] #m-panel { display: flex; }
+  #m-bar [data-toggles-panel] { display: none; }
+  #m-tabs { display: flex; flex: none; border-bottom: 1px solid var(--line); }
+
+  #m-main { order: 1; grid-template-rows: auto auto; }
+  #m-slide { aspect-ratio: 16 / 9; }
+  #m-nav { padding-bottom: 6px; }
+
+  /* The slide list becomes a strip under the slide. */
+  #m-rail {
+    order: 2;
+    flex-direction: row;
+    height: 74px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    padding: 6px 6px;
+    border-top: 1px solid var(--line);
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+  }
+
+  #m-rail .rail-item {
+    flex: none;
+    width: 104px;
+    margin: 0 4px 0 0;
+    grid-template-columns: 14px minmax(0, 1fr);
+    gap: 3px;
+  }
+
+  #m-rail .rail-run,
+  #m-rail .rail-run-items { flex-direction: row; }
+  #m-rail .rail-run-bracket { display: none; }
+  #m-rail .rail-skipped-badge { top: 4px; right: 6px; }
+
+  #m-panel { order: 3; border-left: 0; }
+}
+
+/* --- toast ---------------------------------------------------------------------------- */
+
+#m-toast {
+  position: fixed;
+  z-index: 10004;
+  left: 50%;
+  bottom: calc(16px + env(safe-area-inset-bottom));
+  max-width: min(520px, calc(100vw - 32px));
+  padding: 8px 14px;
+  transform: translateX(-50%);
+  border: 1px solid var(--line);
+  background: var(--panel-2);
+  color: var(--text);
+  box-shadow: 0 8px 30px rgb(0 0 0 / 45%);
+  text-align: center;
+}
+
+#m-toast[hidden] { display: none; }

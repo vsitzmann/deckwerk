@@ -33,9 +33,10 @@ way to leave precise requests on a slide or object.
 
 A presentation open in browser collaboration is different: the real deck
 folder lives on the host, so a remote agent cannot edit it directly. In that
-case **Agent…** provides a `slide-agent connect` command. The command creates a
-local mirror and keeps it synchronized with the authoritative collaboration
-session. The agent sees the same files and commands, while the bridge provides
+case **Agent…** copies a prompt for your agent. Pasted into Claude Code, Codex
+or a similar agent, it has the agent start the server's bridge itself, which
+creates a local mirror and keeps it synchronized with the authoritative
+collaboration session. The agent sees the same files and commands, while the bridge provides
 remote transport, participant attribution, shared ordering, activity, and the
 source/imported scratchpad.
 

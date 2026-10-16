@@ -23,15 +23,29 @@ describe('filesystem agent panel', () => {
   it('onboards an existing agent without chat, account, or model controls', async () => {
     const transport = api(state());
     const panel = new AgentPanel({
-      api: transport, currentDeckPath: () => 'talk', connectCommand: 'slide-agent connect https://deck/session',
+      api: transport, currentDeckPath: () => 'talk', connectCommand: 'Connect to my DeckWerk presentation',
     });
     panel.show();
     await Promise.resolve();
-    expect(panel.element.textContent).toContain('Run this command');
-    expect(panel.element.textContent).toContain('slide-agent connect');
+    expect(panel.element.textContent).toContain('Paste this prompt into your agent');
+    expect(panel.element.textContent).toContain('Connect to my DeckWerk presentation');
     expect(panel.element.querySelector('textarea')).toBeNull();
     expect(panel.element.textContent).not.toContain('Sign in');
     expect(panel.element.textContent).not.toContain('Model');
+  });
+
+  it('copies the prompt and opens the panel in one click', async () => {
+    const writeText = vi.fn(async () => {});
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
+    const panel = new AgentPanel({
+      api: api(state()), currentDeckPath: () => 'talk', connectCommand: 'first prompt',
+    });
+    panel.setConnectCommand('Connect to “Talk”');
+    await expect(panel.copyConnectCommand()).resolves.toBe(true);
+    expect(writeText).toHaveBeenCalledWith('Connect to “Talk”');
+    expect(panel.element.hidden).toBe(false);
+    expect(panel.element.querySelector('.agent-chat-connect-copy')?.textContent).toBe('Copied');
+    Reflect.deleteProperty(navigator, 'clipboard');
   });
 
   it('hands a local deck root directly to an agent without a connection API', () => {

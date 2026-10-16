@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content" />
+    <meta name="theme-color" content="#1a1b26" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <title>DeckWerk</title>
+    <link rel="icon" type="image/svg+xml" href="./favicon.svg" />
+  </head>
+  <body>
+    <div id="m-app" data-panel="none">
+      <header id="m-bar"></header>
+      <div id="m-body">
+        <aside id="m-rail" aria-label="Slides"></aside>
+        <main id="m-main">
+          <div id="m-slide" aria-label="Current slide"></div>
+          <nav id="m-nav" aria-label="Slide navigation"></nav>
+        </main>
+        <section id="m-panel" aria-label="Notes and comments">
+          <nav id="m-tabs" role="tablist"></nav>
+          <div id="m-notes" role="tabpanel"></div>
+          <div id="m-comments" role="tabpanel" hidden></div>
+        </section>
+      </div>
+      <div id="m-toast" role="status" aria-live="polite" hidden></div>
+    </div>
+    <script type="module" src="./mobile.ts"></script>
+  </body>
+</html>

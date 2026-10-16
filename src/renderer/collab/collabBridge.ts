@@ -7,9 +7,11 @@ import {
   COLLAB_PROTOCOL_VERSION,
   ServerMessageSchema,
   type ClientMessage,
+  type ClientRemoteMessage,
   type CursorPosition,
   type PresenceState,
   type ServerDeckMovedMessage,
+  type ServerRemoteMessage,
   type ServerWelcomeMessage,
 } from '@shared/collab.js';
 import type { ChatMessage, ChatRef } from '@shared/chat.js';
@@ -91,6 +93,14 @@ export interface CollabBridgeHooks {
    * tell the user that work done while disconnected did not survive.
    */
   onEditsDiscarded?: (count: number) => void;
+  /** A message about the remote (remoteControl.ts), from the one peer it is shared with. */
+  onRemote?: (message: ServerRemoteMessage) => void;
+}
+
+/** How this peer introduces itself beyond its name: see PresenceState. */
+export interface CollabSurface {
+  presenting?: boolean;
+  device?: 'phone';
 }
 
 export class CollabBridge {
@@ -105,6 +115,7 @@ export class CollabBridge {
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private closed = false;
   private participant: string | undefined;
+  private surface: CollabSurface = {};
 
   constructor(
     private readonly url: string,
@@ -130,6 +141,11 @@ export class CollabBridge {
     this.participant = participant;
   }
 
+  /** Say what kind of peer this is in the hello. Set before connect(). */
+  setSurface(surface: CollabSurface): void {
+    this.surface = surface;
+  }
+
   connect(): void {
     this.closed = false;
     const socket = new WebSocket(this.url);
@@ -141,6 +157,8 @@ export class CollabBridge {
         version: COLLAB_PROTOCOL_VERSION,
         name: this.name,
         ...(this.participant ? { participant: this.participant } : {}),
+        ...(this.surface.presenting ? { presenting: true } : {}),
+        ...(this.surface.device ? { device: this.surface.device } : {}),
       });
     });
     socket.addEventListener('message', (event) => {
@@ -278,6 +296,11 @@ export class CollabBridge {
     return true;
   }
 
+  /** Relay a remote message; dropped while disconnected, like presence. */
+  sendRemote(message: ClientRemoteMessage): void {
+    this.send(message);
+  }
+
   private seq = 0;
 
   private applyHistoryOps(currentDeck: Deck, ops: AgentOperation[], label: string): void {
@@ -408,6 +431,13 @@ export class CollabBridge {
         return;
       case 'chat':
         this.hooks.onChat?.(message.message);
+        return;
+      case 'remote-offer':
+      case 'remote-answer':
+      case 'remote-command':
+      case 'remote-state':
+      case 'remote-end':
+        this.hooks.onRemote?.(message);
         return;
       case 'ended':
         // Deliberate teardown, not a network blip: don't reconnect.

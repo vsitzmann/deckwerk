@@ -1,0 +1,129 @@
+/*
+ * The remote (remoteControl.ts): the presenter's list of people to hand it
+ * to, the question its receiver is asked, and the remote view itself — the
+ * shared Speaker View, rearranged for a phone held either way up.
+ */
+
+/* --- the presenter's list -------------------------------------------------- */
+
+.remote-picker {
+  position: fixed;
+  z-index: 10001;
+  width: min(360px, calc(100vw - 24px));
+  max-height: min(480px, calc(100vh - 24px));
+  gap: 10px;
+  padding: 14px;
+}
+
+.remote-picker-floating { left: 24px; bottom: 24px; }
+.remote-picker-lead { margin: 0; color: var(--muted); }
+
+.remote-picker-list {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.remote-picker-list li {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  background: var(--panel-2);
+}
+
+.remote-picker-dot { width: 8px; height: 8px; border-radius: 50%; }
+.remote-picker-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.remote-picker-state { color: var(--green); font-size: 11px; }
+.remote-picker-close { align-self: flex-end; }
+
+/* The audience view's way in: out of sight until the pointer moves. */
+.remote-launcher {
+  position: fixed;
+  z-index: 10000;
+  left: 18px;
+  bottom: 18px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity .2s;
+}
+.remote-launcher.visible { opacity: 1; pointer-events: auto; }
+.remote-launcher[data-active="true"] { border-color: var(--green); color: var(--green); }
+
+/* --- the question ------------------------------------------------------------ */
+
+.remote-offer-overlay { z-index: 10003; }
+.remote-offer { width: min(440px, calc(100vw - 32px)); }
+.remote-offer p { margin: 0; }
+.remote-offer .workflow-actions button { min-height: 36px; padding: 6px 16px; }
+
+/* --- the remote view ----------------------------------------------------------- */
+
+.remote-view {
+  position: fixed;
+  z-index: 10002;
+  inset: 0;
+  overflow: hidden;
+  background: var(--bg);
+  /* Taps are clicks here, never a double-tap zoom. */
+  touch-action: manipulation;
+}
+
+.remote-view > div { height: 100%; }
+.remote-view .speaker-view {
+  padding: max(16px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right))
+    max(12px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
+}
+.remote-view .speaker-current { cursor: pointer; touch-action: pan-y; }
+.remote-view footer button { min-height: 44px; padding: 8px 18px; }
+/* On a phone the position ("Slide 3 / 17") is heading enough for the slide in hand. */
+@media (max-width: 700px), (max-height: 500px) {
+  .remote-view .current-panel .panel-heading h2 { display: none; }
+  .remote-view .panel-heading { justify-content: flex-start; }
+}
+
+/* A phone upright: the slide, then the next one beside the clocks, then the notes. */
+@media (max-width: 700px) {
+  .remote-view .speaker-view { gap: 10px; }
+  .remote-view .speaker-layout { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); gap: 12px; }
+  .remote-view .current-panel { grid-template-rows: 26px auto; }
+  .remote-view .speaker-current { aspect-ratio: 16 / 9; }
+  .remote-view .speaker-sidebar { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); gap: 12px; }
+  .remote-view .next-panel { grid-template-rows: 22px auto; }
+  .remote-view .timers { gap: 8px; }
+  .remote-view .notes-panel { grid-column: 1 / -1; grid-template-rows: 22px minmax(0, 1fr); }
+  .remote-view .speaker-notes { font-size: 16px; }
+  .remote-view .presentation-clock strong { font-size: 30px; }
+  .remote-view .slide-clock strong { font-size: 22px; }
+  .remote-view .wall-clock strong { font-size: 18px; }
+  .remote-view .speaker-view footer { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; padding-top: 10px; }
+  .remote-view .speaker-prev,
+  .remote-view .speaker-next-button { min-height: 72px; font-size: 16px; }
+  .remote-view .speaker-next-button { order: -1; grid-column: 2; grid-row: 1; }
+  .remote-view .speaker-prev { grid-column: 1; grid-row: 1; }
+}
+
+/* A phone on its side: slide on the left, next slide, clocks and notes on the right. */
+@media (max-height: 500px) and (orientation: landscape) {
+  .remote-view .speaker-view { gap: 8px; }
+  .remote-view .speaker-layout { grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); gap: 14px; }
+  .remote-view .current-panel { grid-template-rows: 24px minmax(0, 1fr); }
+  .remote-view .speaker-sidebar { grid-template-columns: minmax(0, 1fr) auto; grid-template-rows: auto minmax(0, 1fr); gap: 10px; }
+  .remote-view .next-panel { grid-template-rows: 22px auto; }
+  .remote-view .timers { gap: 6px; justify-content: flex-start; }
+  .remote-view .wall-clock { display: none; }
+  .remote-view .notes-panel { grid-column: 1 / -1; grid-template-rows: 22px minmax(0, 1fr); }
+  .remote-view .speaker-notes { font-size: 15px; }
+  .remote-view .presentation-clock strong { font-size: 26px; }
+  .remote-view .slide-clock strong { font-size: 18px; }
+  .remote-view .speaker-view footer { padding-top: 8px; }
+  .remote-view .speaker-prev,
+  .remote-view .speaker-next-button { min-width: 120px; }
+}
+
+html.remote-mode,
+html.remote-mode body { overflow: hidden; }
