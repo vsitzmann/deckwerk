@@ -323,6 +323,62 @@ describe('the file-backed request bridge', () => {
     await runtime.close();
   });
 
+  it('is live from the moment a deck opens, before the renderer publishes', async () => {
+    // The last session left a sidecar saying no editor is up. An agent that
+    // believed it would write deck.json underneath the editor now opening.
+    const runtime = new AgentRuntime(() => null);
+    await runtime.open(dir);
+    await runtime.publish({
+      version: 1, deckRevision: deckRevision(fixture()), activeSlideId: 'slide-2', activeSlideIndex: 1,
+      selectedSlideIds: ['slide-2'], selectedElementIds: [], scenes: [],
+    });
+    await runtime.close();
+    expect(await readLiveAgentContext(dir)).toBeNull();
+
+    const deck = fixture();
+    const next = new AgentRuntime(() => null);
+    await next.open(dir, deck);
+    expect(await readLiveAgentContext(dir)).toMatchObject({
+      live: true,
+      pid: process.pid,
+      sessionId: next.sessionId,
+      deckRevision: deckRevision(deck),
+      // Where the author was last time, since that slide still exists.
+      activeSlideId: 'slide-2',
+      activeSlideIndex: 1,
+      selectedSlideIds: ['slide-2'],
+    });
+    await next.close();
+  });
+
+  it('keeps the newest sidecar when a publish races the opening announcement', async () => {
+    const runtime = new AgentRuntime(() => null);
+    const deck = fixture();
+    const opening = runtime.open(dir, deck);
+    // Queued while open() is still writing: must land after the announcement.
+    await new Promise((resolveWait) => setTimeout(resolveWait, 0));
+    const published = runtime.publish({
+      version: 1, deckRevision: deckRevision(deck), activeSlideId: 'slide-2', activeSlideIndex: 1,
+      selectedSlideIds: ['slide-2'], selectedElementIds: ['title-2'], scenes: [],
+    }).catch(() => null);
+    await Promise.all([opening, published]);
+    expect(await readLiveAgentContext(dir)).toMatchObject({ live: true, pid: process.pid });
+    await runtime.close();
+    expect(await readLiveAgentContext(dir)).toBeNull();
+  });
+
+  it('marks the sidecar dead synchronously on quit', async () => {
+    const runtime = new AgentRuntime(() => null);
+    await runtime.open(dir, fixture());
+    expect(await readLiveAgentContext(dir)).not.toBeNull();
+    // Nothing awaited: the app exits as soon as before-quit returns.
+    runtime.closeSync();
+    expect(await readLiveAgentContext(dir)).toBeNull();
+    expect(await readAgentContextFile(dir)).toMatchObject({ live: false });
+    const paths = agentRuntimePaths(dir);
+    expect((await readdir(paths.root)).filter((name) => name.endsWith('.tmp'))).toEqual([]);
+  });
+
   it('sweeps temp files a killed session left behind', async () => {
     const paths = agentRuntimePaths(dir);
     await mkdir(paths.root, { recursive: true });
