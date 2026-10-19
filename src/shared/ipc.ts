@@ -128,7 +128,9 @@ export type { AgentContextDraft, AgentRequest, AgentResponse };
 
 export type PresentationCommand =
   | { type: 'next' | 'prev' | 'toggleBlank' | 'swapDisplays' | 'exit' }
-  | { type: 'goTo'; slide: number };
+  | { type: 'goTo'; slide: number }
+  /** The presenter's video speed for the current slide (`>` / `<` / `=`). */
+  | { type: 'videoRate'; change: 'faster' | 'slower' | 'normal' };
 
 export interface PresentationState {
   cursor: { slide: number; step: number };

@@ -136,6 +136,7 @@ window.api.onPresentCommand((command: PresentationCommand) => {
     player.goToSlide(target, { play: true });
   }
   else if (command.type === 'toggleBlank') player.toggleBlank();
+  else if (command.type === 'videoRate') player.changeVideoRate(command.change);
 });
 
 // Live updates while presenting (editing on a second screen mid-rehearsal).

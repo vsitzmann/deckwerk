@@ -179,7 +179,38 @@
   white-space: nowrap;
 }
 
+/* The speed slider: the scrubber's rail at a fixed width, beside its rate. */
+.sync-scrubber-speed {
+  flex: none;
+  width: 120px;
+}
+
+.sync-scrubber-rate {
+  min-width: 3.2em;
+  text-align: right;
+}
+
+/* The speed set from the keyboard (> and <), shown for a moment. */
+.player-rate-badge {
+  position: absolute;
+  right: 24px;
+  bottom: 24px;
+  z-index: 60;
+  padding: 6px 14px;
+  border-radius: 10px;
+  background: rgba(16, 16, 20, 0.74);
+  color: #fff;
+  font: 600 22px/1.2 system-ui, -apple-system, sans-serif;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.2s ease;
+}
+
+.player-rate-badge.visible {
+  opacity: 1;
+}
+
 /* Never part of a printed page, whatever the pointer was doing. */
 @media print {
-  .sync-scrubber { display: none !important; }
+  .sync-scrubber, .player-rate-badge { display: none !important; }
 }

@@ -40,6 +40,7 @@ import {
 import { morphTransforms, type Rect, type TextLayout } from './morphTransform.js';
 import { isPendingSrc } from '@shared/media.js';
 import { WEB_BRIDGE_SOURCE, isWebBridgeAction, type WebBridgeEvent } from '@shared/webBridge.js';
+import { formatVideoRate, nextVideoRate, type VideoRateChange } from './videoRate.js';
 
 /**
  * The runtime that owns navigation and turns timeline entries into DOM and
@@ -142,6 +143,14 @@ export class Player {
   /** Sync groups the presenter paused from their scrubber, on slide `heldSlide`. */
   private heldGroups = new Set<string>();
   private heldSlide: string | null = null;
+  /**
+   * The presenter's playback speed for the videos on slide `rateSlide`
+   * (videoRate.ts). It belongs to the slide: leaving it returns to 1×.
+   */
+  private videoRate = 1;
+  private rateSlide: string | null = null;
+  private rateBadge: HTMLElement | null = null;
+  private rateBadgeTimer: ReturnType<typeof setTimeout> | null = null;
   /**
    * Videos the current build state says should be running, and the recovery
    * bookkeeping for keeping them that way. See `keepPlaying`.
@@ -291,6 +300,8 @@ export class Player {
 
   destroy(): void {
     this.clearPending();
+    if (this.rateBadgeTimer) clearTimeout(this.rateBadgeTimer);
+    this.rateBadge?.remove();
     this.offBlobReady?.();
     this.offBlobReady = null;
     this.videoBlobs?.setInUse(null);
@@ -1302,6 +1313,10 @@ export class Player {
   /** Reconcile the DOM and media playback with a computed slide state. */
   private applyState(slide: Slide, state: SlideState): void {
     applyStaticSlideState(this.stage, slide, state);
+    if (this.rateSlide !== slide.id) {
+      this.rateSlide = slide.id;
+      this.videoRate = 1;
+    }
     for (const el of slide.elements) {
       const node = this.stage.querySelector<HTMLElement>(
         `[data-element-id="${CSS.escape(el.id)}"]`,
@@ -1326,6 +1341,9 @@ export class Player {
         this.intendedPlaying.delete(el.id);
         continue;
       }
+
+      // Pooled videos arrive with whatever speed their last slide left them at.
+      if (video.playbackRate !== this.videoRate) video.playbackRate = this.videoRate;
 
       if (state.playing.has(el.id) && state.visible.has(el.id) && !this.blanked) {
         this.keepPlaying(el.id, video);
@@ -1389,6 +1407,8 @@ export class Player {
           else this.heldGroups.add(group);
           setPlaying(members, playing);
         },
+        getRate: () => this.videoRate,
+        setRate: (rate) => this.setVideoRate(rate, false),
       }));
     }
   }
@@ -1426,7 +1446,9 @@ export class Player {
           const followerPlaying = playing && this.intendedPlaying.has(el.id);
           const fix = followerCorrection(video.currentTime, target, followerPlaying);
           if (fix.seek !== undefined) video.currentTime = fix.seek;
-          if (video.playbackRate !== fix.rate) video.playbackRate = fix.rate;
+          // The correction bends the presenter's speed, not normal speed.
+          const rate = fix.rate * this.videoRate;
+          if (video.playbackRate !== rate) video.playbackRate = rate;
           if (!playing && !video.paused) video.pause();
           if (followerPlaying && video.paused) void video.play().catch(() => {});
         }
@@ -1437,7 +1459,7 @@ export class Player {
         cancelAnimationFrame(frame);
         for (const el of followers) {
           const video = videoOf(el.id);
-          if (video) video.playbackRate = 1;
+          if (video) video.playbackRate = this.videoRate;
         }
       });
     }
@@ -1709,6 +1731,46 @@ export class Player {
     this.trimmed.clear();
     this.syncedGroups.clear();
     this.compareMounted = false;
+  }
+
+  /**
+   * Speed every video on the current slide up or down together (the `>` and
+   * `<` keys), and show the new speed for a moment. Returns the new rate.
+   */
+  changeVideoRate(change: VideoRateChange): number {
+    return this.setVideoRate(nextVideoRate(this.videoRate, change));
+  }
+
+  /** Set the current slide's video speed directly (the hover bar's slider). */
+  setVideoRate(rate: number, badge = true): number {
+    this.videoRate = rate;
+    this.rateSlide = this.deck.slides[this.cursor.slide]?.id ?? null;
+    // Sync-group followers pick the rate up on their next correction tick.
+    for (const video of this.stage.querySelectorAll('video')) video.playbackRate = this.videoRate;
+    if (badge) this.showRateBadge();
+    return this.videoRate;
+  }
+
+  getVideoRate(): number {
+    return this.videoRate;
+  }
+
+  private showRateBadge(): void {
+    if (typeof document === 'undefined') return;
+    if (!this.rateBadge) {
+      const badge = document.createElement('div');
+      badge.className = 'player-rate-badge';
+      badge.setAttribute('role', 'status');
+      this.rateBadge = badge;
+    }
+    if (!this.rateBadge.isConnected) {
+      if (getComputedStyle(this.container).position === 'static') this.container.style.position = 'relative';
+      this.container.appendChild(this.rateBadge);
+    }
+    this.rateBadge.textContent = formatVideoRate(this.videoRate);
+    this.rateBadge.classList.add('visible');
+    if (this.rateBadgeTimer) clearTimeout(this.rateBadgeTimer);
+    this.rateBadgeTimer = setTimeout(() => this.rateBadge?.classList.remove('visible'), 1200);
   }
 
   /** Blank the screen (the `B` key) without losing position. */
