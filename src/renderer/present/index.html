@@ -6,9 +6,10 @@
           content="default-src 'self'; font-src 'self' data: deck:; frame-src deck:; img-src 'self' deck: data:; media-src 'self' deck:; style-src 'self' 'unsafe-inline' deck:; script-src 'self'" />
     <title>Present</title>
     <style>
-      html, body { margin: 0; height: 100%; background: #000; overflow: hidden; cursor: none; }
+      html, body { margin: 0; height: 100%; background: #000; overflow: hidden; }
       #root { width: 100vw; height: 100vh; }
       .element-text { cursor: text; }
+      body.cursor-idle, body.cursor-idle * { cursor: none !important; }
     </style>
   </head>
   <body>
