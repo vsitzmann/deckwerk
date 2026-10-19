@@ -1359,7 +1359,8 @@ export class Player {
 
   /**
    * The presenter's hands on a comparison: a draggable wipe divider, and a
-   * scrubber with play/pause for each sync group (wipe.ts, groupScrubber.ts).
+   * scrubber with play/pause for each sync group and each lone video
+   * (wipe.ts, groupScrubber.ts).
    *
    * A group the presenter paused stays paused through the slide's later
    * builds -- they would otherwise restart it -- until it is played again or
@@ -1372,6 +1373,12 @@ export class Player {
       this.heldSlide = slide.id;
     }
     const groups = syncGroupsOf(slide.elements);
+    // A video outside any group gets the same bar, as a group of one. One that
+    // shows its own controls already has a scrubber.
+    for (const el of slide.elements) {
+      if (el.type !== 'video' || el.controls || (el.syncGroup && groups.has(el.syncGroup))) continue;
+      groups.set(`solo:${el.id}`, [el]);
+    }
     const videoOf = (id: string) => this.stage
       .querySelector<HTMLElement>(`[data-element-id="${CSS.escape(id)}"]`)?.querySelector('video') ?? null;
     const setPlaying = (members: Array<{ id: string }>, playing: boolean): void => {
