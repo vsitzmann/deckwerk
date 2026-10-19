@@ -51,6 +51,9 @@ describe('equation builds in the Build panel', () => {
 
     store.select(['eq']);
     button('Add pulse')!.click();
+    // Lift is offered beside the plain pulse; it applies to a whole object.
+    expect([...host.querySelector<HTMLSelectElement>('select.build-action')!.options].map((option) => option.value))
+      .toContain('pulse:lift');
     const cards = host.querySelectorAll<HTMLElement>('.timeline-row');
     const term = cards[1].querySelector<HTMLSelectElement>('select.build-term')!;
     expect([...term.options].map((option) => option.textContent)).toEqual(['whole object', 'term 1', 'term 2']);
@@ -70,6 +73,12 @@ describe('equation builds in the Build panel', () => {
     change(action(), 'pulse');
     expect(store.slide!.timeline[0].action).toMatchObject({ type: 'pulse', value: null });
     expect(store.slide!.timeline[0].action.color).toBeUndefined();
+    change(action(), 'pulse:lift');
+    expect(store.slide!.timeline[0].action).toMatchObject({ type: 'pulse', value: 'lift' });
+    expect(action().value).toBe('pulse:lift');
+    change(action(), 'pulse');
+    expect(store.slide!.timeline[0].action).toMatchObject({ type: 'pulse', value: null });
+    change(action(), 'pulse:lift');
     change(action(), 'appear');
     const plain = store.slide!.timeline[0].action;
     expect(plain).toMatchObject({ type: 'appear', value: null });

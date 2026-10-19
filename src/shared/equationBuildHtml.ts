@@ -18,6 +18,9 @@ import { isTermLabel } from './equationTerms.js';
  *   data-pulse-term="2"             the term to pulse (absent: the whole object)
  *   data-pulse-scale="1.6"          how big at the peak
  *   data-pulse-duration="800"       in ms
+ *   data-pulse-lift="true"          also cast a drop shadow and rise over the
+ *                                   neighbours while it is up (whole objects;
+ *                                   a term pulse keeps it but does not lift)
  *
  * A page states an object's first build of each kind; further ones (a second
  * pulse of another term, say) are made in the Build panel and survive a save
@@ -76,13 +79,14 @@ export function equationBuildsFromNode(
     const duration = finite(dataset.pulseDuration, 0);
     const scale = finite(dataset.pulseScale, 1, 4);
     const term = dataset.pulseTerm?.trim();
+    const lift = dataset.pulseLift !== undefined && dataset.pulseLift.trim().toLowerCase() !== 'false';
     entries.push({
       id: `${elementId}-pulse-${index + entries.length + 1}`,
       trigger: pulse,
       action: {
         type: 'pulse',
         target: elementId,
-        value: null,
+        value: lift ? 'lift' : null,
         ...(term && isTermLabel(term) ? { term } : {}),
         ...(scale !== undefined ? { scale } : {}),
         ...(duration !== undefined ? { duration } : {}),
@@ -128,6 +132,7 @@ export function equationBuildAttributes(slide: Slide, elementId: string): string
     attr('data-pulse-term', pulse.action.term);
     attr('data-pulse-scale', pulse.action.scale);
     attr('data-pulse-duration', pulse.action.duration);
+    if (pulse.action.value === 'lift') attr('data-pulse-lift', 'true');
   }
   return attrs;
 }

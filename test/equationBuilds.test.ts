@@ -250,6 +250,44 @@ describe('equation builds in authoring HTML', () => {
     ));
     expect(without.timeline.map((entry) => entry.id)).toEqual(['terms']);
   });
+
+  // A lifting pulse once came back from its page as a plain one: the export
+  // wrote nothing for the lift, and a save took the page's action whole.
+  it('keeps a whole-object pulse lifting through an export and a save', () => {
+    const lift: TimelineEntry = {
+      id: 'lift', trigger: click, action: { type: 'pulse', target: 'eq', value: 'lift', scale: 1.4 },
+    };
+    const previous = slideWith([equation()], [lift]);
+    const html = slideToHtml(previous, { w: 1920, h: 1080 });
+    expect(html).toContain('data-pulse-lift="true"');
+    const nodes = measured(previous);
+    const compiled = slideFromMeasured(
+      { id: previous.id, name: '', notes: '', background: previous.background, nodes } as never,
+      { slideId: previous.id, usedIds: new Set() },
+    );
+    expect(compiled.timeline[0].action).toMatchObject({ type: 'pulse', value: 'lift', scale: 1.4 });
+    const next = carrySlideState(previous, compiled);
+    expect(next.timeline.map((entry) => [entry.id, entry.action.value])).toEqual([['lift', 'lift']]);
+
+    // Taking the attribute off makes it a plain pulse again.
+    delete nodes[0].dataset.pulseLift;
+    const plain = carrySlideState(previous, slideFromMeasured(
+      { id: previous.id, name: '', notes: '', background: previous.background, nodes } as never,
+      { slideId: previous.id, usedIds: new Set() },
+    ));
+    expect(plain.timeline.map((entry) => [entry.id, entry.action.value])).toEqual([['lift', null]]);
+    // A plain pulse writes no lift.
+    expect(slideToHtml(slideWith([equation()], builds), { w: 1920, h: 1080 })).not.toContain('data-pulse-lift');
+  });
+
+  it('reads data-pulse-lift as written by hand: present lifts, "false" does not', () => {
+    const lifted = (pulseLift: string) =>
+      equationBuildsFromNode({ dataset: { pulse: 'click', pulseLift } }, 'box', 0)[0].action.value;
+    expect(lifted('')).toBe('lift');
+    expect(lifted('true')).toBe('lift');
+    expect(lifted('false')).toBeNull();
+    expect(equationBuildsFromNode({ dataset: { pulse: 'click' } }, 'box', 0)[0].action.value).toBeNull();
+  });
 });
 
 describe('glyph matching', () => {

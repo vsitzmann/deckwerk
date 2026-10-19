@@ -41,12 +41,14 @@ export function addEquationActionOptions(
     add('terms:color', 'color terms');
   }
   add('pulse', 'pulse');
+  // Lift applies to a whole object: a term pulse keeps the setting but only swells.
+  add('pulse:lift', 'pulse (lift)');
 }
 
 /** The action-menu value for an equation build, or null for any other entry. */
 export function equationActionValue(entry: TimelineEntry): string | null {
   if (entry.action.type === 'terms') return entry.action.value === 'color' ? 'terms:color' : 'terms:appear';
-  if (entry.action.type === 'pulse') return 'pulse';
+  if (entry.action.type === 'pulse') return entry.action.value === 'lift' ? 'pulse:lift' : 'pulse';
   return null;
 }
 
@@ -67,15 +69,15 @@ export function applyEquationActionChoice(entry: TimelineEntry, choice: string, 
     action.duration ??= DEFAULT_TERM_DURATION;
     return;
   }
-  if (choice === 'pulse') {
+  if (choice === 'pulse' || choice === 'pulse:lift') {
     action.type = 'pulse';
-    action.value = null;
+    action.value = choice === 'pulse:lift' ? 'lift' : null;
     delete action.color;
     action.duration ??= DEFAULT_PULSE_DURATION;
     return;
   }
   // Leaving an equation build: its fields mean nothing to other actions.
-  if (action.value === 'appear' || action.value === 'color') action.value = null;
+  if (action.value === 'appear' || action.value === 'color' || action.value === 'lift') action.value = null;
   delete action.term;
   delete action.color;
   delete action.scale;
