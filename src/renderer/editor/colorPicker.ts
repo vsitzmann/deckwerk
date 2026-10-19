@@ -129,6 +129,18 @@ function colorToCss(color: RgbaColor): string {
   return `rgba(${color.r}, ${color.g}, ${color.b}, ${Math.round(color.a * 1000) / 1000})`;
 }
 
+/**
+ * Where the "On this slide" row gets its colours. Each editor shell points
+ * this at its own store (see setSlideColorSource); a picker opened anywhere
+ * else, or before a deck is loaded, simply has no such row.
+ */
+let slideColorSource: () => string[] = () => [];
+
+/** Register the function that lists the current slide's colours (shared/slideColors.ts). */
+export function setSlideColorSource(source: () => string[]): void {
+  slideColorSource = source;
+}
+
 function themeColors(): string[] {
   const list = document.getElementById('theme-swatches');
   if (!list) return [];
@@ -271,6 +283,16 @@ export function colorField(
       empty.textContent = 'No theme palette';
       palette.insertBefore(empty, neutrals);
     }
+
+    // Colours already used on this slide, so matching one is a click.
+    const onSlide = slideColorSource()
+      .filter((value) => parseCssColor(value) && !themeColors().includes(value));
+    const slideTitle = document.createElement('div');
+    slideTitle.className = 'color-picker-section-title';
+    slideTitle.textContent = 'On this slide';
+    const slidePalette = document.createElement('div');
+    slidePalette.className = 'color-picker-palette color-picker-slide-palette';
+    for (const slideColor of onSlide) addSwatch(slidePalette, slideColor, 'Slide color');
 
     const plane = document.createElement('div');
     plane.className = 'color-picker-plane';
@@ -477,7 +499,9 @@ export function colorField(
       sourceNote.append(sourceBadge, sourceText);
       popover.append(sourceNote);
     }
-    popover.append(paletteTitle, palette, plane, hueLabel, opacityLabel, values, clearButton);
+    popover.append(paletteTitle, palette);
+    if (onSlide.length > 0) popover.append(slideTitle, slidePalette);
+    popover.append(plane, hueLabel, opacityLabel, values, clearButton);
     paint();
     openAnchoredPopover(trigger, popover, { focus: false });
   });

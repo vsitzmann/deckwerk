@@ -63,6 +63,8 @@ import { trackVideoLoading } from '../player/videoLoadingProgress.js';
 import { DelayedOperationProgress } from '../editor/operationProgress.js';
 import { DesignWorkspace } from '../editor/designWorkspace.js';
 import { installResponsiveToolbar } from '../editor/responsiveToolbar.js';
+import { setSlideColorSource } from '../editor/colorPicker.js';
+import { slideColors } from '@shared/slideColors.js';
 
 applyUiTheme();
 
@@ -232,6 +234,8 @@ if (!deckId) {
 installNetApi({ deckId, saveTheme: (css) => bridge.sendTheme(css) });
 
 const store = new EditorStore(emptyDeck('Connecting…'));
+// The colour picker offers the colours already on the slide being edited.
+setSlideColorSource(() => slideColors(store.slide));
 // Development builds verify after every in-place patch that the canvas DOM
 // still matches a fresh render of the deck, and report any property the two
 // paths disagree about. See renderInvariants.ts. The test builds turn it on
