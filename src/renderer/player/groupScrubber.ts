@@ -1,6 +1,7 @@
 import type { SlideElement } from '@shared/deck.js';
 import { formatClock, scrubFraction, scrubTime, trimWindow, unionBox } from '@shared/compare.js';
 import { isolatePointer, suppressNextClick } from './pointerIsolation.js';
+import { VIDEO_RATES, formatVideoRate } from './videoRate.js';
 
 type VideoElement = Extract<SlideElement, { type: 'video' }>;
 
@@ -17,6 +18,9 @@ export interface GroupTransport {
   leaderVideo: HTMLVideoElement;
   /** Start or stop the whole group, as the presenter's own intent. */
   setPlaying(playing: boolean): void;
+  /** The slide's playback speed and a way to set it (videoRate.ts). Without them the bar has no speed control. */
+  getRate?(): number;
+  setRate?(rate: number): void;
 }
 
 const PLAY_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5.5v13l10.5-6.5z" fill="currentColor"/></svg>';
@@ -71,6 +75,30 @@ export function mountGroupScrubber(root: HTMLElement, group: GroupTransport): ()
   const clock = document.createElement('span');
   clock.className = 'sync-scrubber-time';
   bar.append(play, track, clock);
+
+  // A stepped speed slider: the same rail and thumb as the scrubber, one stop
+  // per rate on the presenter's ladder, with the rate it is at beside it.
+  let speed: HTMLDivElement | null = null;
+  let speedThumb: HTMLDivElement | null = null;
+  let speedLabel: HTMLSpanElement | null = null;
+  if (group.getRate && group.setRate) {
+    speed = document.createElement('div');
+    speed.className = 'sync-scrubber-track sync-scrubber-speed';
+    speed.title = 'Playback speed';
+    const speedFill = document.createElement('div');
+    speedFill.className = 'sync-scrubber-fill';
+    speedThumb = document.createElement('div');
+    speedThumb.className = 'sync-scrubber-thumb';
+    speed.append(speedFill, speedThumb);
+    speedLabel = document.createElement('span');
+    speedLabel.className = 'sync-scrubber-time sync-scrubber-rate';
+    bar.append(speed, speedLabel);
+  }
+  const rateIndex = (rate: number): number => {
+    let best = 0;
+    VIDEO_RATES.forEach((r, i) => { if (Math.abs(r - rate) < Math.abs(VIDEO_RATES[best] - rate)) best = i; });
+    return best;
+  };
   root.appendChild(bar);
 
   const playable = (): { start: number; end: number } | null =>
@@ -92,6 +120,13 @@ export function mountGroupScrubber(root: HTMLElement, group: GroupTransport): ()
     clock.textContent = span
       ? `${formatClock(leaderVideo.currentTime - span.start)} / ${formatClock(span.end - span.start)}`
       : '';
+    if (speed && speedThumb && speedLabel && group.getRate) {
+      const rate = group.getRate();
+      const stop = `${((rateIndex(rate) / (VIDEO_RATES.length - 1)) * 100).toFixed(2)}%`;
+      (speed.firstElementChild as HTMLElement).style.width = stop;
+      speedThumb.style.left = stop;
+      speedLabel.textContent = formatVideoRate(rate);
+    }
   };
 
   // --- showing and hiding -------------------------------------------------
@@ -202,6 +237,41 @@ export function mountGroupScrubber(root: HTMLElement, group: GroupTransport): ()
     resume = false;
     hideLater();
   };
+  // --- speed ----------------------------------------------------------------
+  let speedDrag: number | null = null;
+  const rateAt = (event: PointerEvent): number => {
+    const rect = speed!.getBoundingClientRect();
+    const fraction = rect.width > 0 ? Math.min(1, Math.max(0, (event.clientX - rect.left) / rect.width)) : 0;
+    return VIDEO_RATES[Math.round(fraction * (VIDEO_RATES.length - 1))];
+  };
+  const onSpeedDown = (event: PointerEvent): void => {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    speedDrag = event.pointerId;
+    speed!.setPointerCapture?.(event.pointerId);
+    group.setRate!(rateAt(event));
+    paint();
+  };
+  const onSpeedMove = (event: PointerEvent): void => {
+    if (speedDrag !== event.pointerId) return;
+    const rate = rateAt(event);
+    if (rate !== group.getRate!()) group.setRate!(rate);
+    paint();
+  };
+  const onSpeedUp = (event: PointerEvent): void => {
+    if (speedDrag !== event.pointerId) return;
+    speedDrag = null;
+    if (speed!.hasPointerCapture?.(event.pointerId)) speed!.releasePointerCapture(event.pointerId);
+    suppressNextClick();
+    hideLater();
+  };
+  if (speed) {
+    speed.addEventListener('pointerdown', onSpeedDown);
+    speed.addEventListener('pointermove', onSpeedMove);
+    speed.addEventListener('pointerup', onSpeedUp);
+    speed.addEventListener('pointercancel', onSpeedUp);
+  }
+
   track.addEventListener('pointerdown', onTrackDown);
   track.addEventListener('pointermove', onTrackMove);
   track.addEventListener('pointerup', onTrackUp);
