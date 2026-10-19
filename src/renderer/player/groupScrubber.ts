@@ -5,8 +5,12 @@ import { VIDEO_RATES, formatVideoRate } from './videoRate.js';
 
 type VideoElement = Extract<SlideElement, { type: 'video' }>;
 
-/** How long the bar stays up after the pointer stops moving over the group. */
-export const SCRUBBER_IDLE_MS = 2500;
+/**
+ * How long the bar stays up after the pointer stops moving. It matches the
+ * presentation cursor, which hides after 1 s of stillness, so the two leave
+ * together.
+ */
+export const SCRUBBER_IDLE_MS = 1000;
 /** The bar's height and its inset from the group's edges, in slide pixels. */
 const BAR_HEIGHT = 48;
 const BAR_INSET = 16;
@@ -37,7 +41,7 @@ const PAUSE_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true">'
  * and nothing here can fight that loop.
  *
  * The bar is part of the presenter's hand, not of the slide: it appears only
- * while the pointer is over the group (and fades after a few idle seconds, so
+ * while the pointer is over the group (and fades with the idle cursor, so
  * it does not sit on the audience's view while the presenter talks), passes
  * pointer events through while hidden, never shows in a capture -- a pinned
  * frame (`holdFrame`) or a print -- and keeps its clicks and drags from
@@ -143,6 +147,8 @@ export function mountGroupScrubber(root: HTMLElement, group: GroupTransport): ()
     // A capture pins every video to one frame and owns it; the bar is never
     // part of what it photographs.
     if (on && leaderVideo.dataset.holdFrame === 'true') on = false;
+    // Nor is there a bar over a video a later build has yet to reveal.
+    if (on && leaderVideo.closest<HTMLElement>('[data-element-id]')?.style.visibility === 'hidden') on = false;
     if (on === visible) return;
     visible = on;
     bar.classList.toggle('visible', on);
