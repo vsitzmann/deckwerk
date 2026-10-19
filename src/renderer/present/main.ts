@@ -8,6 +8,7 @@ import {
 } from '@shared/presentationRange.js';
 import { bindPresentKeys } from '../player/keys.js';
 import { Player } from '../player/player.js';
+import { hideCursorWhenIdle } from '../player/idleCursor.js';
 import { eventOnInteractiveWeb, slideLinkFromEvent } from '../player/links.js';
 import { selectionPreventsAdvance } from '../player/presentationPointer.js';
 import { rewriteCssAssetUrls } from '../player/render.js';
@@ -20,6 +21,7 @@ import { rewriteCssAssetUrls } from '../player/render.js';
 
 const root = document.getElementById('root');
 if (!root) throw new Error('missing #root');
+hideCursorWhenIdle(document.body);
 
 let player: Player | null = null;
 let session: DeckSession | null = null;
