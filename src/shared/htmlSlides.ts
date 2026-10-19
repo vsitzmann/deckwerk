@@ -54,6 +54,10 @@ export interface MeasuredNode {
     objectFit?: string;
     objectPosition?: string;
     textAlign?: string;
+    /** The box's own flex layout, when it is a flex container; see `flexTextAlignment`. */
+    flexDirection?: string;
+    justifyContent?: string;
+    alignItems?: string;
     loop?: boolean;
     muted?: boolean;
     autoplay?: boolean;
@@ -1469,8 +1473,10 @@ export function elementFromNode(
       // A deck text box's own markup is kept exactly: the player shows it
       // pre-wrap, so even a trailing space is something it holds.
       : node.preformatted ? node.html : node.html.trim()),
-    align: alignFrom(node.attrs.textAlign),
-    valign: valignFrom(node.dataset.valign),
+    align: flexTextAlignment(node).align ?? alignFrom(node.attrs.textAlign),
+    valign: node.dataset.valign !== undefined
+      ? valignFrom(node.dataset.valign)
+      : flexTextAlignment(node).valign ?? 'top',
     ...(contentStyle ? { contentStyle } : {}),
     ...(node.dataset.autofit !== undefined ? { autoFit: node.dataset.autofit !== 'false' } : {}),
     ...(node.dataset.autoSize === 'true' ? { autoSize: true } : {}),
@@ -2012,6 +2018,35 @@ function numbers(spec: string | undefined): [number, number] {
 
 function fitFrom(objectFit: string | undefined): 'contain' | 'cover' | 'fill' {
   return objectFit === 'cover' || objectFit === 'fill' ? objectFit : 'contain';
+}
+
+/**
+ * Where a flex container puts its own text. A hand-written banner or badge
+ * that centres a sentence with `display:flex; align-items:center;
+ * justify-content:center` was stored top-left, so the deck drew it in the
+ * corner while the browser drew it in the middle. A deck text box's own
+ * markup (`preformatted`) carries its alignment explicitly and is left alone.
+ */
+function flexTextAlignment(node: MeasuredNode): { align?: 'center' | 'right'; valign?: 'middle' | 'bottom' } {
+  const { flexDirection, justifyContent, alignItems } = node.attrs;
+  if (node.preformatted || flexDirection === undefined || flexDirection.endsWith('reverse')) return {};
+  const along = (value: string | undefined): 'center' | 'end' | null => {
+    if (value === 'center' || value === 'space-around' || value === 'space-evenly') return 'center';
+    if (value === 'flex-end' || value === 'end' || value === 'right') return 'end';
+    return null;
+  };
+  const across = (value: string | undefined): 'center' | 'end' | null => {
+    if (value === 'center') return 'center';
+    if (value === 'flex-end' || value === 'end' || value === 'self-end') return 'end';
+    return null;
+  };
+  const column = flexDirection.startsWith('column');
+  const horizontal = column ? across(alignItems) : along(justifyContent);
+  const vertical = column ? along(justifyContent) : across(alignItems);
+  return {
+    ...(horizontal ? { align: horizontal === 'center' ? 'center' : 'right' } : {}),
+    ...(vertical ? { valign: vertical === 'center' ? 'middle' : 'bottom' } : {}),
+  };
 }
 
 function alignFrom(textAlign: string | undefined): 'left' | 'center' | 'right' | 'justify' {

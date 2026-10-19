@@ -1308,6 +1308,11 @@ export function measureSlides(doc: Document): MeasuredSlide[] {
         objectFit: style.objectFit || undefined,
         objectPosition: style.objectPosition || undefined,
         textAlign: style.textAlign || undefined,
+        // A box that centres its own text with flexbox: the text sits where
+        // the flex alignment puts it, not where text-align alone would.
+        flexDirection: /flex$/.test(style.display) ? style.flexDirection || 'row' : undefined,
+        justifyContent: /flex$/.test(style.display) ? style.justifyContent || undefined : undefined,
+        alignItems: /flex$/.test(style.display) ? style.alignItems || undefined : undefined,
         // Absent means "the deck's default" (all three on: a slide video
         // normally plays itself) — unless the export said "false", which it
         // does for a deck video that has the flag off.

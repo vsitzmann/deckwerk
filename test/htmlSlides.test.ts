@@ -72,6 +72,32 @@ describe('measured nodes become deck objects', () => {
     expect(element?.style).toEqual({ color: '#ff3366', 'font-size': '80px' });
   });
 
+  it('keeps text a flex container centres where the browser drew it', () => {
+    // A banner or badge centring its own text with flexbox was stored top-left.
+    const banner = elementFromNode(node({
+      attrs: { flexDirection: 'row', justifyContent: 'center', alignItems: 'center' },
+    }), 'banner', 1);
+    expect(banner).toMatchObject({ type: 'text', align: 'center', valign: 'middle' });
+
+    const column = elementFromNode(node({
+      attrs: { flexDirection: 'column', justifyContent: 'flex-end', alignItems: 'center' },
+    }), 'column', 1);
+    expect(column).toMatchObject({ align: 'center', valign: 'bottom' });
+
+    // An explicit data-valign (every export carries one) still wins, and a
+    // deck text box's own markup keeps the alignment it states.
+    const stated = elementFromNode(node({
+      dataset: { valign: 'top' },
+      attrs: { flexDirection: 'row', justifyContent: 'center', alignItems: 'center' },
+    }), 'stated', 1);
+    expect(stated).toMatchObject({ align: 'center', valign: 'top' });
+    const exported = elementFromNode(node({
+      preformatted: true,
+      attrs: { textAlign: 'left', flexDirection: 'column', justifyContent: 'center', alignItems: 'center' },
+    }), 'exported', 1);
+    expect(exported).toMatchObject({ align: 'left', valign: 'top' });
+  });
+
   it('drops layout declarations that did their job during measurement', () => {
     // `display: flex` on an absolutely positioned box would re-flow the text
     // the geometry was measured against.
