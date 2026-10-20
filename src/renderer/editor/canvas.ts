@@ -1,5 +1,5 @@
 import { openContextMenu } from './contextMenuPlacement.js';
-import type { Deck, ShapeEl, Slide, SlideElement, TextEl } from '@shared/deck.js';
+import type { Deck, ShapeEl, Slide, SlideElement, StrokeStyle, TextEl } from '@shared/deck.js';
 import { NEW_MEDIA_FIT } from '@shared/deck.js';
 import { lineSpacingValue } from '@shared/lineHeight.js';
 import { canHoldText, shapeToTextBox } from '@shared/shapeText.js';
@@ -1112,6 +1112,8 @@ export class EditorCanvas {
    * where it would open its points for editing.
    */
   private penFinishedAt = Number.NEGATIVE_INFINITY;
+  /** How the pen draws its next path; the Pen button's menu chooses it. */
+  penStyle: StrokeStyle = 'pen';
   /** Notified when the pen is taken up or put down, so its button can show it. */
   onPenToolChange?: (drawing: boolean) => void;
   /**
@@ -3883,7 +3885,7 @@ export class EditorCanvas {
     const run = pen.result(closed);
     const index = this.store.get().deck.slides.findIndex((slide) => slide.id === pen.slideId);
     if (!run || index < 0) return;
-    insertPath(this.store, index, run);
+    insertPath(this.store, index, run, this.penStyle);
   }
 
   private penPointerDown(ev: PointerEvent, point: XY, secondClick: boolean): void {

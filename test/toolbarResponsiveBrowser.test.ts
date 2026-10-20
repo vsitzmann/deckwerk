@@ -77,7 +77,8 @@ describe.skipIf(!electronBinary)('responsive desktop toolbar', () => {
 
     // The File menu carries New / Open / Import / Save As at every width, so
     // a medium window keeps Insert centred and simply drops the deck name.
-    const medium = await toolbarAt(900, (layout) => layout.fileVisible
+    // (Medium is 960: with the Pen and its style menu, Insert outgrew 900.)
+    const medium = await toolbarAt(960, (layout) => layout.fileVisible
       && layout.classes.includes('toolbar-hide-deck-name'));
     expect(medium.height).toBe(44);
     expect(medium.fileVisible).toBe(true);
