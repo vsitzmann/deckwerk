@@ -272,11 +272,20 @@ const VideoElement = BaseElement.extend({
   poster: z.string().nullable().default(null),
   /**
    * Videos on a slide that share a sync group play from one clock while
-   * presenting: the first of them (in z order) leads and the rest follow its
-   * time, measured from each one's own in-point, so a real clip and its
-   * simulation stay frame-matched however long the talk dwells on them.
+   * presenting: one of them keeps time and the rest follow it, measured from
+   * each one's own in-point, so a real clip and its simulation stay
+   * frame-matched however long the talk dwells on them.
    */
   syncGroup: z.string().min(1).optional(),
+  /**
+   * How long a sync group runs when its clips differ in length (each clip's
+   * length being its trim window): `shortest` (the default) ends, or loops,
+   * with the shortest clip, cutting the rest; `hold` runs to the longest,
+   * shorter clips freezing on their last frame; `black` runs to the longest,
+   * shorter clips going black. Like `syncGroup` it is written on every member;
+   * the first member in z that carries it decides (src/shared/compare.ts).
+   */
+  syncLength: z.enum(['shortest', 'hold', 'black']).optional(),
   /**
    * A before/after wipe. On the upper of two pictures stacked in one box,
    * `compare: 'wipe'` shows this one only left of a vertical divider and

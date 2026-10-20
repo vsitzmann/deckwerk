@@ -343,6 +343,7 @@ describe('image and video keep the same media vocabulary', () => {
     end: 'Trim point, meaningless on a still.',
     poster: 'Still shown before playback begins.',
     syncGroup: 'Shares a playback clock, meaningless on a still (a still can still be a wipe layer).',
+    syncLength: 'How long a playback clock runs, meaningless on a still.',
   };
 
   const shapeOf = (type: string): Set<string> => {

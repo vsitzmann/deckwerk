@@ -1,8 +1,18 @@
 /*
- * Comparing pictures: the before/after wipe divider (wipe.ts) and a sync
- * group's scrubber (groupScrubber.ts). Sizes are slide pixels -- both live
+ * Comparing pictures: the before/after wipe divider (wipe.ts), a sync
+ * group's scrubber (groupScrubber.ts) and its clips that have run out. Sizes are slide pixels -- both live
  * inside the slide, so they scale with it like everything else on it.
  */
+
+/* --- a synced clip that has run out ----------------------------------------
+   A group set to run to its longest clip, shorter ones going black: the
+   shorter clip's own picture is darkened rather than hidden, so it keeps its
+   crop, its wipe clip and its frame and the slide does not show through.
+   `!important` because a clip's effects are an inline filter. A PDF copies
+   the class onto the canvas that replaces the <video> (print/readiness.ts). */
+.sync-black {
+  filter: brightness(0) !important;
+}
 
 /* --- wipe divider ----------------------------------------------------------
    Drawn wherever the slide is drawn (canvas, thumbnails, PDF) as a plain line

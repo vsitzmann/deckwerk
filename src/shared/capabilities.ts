@@ -275,12 +275,13 @@ export function capabilities(): Capability[] {
       what: 'Videos that play in sync, with a shared scrubber, and a before/after wipe.',
       when: 'Real vs. simulated, before vs. after: two clips (or stills) the audience must compare frame for frame.',
       notes: [
-        'syncGroup (data-sync-group) on two or more videos plays them from one clock while presenting: the lowest in z leads, each follower is measured from its own in-point.',
-        'While presenting, hovering a synced video shows one bar along the bottom of the group: play/pause for the group and a scrubber over the leader’s trim window. It never shows in PDFs, thumbnails or posters.',
+        'syncGroup (data-sync-group) on two or more videos plays them from one clock while presenting, each clip measured from its own in-point (its trim start).',
+        'When the clips differ in length (each one’s trim window), syncLength (data-sync-length) on every member says how long the group runs: "shortest" (the default; leave it out) ends, or loops, with the shortest clip and cuts the rest; "hold" runs to the longest, shorter clips freezing on their last frame; "black" runs to the longest, shorter clips going black. The group loops at that length when the clip that sets it loops, so give every member the same loop flag. PDFs and thumbnails show the same frame (or black) the presentation would.',
+        'While presenting, hovering a synced video shows one bar along the bottom of the group: play/pause for the group and a scrubber over the group’s length. It never shows in PDFs, thumbnails or posters.',
         'A wipe is two pictures stacked in the same box. The UPPER one (later in the HTML, higher z) carries compare: "wipe" (data-compare="wipe") and wipe: 0–1 (data-wipe, also accepts "40%"), the divider’s position across the box. It shows left of the divider; whatever is beneath shows right of it.',
         'The lower layer needs nothing. For video pairs give both the same syncGroup so they show the same moment. Images work as either layer.',
         'The presenter can drag the divider while presenting; that never edits the deck. The editor, thumbnails and PDF show it at the stored position.',
-        'In the editor: select two videos (or two images) → Compare → Arrange as wipe; a layer of a wipe shows a Divider slider and Turn off wipe.',
+        'In the editor: select two videos or images and click the Wipe chip under them (or right-click → Arrange as wipe, or Props → Compare → Arrange as wipe). With a two-clip wipe selected the chip, and the Wipe section in Props, choose its length: Shortest / Hold last / Black. A synced pair that is not a wipe has the same choice beside Play in sync.',
       ],
       elements: [
         text('cap-compare-title', 'Real and simulated, one divider', TITLE, { class: ['role-title'] }),

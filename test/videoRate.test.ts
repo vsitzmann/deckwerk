@@ -202,7 +202,7 @@ describe('the hover bar’s speed slider', () => {
     let rate = 1;
     const off = mountGroupScrubber(root, {
       members: [video('a', { syncGroup: 'g' }), video('b', { x: 500, syncGroup: 'g' })],
-      leaderVideo,
+      clock: () => ({ element: video('a', { syncGroup: 'g' }), video: leaderVideo }),
       setPlaying: () => {},
       getRate: () => rate,
       setRate: (next) => { rate = next; },
@@ -231,7 +231,7 @@ describe('the hover bar’s speed slider', () => {
     document.body.appendChild(root);
     const off = mountGroupScrubber(root, {
       members: [video('a', { syncGroup: 'g' }), video('b', { x: 500, syncGroup: 'g' })],
-      leaderVideo: document.createElement('video'),
+      clock: () => null,
       setPlaying: () => {},
     });
     expect(root.querySelector('.sync-scrubber-speed')).toBeNull();
