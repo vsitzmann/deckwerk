@@ -165,6 +165,28 @@ describe('term builds on the timeline', () => {
     expect([...after.visible]).toEqual([...before.visible]);
     expect(after.terms.size).toBe(0);
   });
+
+  it('treats a jiggle and a pop the same way, each with its own default time', () => {
+    const slide = slideWith([equation()], [
+      { id: 'jiggle', trigger: click, action: { type: 'jiggle', target: 'eq', value: null } },
+      { id: 'pop', trigger: click, action: { type: 'pop', target: 'eq', value: null, term: '2' } },
+    ]);
+    expect(stepCount(slide)).toBe(3);
+    const [jiggle, pop] = expandTimeline(slide);
+    expect(buildEffect(jiggle, slide)).toBe('jiggle');
+    expect(effectDuration(jiggle, 'jiggle')).toBe(700);
+    expect(buildEffect(pop, slide)).toBe('pop');
+    expect(effectDuration(pop, 'pop')).toBe(450);
+    expect(effectDuration({ ...pop, action: { ...pop.action, duration: 200 } }, 'pop')).toBe(200);
+    // Jumping over either is a no-op: every step resolves to the opening state.
+    const before = resolveState(slide, 0);
+    for (const step of [1, 2]) {
+      const after = resolveState(slide, step);
+      expect([...after.visible]).toEqual([...before.visible]);
+      expect(after.terms.size).toBe(0);
+      expect(after.classes).toEqual(before.classes);
+    }
+  });
 });
 
 describe('equation builds in authoring HTML', () => {
@@ -278,6 +300,62 @@ describe('equation builds in authoring HTML', () => {
     expect(plain.timeline.map((entry) => [entry.id, entry.action.value])).toEqual([['lift', null]]);
     // A plain pulse writes no lift.
     expect(slideToHtml(slideWith([equation()], builds), { w: 1920, h: 1080 })).not.toContain('data-pulse-lift');
+  });
+
+  it('round-trips a jiggle and a pop beside a pulse, each stated on the page', () => {
+    const emphases: TimelineEntry[] = [
+      { id: 'pulse', trigger: click, action: { type: 'pulse', target: 'eq', value: null, scale: 1.8 } },
+      {
+        id: 'jiggle', trigger: { on: 'afterPrev', ref: null, delay: 200 },
+        action: { type: 'jiggle', target: 'eq', value: null, term: '1', duration: 900 },
+      },
+      { id: 'pop', trigger: click, action: { type: 'pop', target: 'eq', value: null, term: '2', scale: 1.5, duration: 300 } },
+    ];
+    const slide = slideWith([equation()], emphases);
+    const html = slideToHtml(slide, { w: 1920, h: 1080 });
+    for (const attribute of [
+      'data-jiggle="afterPrev+200"', 'data-jiggle-term="1"', 'data-jiggle-duration="900"',
+      'data-pop="click"', 'data-pop-term="2"', 'data-pop-scale="1.5"', 'data-pop-duration="300"',
+    ]) expect(html).toContain(attribute);
+    const back = slideFromMeasured(
+      { id: slide.id, name: '', notes: '', background: slide.background, nodes: measured(slide) } as never,
+      { slideId: slide.id, usedIds: new Set() },
+    );
+    expect(back.timeline.map((entry) => ({ trigger: entry.trigger, action: entry.action })))
+      .toEqual(emphases.map((entry) => ({ trigger: entry.trigger, action: entry.action })));
+    // Saving the page untouched keeps every entry as it was.
+    expect(carrySlideState(slide, back).timeline.map((entry) => [entry.id, entry.action.type]))
+      .toEqual([['pulse', 'pulse'], ['jiggle', 'jiggle'], ['pop', 'pop']]);
+  });
+
+  it('reads a jiggle and a pop written by hand, defaults and all', () => {
+    expect(equationBuildsFromNode({ dataset: { jiggle: 'click', pop: 'withPrev', popTerm: '2' } }, 'eq', 0)).toEqual([
+      { id: 'eq-jiggle-1', trigger: click, action: { type: 'jiggle', target: 'eq', value: null } },
+      { id: 'eq-pop-2', trigger: { on: 'withPrev', ref: null, delay: 0 }, action: { type: 'pop', target: 'eq', value: null, term: '2' } },
+    ]);
+    // A jiggle has no size and nothing lifts but a pulse; nonsense is dropped.
+    expect(equationBuildsFromNode({ dataset: { jiggle: 'click', jiggleScale: '2', pop: 'click', popScale: '9', pulseLift: 'true' } }, 'box', 0))
+      .toEqual([
+        { id: 'box-jiggle-1', trigger: click, action: { type: 'jiggle', target: 'box', value: null } },
+        { id: 'box-pop-2', trigger: click, action: { type: 'pop', target: 'box', value: null } },
+      ]);
+  });
+
+  it('lets a page take a jiggle off and change a pop, keeping the pops it cannot state', () => {
+    const previous = slideWith([equation()], [
+      { id: 'jiggle', trigger: click, action: { type: 'jiggle', target: 'eq', value: null } },
+      { id: 'pop', trigger: click, action: { type: 'pop', target: 'eq', value: null, term: '1' } },
+      { id: 'pop-again', trigger: click, action: { type: 'pop', target: 'eq', value: null, term: '2' } },
+    ]);
+    const nodes = measured(previous);
+    delete nodes[0].dataset.jiggle;
+    nodes[0].dataset.popScale = '1.2';
+    const next = carrySlideState(previous, slideFromMeasured(
+      { id: previous.id, name: '', notes: '', background: previous.background, nodes } as never,
+      { slideId: previous.id, usedIds: new Set() },
+    ));
+    expect(next.timeline.map((entry) => [entry.id, entry.action.term, entry.action.scale]))
+      .toEqual([['pop', '1', 1.2], ['pop-again', '2', undefined]]);
   });
 
   it('reads data-pulse-lift as written by hand: present lifts, "false" does not', () => {

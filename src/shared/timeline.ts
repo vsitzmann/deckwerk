@@ -1,11 +1,13 @@
 import type { Slide, SlideElement, TimelineEntry } from './deck.js';
 import { countParagraphs } from './paragraphs.js';
 import {
-  DEFAULT_PULSE_DURATION,
   DEFAULT_TERM_DURATION,
   applyTermAction,
+  defaultEmphasisDuration,
   initialTermStates,
+  isEmphasisType,
   isTermBuild,
+  type EmphasisType,
   termBuildLabels,
   type TermState,
 } from './equationTerms.js';
@@ -53,14 +55,15 @@ export const DEFAULT_BLUR_DURATION = 1000;
  * any element in or out; `blur` fades it in out of a blur (or out into one);
  * `draw` draws a line or arrow in from its start.
  */
-export type BuildEffect = 'draw' | 'dissolve' | 'blur' | 'terms' | 'pulse';
+export type BuildEffect = 'draw' | 'dissolve' | 'blur' | 'terms' | EmphasisType;
 
 /** The effect an entry animates with, or null for an instant change. */
 export function buildEffect(entry: TimelineEntry, slide: Slide): BuildEffect | null {
   const { type, value } = entry.action;
-  // A term fades in (or changes colour) and a pulse swells and settles; both
-  // take time, so an "after previous" build waits them out like any other.
-  if (type === 'terms' || type === 'pulse') return type;
+  // A term fades in (or changes colour) and an emphasis swells or wobbles and
+  // settles; both take time, so an "after previous" build waits them out like
+  // any other.
+  if (type === 'terms' || isEmphasisType(type)) return type;
   if ((value === 'dissolve' || value === 'blur') && (type === 'appear' || type === 'disappear')) {
     return value;
   }
@@ -71,7 +74,7 @@ export function buildEffect(entry: TimelineEntry, slide: Slide): BuildEffect | n
 /** Milliseconds an animated build takes. */
 export function effectDuration(entry: TimelineEntry, effect: BuildEffect): number {
   return entry.action.duration
-    ?? (effect === 'terms' ? DEFAULT_TERM_DURATION : effect === 'pulse' ? DEFAULT_PULSE_DURATION
+    ?? (effect === 'terms' ? DEFAULT_TERM_DURATION : isEmphasisType(effect) ? defaultEmphasisDuration(effect)
       : effect === 'draw' ? DEFAULT_DRAW_DURATION
       : effect === 'blur' ? DEFAULT_BLUR_DURATION : DEFAULT_DISSOLVE_DURATION);
 }
@@ -281,9 +284,11 @@ export function applyAction(
     case 'terms':
       applyTermAction(state.terms, entry, slide);
       break;
-    // A pulse changes nothing it leaves behind: the state after it is the
-    // state before it, which is what makes it safe to jump over.
+    // An emphasis changes nothing it leaves behind: the state after it is
+    // the state before it, which is what makes it safe to jump over.
     case 'pulse':
+    case 'jiggle':
+    case 'pop':
       break;
   }
 }

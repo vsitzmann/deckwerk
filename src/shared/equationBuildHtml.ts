@@ -1,5 +1,5 @@
 import type { Slide, TimelineEntry } from './deck.js';
-import { isTermLabel } from './equationTerms.js';
+import { EMPHASIS_TYPES, isEmphasisType, isTermLabel, type EmphasisType } from './equationTerms.js';
 
 /**
  * Equation builds in the HTML authoring format.
@@ -21,6 +21,11 @@ import { isTermLabel } from './equationTerms.js';
  *   data-pulse-lift="true"          also cast a drop shadow and rise over the
  *                                   neighbours while it is up (whole objects;
  *                                   a term pulse keeps it but does not lift)
+ *
+ *   data-jiggle="click"             wobble the object, or one term, side to side
+ *   data-jiggle-term, data-jiggle-duration
+ *   data-pop="click"                swell sharply and snap back
+ *   data-pop-term, data-pop-scale, data-pop-duration
  *
  * A page states an object's first build of each kind; further ones (a second
  * pulse of another term, say) are made in the Build panel and survive a save
@@ -49,7 +54,7 @@ function finite(value: string | undefined, min: number, max = Infinity): number 
   return Number.isFinite(number) && number >= min && number <= max ? number : undefined;
 }
 
-/** The timeline entries an object's equation-build attributes state, in order: terms, then pulse. */
+/** The timeline entries an object's equation-build attributes state, in order: terms, then pulse, jiggle, pop. */
 export function equationBuildsFromNode(
   node: { dataset: Record<string, string | undefined> },
   elementId: string,
@@ -74,17 +79,21 @@ export function equationBuildsFromNode(
       },
     });
   }
-  const pulse = triggerFrom(dataset.pulse, dataset.pulseRef);
-  if (pulse) {
-    const duration = finite(dataset.pulseDuration, 0);
-    const scale = finite(dataset.pulseScale, 1, 4);
-    const term = dataset.pulseTerm?.trim();
-    const lift = dataset.pulseLift !== undefined && dataset.pulseLift.trim().toLowerCase() !== 'false';
+  for (const type of EMPHASIS_TYPES) {
+    // `data-pop-term` and the like, as the dataset spells them (`popTerm`).
+    const trigger = triggerFrom(dataset[type], dataset[`${type}Ref`]);
+    if (!trigger) continue;
+    const duration = finite(dataset[`${type}Duration`], 0);
+    // A jiggle turns rather than grows, so it has no size to read.
+    const scale = type === 'jiggle' ? undefined : finite(dataset[`${type}Scale`], 1, 4);
+    const term = dataset[`${type}Term`]?.trim();
+    const lift = type === 'pulse' && dataset.pulseLift !== undefined
+      && dataset.pulseLift.trim().toLowerCase() !== 'false';
     entries.push({
-      id: `${elementId}-pulse-${index + entries.length + 1}`,
-      trigger: pulse,
+      id: `${elementId}-${type}-${index + entries.length + 1}`,
+      trigger,
       action: {
-        type: 'pulse',
+        type,
         target: elementId,
         value: lift ? 'lift' : null,
         ...(term && isTermLabel(term) ? { term } : {}),
@@ -99,10 +108,10 @@ export function equationBuildsFromNode(
 /** Which page-stated build an entry is, per object: a page owns the first of each. */
 export function pageBuildKind(entry: TimelineEntry): string | null {
   const { type, target } = entry.action;
-  return type === 'appear' || type === 'terms' || type === 'pulse' ? `${type}\0${target}` : null;
+  return type === 'appear' || type === 'terms' || isEmphasisType(type) ? `${type}\0${target}` : null;
 }
 
-function firstOf(slide: Slide, elementId: string, type: 'terms' | 'pulse'): TimelineEntry | undefined {
+function firstOf(slide: Slide, elementId: string, type: 'terms' | EmphasisType): TimelineEntry | undefined {
   return slide.timeline.find((entry) => entry.action.type === type && entry.action.target === elementId);
 }
 
@@ -110,7 +119,7 @@ function escapeAttribute(text: string): string {
   return text.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
-/** The attributes an export writes for an object's first term build and first pulse. */
+/** The attributes an export writes for an object's first term build and first emphasis of each kind. */
 export function equationBuildAttributes(slide: Slide, elementId: string): string[] {
   const attrs: string[] = [];
   const attr = (name: string, value: string | number | undefined): void => {
@@ -125,14 +134,15 @@ export function equationBuildAttributes(slide: Slide, elementId: string): string
     attr('data-term-duration', terms.action.duration);
     attr('data-term', terms.action.term);
   }
-  const pulse = firstOf(slide, elementId, 'pulse');
-  if (pulse) {
-    attr('data-pulse', triggerSpec(pulse.trigger));
-    attr('data-pulse-ref', pulse.trigger.ref ?? undefined);
-    attr('data-pulse-term', pulse.action.term);
-    attr('data-pulse-scale', pulse.action.scale);
-    attr('data-pulse-duration', pulse.action.duration);
-    if (pulse.action.value === 'lift') attr('data-pulse-lift', 'true');
+  for (const type of EMPHASIS_TYPES) {
+    const entry = firstOf(slide, elementId, type);
+    if (!entry) continue;
+    attr(`data-${type}`, triggerSpec(entry.trigger));
+    attr(`data-${type}-ref`, entry.trigger.ref ?? undefined);
+    attr(`data-${type}-term`, entry.action.term);
+    if (type !== 'jiggle') attr(`data-${type}-scale`, entry.action.scale);
+    attr(`data-${type}-duration`, entry.action.duration);
+    if (type === 'pulse' && entry.action.value === 'lift') attr('data-pulse-lift', 'true');
   }
   return attrs;
 }

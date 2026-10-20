@@ -1,7 +1,8 @@
 import type { Slide, TimelineEntry } from '@shared/deck.js';
 import {
-  DEFAULT_PULSE_SCALE,
   TERM_CLASS_PREFIX,
+  defaultEmphasisScale,
+  isEmphasisType,
   termBuildLabels,
   termClass,
   termEffect,
@@ -12,7 +13,8 @@ import { isolatedClone, localRects, nodePath, px, slideScale } from './glyphClon
 /**
  * Equation builds on a rendered slide: the motion-free endpoint of term
  * reveals and term colours, and the live animations that get there — a term
- * fading in, a term changing colour, a term or an object pulsing.
+ * fading in, a term changing colour, a term or an object pulsing, jiggling or
+ * popping.
  */
 
 /** The labels a rendered term span carries (`step-2` → `2`). */
@@ -74,14 +76,18 @@ export function prepareEquationEffect(
   duration: number,
 ): (() => () => void) | null {
   const { type, target } = entry.action;
-  if (type !== 'terms' && type !== 'pulse') return null;
+  if (type !== 'terms' && !isEmphasisType(type)) return null;
   const node = [...stage.querySelectorAll<HTMLElement>('[data-element-id]')]
     .find((candidate) => candidate.dataset.elementId === target);
   if (!node || typeof node.animate !== 'function') return null;
 
-  if (type === 'pulse') {
-    const lift = entry.action.value === 'lift';
-    return () => pulse(node, entry.action.term, entry.action.scale ?? DEFAULT_PULSE_SCALE, duration, lift);
+  if (isEmphasisType(type)) {
+    const scale = entry.action.scale ?? defaultEmphasisScale(type);
+    const frames = type === 'jiggle' ? jiggleFrames : type === 'pop' ? popFrames(scale) : pulseFrames(scale);
+    // A jiggle never grows, and a swell to 1× is no swell at all.
+    if (type !== 'jiggle' && scale === 1) return () => () => {};
+    const lift = type === 'pulse' && entry.action.value === 'lift';
+    return () => emphasize(node, entry.action.term, frames, duration, lift);
   }
 
   const labels = termBuildLabels(entry, slide);
@@ -104,17 +110,50 @@ export function prepareEquationEffect(
 }
 
 /**
- * The keyframes of an emphasis pulse around `transform`: out to `scale` with
- * an ease-out, and back with an ease-in-out, so the term lingers big for a
- * beat and settles rather than bouncing.
+ * An emphasis's keyframes, given how to place one local transform (a scale,
+ * a turn) about the centre of what moves. Each ends where it began, so with
+ * `fill: none` the slide is exactly as it was once it is over.
  */
-function pulseFrames(around: (scale: number) => string, scale: number): Keyframe[] {
-  return [
-    { transform: around(1), offset: 0, easing: 'cubic-bezier(.2,.7,.3,1)' },
-    { transform: around(scale), offset: 0.4, easing: 'cubic-bezier(.45,0,.25,1)' },
-    { transform: around(1), offset: 1 },
+type EmphasisFrames = (around: (local: string) => string) => Keyframe[];
+
+/**
+ * A pulse: out to `scale` with an ease-out, and back with an ease-in-out, so
+ * the term lingers big for a beat and settles rather than bouncing.
+ */
+function pulseFrames(scale: number): EmphasisFrames {
+  return (around) => [
+    { transform: around('scale(1)'), offset: 0, easing: 'cubic-bezier(.2,.7,.3,1)' },
+    { transform: around(`scale(${scale})`), offset: 0.4, easing: 'cubic-bezier(.45,0,.25,1)' },
+    { transform: around('scale(1)'), offset: 1 },
   ];
 }
+
+/**
+ * A pop: a sharp swell to `scale` in the first quarter, a quick snap back
+ * that overshoots a little below the original size, and one small rebound
+ * before it settles — more abrupt than a pulse, and springy where a pulse is
+ * smooth.
+ */
+function popFrames(scale: number): EmphasisFrames {
+  const swell = scale - 1;
+  return (around) => [
+    { transform: around('scale(1)'), offset: 0, easing: 'cubic-bezier(.2,.9,.3,1)' },
+    { transform: around(`scale(${scale})`), offset: 0.25, easing: 'cubic-bezier(.6,0,.8,.4)' },
+    { transform: around(`scale(${1 - swell * 0.3})`), offset: 0.55, easing: 'ease-in-out' },
+    { transform: around(`scale(${1 + swell * 0.08})`), offset: 0.8, easing: 'ease-in-out' },
+    { transform: around('scale(1)'), offset: 1 },
+  ];
+}
+
+/** A jiggle's turns, in degrees: side to side, each swing smaller, ending square. */
+const JIGGLE_TURNS = [0, 5, -4.5, 3.5, -2.5, 1.5, -0.5, 0];
+
+/** A jiggle: a wobble about the centre that dies away, ending exactly square. */
+const jiggleFrames: EmphasisFrames = (around) => JIGGLE_TURNS.map((turn, index) => ({
+  transform: around(`rotate(${turn}deg)`),
+  offset: index / (JIGGLE_TURNS.length - 1),
+  easing: 'ease-in-out',
+}));
 
 /** The drop shadow a lifting pulse casts at its peak. */
 const LIFT_SHADOW = 'drop-shadow(0px 14px 18px rgba(0, 0, 0, 0.35))';
@@ -123,21 +162,27 @@ const NO_SHADOW = 'drop-shadow(0px 0px 0px rgba(0, 0, 0, 0))';
 const LIFT_Z = 100000;
 
 /**
- * Briefly enlarge an object, or one marked term of its equation, about its
- * own centre. Transforms only — nothing is laid out differently at any point,
- * so when it ends the slide is exactly as it was. A whole-object pulse with
- * `lift` also casts a drop shadow at its peak and paints over its neighbours
- * while it is up, as if picked up off the slide and put back; objects lifted
- * together keep their own stacking order.
+ * Briefly move an object, or one marked term of its equation, about its own
+ * centre: swell it, turn it. Transforms only — nothing is laid out
+ * differently at any point, so when it ends the slide is exactly as it was. A
+ * whole-object pulse with `lift` also casts a drop shadow at its peak and
+ * paints over its neighbours while it is up, as if picked up off the slide
+ * and put back; objects lifted together keep their own stacking order.
  */
-function pulse(node: HTMLElement, term: string | undefined, scale: number, duration: number, lift = false): () => void {
-  if (duration <= 0 || scale === 1) return () => {};
+function emphasize(
+  node: HTMLElement,
+  term: string | undefined,
+  keyframes: EmphasisFrames,
+  duration: number,
+  lift = false,
+): () => void {
+  if (duration <= 0) return () => {};
   const base = node.style.transform && node.style.transform !== 'none' ? `${node.style.transform} ` : '';
 
   if (term === undefined) {
-    // The object's own transform (a rotation) stays first, so the swell
+    // The object's own transform (a rotation) stays first, so the motion
     // happens in its frame and the fill-none end is its settled render.
-    const frames: Keyframe[] = pulseFrames((s) => `${base}scale(${s})`, scale).map((frame) => ({ ...frame, transformOrigin: 'center' }));
+    const frames: Keyframe[] = keyframes((local) => `${base}${local}`).map((frame) => ({ ...frame, transformOrigin: 'center' }));
     if (lift) {
       const z = (Number.parseInt(getComputedStyle(node).zIndex, 10) || 0) + LIFT_Z;
       frames.forEach((frame, index) => {
@@ -159,23 +204,23 @@ function pulse(node: HTMLElement, term: string | undefined, scale: number, durat
   spans.forEach((span, index) => {
     const rect = rects[index];
     // The term's centre relative to the object's centre, in the object's own
-    // (unrotated) frame: translate there, scale, translate back, all after
-    // the object's own transform.
+    // (unrotated) frame: translate there, scale or turn, translate back, all
+    // after the object's own transform.
     const ox = px(rect.x + rect.w / 2 - width / 2);
     const oy = px(rect.y + rect.h / 2 - height / 2);
     const clone = isolatedClone(node, [nodePath(node, span)]);
-    // Last in the slide, so the enlarged term paints over its neighbours.
+    // Last in the slide, so the moving term paints over its neighbours.
     node.parentElement?.appendChild(clone);
-    const grow = clone.animate(
-      pulseFrames((s) => `${base}translate(${ox}px, ${oy}px) scale(${s}) translate(${-ox}px, ${-oy}px)`, scale)
+    const move = clone.animate(
+      keyframes((local) => `${base}translate(${ox}px, ${oy}px) ${local} translate(${-ox}px, ${-oy}px)`)
         .map((frame) => ({ ...frame, transformOrigin: 'center' })),
       { duration, fill: 'forwards' },
     );
-    // The term itself steps aside while its copy swells over it.
+    // The term itself steps aside while its copy moves over it.
     const hide = span.animate([{ opacity: 0 }, { opacity: 0 }], { duration, fill: 'none' });
     const remove = (): void => clone.remove();
-    void grow.finished.then(remove, remove);
-    finishers.push(() => { grow.finish(); hide.finish(); remove(); });
+    void move.finished.then(remove, remove);
+    finishers.push(() => { move.finish(); hide.finish(); remove(); });
   });
   return () => { for (const finish of finishers) finish(); };
 }

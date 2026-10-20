@@ -6,10 +6,11 @@ import type { Slide, SlideElement, TimelineEntry } from './deck.js';
  * An author marks a part of the TeX as a term — `\step{2}{\rho \ddot{u}}`, or
  * the standard KaTeX spelling `\htmlClass{step-2}{\rho \ddot{u}}` — and KaTeX
  * renders it as a span carrying the class `step-2`. A `terms` build steps
- * through those labels, revealing or colouring each in turn, and a `pulse`
- * build can enlarge one for a moment. Nothing else about the maths changes:
- * a term is laid out exactly where it would be without the marker, so an
- * unrevealed term holds its place and the equation never reflows as it builds.
+ * through those labels, revealing or colouring each in turn, and an emphasis
+ * (`pulse`, `jiggle` or `pop`) can point at one for a moment. Nothing else
+ * about the maths changes: a term is laid out exactly where it would be
+ * without the marker, so an unrevealed term holds its place and the equation
+ * never reflows as it builds.
  *
  * Pure and DOM-free: the timeline counts steps from the TeX source in Node
  * (the agent CLI, the collab server) as well as in the renderer.
@@ -91,6 +92,12 @@ export const DEFAULT_TERM_DURATION = 400;
 export const DEFAULT_PULSE_DURATION = 800;
 /** How far an emphasis pulse enlarges its target at the peak. */
 export const DEFAULT_PULSE_SCALE = 1.6;
+/** How long a jiggle wobbles when its entry does not say. */
+export const DEFAULT_JIGGLE_DURATION = 700;
+/** How long a pop takes, swell and snap back, when its entry does not say. */
+export const DEFAULT_POP_DURATION = 450;
+/** How far a pop swells its target at the peak: less than a pulse, and quicker. */
+export const DEFAULT_POP_SCALE = 1.3;
 /** The highlight a `color` term build paints when its entry names none. */
 export const DEFAULT_TERM_COLOR = '#d9480f';
 
@@ -107,9 +114,28 @@ export function isTermBuild(entry: TimelineEntry): boolean {
   return entry.action.type === 'terms';
 }
 
-/** Whether an entry is an emphasis pulse, of a term or of a whole object. */
-export function isPulseBuild(entry: TimelineEntry): boolean {
-  return entry.action.type === 'pulse';
+/**
+ * Keynote's Action builds: a moment of motion that points at an object, or at
+ * one term of its equation, and leaves it exactly as it was. A `pulse` swells
+ * and settles, a `jiggle` wobbles side to side, and a `pop` swells sharply and
+ * snaps back with a small overshoot.
+ */
+export const EMPHASIS_TYPES = ['pulse', 'jiggle', 'pop'] as const;
+export type EmphasisType = (typeof EMPHASIS_TYPES)[number];
+
+/** Whether an action type is an emphasis. */
+export function isEmphasisType(type: string): type is EmphasisType {
+  return (EMPHASIS_TYPES as readonly string[]).includes(type);
+}
+
+/** How long an emphasis takes when its entry does not say. */
+export function defaultEmphasisDuration(type: EmphasisType): number {
+  return type === 'jiggle' ? DEFAULT_JIGGLE_DURATION : type === 'pop' ? DEFAULT_POP_DURATION : DEFAULT_PULSE_DURATION;
+}
+
+/** How far a pulse or a pop swells at the peak when its entry does not say; a jiggle does not. */
+export function defaultEmphasisScale(type: EmphasisType): number {
+  return type === 'pop' ? DEFAULT_POP_SCALE : type === 'pulse' ? DEFAULT_PULSE_SCALE : 1;
 }
 
 /** The text element a term build targets, if it is one. */
