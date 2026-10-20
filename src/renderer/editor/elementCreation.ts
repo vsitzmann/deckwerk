@@ -206,6 +206,7 @@ export function createShapeInsertPicker(
   const trigger = document.createElement('button');
   trigger.type = 'button';
   trigger.className = 'shape-menu-trigger';
+  trigger.title = 'Shape';
   trigger.setAttribute('aria-haspopup', 'menu');
   trigger.setAttribute('aria-expanded', 'false');
   trigger.innerHTML =
@@ -380,6 +381,7 @@ export function createTableInsertPicker(store: EditorStore): HTMLElement {
   const trigger = document.createElement('button');
   trigger.type = 'button';
   trigger.className = 'shape-menu-trigger table-picker-trigger';
+  trigger.title = 'Table';
   trigger.setAttribute('aria-haspopup', 'grid');
   trigger.setAttribute('aria-expanded', 'false');
   trigger.innerHTML =

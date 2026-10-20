@@ -642,6 +642,7 @@ export function barButton(label: string, onClick: () => void, variant = ''): HTM
 export function barIconButton(label: string, iconSvg: string, onClick: () => void): HTMLButtonElement {
   const b = document.createElement('button');
   b.className = 'bar-icon-button';
+  b.title = label;
   b.innerHTML = `${iconSvg}<span>${label}</span>`;
   b.addEventListener('click', onClick);
   return b;
