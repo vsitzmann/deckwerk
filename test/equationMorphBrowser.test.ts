@@ -21,10 +21,11 @@ import { collabClientDir } from './support/collabClient.js';
  *
  * The production Player in the production Present view plays a deck whose
  * transition rewrites an equation, and whose last slide builds an equation
- * term by term and pulses a term and a whole object. What is asserted is
- * what the eye would catch: every shared glyph starts exactly where it was
- * painted on the slide before and ends exactly where the settled slide
- * paints it, and a pulse leaves every glyph where it found it.
+ * term by term, then pulses, jiggles and pops a term and a whole object.
+ * What is asserted is what the eye would catch: every shared glyph starts
+ * exactly where it was painted on the slide before and ends exactly where the
+ * settled slide paints it, and an emphasis leaves every glyph where it found
+ * it.
  */
 
 const DECK_ID = 'equation-motion';
@@ -77,6 +78,9 @@ function fixtureDeck(): Deck {
       { id: 't', trigger: click, action: { type: 'terms', target: 'terms', value: 'appear' } },
       { id: 'p', trigger: click, action: { type: 'pulse', target: 'terms', value: null, term: '2', scale: 1.6, duration: 800 } },
       { id: 'q', trigger: click, action: { type: 'pulse', target: 'box', value: null, scale: 1.6, duration: 800 } },
+      { id: 'j', trigger: click, action: { type: 'jiggle', target: 'terms', value: null, term: '2', duration: 700 } },
+      { id: 'k', trigger: click, action: { type: 'jiggle', target: 'box', value: null, duration: 700 } },
+      { id: 'o', trigger: click, action: { type: 'pop', target: 'box', value: null, scale: 1.3, duration: 450 } },
     ]),
   ];
   return deck;
@@ -258,5 +262,68 @@ describe.skipIf(!electronBinary)('equation motion in the browser', () => {
     expect(box.peak.x + box.peak.width / 2).toBeCloseTo(box.before.x + box.before.width / 2, 1);
     expect(box.after).toEqual(box.before);
     expect(box.transform).toBe('none');
+
+    // --- Jiggle a term, then the whole object: a seventh of the way in,
+    // each has turned its first 5° about its own centre, and afterwards
+    // nothing has moved.
+    const turnOf = `((node) => { const m = new DOMMatrix(getComputedStyle(node).transform);
+      return Math.atan2(m.b, m.a) * 180 / Math.PI; })`;
+    const centre = `((r) => ({ x: r.left + r.width / 2, y: r.top + r.height / 2 }))`;
+    const termJiggle = await page.evaluate<{ turn: number; before: { x: number; y: number }; during: { x: number; y: number }; after: Record<string, Box[]>; ghosts: number }>(`(async () => {
+      const before = ${centre}(document.querySelector('[data-element-id="terms"] .katex-html .step-2').getBoundingClientRect());
+      window.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      const animations = document.getAnimations();
+      for (const a of animations) { a.pause(); a.currentTime = 100; }
+      const copy = [...document.querySelectorAll('.slide > .morph-ghost')].pop();
+      const turn = ${turnOf}(copy);
+      const during = ${centre}(copy.querySelector('.katex-html .step-2').getBoundingClientRect());
+      for (const a of animations) a.finish();
+      await new Promise((resolve) => requestAnimationFrame(() => setTimeout(resolve, 0)));
+      return { turn, before, during, after: ${GLYPHS}, ghosts: document.querySelectorAll('.slide > .morph-ghost').length };
+    })()`);
+    expect(termJiggle.turn).toBeCloseTo(5, 1);
+    expect(termJiggle.during.x).toBeCloseTo(termJiggle.before.x, 0);
+    expect(termJiggle.during.y).toBeCloseTo(termJiggle.before.y, 0);
+    expect(termJiggle.ghosts).toBe(0);
+    expect(termJiggle.after.terms).toEqual(atStart.terms);
+
+    const boxJiggle = await page.evaluate<{ turn: number; before: { x: number; y: number }; during: { x: number; y: number }; after: string; transform: string }>(`(() => {
+      const node = document.querySelector('[data-element-id="box"]');
+      const before = ${centre}(node.getBoundingClientRect());
+      const settled = JSON.stringify(node.getBoundingClientRect());
+      window.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      const animations = document.getAnimations();
+      for (const a of animations) { a.pause(); a.currentTime = 100; }
+      const turn = ${turnOf}(node);
+      const during = ${centre}(node.getBoundingClientRect());
+      for (const a of animations) a.finish();
+      return { turn, before, during, after: JSON.stringify(node.getBoundingClientRect()) === settled ? 'same' : 'moved',
+        transform: getComputedStyle(node).transform };
+    })()`);
+    expect(boxJiggle.turn).toBeCloseTo(5, 1);
+    expect(boxJiggle.during.x).toBeCloseTo(boxJiggle.before.x, 1);
+    expect(boxJiggle.during.y).toBeCloseTo(boxJiggle.before.y, 1);
+    expect(boxJiggle.after).toBe('same');
+    expect(boxJiggle.transform).toBe('none');
+
+    // --- Pop the object: 1.3× a quarter of the way in, then for a moment
+    // smaller than it was, and back exactly.
+    const pop = await page.evaluate<{ before: number; peak: number; under: number; after: number; transform: string }>(`(() => {
+      const node = document.querySelector('[data-element-id="box"]');
+      const width = () => node.getBoundingClientRect().width;
+      const before = width();
+      window.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      const animations = document.getAnimations();
+      for (const a of animations) { a.pause(); a.currentTime = 112.5; }
+      const peak = width();
+      for (const a of animations) a.currentTime = 247.5;
+      const under = width();
+      for (const a of animations) a.finish();
+      return { before, peak, under, after: width(), transform: getComputedStyle(node).transform };
+    })()`);
+    expect(pop.peak / pop.before).toBeCloseTo(1.3, 2);
+    expect(pop.under / pop.before).toBeCloseTo(0.91, 2);
+    expect(pop.after).toBe(pop.before);
+    expect(pop.transform).toBe('none');
   }, 240_000);
 });
