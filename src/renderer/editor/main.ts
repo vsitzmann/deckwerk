@@ -28,6 +28,7 @@ import { CANVAS_NOTICE_EVENT, EditorCanvas } from './canvas.js';
 import { CssEditor } from './cssEditor.js';
 import { Inspector } from './inspector.js';
 import { HistoryPanel } from './historyPanel.js';
+import { ObjectList } from './objectList.js';
 import { authoredHtmlSync, fileName } from './htmlCompile.js';
 import { createShapeInsertPicker, createTableInsertPicker, insertText } from './elementCreation.js';
 import { createToolbarPicker, createToolbarSplitButton } from './exportPicker.js';
@@ -151,12 +152,15 @@ new TimelinePanel(el('timeline'), store);
 new HistoryPanel(el('history'), store);
 const rail = new SlideRail(el('rail'), store);
 rail.onStatus = setStatusMessage;
+const objectList = new ObjectList(el('objects'), store);
 const editorBody = el('body');
 const railDivider = document.createElement('div');
 railDivider.className = 'panel-resize-divider panel-resize-rail';
 const sideDivider = document.createElement('div');
 sideDivider.className = 'panel-resize-divider panel-resize-side';
-editorBody.append(railDivider, sideDivider);
+const objectsDivider = document.createElement('div');
+objectsDivider.className = 'panel-resize-divider panel-resize-objects';
+editorBody.append(railDivider, sideDivider, objectsDivider);
 makePanelResizable(railDivider, {
   storageKey: 'deckwerk.editor.rail-size',
   sizeTarget: editorBody,
@@ -176,6 +180,17 @@ makePanelResizable(sideDivider, {
     initial: 320,
     min: 240,
     max: () => Math.min(560, window.innerWidth - 500),
+    edge: 'left',
+  },
+});
+makePanelResizable(objectsDivider, {
+  storageKey: 'deckwerk.editor.object-list-size',
+  sizeTarget: editorBody,
+  width: {
+    property: '--object-list-width',
+    initial: 220,
+    min: 160,
+    max: () => Math.min(420, window.innerWidth - 760),
     edge: 'left',
   },
 });
@@ -999,6 +1014,7 @@ function buildTabs(): void {
     b.addEventListener('click', () => showPanel(panel.id));
     tabs.appendChild(b);
   }
+  tabs.after(objectList.toggle);
   showPanel('inspector');
 }
 

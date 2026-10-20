@@ -186,7 +186,7 @@ body.welcome-mode .deck-only { display: none; }
 #body {
   position: relative;
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
   min-height: 0;
 }
 
@@ -225,6 +225,10 @@ body.welcome-mode .deck-only { display: none; }
 .panel-resize-divider .panel-resize-handle { pointer-events: auto; }
 .panel-resize-rail { left: calc(var(--rail-width, 220px) - 4px); }
 .panel-resize-side { right: calc(var(--sidebar-width, 320px) - 4px); }
+.panel-resize-objects {
+  right: calc(var(--sidebar-width, 320px) + var(--object-list-width, 220px) - 4px);
+}
+#objects[hidden] ~ .panel-resize-objects { display: none; }
 
 .panel-resize-left,
 .panel-resize-right {
@@ -538,6 +542,7 @@ body.panel-resizing iframe { pointer-events: none; }
 
 #body.welcome-mode { grid-template-columns: 1fr; }
 #body.welcome-mode > #rail,
+#body.welcome-mode > #objects,
 #body.welcome-mode > #side,
 #body.welcome-mode > .panel-resize-divider { display: none; }
 .canvas-host.welcome-mode .stage { display: none; }
@@ -1608,7 +1613,8 @@ input[type="range"] { accent-color: var(--accent); padding: 0; background: trans
   background: var(--panel-2);
 }
 
-.build-element-row {
+.build-element-row,
+.object-list-row {
   display: block;
   overflow: hidden;
   width: 100%;
@@ -1623,9 +1629,11 @@ input[type="range"] { accent-color: var(--accent); padding: 0; background: trans
   cursor: pointer;
 }
 
-.build-element-row:hover { background: rgb(255 255 255 / 6%); }
+.build-element-row:hover,
+.object-list-row:hover:not(.locked) { background: rgb(255 255 255 / 6%); }
 
-.build-element-row.selected {
+.build-element-row.selected,
+.object-list-row.selected {
   background: var(--accent-soft, rgb(59 130 246 / 22%));
   box-shadow: inset 2px 0 0 var(--accent);
 }
@@ -3645,9 +3653,10 @@ button.deck-picker-row.active { border-color: var(--accent); }
 .web-export-detail { margin: 0; min-height: 3.6em; color: var(--muted); font-size: 12px; line-height: 1.5; }
 .pdf-export-builds { padding: 8px 0 4px; }
 
-/* Object names in the build and Morph lists carry colour swatches so two
-   shapes of the same geometry are still told apart at a glance. */
+/* Object names in the build, Morph and object lists carry colour swatches so
+   two shapes of the same geometry are still told apart at a glance. */
 .build-element-row,
+.object-list-row,
 .build-target-name,
 .morph-list-label {
   display: flex;
@@ -4522,14 +4531,16 @@ button.ghost:hover:not(:disabled) { color: var(--text); background: transparent;
   max-height: calc(8 * 26px + 2px);
   margin-bottom: 8px;
 }
-.build-element-row {
+.build-element-row,
+.object-list-row {
   position: relative;
   height: 26px;
   padding: 0 8px 0 26px;
   align-items: center;
 }
 /* A glyph for the element's kind, in the row's own gutter. */
-.build-element-row::before {
+.build-element-row::before,
+.object-list-row::before {
   content: 'T';
   position: absolute;
   left: 8px;
@@ -4540,17 +4551,28 @@ button.ghost:hover:not(:disabled) { color: var(--text); background: transparent;
   font: 10px var(--mono);
   text-align: center;
 }
-.build-element-row[data-kind="list"]::before { content: '≔'; }
-.build-element-row[data-kind="table"]::before { content: '▦'; }
-.build-element-row[data-kind="image"]::before { content: '▣'; }
-.build-element-row[data-kind="video"]::before { content: '▶'; }
-.build-element-row[data-kind="html"]::before { content: '<>'; letter-spacing: -0.1em; }
-.build-element-row[data-kind="unsupported"]::before { content: '?'; }
-.build-element-row[data-kind^="shape"]::before { content: '■'; }
-.build-element-row[data-kind="shape-ellipse"]::before { content: '●'; }
-.build-element-row[data-kind="shape-line"]::before { content: '╱'; }
-.build-element-row[data-kind="shape-arrow"]::before { content: '→'; }
-.build-element-row[data-kind="shape-path"]::before { content: '∿'; }
+.build-element-row[data-kind="list"]::before,
+.object-list-row[data-kind="list"]::before { content: '≔'; }
+.build-element-row[data-kind="table"]::before,
+.object-list-row[data-kind="table"]::before { content: '▦'; }
+.build-element-row[data-kind="image"]::before,
+.object-list-row[data-kind="image"]::before { content: '▣'; }
+.build-element-row[data-kind="video"]::before,
+.object-list-row[data-kind="video"]::before { content: '▶'; }
+.build-element-row[data-kind="html"]::before,
+.object-list-row[data-kind="html"]::before { content: '<>'; letter-spacing: -0.1em; }
+.build-element-row[data-kind="unsupported"]::before,
+.object-list-row[data-kind="unsupported"]::before { content: '?'; }
+.build-element-row[data-kind^="shape"]::before,
+.object-list-row[data-kind^="shape"]::before { content: '■'; }
+.build-element-row[data-kind="shape-ellipse"]::before,
+.object-list-row[data-kind="shape-ellipse"]::before { content: '●'; }
+.build-element-row[data-kind="shape-line"]::before,
+.object-list-row[data-kind="shape-line"]::before { content: '╱'; }
+.build-element-row[data-kind="shape-arrow"]::before,
+.object-list-row[data-kind="shape-arrow"]::before { content: '→'; }
+.build-element-row[data-kind="shape-path"]::before,
+.object-list-row[data-kind="shape-path"]::before { content: '∿'; }
 /* The steps that animate this element, drawn as the same orange badge the
    canvas uses, from a data attribute so the row's text stays its name. */
 .build-element-row[data-steps]::after {
@@ -4733,3 +4755,59 @@ button.ghost:hover:not(:disabled) { color: var(--text); background: transparent;
   text-decoration-thickness: 1.5px;
   text-underline-offset: 3px;
 }
+
+/* --- object list --- */
+
+/* The tab strip shares its row with the object list's toggle. */
+.side-tabs-row { display: flex; }
+.side-tabs-row > #side-tabs { flex: 1; min-width: 0; padding-right: 0; }
+
+#side .object-list-toggle {
+  flex: none;
+  display: grid;
+  place-items: center;
+  margin: 8px 10px 0 6px;
+  padding: 0 8px;
+  border: 1px solid transparent;
+  border-bottom-color: var(--line);
+  background: transparent;
+  color: var(--muted);
+}
+#side .object-list-toggle:hover:not(:disabled) { border-color: transparent; border-bottom-color: var(--line); background: transparent; color: var(--text); }
+#side .object-list-toggle[aria-pressed="true"] { color: var(--accent); }
+
+#objects {
+  display: flex;
+  flex-direction: column;
+  width: var(--object-list-width, 220px);
+  min-height: 0;
+  overflow: hidden;
+  border-left: 1px solid var(--line);
+  background: var(--panel);
+}
+#objects[hidden] { display: none; }
+
+.object-list-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 12px 14px 2px;
+}
+.object-list-header .insp-title { margin: 0; }
+.object-list-count { color: var(--muted); font: 10.5px var(--mono); }
+.object-list-hint { margin: 0; padding: 0 14px 8px; }
+.object-list-rows {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding-bottom: 12px;
+  border-top: 1px solid var(--line);
+}
+.object-list-empty { margin: 0; padding: 10px 14px; }
+.object-list-row { flex: none; padding-right: 14px; cursor: grab; }
+.object-list-row:focus-visible { outline: 1px solid var(--accent); outline-offset: -1px; }
+.object-list-row.locked { color: var(--muted); cursor: default; }
+.object-list-row.dragging { opacity: 0.4; }
+.object-list-row.drop-before { box-shadow: inset 0 2px 0 var(--accent); }
+.object-list-row.drop-after { box-shadow: inset 0 -2px 0 var(--accent); }
