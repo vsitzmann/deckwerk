@@ -52,6 +52,34 @@ function undoShortcutLabel(): string {
   return /Mac|iPhone|iPad/i.test(platform) ? '⌘Z' : 'Ctrl+Z';
 }
 
+/**
+ * A slide drawn at full canvas size by the player's own renderer, for a
+ * miniature the caller scales down: the rail's thumbnails, and the object
+ * list's, which draw a slide holding one object. Media load a single frame
+ * and freeze into stills; nothing plays.
+ */
+export function previewSurface(slide: Slide, canvas: { w: number; h: number }): HTMLElement {
+  const inner = document.createElement('div');
+  inner.className = 'rail-thumb-inner';
+  inner.style.width = `${canvas.w}px`;
+  inner.style.height = `${canvas.h}px`;
+  if (slide.background.color) inner.style.background = slide.background.color;
+  inner.appendChild(
+    renderSlide(slide, { resolveSrc: (src) => window.api.assetUrl(src), mediaPreload: 'metadata', deferVideoSrc: true }),
+  );
+  for (const video of inner.querySelectorAll('video')) {
+    video.removeAttribute('autoplay');
+    // renderSlide's 'metadata' preload decodes exactly one poster frame,
+    // so the thumbnail shows a picture without buffering the clip.
+    video.pause();
+  }
+  // A thumbnail needs one frame, never playback, and a live <video> is
+  // what makes it go black when the page is hidden, occluded or holding
+  // more players than Chromium wants resident. Freeze it into a still.
+  freezePreviewVideos(inner);
+  return inner;
+}
+
 export interface RailPresence {
   name: string;
   color: string;
@@ -517,25 +545,7 @@ export class SlideRail {
       thumb.className = 'rail-thumb';
       thumb.dataset.canvasWidth = String(deck.canvas.w);
       thumb.style.setProperty('--rail-thumb-aspect', `${deck.canvas.w} / ${deck.canvas.h}`);
-      const inner = document.createElement('div');
-      inner.className = 'rail-thumb-inner';
-      inner.style.width = `${deck.canvas.w}px`;
-      inner.style.height = `${deck.canvas.h}px`;
-      if (slide.background.color) inner.style.background = slide.background.color;
-      inner.appendChild(
-        renderSlide(slide, { resolveSrc: (src) => window.api.assetUrl(src), mediaPreload: 'metadata', deferVideoSrc: true }),
-      );
-      for (const video of inner.querySelectorAll('video')) {
-        video.removeAttribute('autoplay');
-        // renderSlide's 'metadata' preload decodes exactly one poster frame,
-        // so the thumbnail shows a picture without buffering the clip.
-        video.pause();
-      }
-      // A thumbnail needs one frame, never playback, and a live <video> is
-      // what makes it go black when the page is hidden, occluded or holding
-      // more players than Chromium wants resident. Freeze it into a still.
-      freezePreviewVideos(inner);
-      thumb.appendChild(inner);
+      thumb.appendChild(previewSurface(slide, deck.canvas));
       this.scaleThumb(thumb);
       this.thumbResizeObserver?.observe(thumb);
       this.thumbCache.set(slide, thumb);
