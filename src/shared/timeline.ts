@@ -55,10 +55,16 @@ export function popScales(entry: TimelineEntry): { from: number; peak: number } 
 /**
  * The animated forms an `appear` or a `disappear` can take. `dissolve` fades
  * any element in or out; `blur` fades it in out of a blur (or out into one);
- * `draw` draws a line or arrow in from its start; `pop` (appear only) grows the
- * element in from smaller, overshoots a little and settles.
+ * `draw` draws a line or arrow in from its start. The rest are appear only:
+ * `pop` grows the element in from smaller, overshoots a little and settles.
  */
-export type BuildEffect = 'draw' | 'dissolve' | 'blur' | 'pop';
+export const BUILD_EFFECTS = ['draw', 'dissolve', 'blur', 'pop'] as const;
+export type BuildEffect = typeof BUILD_EFFECTS[number];
+
+/** Whether a build's value names one of the animated effects. */
+export function isBuildEffectName(value: unknown): value is BuildEffect {
+  return (BUILD_EFFECTS as readonly unknown[]).includes(value);
+}
 
 /** The effect an entry animates with, or null for an instant change. */
 export function buildEffect(entry: TimelineEntry, slide: Slide): BuildEffect | null {
@@ -66,17 +72,24 @@ export function buildEffect(entry: TimelineEntry, slide: Slide): BuildEffect | n
   if ((value === 'dissolve' || value === 'blur') && (type === 'appear' || type === 'disappear')) {
     return value;
   }
-  if (value === 'pop' && type === 'appear') return 'pop';
-  if (isDrawBuild(entry, slide)) return 'draw';
+  if (value === 'draw') return isDrawBuild(entry, slide) ? 'draw' : null;
+  if (isBuildEffectName(value) && type === 'appear') return value;
   return null;
+}
+
+/** Milliseconds an effect takes when its entry does not say. */
+export function defaultEffectDuration(effect: BuildEffect): number {
+  switch (effect) {
+    case 'draw': return DEFAULT_DRAW_DURATION;
+    case 'blur': return DEFAULT_BLUR_DURATION;
+    case 'pop': return DEFAULT_POP_DURATION;
+    default: return DEFAULT_DISSOLVE_DURATION;
+  }
 }
 
 /** Milliseconds an animated build takes. */
 export function effectDuration(entry: TimelineEntry, effect: BuildEffect): number {
-  return entry.action.duration
-    ?? (effect === 'draw' ? DEFAULT_DRAW_DURATION
-      : effect === 'blur' ? DEFAULT_BLUR_DURATION
-      : effect === 'pop' ? DEFAULT_POP_DURATION : DEFAULT_DISSOLVE_DURATION);
+  return entry.action.duration ?? defaultEffectDuration(effect);
 }
 
 /**

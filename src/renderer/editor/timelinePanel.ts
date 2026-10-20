@@ -1,12 +1,10 @@
 import type { Slide, TimelineEntry } from '@shared/deck.js';
 import { makeId } from '@shared/geometry.js';
 import {
-  DEFAULT_BLUR_DURATION,
-  DEFAULT_POP_DURATION,
-  DEFAULT_DISSOLVE_DURATION,
-  DEFAULT_DRAW_DURATION,
   buildEffect,
+  defaultEffectDuration,
   effectDuration,
+  isBuildEffectName,
   popScales,
   expandTimeline,
   groupIntoSteps,
@@ -292,16 +290,13 @@ export class TimelinePanel {
         const [type, variant] = action.value.split(':') as ['appear', string | undefined];
         e.action.type = type;
         if (variant === 'paragraph') e.action.value = 'byParagraph';
-        else if (variant === 'draw' || variant === 'dissolve' || variant === 'blur' || variant === 'pop') e.action.value = variant;
-        else if (['byParagraph', 'draw', 'dissolve', 'blur', 'pop'].includes(String(e.action.value))) {
+        else if (isBuildEffectName(variant)) e.action.value = variant;
+        else if (e.action.value === 'byParagraph' || isBuildEffectName(e.action.value)) {
           e.action.value = null;
         }
         // A time belongs to an animation; switching between two keeps the author's.
-        if (variant === 'draw' || variant === 'dissolve' || variant === 'blur' || variant === 'pop') {
-          e.action.duration ??= variant === 'draw' ? DEFAULT_DRAW_DURATION
-            : variant === 'blur' ? DEFAULT_BLUR_DURATION
-            : variant === 'pop' ? DEFAULT_POP_DURATION : DEFAULT_DISSOLVE_DURATION;
-        } else delete e.action.duration;
+        if (isBuildEffectName(variant)) e.action.duration ??= defaultEffectDuration(variant);
+        else delete e.action.duration;
         if (variant !== 'pop') {
           delete e.action.popFrom;
           delete e.action.popPeak;
