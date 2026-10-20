@@ -99,6 +99,7 @@ export class TimelinePanel {
     title.textContent = 'Build';
     header.appendChild(title);
     this.host.appendChild(header);
+    if (this.preview) this.host.appendChild(this.previewControls(slide.timeline.length > 0));
 
     const selection = this.store.get().selection;
 
@@ -181,9 +182,8 @@ export class TimelinePanel {
     add.addEventListener('click', () => this.addAnimationForSelection());
     elements.section.appendChild(add);
 
-    const { section: stepsSection, head: stepsHead } = panelSection('Build steps', 'build-steps-section');
+    const stepsSection = panelSection('Build steps', 'build-steps-section').section;
     this.host.appendChild(stepsSection);
-    if (this.preview && slide.timeline.length > 0) stepsHead.appendChild(this.previewControls());
 
     if (slide.timeline.length === 0) {
       const hint = document.createElement('p');
@@ -231,14 +231,16 @@ export class TimelinePanel {
    * Preview, as Keynote's Animate inspector has it: play the selected
    * element's build on the slide (or, with Shift, or nothing animated
    * selected, the whole slide). Play slide runs every click in turn. A
-   * playing preview's button turns into its Stop.
+   * playing preview's button turns into its Stop. They head the panel, so
+   * the row stays put as builds come and go; with none, they are disabled.
    */
-  private previewControls(): HTMLElement {
+  private previewControls(enabled: boolean): HTMLElement {
     const controls = document.createElement('div');
     controls.className = 'build-preview-controls';
     const selection = document.createElement('button');
     selection.type = 'button';
-    selection.className = 'ghost build-preview';
+    selection.className = 'build-preview';
+    selection.disabled = !enabled;
     selection.addEventListener('click', (event) => {
       if (!this.preview) return;
       if (this.previewStartedBy === 'selection') return this.preview.stop();
@@ -249,7 +251,8 @@ export class TimelinePanel {
     });
     const slide = document.createElement('button');
     slide.type = 'button';
-    slide.className = 'ghost build-preview-slide';
+    slide.className = 'build-preview-slide';
+    slide.disabled = !enabled;
     slide.addEventListener('click', () => {
       if (!this.preview) return;
       if (this.previewStartedBy === 'slide') return this.preview.stop();
@@ -268,16 +271,27 @@ export class TimelinePanel {
     if (!this.preview.playing) this.previewStartedBy = null;
     if (!this.previewButtons) return;
     const { selection, slide } = this.previewButtons;
-    const show = (button: HTMLButtonElement, active: boolean, label: string, title: string): void => {
-      button.textContent = active ? 'Stop' : label;
-      button.title = active ? 'Stop the preview (Esc)' : title;
-      button.classList.toggle('is-active', active);
+    const show = (
+      button: HTMLButtonElement, active: boolean, glyph: string, label: string, title: string,
+    ): void => {
+      const icon = document.createElement('span');
+      icon.className = 'build-preview-icon';
+      icon.setAttribute('aria-hidden', 'true');
+      icon.textContent = active ? '■' : glyph;
+      const text = document.createElement('span');
+      text.className = 'build-preview-label';
+      text.textContent = active ? 'Stop' : label;
+      button.replaceChildren(icon, text);
+      button.title = button.disabled ? 'Add an animation to preview it'
+        : active ? 'Stop the preview (Esc)' : title;
+      // The one playing takes the accent, so Stop is the first thing seen.
+      button.classList.toggle('primary', active);
       button.setAttribute('aria-pressed', String(active));
     };
-    show(selection, this.previewStartedBy === 'selection', 'Preview', this.preview.selectedSteps()
+    show(selection, this.previewStartedBy === 'selection', '▶', 'Preview', this.preview.selectedSteps()
       ? 'Play the selected build on the slide (Shift-click: the whole slide)'
       : 'Play this slide\'s builds (select an animated element to preview only its build)');
-    show(slide, this.previewStartedBy === 'slide', 'Play slide',
+    show(slide, this.previewStartedBy === 'slide', '▶▶', 'Play slide',
       'Play every build on this slide from the start, advancing through each click');
   }
 
