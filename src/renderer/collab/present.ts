@@ -166,6 +166,16 @@ function announceExit(): void {
   bus?.post({ kind: 'bye' });
 }
 
+/**
+ * Tell the editor tab which slide is showing, so ending the show — by any
+ * route, Escape out of fullscreen included — lands the editor there.
+ */
+function reportShownSlide(): void {
+  if (!embedded) return;
+  const slideId = deck?.slides[lastState.cursor.slide]?.id;
+  if (slideId) window.parent.postMessage({ type: 'present-at', slideId }, location.origin);
+}
+
 function exitPresentation(): void {
   remotes?.endAll();
   announceExit();
@@ -209,6 +219,7 @@ function publishState(cursor: Cursor, steps: number): void {
   };
   bus?.post({ kind: 'state', state: lastState });
   remotes?.publish();
+  reportShownSlide();
 }
 
 function advance(): void {
@@ -431,6 +442,7 @@ bus?.subscribe((message) => {
     lastState = message.state;
     speaker?.setState(message.state);
     remotes?.publish();
+    reportShownSlide();
     return;
   }
   if (message.kind === 'swap') {

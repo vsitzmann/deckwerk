@@ -31,12 +31,17 @@ export interface PresentOptions {
   speakerView?: boolean;
   /** Somewhere to report a blocked pop-up; presenting continues regardless. */
   onStatus?: (message: string) => void;
+  /** The show ended, by any route, while showing this slide. */
+  onEnd?: (slideId: string) => void;
 }
 
 let overlay: HTMLIFrameElement | null = null;
 let seedProvider: (() => PresentSeed) | null = null;
 /** The audience window opened for Speaker View, so ending here ends it too. */
 let audienceWindow: Window | null = null;
+/** The slide the presentation last reported showing, and who wants it at the end. */
+let shownSlideId: string | null = null;
+let onEnd: ((slideId: string) => void) | null = null;
 
 function teardown(): void {
   // Ending the presentation must take both surfaces with it. The audience
@@ -49,8 +54,13 @@ function teardown(): void {
   overlay.remove();
   overlay = null;
   seedProvider = null;
+  const ended = onEnd;
+  const slideId = shownSlideId;
+  onEnd = null;
+  shownSlideId = null;
   window.removeEventListener('message', onMessage);
   document.removeEventListener('fullscreenchange', onFullscreenChange);
+  if (ended && slideId) ended(slideId);
 }
 
 function onMessage(event: MessageEvent): void {
@@ -74,6 +84,11 @@ function onMessage(event: MessageEvent): void {
         location.origin,
       );
     }
+    return;
+  }
+  if (type === 'present-at') {
+    const slideId = (event.data as { slideId?: unknown }).slideId;
+    if (typeof slideId === 'string') shownSlideId = slideId;
     return;
   }
   if (type !== 'present-exit') return;
@@ -114,6 +129,7 @@ export function startPresenting(
 ): void {
   teardown();
   seedProvider = seed ?? null;
+  onEnd = options.onEnd ?? null;
 
   // Open the audience window first: it must happen synchronously inside the
   // gesture or the pop-up blocker takes it. A refusal is not fatal — fall back

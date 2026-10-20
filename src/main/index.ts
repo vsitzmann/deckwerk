@@ -1104,7 +1104,15 @@ function registerHandlers(): void {
       ? openSpeakerWindow(state, presenterDisplay.id, false)
       : null;
     audience.on('closed', () => {
-      if (state.present === audience) state.present = null;
+      if (state.present === audience) {
+        state.present = null;
+        // Leaving the show lands the editor where the show was, not where it
+        // started.
+        const ended = state.presentationState?.cursor.slide;
+        if (ended !== undefined && !state.editor.isDestroyed()) {
+          state.editor.webContents.send(IPC.presentEnded, ended);
+        }
+      }
       state.presentationDisplays = null;
       if (state.presenter && !state.presenter.isDestroyed()) state.presenter.close();
     });

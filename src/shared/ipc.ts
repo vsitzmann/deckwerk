@@ -38,6 +38,8 @@ export const IPC = {
   presentCursor: 'present:cursor',
   presentCommand: 'present:command',
   presentState: 'present:state',
+  /** The show ended; carries the slide index it was on, for the editor to land on. */
+  presentEnded: 'present:ended',
   trimOpen: 'trim:open',
   trimRun: 'trim:run',
   /** A poster frame for a preview surface, cut by ffmpeg in the main process. */
