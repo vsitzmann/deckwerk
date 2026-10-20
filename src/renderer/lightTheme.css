@@ -53,7 +53,6 @@
   --yellow: var(--amber-700);
   --build-orange: var(--amber-500);
   --comment: var(--amber-500);
-  --mark-text: var(--zinc-900);
   --scrim: color-mix(in oklch, var(--zinc-900) 28%, transparent);
   --shadow: 0 1px 2px rgb(0 0 0 / 12%);
 }
@@ -100,11 +99,8 @@
 :root[data-ui-theme="light"] .morph-modal > header h2 { color: var(--text); }
 :root[data-ui-theme="light"] .layout-editor-header > div:first-child span { color: var(--muted); }
 
-/* A build step's trigger is its headline, in text colour; the amber stays on
-   the numbered marks that tie the step to its object on the canvas. */
+/* A build step's trigger is its headline, in text colour. */
 :root[data-ui-theme="light"] .timeline-row select.build-trigger { border-color: var(--line); color: var(--text); }
-:root[data-ui-theme="light"] .build-num,
-:root[data-ui-theme="light"] .build-badge { color: var(--mark-text); }
 
 /* A colour written as raw CSS rather than taken from the theme: a warning. */
 :root[data-ui-theme="light"] .color-picker-css-badge { background: var(--yellow); }
