@@ -1,5 +1,6 @@
 import type { SlideElement } from './deck.js';
 import { braceDepthOf, bracePath } from './brace.js';
+import { strokeStyleOf, styledPathSvg } from './strokeStyles.js';
 
 /**
  * A shape as SVG markup.
@@ -55,10 +56,22 @@ export function shapeSvg(el: Shape, options: { drawProgress?: number } = {}): st
         + ` stroke-linejoin="round" ${paint}/>`;
       break;
     case 'path': {
-      if (el.arrowEnd || el.arrowStart) defs = arrowMarker(markerId, stroke, arrowHeadSize(el));
-      const markers = (el.arrowStart ? ` marker-start="url(#${markerId})"` : '')
+      const styled = strokeStyleOf(el) !== 'pen' && stroke !== 'none' && el.strokeWidth > 0;
+      // A brush's outline is filled, not stroked, so it carries no markers.
+      const headed = (el.arrowEnd || el.arrowStart) && strokeStyleOf(el) !== 'brush';
+      if (headed) defs = arrowMarker(markerId, stroke, arrowHeadSize(el));
+      const markers = !headed ? '' : (el.arrowStart ? ` marker-start="url(#${markerId})"` : '')
         + (el.arrowEnd ? ` marker-end="url(#${markerId})"` : '');
-      node = `<path d="${escapeAttr(el.path ?? '')}" stroke-linecap="round"`
+      const d = escapeAttr(el.path ?? '');
+      if (styled) {
+        const drawn = styledPathSvg(el, {
+          fill, stroke, markers, d, view, id: `${el.id}`.replace(/[^a-zA-Z0-9_-]/g, '-'),
+        });
+        defs += drawn.defs;
+        node = drawn.node;
+        break;
+      }
+      node = `<path d="${d}" stroke-linecap="round"`
         + ` stroke-linejoin="round"${markers} ${paint}/>`;
       break;
     }

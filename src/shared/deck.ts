@@ -320,6 +320,10 @@ const VideoElement = BaseElement.extend({
     .default(null),
 });
 
+/** The ways a path's stroke can be drawn; the first is the default. */
+export const STROKE_STYLES = ['pen', 'brush', 'pencil', 'marker'] as const;
+export type StrokeStyle = (typeof STROKE_STYLES)[number];
+
 const ShapeElement = BaseElement.extend({
   type: z.literal('shape'),
   shape: z.enum(['rect', 'ellipse', 'line', 'arrow', 'path', 'brace']),
@@ -348,6 +352,13 @@ const ShapeElement = BaseElement.extend({
     .object({ w: z.number().positive(), h: z.number().positive() })
     .nullable()
     .default(null),
+  /**
+   * How a path's stroke is drawn: `pen` (absent too) a clean even line,
+   * `brush` swelling in the middle and tapering at its ends, `pencil` thin,
+   * grainy and a little translucent, `marker` a flat, see-through
+   * highlighter. Only paths take it; see `strokeStyles.ts`.
+   */
+  strokeStyle: z.enum(STROKE_STYLES).optional(),
   arrowStart: z.boolean().default(false),
   arrowEnd: z.boolean().default(false),
   /**
