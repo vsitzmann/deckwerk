@@ -4,6 +4,7 @@ import { resolveState, type SlideState } from '@shared/timeline.js';
 import { pdfSteps } from '@shared/pdfExport.js';
 import { renderSlide } from '../player/render.js';
 import { applyStaticSlideState } from '../player/staticState.js';
+import { prepareCodeBlocks } from '../player/codeRender.js';
 
 /**
  * Building the printable pages for a deck, shared by the two ways a PDF is
@@ -46,6 +47,7 @@ export function buildPrintPages(
   options: PrintPagesOptions,
 ): PrintPage[] {
   const { deck, mode, includeHidden = false, slideFilter = null, resolveSrc } = options;
+  prepareCodeBlocks(deck);
   const pages: PrintPage[] = [];
   for (const slide of deck.slides) {
     if (slide.skipped && !includeHidden) continue;

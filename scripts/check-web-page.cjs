@@ -11,7 +11,11 @@ const { app, BrowserWindow } = require('electron');
 
 const job = JSON.parse(readFileSync(process.argv[2], 'utf8'));
 const { pagePath, width, height, screenshot, settleMs } = job;
-app.disableHardwareAcceleration();
+// The GPU stays on here, unlike the slide captures: a web element built on
+// WebGL (three.js) cannot get a context without it on macOS, and would
+// check as broken and leave a blank poster though it runs fine in the app.
+// This window only runs a page and takes one screenshot, so it does not need
+// the pixel-exact software rendering the slide comparisons rely on.
 
 app.whenReady().then(async () => {
   const win = new BrowserWindow({

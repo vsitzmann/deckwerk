@@ -357,6 +357,37 @@ const WebElement = BaseElement.extend({
 });
 
 /**
+ * Source code, shown as a syntax-highlighted block.
+ *
+ * The code is stored exactly as written — indentation, tabs and blank lines
+ * are content — and highlighted with Shiki wherever the element renders
+ * (shared/codeHighlight.ts), from grammars and colour schemes bundled with
+ * the app, so a talk highlights the same with or without a network. Nothing
+ * about the colours is stored: changing `scheme` or `language` re-colours
+ * the same text, and the `deck` scheme follows the deck's theme colours.
+ */
+const CodeElement = BaseElement.extend({
+  type: z.literal('code'),
+  /** The source text, verbatim. Lines are split on `\n`. */
+  code: z.string().default(''),
+  /**
+   * Grammar id, e.g. `python`, `cuda`, `bash` (CODE_LANGUAGES in
+   * shared/codeBlocks.ts). A string rather than an enum so a deck naming a
+   * language this build does not know still opens; it renders as plain text.
+   */
+  language: z.string().default('plaintext'),
+  /**
+   * Colour scheme id, e.g. `github-dark` or `deck` (CODE_SCHEMES in
+   * shared/codeBlocks.ts). Unknown ids render in the default scheme.
+   */
+  scheme: z.string().default('github-dark'),
+  /** Type size in canvas pixels; line height and padding scale with it. */
+  fontSize: z.number().positive().default(28),
+  /** A gutter of line numbers down the left edge. */
+  lineNumbers: z.boolean().default(false),
+});
+
+/**
  * Produced by the Keynote importer when it meets an object it cannot map.
  * Carries the original geometry so the slide stays laid out correctly, and
  * renders as a labelled dashed box so the gap is visible rather than silent.
@@ -375,6 +406,7 @@ export const ElementSchema = z.discriminatedUnion('type', [
   ShapeElement,
   HtmlElement,
   WebElement,
+  CodeElement,
   UnsupportedElement,
 ]);
 
@@ -412,6 +444,7 @@ export const ActionSchema = z.object({
     'seek',
     'addClass',
     'removeClass',
+    'lines',
   ]),
   target: Id,
   /**
@@ -420,6 +453,11 @@ export const ActionSchema = z.object({
    * line or arrow in from its start to its end. On `appear` or `disappear`,
    * `"dissolve"` fades the element in or out and `"blur"` brings it into (or
    * takes it out of) focus as it fades.
+   *
+   * On `lines` (a code element only), the line steps it builds through, e.g.
+   * `"1-3; 4-6; highlight:5"`: each `;`-separated step reveals its lines, or
+   * with `highlight:` dims every other line (shared/codeBlocks.ts). One entry
+   * fans out into one step per part, as a by-paragraph reveal does.
    */
   value: z.union([z.number(), z.string()]).nullable().default(null),
   /** Milliseconds an animated build takes (`"draw"`, `"dissolve"`, `"blur"`). */
@@ -519,6 +557,7 @@ export type ImageEl = z.infer<typeof ImageElement>;
 export type VideoEl = z.infer<typeof VideoElement>;
 export type ShapeEl = z.infer<typeof ShapeElement>;
 export type HtmlEl = z.infer<typeof HtmlElement>;
+export type CodeEl = z.infer<typeof CodeElement>;
 export type UnsupportedEl = z.infer<typeof UnsupportedElement>;
 export type Slide = z.infer<typeof SlideSchema>;
 export type Comment = z.infer<typeof CommentSchema>;

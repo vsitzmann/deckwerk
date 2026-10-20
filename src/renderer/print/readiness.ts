@@ -1,6 +1,7 @@
 import type { Slide } from '@shared/deck.js';
 import type { SlideState } from '@shared/timeline.js';
 import { whenWebElementReady } from '../player/render.js';
+import { whenCodeHighlighted } from '../player/codeRender.js';
 
 const eventOrTimeout = (target: EventTarget, event: string, timeout = 5_000): Promise<void> =>
   new Promise((resolve) => {
@@ -155,6 +156,7 @@ export async function waitForPdfPage(
   // reveals itself on its own clock; print it once it has, or once its reveal
   // timeout has shown it as it is.
   await Promise.all([...page.querySelectorAll('.web-body')].map(whenWebElementReady));
+  await Promise.all([...page.querySelectorAll('.code-body')].map(whenCodeHighlighted));
   await Promise.all([...page.querySelectorAll<HTMLVideoElement>('video')].map(async (video) => {
     const id = video.closest<HTMLElement>('[data-element-id]')?.dataset.elementId;
     const element = slide.elements.find((candidate) => candidate.id === id);
