@@ -99,12 +99,12 @@ async function exercise(cdp: Cdp): Promise<void> {
     };
     sample();
   })()`);
-  await cdp.clickByText('.build-preview', 'Preview', 'Preview');
-  expect(await cdp.evaluate<string>(`document.querySelector('.build-preview').textContent`)).toBe('Stop');
+  await cdp.click('.build-preview', 'Preview');
+  expect(await cdp.evaluate<string>(`document.querySelector('.build-preview .build-preview-label').textContent`)).toBe('Stop');
   expect(await cdp.evaluate<boolean>(`document.querySelector('#canvas').classList.contains('build-previewing')`))
     .toBe(true);
   // It ends by itself once the dissolve and a short pause are over.
-  await eventually(async () => cdp.evaluate<string>(`document.querySelector('.build-preview').textContent`),
+  await eventually(async () => cdp.evaluate<string>(`document.querySelector('.build-preview .build-preview-label').textContent`),
     'the preview never ended', (label) => label === 'Preview');
   const sampled = await cdp.evaluate<{ opacities: number[]; frames: number[][]; label: string }>(
     'window.__preview');
@@ -119,7 +119,7 @@ async function exercise(cdp: Cdp): Promise<void> {
   expect(await cdp.evaluate(editingView)).toEqual(before);
 
   // A click on the canvas ends a preview early and selects nothing.
-  await cdp.clickByText('.build-preview', 'Preview', 'Preview');
+  await cdp.click('.build-preview', 'Preview');
   await wait(200);
   const [x, y] = before.stage as number[];
   await cdp.clickAt(x + 20, y + 20);
@@ -129,7 +129,7 @@ async function exercise(cdp: Cdp): Promise<void> {
   expect(await cdp.evaluate(editingView)).toEqual(before);
 
   // So does Escape, which the editor would otherwise take as "deselect".
-  await cdp.clickByText('.build-preview-slide', 'Play slide', 'Play slide');
+  await cdp.click('.build-preview-slide', 'Play slide');
   await wait(200);
   await cdp.key('Escape', 27);
   await eventually(async () => cdp.evaluate<boolean>(`!document.querySelector('.build-preview-shield')`),

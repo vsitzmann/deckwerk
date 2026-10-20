@@ -5,6 +5,9 @@ import { BuildPreview, PREVIEW_PAUSE_MS } from '../src/renderer/editor/buildPrev
 import { EditorStore } from '../src/renderer/editor/store.js';
 import { TimelinePanel } from '../src/renderer/editor/timelinePanel.js';
 
+/** A preview button's label, beside its icon. */
+const label = (button: HTMLButtonElement) => button.querySelector('.build-preview-label')?.textContent;
+
 function text(id: string, y: number) {
   return { id, type: 'text' as const, x: 0, y, w: 100, h: 50, rot: 0, z: 1,
     opacity: 1, class: [], style: {}, html: id, align: 'left' as const, valign: 'top' as const };
@@ -76,14 +79,17 @@ describe('Build panel Preview', () => {
     const { store, preview, button, slideButton, visible } = setup();
     store.select(['a']);
     const deckBefore = store.get().deck;
-    expect(button().textContent).toBe('Preview');
+    expect(label(button())).toBe('Preview');
     expect(button().title).toMatch(/selected build/);
 
     button().click();
     expect(preview.playing).toBe('builds');
-    expect(button().textContent).toBe('Stop');
+    expect(label(button())).toBe('Stop');
     expect(button().getAttribute('aria-pressed')).toBe('true');
-    expect(slideButton().textContent).toBe('Play slide');
+    expect(button().querySelector('.build-preview-icon')?.textContent).toBe('■');
+    expect(button().classList.contains('primary')).toBe(true);
+    expect(slideButton().classList.contains('primary')).toBe(false);
+    expect(label(slideButton())).toBe('Play slide');
     // The first click's builds ran -- a and the b that comes with it -- and
     // nothing of the second click.
     expect([visible('a'), visible('b'), visible('c')]).toEqual([true, true, false]);
@@ -94,8 +100,9 @@ describe('Build panel Preview', () => {
     await vi.advanceTimersByTimeAsync(PREVIEW_PAUSE_MS);
     expect(preview.playing).toBeNull();
     expect(ended).toBe(1);
-    expect(button().textContent).toBe('Preview');
+    expect(label(button())).toBe('Preview');
     expect(button().getAttribute('aria-pressed')).toBe('false');
+    expect(button().classList.contains('primary')).toBe(false);
     // Nothing about the document moved.
     expect(store.get().deck).toBe(deckBefore);
     expect(store.canUndo()).toBe(false);
@@ -116,7 +123,7 @@ describe('Build panel Preview', () => {
     button().click();
     expect(preview.playing).toBeNull();
     expect(ended).toBe(1);
-    expect(button().textContent).toBe('Preview');
+    expect(label(button())).toBe('Preview');
 
     // Escape ends the preview and goes no further: the editor's own Escape
     // (deselect, leave a mode) never hears it.
@@ -142,8 +149,8 @@ describe('Build panel Preview', () => {
     store.select(['c']);
     slideButton().click();
     expect(preview.playing).toBe('slide');
-    expect(slideButton().textContent).toBe('Stop');
-    expect(button().textContent).toBe('Preview');
+    expect(label(slideButton())).toBe('Stop');
+    expect(label(button())).toBe('Preview');
     // The slide arrives with nothing built yet.
     expect([visible('a'), visible('b'), visible('c')]).toEqual([false, false, false]);
     await vi.advanceTimersByTimeAsync(PREVIEW_PAUSE_MS);
@@ -152,13 +159,13 @@ describe('Build panel Preview', () => {
     expect(visible('c')).toBe(true);
     await vi.advanceTimersByTimeAsync(PREVIEW_PAUSE_MS);
     expect(preview.playing).toBeNull();
-    expect(slideButton().textContent).toBe('Play slide');
+    expect(label(slideButton())).toBe('Play slide');
 
     // Shift on Preview is the same whole-slide run, and Preview is its Stop.
     button().dispatchEvent(new MouseEvent('click', { bubbles: true, shiftKey: true }));
     expect(preview.playing).toBe('slide');
-    expect(button().textContent).toBe('Stop');
-    expect(slideButton().textContent).toBe('Play slide');
+    expect(label(button())).toBe('Stop');
+    expect(label(slideButton())).toBe('Play slide');
     button().click();
     expect(preview.playing).toBeNull();
   });
@@ -173,10 +180,17 @@ describe('Build panel Preview', () => {
     expect(preview.playing).toBeNull();
   });
 
-  it('offers no preview on a slide without builds', () => {
+  it('heads the panel with an icon on each, disabled on a slide without builds', () => {
+    const { host, button, slideButton } = setup();
+    expect(host.firstElementChild?.nextElementSibling?.classList.contains('build-preview-controls')).toBe(true);
+    expect(button().querySelector('.build-preview-icon')?.textContent).toBe('▶');
+    expect(slideButton().querySelector('.build-preview-icon')?.textContent).toBe('▶▶');
+    expect(button().disabled).toBe(false);
+
     const store = new EditorStore(emptyDeck('Empty'), '/tmp/build-preview');
-    const host = document.createElement('div');
-    new TimelinePanel(host, store, new BuildPreview(canvas, store));
-    expect(host.querySelector('.build-preview')).toBeNull();
+    const empty = document.createElement('div');
+    new TimelinePanel(empty, store, new BuildPreview(canvas, store));
+    expect(empty.querySelector<HTMLButtonElement>('.build-preview')!.disabled).toBe(true);
+    expect(empty.querySelector<HTMLButtonElement>('.build-preview-slide')!.disabled).toBe(true);
   });
 });
