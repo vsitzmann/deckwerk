@@ -71,7 +71,10 @@ describe('how long the bar stays', () => {
     const leaderVideo = document.createElement('video');
     node.appendChild(leaderVideo);
     root.appendChild(node);
-    const off = mountGroupScrubber(root, { members: [video('lone')], leaderVideo, setPlaying: () => {} });
+    const lone = video('lone');
+    const off = mountGroupScrubber(root, {
+      members: [lone], clock: () => ({ element: lone, video: leaderVideo }), setPlaying: () => {},
+    });
     return { root, leaderVideo, off };
   }
   const visible = (root: HTMLElement) => root.querySelector('.sync-scrubber')!.classList.contains('visible');

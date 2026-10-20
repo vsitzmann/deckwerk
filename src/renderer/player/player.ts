@@ -14,7 +14,15 @@ import {
   stepCount,
 } from '@shared/timeline.js';
 import { arrowHeadSize, shapeSvg } from '@shared/shapeSvg.js';
-import { followerCorrection, followerTarget, syncGroupsOf } from './videoSync.js';
+import {
+  followerCorrection,
+  groupClock,
+  memberFrame,
+  SYNC_BLACK_CLASS,
+  syncGroupsOf,
+  type SyncClip,
+} from './videoSync.js';
+import { syncLengthOf, type SyncLength } from '@shared/compare.js';
 import { mountGroupScrubber } from './groupScrubber.js';
 import { mountWipeDrag } from './wipe.js';
 import {
@@ -87,6 +95,22 @@ const VIDEO_WARM_TIMEOUT_MS = 20_000;
 /** How long the lookahead waits for the visible slide before starting anyway. */
 const LOOKAHEAD_HOLD_MS = 2_000;
 
+type VideoEl = Extract<SlideElement, { type: 'video' }>;
+
+/** A sync group's clock, as `Player.groupClockOf` finds it on the stage. */
+interface GroupClock {
+  /** Which member keeps time, and its element and `<video>`. */
+  index: number;
+  element: VideoEl;
+  video: HTMLVideoElement;
+  /** Every member's `<video>` and clip, in member order. */
+  videos: Array<HTMLVideoElement | null>;
+  clips: SyncClip[];
+  mode: SyncLength;
+  /** The group's length in seconds, once every member's is known. */
+  length: number | null;
+}
+
 /** A video the lookahead wants decoded before its slide is reached. */
 interface VideoWarmTarget {
   src: string;
@@ -157,6 +181,12 @@ export class Player {
    * bookkeeping for keeping them that way. See `keepPlaying`.
    */
   private intendedPlaying = new Set<string>();
+  /**
+   * Sync-group followers that have run out before their group and wait,
+   * paused, for it to loop back (`syncVideoGroups`). Intended to play, yet
+   * not to be restarted by the play recovery.
+   */
+  private parkedVideos = new Set<HTMLVideoElement>();
   private playAttempts = new Map<string, number>();
   private playWatched = new WeakSet<HTMLVideoElement>();
   /** Videos whose retry budget ran out mid-load, waiting for `canplay` to try again. */
@@ -1401,11 +1431,9 @@ export class Player {
       if (el.type !== 'video' || el.controls || (el.syncGroup && groups.has(el.syncGroup))) continue;
       groups.set(`solo:${el.id}`, [el]);
     }
-    const videoOf = (id: string) => this.stage
-      .querySelector<HTMLElement>(`[data-element-id="${CSS.escape(id)}"]`)?.querySelector('video') ?? null;
     const setPlaying = (members: Array<{ id: string }>, playing: boolean): void => {
       for (const el of members) {
-        const video = videoOf(el.id);
+        const video = this.videoFor(el.id);
         if (!video || video.dataset.holdFrame === 'true') continue;
         const node = video.closest<HTMLElement>('[data-element-id]');
         if (playing && !this.blanked && node?.style.visibility !== 'hidden') {
@@ -1426,11 +1454,10 @@ export class Player {
     this.compareMounted = true;
     this.mediaListeners.push(mountWipeDrag(root));
     for (const [group, members] of groups) {
-      const leaderVideo = videoOf(members[0].id);
-      if (!leaderVideo) continue;
+      if (!this.groupClockOf(members)) continue;
       this.mediaListeners.push(mountGroupScrubber(root, {
         members,
-        leaderVideo,
+        clock: () => this.groupClockOf(members),
         setPlaying: (playing) => {
           if (playing) this.heldGroups.delete(group);
           else this.heldGroups.add(group);
@@ -1443,52 +1470,88 @@ export class Player {
   }
 
   /**
+   * The member of a sync group that keeps its time (videoSync.ts
+   * `groupClock`): the shortest clip when the group is cut to the shortest,
+   * the longest otherwise, once every member's length is known. Null while
+   * the clock's `<video>` is not on the stage.
+   */
+  private groupClockOf(members: readonly VideoEl[]): GroupClock | null {
+    const videos = members.map((el) => this.videoFor(el.id));
+    const mode = syncLengthOf(members);
+    const clips = members.map((el, index) => ({
+      start: el.start, end: el.end, duration: videos[index]?.duration ?? Number.NaN,
+    }));
+    const { clock, length } = groupClock(clips, mode);
+    const video = videos[clock];
+    return video ? { index: clock, element: members[clock], video, videos, clips, mode, length } : null;
+  }
+
+  private videoFor(id: string): HTMLVideoElement | null {
+    return this.stage
+      .querySelector<HTMLElement>(`[data-element-id="${CSS.escape(id)}"]`)?.querySelector('video') ?? null;
+  }
+
+  /**
    * Run one clock per sync group on the slide.
    *
-   * The leader plays as any video does; every frame, each follower is put
-   * where the leader's elapsed time says it should be. Followers keep their
-   * own play intent (a follower hidden by a build stays paused), but while
-   * they play they are kept in step: by bending the playback rate for small
-   * drift, so nothing visibly jumps, and by seeking after a loop or a stall.
+   * The clock clip plays as any video does, and its own end -- a loop back to
+   * its in-point, or a stop -- is the group's. Every frame, each other member
+   * is put where the clock's elapsed time says it should be. Followers keep
+   * their own play intent (a follower hidden by a build stays paused), but
+   * while they play they are kept in step: by bending the playback rate for
+   * small drift, so nothing visibly jumps, and by seeking after a loop or a
+   * stall. A follower that runs out before the group parks on its last frame,
+   * or under black, until the group loops back to it.
    */
   private syncVideoGroups(slide: Slide): void {
     for (const [group, members] of syncGroupsOf(slide.elements)) {
       if (this.syncedGroups.has(group)) continue;
-      const videoOf = (id: string) => this.stage
-        .querySelector<HTMLElement>(`[data-element-id="${CSS.escape(id)}"]`)?.querySelector('video') ?? null;
-      const leaderVideo = videoOf(members[0].id);
-      if (!leaderVideo) continue;
+      if (!this.groupClockOf(members)) continue;
       this.syncedGroups.add(group);
-      const leader = members[0];
-      const followers = members.slice(1);
+      const touched = new Set<HTMLVideoElement>();
       let frame = 0;
       const tick = (): void => {
-        if (!leaderVideo.isConnected) return;
-        const playing = !leaderVideo.paused;
-        for (const el of followers) {
-          const video = videoOf(el.id);
-          if (!video || video.dataset.holdFrame === 'true') continue;
-          const target = followerTarget(
-            { time: leaderVideo.currentTime, start: leader.start },
-            { start: el.start, end: el.end, duration: video.duration },
-          );
-          const followerPlaying = playing && this.intendedPlaying.has(el.id);
-          const fix = followerCorrection(video.currentTime, target, followerPlaying);
+        const clock = this.groupClockOf(members);
+        if (!clock || !clock.video.isConnected) return;
+        const playing = !clock.video.paused;
+        const elapsed = clock.video.currentTime - clock.element.start;
+        members.forEach((el, index) => {
+          const video = clock.videos[index];
+          if (!video || video.dataset.holdFrame === 'true') return;
+          touched.add(video);
+          if (index === clock.index) {
+            // The clock may have been a follower a moment ago, before every
+            // length was known: it runs at the presenter's speed, unbent.
+            this.parkedVideos.delete(video);
+            video.classList.remove(SYNC_BLACK_CLASS);
+            if (video.playbackRate !== this.videoRate) video.playbackRate = this.videoRate;
+            return;
+          }
+          const at = memberFrame(elapsed, clock.clips[index], clock.mode, clock.length);
+          if (at.ended) this.parkedVideos.add(video);
+          else this.parkedVideos.delete(video);
+          video.classList.toggle(SYNC_BLACK_CLASS, at.black);
+          const followerPlaying = playing && !at.ended && this.intendedPlaying.has(el.id);
+          const fix = followerCorrection(video.currentTime, at.time, followerPlaying);
           if (fix.seek !== undefined) video.currentTime = fix.seek;
           // The correction bends the presenter's speed, not normal speed.
           const rate = fix.rate * this.videoRate;
           if (video.playbackRate !== rate) video.playbackRate = rate;
-          if (!playing && !video.paused) video.pause();
+          if (!followerPlaying && !video.paused) video.pause();
           if (followerPlaying && video.paused) void video.play().catch(() => {});
-        }
+        });
         frame = requestAnimationFrame(tick);
       };
-      frame = requestAnimationFrame(tick);
+      // The first correction is made now rather than on the next frame: a
+      // build step tears the previous tick down, and a parked clip would
+      // otherwise show its last frame for one frame between the two.
+      tick();
       this.mediaListeners.push(() => {
         cancelAnimationFrame(frame);
-        for (const el of followers) {
-          const video = videoOf(el.id);
-          if (video) video.playbackRate = this.videoRate;
+        for (const video of touched) {
+          this.parkedVideos.delete(video);
+          video.classList.remove(SYNC_BLACK_CLASS);
+          video.playbackRate = this.videoRate;
         }
       });
     }
@@ -1535,6 +1598,9 @@ export class Player {
   }
 
   private retryPlayback(id: string, video: HTMLVideoElement): void {
+    // A clip that played to its end has stopped, not been interrupted:
+    // `play()` would start it over. Nor is a parked follower to be restarted.
+    if (this.playedToEnd(id, video) || this.parkedVideos.has(video)) return;
     if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
     const attempts = this.playAttempts.get(id) ?? 0;
     if (attempts >= PLAY_RETRY_LIMIT) {
@@ -1570,6 +1636,16 @@ export class Player {
       });
     }, PLAY_RETRY_DELAY_MS);
     this.pending.push(timer);
+  }
+
+  /**
+   * Whether a video that does not loop has finished: at the end of its file,
+   * or held at its out-point by `enforceTrim`.
+   */
+  private playedToEnd(id: string, video: HTMLVideoElement): boolean {
+    if (video.ended) return true;
+    const el = this.deck.slides[this.cursor.slide]?.elements.find((candidate) => candidate.id === id);
+    return el?.type === 'video' && !el.loop && el.end !== null && video.currentTime >= el.end - 0.05;
   }
 
   /**

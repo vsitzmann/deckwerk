@@ -154,6 +154,25 @@ describe('player: slide changes', () => {
     expect(play).not.toHaveBeenCalled();
   });
 
+  it('lets a clip that does not loop stay finished', async () => {
+    // Reaching the end of the file fires `pause` too. The recovery took it
+    // for an interruption and called play(), which starts a finished clip
+    // over: a clip without Loop looped anyway, and a synced group set to end
+    // never did.
+    const deck = deckOf({ elements: [video({ id: 'v', autoplay: true, loop: false })] });
+    const { stage } = mount(deck);
+    const node = stage.querySelector<HTMLVideoElement>('video')!;
+    const play = vi.fn(() => Promise.resolve());
+    node.play = play as unknown as HTMLVideoElement['play'];
+
+    Object.defineProperty(node, 'paused', { value: true, configurable: true });
+    Object.defineProperty(node, 'ended', { value: true, configurable: true });
+    node.dispatchEvent(new Event('pause'));
+
+    await new Promise((resolve) => setTimeout(resolve, 700));
+    expect(play).not.toHaveBeenCalled();
+  });
+
   it('does not animate a Morph between slides that are not neighbours', () => {
     // The flag describes a slide's relation to the one before it, so jumping
     // from the rail (or stepping backwards) used to animate two slides that

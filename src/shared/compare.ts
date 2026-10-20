@@ -16,6 +16,17 @@ import type { SlideElement } from './deck.js';
  */
 
 export type CompareMedia = Extract<SlideElement, { type: 'image' | 'video' }>;
+type VideoElement = Extract<SlideElement, { type: 'video' }>;
+
+/**
+ * How long a sync group runs when its clips differ in length: to the shortest
+ * (the rest are cut), or to the longest with the shorter ones holding their
+ * last frame or going black. See `syncLength` on VideoElement.
+ */
+export type SyncLength = NonNullable<VideoElement['syncLength']>;
+export const SYNC_LENGTHS: readonly SyncLength[] = ['shortest', 'hold', 'black'];
+/** Cut to the shortest: what a side-by-side or a wipe wants, two clips showing the same moment. */
+export const DEFAULT_SYNC_LENGTH: SyncLength = 'shortest';
 
 /** Where a new wipe puts its divider: the middle, so both sides read equally. */
 export const DEFAULT_WIPE = 0.5;
@@ -69,6 +80,26 @@ export function compareFromDataset(
   return { compare: 'wipe', wipe: clampWipe(value) };
 }
 
+/**
+ * A group's length setting: the first member in z that carries one, as the
+ * rest of a group is read from its lowest member. Members written by the app
+ * all agree; an author who sets it on one clip only still gets it.
+ */
+export function syncLengthOf(members: readonly SlideElement[]): SyncLength {
+  const carrier = [...members]
+    .sort((a, b) => a.z - b.z)
+    .find((element) => element.type === 'video' && element.syncLength);
+  return (carrier?.type === 'video' && carrier.syncLength) || DEFAULT_SYNC_LENGTH;
+}
+
+/** Read `data-sync-length` back; anything but the three settings is dropped. */
+export function syncLengthFromDataset(
+  dataset: Record<string, string | undefined>,
+): { syncLength?: SyncLength } {
+  const value = dataset.syncLength?.trim();
+  return SYNC_LENGTHS.includes(value as SyncLength) ? { syncLength: value as SyncLength } : {};
+}
+
 /** Elements in the order they paint: `z`, ties broken by array position, as the renderer draws them. */
 function paintOrder(elements: readonly SlideElement[]): SlideElement[] {
   return elements
@@ -109,6 +140,36 @@ export function wipeLayers(
   const top = above.find((candidate) =>
     isCompareMedia(candidate) && candidate.compare === 'wipe' && partnerOf(candidate, element));
   return top ? { top: top as CompareMedia, under: element } : null;
+}
+
+/**
+ * The wipe two elements make together, if they are its two layers (either
+ * way round). What the inspector, the canvas chip and the context menu ask
+ * of a two-picture selection: arrange it, or adjust the wipe it already is.
+ */
+export function wipeOfPair(
+  elements: readonly SlideElement[],
+  ids: readonly string[],
+): { top: CompareMedia; under: CompareMedia } | null {
+  if (ids.length !== 2 || ids[0] === ids[1]) return null;
+  const first = elements.find((element) => element.id === ids[0]);
+  if (!first) return null;
+  const layers = wipeLayers(elements, first);
+  if (!layers?.under) return null;
+  const pair = [layers.top.id, layers.under.id];
+  return pair.includes(ids[0]) && pair.includes(ids[1])
+    ? { top: layers.top, under: layers.under }
+    : null;
+}
+
+/** The two selected ids when they could become, or already are, a wipe: two images or videos. */
+export function wipeCandidates(
+  elements: readonly SlideElement[],
+  ids: Iterable<string>,
+): [CompareMedia, CompareMedia] | null {
+  const chosen = [...ids].map((id) => elements.find((element) => element.id === id));
+  if (chosen.length !== 2 || chosen.some((element) => !element || !isCompareMedia(element))) return null;
+  return chosen as [CompareMedia, CompareMedia];
 }
 
 /**

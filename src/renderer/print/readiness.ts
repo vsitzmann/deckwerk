@@ -2,6 +2,12 @@ import type { Slide } from '@shared/deck.js';
 import type { SlideState } from '@shared/timeline.js';
 import { WEB_BRIDGE_SOURCE, type WebBridgeEvent } from '@shared/webBridge.js';
 import { WEB_REVEAL_TIMEOUT_MS, whenWebElementReady } from '../player/render.js';
+import {
+  SYNC_BLACK_CLASS,
+  stillGroupFrames,
+  syncGroupsOf,
+  type MemberFrame,
+} from '../player/videoSync.js';
 
 const eventOrTimeout = (target: EventTarget, event: string, timeout = 5_000): Promise<void> =>
   new Promise((resolve) => {
@@ -191,6 +197,13 @@ export interface PdfReadinessOptions {
    * have this page load that video and capture the frame itself.
    */
   stillFor?: (src: string, time: number) => Promise<string | null>;
+  /**
+   * The length in seconds of deck video `src`, probed outside the page
+   * (ffprobe on the server or in the desktop's main process), or null when it
+   * cannot say; the page then reads the video's metadata. Only a synced clip
+   * without an out-point asks: its length decides its group's frame.
+   */
+  durationFor?: (src: string) => Promise<number | null>;
   /** Called as videos settle, with how many are done out of how many. */
   onProgress?: (settled: number, total: number) => void;
 }
@@ -198,12 +211,82 @@ export interface PdfReadinessOptions {
 /** Stills are only image fetches; the server bounds its own ffmpeg work. */
 const STILL_CONCURRENCY = 4;
 
+type PrintPage = { page: HTMLElement; slide: Slide; state: SlideState };
+
+const elementIdOf = (video: HTMLVideoElement): string | undefined =>
+  video.closest<HTMLElement>('[data-element-id]')?.dataset.elementId;
+
+/** A video's duration from its metadata alone: no frame is decoded. */
+async function metadataDuration(url: string): Promise<number> {
+  const probe = document.createElement('video');
+  probe.preload = 'metadata';
+  probe.muted = true;
+  probe.src = url;
+  await Promise.race([eventOrTimeout(probe, 'loadedmetadata'), eventOrTimeout(probe, 'error')]);
+  const duration = probe.duration;
+  probe.removeAttribute('src');
+  try { probe.load(); } catch { /* jsdom stub */ }
+  return duration;
+}
+
+/**
+ * Show black where a synced clip has run out before its group, as the
+ * presentation does (compare.css darkens the picture to black). Its whole box
+ * is black whatever frame it would hold, so nothing is fetched or decoded.
+ */
+function replaceWithBlack(video: HTMLVideoElement): void {
+  const canvas = document.createElement('canvas');
+  canvas.width = 1;
+  canvas.height = 1;
+  canvas.className = video.className;
+  canvas.classList.add(SYNC_BLACK_CLASS);
+  canvas.style.cssText = video.style.cssText;
+  // Transparent pixels over a black ground: the box prints black, letterbox
+  // included, as a frame darkened by the class would.
+  canvas.style.backgroundColor = 'black';
+  video.replaceWith(canvas);
+}
+
+/**
+ * Where each member of a print page's sync groups belongs, by element id.
+ *
+ * A synced group is pinned as one: its clips' lengths decide which frame,
+ * or black, each shows at this build step (videoSync.ts), exactly as the
+ * presentation would. A trimmed clip's length is its trim; only a clip that
+ * runs to the end of its file needs that file's duration, which `durationOf`
+ * gets as cheaply as it can.
+ */
+async function syncedFramesOf(
+  { page, slide, state }: PrintPage,
+  durationOf: (src: string, url: string | null) => Promise<number>,
+): Promise<Map<string, MemberFrame>> {
+  const frames = new Map<string, MemberFrame>();
+  const groups = syncGroupsOf(slide.elements);
+  if (groups.size === 0) return frames;
+  const urls = new Map<string, string>();
+  for (const video of page.querySelectorAll<HTMLVideoElement>('video')) {
+    const id = elementIdOf(video);
+    const url = video.dataset.printSrc ?? video.getAttribute('src');
+    if (id && url) urls.set(id, url);
+  }
+  for (const members of groups.values()) {
+    const lengths = new Map(await Promise.all(members.map(async (member) => [
+      member.id,
+      // An out-point is the clip's length (clipSpan caps it by the file's).
+      member.end ?? await durationOf(member.src, urls.get(member.id) ?? null),
+    ] as const)));
+    const memberFrames = stillGroupFrames(members, (id) => lengths.get(id) ?? Number.NaN, state.seeks);
+    for (const [id, frame] of memberFrames) frames.set(id, frame);
+  }
+  return frames;
+}
+
 async function settlePrintVideos(
-  pages: Array<{ page: HTMLElement; slide: Slide; state: SlideState }>,
+  pages: PrintPage[],
   options: PdfReadinessOptions,
 ): Promise<void> {
-  const videos = pages.flatMap(({ page, slide, state }) =>
-    [...page.querySelectorAll<HTMLVideoElement>('video')].map((video) => ({ video, slide, state })));
+  const videos = pages.flatMap((entry) =>
+    [...entry.page.querySelectorAll<HTMLVideoElement>('video')].map((video) => ({ video, entry })));
   let settled = 0;
   options.onProgress?.(0, videos.length);
   // A video that has to play in the page is the expensive case: one at a time.
@@ -213,10 +296,43 @@ async function settlePrintVideos(
     live = run.catch(() => {});
     return run;
   };
-  const settleOne = async ({ video, slide, state }: typeof videos[number]): Promise<void> => {
-    const id = video.closest<HTMLElement>('[data-element-id]')?.dataset.elementId;
+  // Every build stage repeats a slide's clips: probe each file once.
+  const durations = new Map<string, Promise<number>>();
+  const durationOf = (src: string, url: string | null): Promise<number> => {
+    let duration = durations.get(src);
+    if (!duration) {
+      duration = (async () => {
+        const probed = await options.durationFor?.(src).catch(() => null);
+        if (typeof probed === 'number' && Number.isFinite(probed) && probed > 0) return probed;
+        return url ? metadataDuration(url) : Number.NaN;
+      })();
+      durations.set(src, duration);
+    }
+    return duration;
+  };
+  const syncedFrames = new Map<PrintPage, Promise<Map<string, MemberFrame>>>();
+  const syncedFramesFor = (entry: PrintPage): Promise<Map<string, MemberFrame>> => {
+    let frames = syncedFrames.get(entry);
+    if (!frames) {
+      frames = syncedFramesOf(entry, durationOf);
+      syncedFrames.set(entry, frames);
+    }
+    return frames;
+  };
+  const settleOne = async ({ video, entry }: typeof videos[number]): Promise<void> => {
+    const { slide, state } = entry;
+    const id = elementIdOf(video);
     const element = slide.elements.find((candidate) => candidate.id === id);
-    const at = element?.type === 'video' ? state.seeks.get(element.id) ?? element.start : 0;
+    const synced = id && element?.type === 'video' && element.syncGroup
+      ? (await syncedFramesFor(entry)).get(id)
+      : undefined;
+    if (synced?.black) {
+      replaceWithBlack(video);
+      options.onProgress?.(++settled, videos.length);
+      return;
+    }
+    const at = synced?.time
+      ?? (element?.type === 'video' ? state.seeks.get(element.id) ?? element.start : 0);
     const url = element?.type === 'video' && options.stillFor
       ? await options.stillFor(element.src, at).catch(() => null)
       : null;

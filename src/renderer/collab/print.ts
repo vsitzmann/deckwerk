@@ -61,6 +61,13 @@ const stillUrl = (src: string, time: number): Promise<string> => Promise.resolve
   `/api/video-still?${new URLSearchParams({ deck: deckId!, src, t: String(time) }).toString()}`,
 );
 
+/** A synced clip's length, from the server's ffprobe (`/api/probe`). */
+const durationFor = async (src: string): Promise<number | null> => {
+  const response = await fetch(`/api/probe?${new URLSearchParams({ deck: deckId!, src }).toString()}`);
+  if (!response.ok) return null;
+  return ((await response.json()) as { duration?: number | null }).duration ?? null;
+};
+
 function hiddenTabHint(): void {
   if (document.visibilityState === 'visible') return;
   status.textContent = 'Switch to this tab to finish preparing the PDF.';
@@ -114,7 +121,7 @@ void (async () => {
     }
   };
   const settled = await Promise.race([
-    waitForPdfDocument(pages, { stillFor: stillUrl, onProgress }).then(() => true),
+    waitForPdfDocument(pages, { stillFor: stillUrl, durationFor, onProgress }).then(() => true),
     new Promise<boolean>((resolve) => {
       stalled = resolve;
       armStallTimer();

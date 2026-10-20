@@ -16,10 +16,15 @@ const BAR_HEIGHT = 48;
 const BAR_INSET = 16;
 
 export interface GroupTransport {
-  /** The group's members, leader (lowest z) first, as `syncGroupsOf` returns them. */
+  /** The group's members, lowest in z first, as `syncGroupsOf` returns them. */
   members: VideoElement[];
-  /** The leader's `<video>`: the clock the rest of the group follows. */
-  leaderVideo: HTMLVideoElement;
+  /**
+   * The member that keeps the group's time and its `<video>`: the one the
+   * rest follow, whose trim window is the group's length (videoSync.ts
+   * `groupClock`). Asked afresh each time, since it is only settled once
+   * every member's length is known.
+   */
+  clock(): { element: VideoElement; video: HTMLVideoElement } | null;
   /** Start or stop the whole group, as the presenter's own intent. */
   setPlaying(playing: boolean): void;
   /** The slide's playback speed and a way to set it (videoRate.ts). Without them the bar has no speed control. */
@@ -33,12 +38,13 @@ const PAUSE_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true">'
 
 /**
  * One transport for a sync group while presenting: play/pause for all of it
- * and a scrubber over the leader's trim window, in a slim bar along the
- * bottom of the group's combined box.
+ * and a scrubber over the group's length -- the trim window of the clip that
+ * keeps its time -- in a slim bar along the bottom of the group's combined
+ * box.
  *
- * Only the leader is driven. The followers already track its clock every
- * frame (Player.syncVideoGroups), so seeking the leader moves the whole group
- * and nothing here can fight that loop.
+ * Only the clock clip is driven. The followers already track it every frame
+ * (Player.syncVideoGroups), so seeking it moves the whole group and nothing
+ * here can fight that loop.
  *
  * The bar is part of the presenter's hand, not of the slide: it appears only
  * while the pointer is over the group (and fades with the idle cursor, so
@@ -48,13 +54,12 @@ const PAUSE_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true">'
  * advancing the deck. Returns the teardown.
  */
 export function mountGroupScrubber(root: HTMLElement, group: GroupTransport): () => void {
-  const { leaderVideo, members } = group;
-  const leader = members[0];
+  const { members } = group;
   const bounds = unionBox(members)!;
 
   const bar = document.createElement('div');
   bar.className = 'sync-scrubber';
-  bar.dataset.syncGroup = leader.syncGroup ?? '';
+  bar.dataset.syncGroup = members[0].syncGroup ?? '';
   bar.setAttribute('aria-hidden', 'true');
   Object.assign(bar.style, {
     left: `${bounds.x + BAR_INSET}px`,
@@ -105,24 +110,28 @@ export function mountGroupScrubber(root: HTMLElement, group: GroupTransport): ()
   };
   root.appendChild(bar);
 
-  const playable = (): { start: number; end: number } | null =>
-    trimWindow(leader, leaderVideo.duration);
+  const playable = (): { video: HTMLVideoElement; start: number; end: number } | null => {
+    const keeper = group.clock();
+    const span = keeper && trimWindow(keeper.element, keeper.video.duration);
+    return keeper && span ? { video: keeper.video, ...span } : null;
+  };
+  const clockPaused = (): boolean => group.clock()?.video.paused ?? true;
 
   let shownPlaying: boolean | null = null;
   const paint = (): void => {
-    const playing = !leaderVideo.paused;
+    const playing = !clockPaused();
     if (playing !== shownPlaying) {
       shownPlaying = playing;
       play.innerHTML = playing ? PAUSE_ICON : PLAY_ICON;
       play.title = playing ? 'Pause the group' : 'Play the group';
     }
     const span = playable();
-    const at = span ? scrubFraction(leaderVideo.currentTime, span) : 0;
+    const at = span ? scrubFraction(span.video.currentTime, span) : 0;
     const percent = `${(at * 100).toFixed(2)}%`;
     fill.style.width = percent;
     thumb.style.left = percent;
     clock.textContent = span
-      ? `${formatClock(leaderVideo.currentTime - span.start)} / ${formatClock(span.end - span.start)}`
+      ? `${formatClock(span.video.currentTime - span.start)} / ${formatClock(span.end - span.start)}`
       : '';
     if (speed && speedThumb && speedLabel && group.getRate) {
       const rate = group.getRate();
@@ -146,9 +155,10 @@ export function mountGroupScrubber(root: HTMLElement, group: GroupTransport): ()
   const setVisible = (on: boolean): void => {
     // A capture pins every video to one frame and owns it; the bar is never
     // part of what it photographs.
-    if (on && leaderVideo.dataset.holdFrame === 'true') on = false;
+    const video = group.clock()?.video;
+    if (on && video?.dataset.holdFrame === 'true') on = false;
     // Nor is there a bar over a video a later build has yet to reveal.
-    if (on && leaderVideo.closest<HTMLElement>('[data-element-id]')?.style.visibility === 'hidden') on = false;
+    if (on && video?.closest<HTMLElement>('[data-element-id]')?.style.visibility === 'hidden') on = false;
     if (on === visible) return;
     visible = on;
     bar.classList.toggle('visible', on);
@@ -191,7 +201,7 @@ export function mountGroupScrubber(root: HTMLElement, group: GroupTransport): ()
 
   // --- play / pause -------------------------------------------------------
   const onPlay = (): void => {
-    group.setPlaying(leaderVideo.paused);
+    group.setPlaying(clockPaused());
     paint();
     hideLater();
   };
@@ -215,7 +225,7 @@ export function mountGroupScrubber(root: HTMLElement, group: GroupTransport): ()
     seekFrame = requestAnimationFrame(() => {
       seekFrame = 0;
       const span = playable();
-      if (span && pendingFraction !== null) leaderVideo.currentTime = scrubTime(pendingFraction, span);
+      if (span && pendingFraction !== null) span.video.currentTime = scrubTime(pendingFraction, span);
       pendingFraction = null;
       paint();
     });
@@ -226,7 +236,7 @@ export function mountGroupScrubber(root: HTMLElement, group: GroupTransport): ()
     dragging = event.pointerId;
     track.setPointerCapture?.(event.pointerId);
     bar.classList.add('scrubbing');
-    resume = !leaderVideo.paused;
+    resume = !clockPaused();
     if (resume) group.setPlaying(false);
     seek(fractionAt(event));
   };

@@ -35,6 +35,8 @@ void (async () => {
     // Cut by ffmpeg in the main process, like the rail's posters, so the
     // window never decodes every video in the deck at once.
     stillFor: async (src, time) => (await window.api.videoPoster({ src, time, print: true })).url,
+    // A synced clip's length, from ffprobe in the main process.
+    durationFor: async (src) => (await window.api.probeAsset(src)).duration,
   });
   document.documentElement.dataset.ready = 'true';
   window.api.pdfReady(jobId);
