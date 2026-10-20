@@ -186,7 +186,7 @@ body.welcome-mode .deck-only { display: none; }
 #body {
   position: relative;
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  grid-template-columns: auto auto minmax(0, 1fr) auto;
   min-height: 0;
 }
 
@@ -226,9 +226,9 @@ body.welcome-mode .deck-only { display: none; }
 .panel-resize-rail { left: calc(var(--rail-width, 220px) - 4px); }
 .panel-resize-side { right: calc(var(--sidebar-width, 320px) - 4px); }
 .panel-resize-objects {
-  right: calc(var(--sidebar-width, 320px) + var(--object-list-width, 220px) - 4px);
+  left: calc(var(--rail-width, 220px) + var(--object-list-width, 220px) - 4px);
 }
-#objects[hidden] ~ .panel-resize-objects { display: none; }
+#objects.collapsed ~ .panel-resize-objects { display: none; }
 
 .panel-resize-left,
 .panel-resize-right {
@@ -4531,16 +4531,14 @@ button.ghost:hover:not(:disabled) { color: var(--text); background: transparent;
   max-height: calc(8 * 26px + 2px);
   margin-bottom: 8px;
 }
-.build-element-row,
-.object-list-row {
+.build-element-row {
   position: relative;
   height: 26px;
   padding: 0 8px 0 26px;
   align-items: center;
 }
 /* A glyph for the element's kind, in the row's own gutter. */
-.build-element-row::before,
-.object-list-row::before {
+.build-element-row::before {
   content: 'T';
   position: absolute;
   left: 8px;
@@ -4551,28 +4549,17 @@ button.ghost:hover:not(:disabled) { color: var(--text); background: transparent;
   font: 10px var(--mono);
   text-align: center;
 }
-.build-element-row[data-kind="list"]::before,
-.object-list-row[data-kind="list"]::before { content: '≔'; }
-.build-element-row[data-kind="table"]::before,
-.object-list-row[data-kind="table"]::before { content: '▦'; }
-.build-element-row[data-kind="image"]::before,
-.object-list-row[data-kind="image"]::before { content: '▣'; }
-.build-element-row[data-kind="video"]::before,
-.object-list-row[data-kind="video"]::before { content: '▶'; }
-.build-element-row[data-kind="html"]::before,
-.object-list-row[data-kind="html"]::before { content: '<>'; letter-spacing: -0.1em; }
-.build-element-row[data-kind="unsupported"]::before,
-.object-list-row[data-kind="unsupported"]::before { content: '?'; }
-.build-element-row[data-kind^="shape"]::before,
-.object-list-row[data-kind^="shape"]::before { content: '■'; }
-.build-element-row[data-kind="shape-ellipse"]::before,
-.object-list-row[data-kind="shape-ellipse"]::before { content: '●'; }
-.build-element-row[data-kind="shape-line"]::before,
-.object-list-row[data-kind="shape-line"]::before { content: '╱'; }
-.build-element-row[data-kind="shape-arrow"]::before,
-.object-list-row[data-kind="shape-arrow"]::before { content: '→'; }
-.build-element-row[data-kind="shape-path"]::before,
-.object-list-row[data-kind="shape-path"]::before { content: '∿'; }
+.build-element-row[data-kind="list"]::before { content: '≔'; }
+.build-element-row[data-kind="table"]::before { content: '▦'; }
+.build-element-row[data-kind="image"]::before { content: '▣'; }
+.build-element-row[data-kind="video"]::before { content: '▶'; }
+.build-element-row[data-kind="html"]::before { content: '<>'; letter-spacing: -0.1em; }
+.build-element-row[data-kind="unsupported"]::before { content: '?'; }
+.build-element-row[data-kind^="shape"]::before { content: '■'; }
+.build-element-row[data-kind="shape-ellipse"]::before { content: '●'; }
+.build-element-row[data-kind="shape-line"]::before { content: '╱'; }
+.build-element-row[data-kind="shape-arrow"]::before { content: '→'; }
+.build-element-row[data-kind="shape-path"]::before { content: '∿'; }
 /* The steps that animate this element, drawn as the same orange badge the
    canvas uses, from a data attribute so the row's text stays its name. */
 .build-element-row[data-steps]::after {
@@ -4758,45 +4745,46 @@ button.ghost:hover:not(:disabled) { color: var(--text); background: transparent;
 
 /* --- object list --- */
 
-/* The tab strip shares its row with the object list's toggle. */
-.side-tabs-row { display: flex; }
-.side-tabs-row > #side-tabs { flex: 1; min-width: 0; padding-right: 0; }
-
-#side .object-list-toggle {
-  flex: none;
-  display: grid;
-  place-items: center;
-  margin: 8px 10px 0 6px;
-  padding: 0 8px;
-  border: 1px solid transparent;
-  border-bottom-color: var(--line);
-  background: transparent;
-  color: var(--muted);
-}
-#side .object-list-toggle:hover:not(:disabled) { border-color: transparent; border-bottom-color: var(--line); background: transparent; color: var(--text); }
-#side .object-list-toggle[aria-pressed="true"] { color: var(--accent); }
-
+/* A column between the rail and the canvas. Closed, it folds to a strip that
+   keeps only its toggle, so the list is always one click away. */
 #objects {
   display: flex;
   flex-direction: column;
   width: var(--object-list-width, 220px);
   min-height: 0;
   overflow: hidden;
-  border-left: 1px solid var(--line);
+  border-right: 1px solid var(--line);
   background: var(--panel);
 }
-#objects[hidden] { display: none; }
+#objects.collapsed { width: 36px; }
+#objects.collapsed > :not(.object-list-header),
+#objects.collapsed .object-list-header > :not(.object-list-toggle) { display: none; }
+#objects.collapsed .object-list-header { justify-content: center; padding: 8px 0; }
 
 .object-list-header {
   display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 8px;
-  padding: 12px 14px 2px;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px 2px 8px;
 }
-.object-list-header .insp-title { margin: 0; }
+.object-list-header .insp-title { flex: 1; margin: 0; }
 .object-list-count { color: var(--muted); font: 10.5px var(--mono); }
 .object-list-hint { margin: 0; padding: 0 14px 8px; }
+
+#objects .object-list-toggle {
+  flex: none;
+  display: grid;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--muted);
+  place-items: center;
+}
+#objects .object-list-toggle:hover:not(:disabled) { border-color: var(--line); background: var(--panel-2); color: var(--text); }
+#objects .object-list-toggle[aria-pressed="true"] { color: var(--accent); }
+
 .object-list-rows {
   flex: 1;
   min-height: 0;
@@ -4805,9 +4793,38 @@ button.ghost:hover:not(:disabled) { color: var(--text); background: transparent;
   border-top: 1px solid var(--line);
 }
 .object-list-empty { margin: 0; padding: 10px 14px; }
-.object-list-row { flex: none; padding-right: 14px; cursor: grab; }
+.object-list-row {
+  flex: none;
+  gap: 8px;
+  height: 46px;
+  padding: 0 14px 0 8px;
+  cursor: grab;
+}
 .object-list-row:focus-visible { outline: 1px solid var(--accent); outline-offset: -1px; }
 .object-list-row.locked { color: var(--muted); cursor: default; }
+.object-list-row.locked .object-list-thumb { opacity: 0.5; }
 .object-list-row.dragging { opacity: 0.4; }
 .object-list-row.drop-before { box-shadow: inset 0 2px 0 var(--accent); }
 .object-list-row.drop-after { box-shadow: inset 0 -2px 0 var(--accent); }
+
+/* The object's miniature, drawn by the player like a rail thumbnail. The box
+   matches THUMB_W x THUMB_H in objectList.ts. */
+.object-list-thumb {
+  position: relative;
+  flex: none;
+  overflow: hidden;
+  width: 54px;
+  height: 36px;
+  background: var(--bg);
+  /* Decorative: presses and drags belong to the row. */
+  pointer-events: none;
+}
+.object-list-thumb > .rail-thumb-inner { overflow: hidden; }
+/* The frame's stroke sits over the drawing, which fills the whole box. */
+.object-list-thumb::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  box-shadow: inset 0 0 0 1px var(--line);
+}
+.object-list-row.selected .object-list-thumb::after { box-shadow: inset 0 0 0 1px var(--accent); }

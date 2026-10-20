@@ -27,7 +27,7 @@ import { sidebarSelectionProbes } from './support/selectionSession.js';
  * selection, Cmd+A in both contexts, Backspace on a multi-slide rail
  * selection (which must ask first; cancelled, or confirmed and undone), and
  * resizing a selected word from the sidebar's Font size field, picking
- * objects by row in the object list (mid-edit included), and
+ * objects by row in the object list (mid-edit included) and folding it, and
  * panning and zooming the view with a plain mouse and the keyboard.
  *
  * After EVERY step five oracles run: the whole-editor invariant set from
@@ -613,13 +613,15 @@ async function performOp(
       return expected;
     }
     case 'object list pick': {
-      // Open the object list, pick a row with a real click (Shift adds or
-      // drops it, as on the canvas), then close the list again so the canvas
-      // keeps the size the other moves assume.
+      // Pick a row of the object list with a real click (Shift adds or drops
+      // it, as on the canvas), unfolding the list first if a previous pick
+      // folded it, and now and then fold it again: the canvas changes width.
       const id = pick(next, targets);
       const shift = next() < 0.4;
-      await session.cdp.click('.object-list-toggle', 'object list toggle');
-      await wait(120);
+      if (await session.cdp.evaluate<boolean>(`document.getElementById('objects').classList.contains('collapsed')`)) {
+        await session.cdp.click('.object-list-toggle', 'object list toggle');
+        await wait(120);
+      }
       const row = `.object-list-row[data-element-id="${id}"]`;
       const selection = () => session.cdp.evaluate<string[]>('[...window.store.get().selection].sort()');
       const before = await selection();
@@ -638,8 +640,10 @@ async function performOp(
       if (highlighted.join() !== after.join()) {
         flag('routing', `the object list highlights [${highlighted}] while the selection is [${after}]`);
       }
-      await session.cdp.click('.object-list-toggle', 'object list toggle');
-      await wait(120);
+      if (next() < 0.25) {
+        await session.cdp.click('.object-list-toggle', 'object list toggle');
+        await wait(120);
+      }
       return 'same';
     }
     case 'stack key': {
