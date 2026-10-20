@@ -214,7 +214,14 @@ describe.skipIf(!electronBinary || process.platform === 'win32')('leaving a desk
       (ids) => ids.length === 1 && ids[0] === 't3',
     );
 
-    await audience.key('Escape', ESCAPE);
+    // Escape closes the audience window on key-down, so a key-up has no window
+    // left to reach: send the press alone, and let the connection close under it.
+    await audience.call('Input.dispatchKeyEvent', {
+      type: 'keyDown', key: 'Escape', code: 'Escape',
+      windowsVirtualKeyCode: ESCAPE, nativeVirtualKeyCode: ESCAPE,
+    }).catch((error: Error) => {
+      if (!error.message.includes('connection closed')) throw error;
+    });
     await eventually(
       async () => editor!.evaluate<string | null>(ACTIVE_RAIL_SLIDE),
       'leaving the show did not land the editor on the slide it ended on',
