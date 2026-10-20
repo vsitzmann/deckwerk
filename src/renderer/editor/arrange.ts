@@ -25,10 +25,7 @@ export function arrangeElements(
   selected: ReadonlySet<string>,
   direction: ArrangeDirection,
 ): boolean {
-  const order = elements
-    .map((element, index) => ({ element, index }))
-    .sort((a, b) => a.element.z - b.element.z || a.index - b.index)
-    .map(({ element }) => element);
+  const order = paintOrder(elements);
   const isSelected = (element: SlideElement): boolean => selected.has(element.id);
   let next: SlideElement[];
   if (direction === 'front') {
@@ -52,6 +49,38 @@ export function arrangeElements(
       }
     }
   }
+  return restack(order, next);
+}
+
+/**
+ * Restack `elements` so the `selected` ones sit, as a block in their present
+ * order, with exactly `below` unselected objects underneath them: 0 puts them
+ * at the back, the count of unselected objects at the front. This is a drop in
+ * the object list, where the rows between the block and the bottom of the list
+ * say where it lands. Renumbers and reports like `arrangeElements`.
+ */
+export function arrangeElementsAt(
+  elements: SlideElement[],
+  selected: ReadonlySet<string>,
+  below: number,
+): boolean {
+  const order = paintOrder(elements);
+  const moving = order.filter((element) => selected.has(element.id));
+  const rest = order.filter((element) => !selected.has(element.id));
+  if (moving.length === 0) return false;
+  const at = Math.max(0, Math.min(rest.length, below));
+  return restack(order, [...rest.slice(0, at), ...moving, ...rest.slice(at)]);
+}
+
+/** The slide's objects bottom first, as the renderer paints them. */
+export function paintOrder(elements: readonly SlideElement[]): SlideElement[] {
+  return elements
+    .map((element, index) => ({ element, index }))
+    .sort((a, b) => a.element.z - b.element.z || a.index - b.index)
+    .map(({ element }) => element);
+}
+
+function restack(order: SlideElement[], next: SlideElement[]): boolean {
   if (next.every((element, i) => element === order[i])) return false;
   next.forEach((element, i) => { element.z = i + 1; });
   return true;
@@ -65,4 +94,17 @@ export function arrangeSelection(store: EditorStore, direction: ArrangeDirection
     const slide = deck.slides[slideIndex];
     if (slide) arrangeElements(slide.elements, selection, direction);
   }, { label: ARRANGE_LABELS[direction] });
+}
+
+/**
+ * Move the store's selected objects on the current slide to a place in the
+ * stack (see `arrangeElementsAt`), as one undoable edit.
+ */
+export function arrangeSelectionAt(store: EditorStore, below: number): void {
+  const { slideIndex, selection } = store.get();
+  if (selection.size === 0) return;
+  store.commit((deck) => {
+    const slide = deck.slides[slideIndex];
+    if (slide) arrangeElementsAt(slide.elements, selection, below);
+  }, { label: 'Reorder objects' });
 }
