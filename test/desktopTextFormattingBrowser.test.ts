@@ -37,7 +37,7 @@ const CONTENT = `#canvas [data-element-id="${TEXT_ID}"] .text-content`;
 const PANEL = '#inspector';
 const MOD = process.platform === 'darwin' ? 4 : 2;
 
-type Format = 'bold' | 'italic' | 'underline' | 'superscript' | 'subscript';
+type Format = 'bold' | 'italic' | 'underline' | 'strikethrough' | 'superscript' | 'subscript';
 type InputRoute = 'shortcut' | 'button';
 
 /** Shift is part of the chord for the baselines; CDP spells it as bit 8. */
@@ -48,6 +48,10 @@ const FORMAT_UI: Record<Format, {
   bold: { key: 'b', code: 'KeyB', keyCode: 66, label: 'Bold (Cmd/Ctrl+B)' },
   italic: { key: 'i', code: 'KeyI', keyCode: 73, label: 'Italic (Cmd/Ctrl+I)' },
   underline: { key: 'u', code: 'KeyU', keyCode: 85, label: 'Underline (Cmd/Ctrl+U)' },
+  strikethrough: {
+    key: 'X', code: 'KeyX', keyCode: 88, shift: true,
+    label: 'Strikethrough (Cmd/Ctrl+Shift+X)',
+  },
   superscript: {
     key: '+', code: 'Equal', keyCode: 187, shift: true,
     label: 'Superscript (Cmd/Ctrl+Shift+=)',
@@ -58,6 +62,8 @@ const FORMAT_UI: Record<Format, {
   },
 };
 const FORMATS: Format[] = ['bold', 'italic', 'underline', 'superscript', 'subscript'];
+/** Every format the matrix reads back after each step. */
+const CHECKED: Format[] = [...FORMATS, 'strikethrough'];
 /** Raised and lowered are one exclusive choice, so each settles the other. */
 const OPPOSITE: Partial<Record<Format, Format>> = {
   superscript: 'subscript',
@@ -185,6 +191,7 @@ describe.skipIf(!electronBinary)('desktop inline-formatting matrix', () => {
       bold: Array(authoredText.length).fill(false),
       italic: Array(authoredText.length).fill(false),
       underline: Array(authoredText.length).fill(false),
+      strikethrough: Array(authoredText.length).fill(false),
       superscript: Array(authoredText.length).fill(false),
       subscript: Array(authoredText.length).fill(false),
     };
@@ -201,7 +208,7 @@ describe.skipIf(!electronBinary)('desktop inline-formatting matrix', () => {
     };
 
     const assertAllFormats = async (label: string, expectedSelection?: string) => {
-      for (const format of FORMATS) {
+      for (const format of CHECKED) {
         const state = await readFormatState(editor!, format);
         expect(state.text, `${label}: ${format} changed text`).toBe(authoredText);
         expect(state.map, `${label}: ${format} scope drifted`).toEqual(expected[format]);
@@ -297,6 +304,8 @@ describe.skipIf(!electronBinary)('desktop inline-formatting matrix', () => {
     await applyWhole('bold', 'button', false);
     await applyWhole('italic', 'shortcut', false);
     await applyWhole('underline', 'button', false);
+    await applyWhole('strikethrough', 'shortcut', true);
+    await applyWhole('strikethrough', 'button', false);
 
     const applyRange = async (
       start: number,
@@ -332,6 +341,13 @@ describe.skipIf(!electronBinary)('desktop inline-formatting matrix', () => {
       'italic', 'shortcut', true, 'second-line italic phrase');
     await applyRange(nostrudPhrase.start, nostrudPhrase.end,
       'underline', 'button', true, 'late underline phrase');
+    // Into the underlined phrase and back out of it: the underline stays put
+    // under both, and the strikethrough on the words before it survives.
+    const struckPhrase = phraseRange(authoredText, 'amet', ' adipiscing');
+    await applyRange(struckPhrase.start, struckPhrase.end,
+      'strikethrough', 'shortcut', true, 'strikethrough over part of an underline');
+    await applyRange(consecteturPhrase.start, consecteturPhrase.end,
+      'strikethrough', 'button', false, 'strikethrough off an underlined phrase');
 
     // Put the caret in unformatted text, insert a real paragraph break and a
     // new word, then exercise all three formats over the newly created run.
@@ -355,7 +371,7 @@ describe.skipIf(!electronBinary)('desktop inline-formatting matrix', () => {
     const insertedLength = inserted.text.length - authoredText.length;
     expect(insertedLength).toBe('NOVUM '.length);
     authoredText = inserted.text;
-    for (const format of FORMATS) {
+    for (const format of CHECKED) {
       expected[format].splice(insertedAt, 0, ...Array(insertedLength).fill(false));
     }
     await assertAllFormats('after inserting a paragraph and word');
@@ -627,6 +643,8 @@ async function readFormatState(cdp: Cdp, format: Format): Promise<{
         ? style.fontStyle === 'italic'
         : ${JSON.stringify(format)} === 'underline'
           ? style.textDecorationLine.includes('underline')
+          : ${JSON.stringify(format)} === 'strikethrough'
+            ? style.textDecorationLine.includes('line-through')
           : ${JSON.stringify(format)} === 'superscript'
             ? style.verticalAlign === 'super'
             : ${JSON.stringify(format)} === 'subscript'

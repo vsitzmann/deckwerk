@@ -1964,6 +1964,7 @@ export class Inspector {
             ['bold', 'B', 'Bold (Cmd/Ctrl+B)'],
             ['italic', 'I', 'Italic (Cmd/Ctrl+I)'],
             ['underline', 'U', 'Underline (Cmd/Ctrl+U)'],
+            ['strikethrough', 'S', 'Strikethrough (Cmd/Ctrl+Shift+X)'],
             ['superscript', 'x²', 'Superscript (Cmd/Ctrl+Shift+=)'],
             ['subscript', 'x₂', 'Subscript (Cmd/Ctrl+Shift+-)'],
           ] as const) {

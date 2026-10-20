@@ -57,7 +57,7 @@ export function capabilities(): Capability[] {
         'role-title, role-heading, role-body, role-caption are the vocabulary.',
         'An inline `style` overrides the theme and should be a deliberate one-off.',
         'contentStyle applies CSS to the inner text content rather than the positioned box; use it for glyph paint such as gradient text, text strokes and shadows.',
-        'html may contain inline markup: <b>, <i>, <br>, <span>.',
+        'html may contain inline markup: <b>, <i>, <u>, <s> (strikethrough), <br>, <span>.',
         'paragraphSpacing (px) sets the gap between paragraphs and between bullets; unset keeps the theme default.',
         "align sets the horizontal setting of the type — 'left', 'center', 'right' or 'justify'.",
         "valign places the text inside its box — 'top', 'middle' or 'bottom' — which is what keeps a caption sitting against a figure rather than floating.",

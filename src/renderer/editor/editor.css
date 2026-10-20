@@ -1586,12 +1586,13 @@ input[type="range"] { accent-color: var(--accent); padding: 0; background: trans
 .text-selection-style { display: grid; gap: 6px; margin: 4px 0 8px; }
 .text-selection-style .button-row { display: grid; gap: 4px; }
 .text-selection-style button { padding: 5px 2px; font-size: 10px; }
-.text-selection-style .text-format-buttons { grid-template-columns: repeat(5, 1fr); }
+.text-selection-style .text-format-buttons { grid-template-columns: repeat(6, 1fr); }
 .text-format-bold { font-weight: 800; }
 .text-format-italic { font-style: italic; }
 .text-format-underline { text-decoration: underline; }
+.text-format-strikethrough { text-decoration: line-through; }
 /* The glyph pair "x²"/"x₂" already carries the meaning; keep it from
-   crowding the narrower five-across row. */
+   crowding the narrower six-across row. */
 .text-format-superscript,
 .text-format-subscript { letter-spacing: -0.02em; }
 .text-format-buttons button[aria-pressed="true"] {
@@ -4390,7 +4391,7 @@ button.cthread-where:disabled { cursor: default; opacity: 1; }
   margin-bottom: 6px;
 }
 .text-style-row > .field { margin-bottom: 0; min-width: 0; }
-.text-selection-style .text-format-buttons { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+.text-selection-style .text-format-buttons { grid-template-columns: repeat(6, minmax(0, 1fr)); }
 .text-selection-style button { height: 26px; padding: 0; }
 .field-color.field-color-stacked { flex-direction: column; align-items: stretch; gap: 3px; }
 .field-color-stacked .color-picker-trigger { width: 100%; height: 26px; }
