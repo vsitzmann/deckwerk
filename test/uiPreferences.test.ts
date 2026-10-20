@@ -3,6 +3,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { createDeckWerkButton } from '../src/renderer/editor/aboutDialog.js';
 import { installSettingsShortcut, settingsShortcut } from '../src/renderer/editor/settingsDialog.js';
 import { closePopover } from '../src/renderer/editor/ui.js';
+import packageJson from '../package.json';
 import {
   applyUiPreferences,
   resetUiPreferences,
@@ -41,6 +42,12 @@ function openSettings(): HTMLElement {
     .find((item) => item.textContent === 'Settings…')!.click();
   return document.querySelector<HTMLElement>('[role="dialog"]')!;
 }
+
+const button = (root: ParentNode, text: string): HTMLButtonElement =>
+  [...root.querySelectorAll<HTMLButtonElement>('button')].find((candidate) => candidate.textContent === text)!;
+
+const pressedTheme = (dialog: HTMLElement): string | null | undefined =>
+  dialog.querySelector('.settings-theme [aria-pressed="true"]')?.textContent;
 
 function choose(select: HTMLSelectElement, value: string): void {
   select.value = value;
@@ -135,7 +142,8 @@ describe('interface font and scale', () => {
     expect(options.slice(0, 2)).toEqual(['DeckWerk (Monaspace Krypton)', 'System']);
     // A stored font this machine lacks is still shown, and named as missing.
     expect(font.selectedOptions[0].textContent).toBe('Some Retired Font (not installed)');
-    expect(document.activeElement).toBe(font);
+    // The first control is the theme strip, focused on the current choice.
+    expect(document.activeElement?.textContent).toBe('System');
 
     choose(font, 'system-ui');
     expect(storedUiFont()).toBe('system-ui');
@@ -146,7 +154,11 @@ describe('interface font and scale', () => {
     choose(scale, '1.1');
     expect(zooms.at(-1)).toBe(1.1);
 
-    [...dialog.querySelectorAll('button')].find((button) => button.textContent === 'Reset to Defaults')!.click();
+    button(dialog, 'Dark').click();
+    expect(document.documentElement.dataset.uiTheme).toBe('dark');
+    button(dialog, 'Reset to Defaults').click();
+    expect(localStorage.getItem('deckwerk.uiTheme')).toBeNull();
+    expect(pressedTheme(dialog)).toBe('System');
     expect(font.value).toBe('');
     expect(scale.value).toBe('1');
     expect(mono()).toBe('');
@@ -211,5 +223,46 @@ describe('interface font and scale', () => {
     expect(menuSettings).not.toBeNull();
     menuSettings!();
     expect(document.querySelector('[role="dialog"]')?.getAttribute('aria-labelledby')).toBe('deckwerk-settings-title');
+  });
+
+  it('lays Settings out as Appearance, Interface and About', () => {
+    const dialog = openSettings();
+    expect([...dialog.querySelectorAll('.settings-section-title')].map((h) => h.textContent))
+      .toEqual(['Appearance', 'Interface', 'About']);
+    expect([...dialog.querySelectorAll('.settings-theme button')].map((b) => b.textContent))
+      .toEqual(['System', 'Light', 'Dark']);
+    expect(dialog.querySelector('.settings-about')?.textContent).toContain(`DeckWerk ${packageJson.version}`);
+  });
+
+  it('shares the appearance with the DeckWerk menu, both ways', () => {
+    localStorage.removeItem('deckwerk.uiTheme');
+    let dialog = openSettings();
+    expect(pressedTheme(dialog)).toBe('System');
+    button(dialog, 'Light').click();
+    expect(document.documentElement.dataset.uiTheme).toBe('light');
+    expect(pressedTheme(dialog)).toBe('Light');
+    button(dialog, 'Done').click();
+
+    const brand = document.querySelector<HTMLElement>('.shape-menu-wrap')!;
+    brand.querySelector<HTMLButtonElement>('.brand-button')!.click();
+    const radios = () => [...document.querySelectorAll<HTMLButtonElement>('[role="menuitemradio"]')];
+    expect(radios().find((item) => item.getAttribute('aria-checked') === 'true')?.textContent).toBe('Light');
+    radios().find((item) => item.textContent === 'Dark')!.click();
+
+    dialog = openSettings();
+    expect(pressedTheme(dialog)).toBe('Dark');
+    // Another window's choice reaches the open dialog.
+    localStorage.setItem('deckwerk.uiTheme', 'light');
+    window.dispatchEvent(new window.StorageEvent('storage', { key: 'deckwerk.uiTheme' }));
+    expect(pressedTheme(dialog)).toBe('Light');
+    localStorage.removeItem('deckwerk.uiTheme');
+  });
+
+  it('opens About from the About line, in place of Settings', () => {
+    const dialog = openSettings();
+    button(dialog, 'About DeckWerk…').click();
+    const dialogs = [...document.querySelectorAll('[role="dialog"]')];
+    expect(dialogs).toHaveLength(1);
+    expect(dialogs[0].getAttribute('aria-labelledby')).toBe('deckwerk-about-title');
   });
 });

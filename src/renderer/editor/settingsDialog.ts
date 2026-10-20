@@ -8,6 +8,14 @@ import {
   storedUiFont,
   storedUiScale,
 } from '../uiPreferences.js';
+import {
+  UI_THEME_CHOICES,
+  setUiThemePreference,
+  storedUiThemePreference,
+  type UiThemePreference,
+} from '../uiTheme.js';
+import { version } from '../../../package.json';
+import { showAboutDialog } from './aboutDialog.js';
 import { installedFontFamilies } from './fontPicker.js';
 
 const SETTINGS_DIALOG_ID = 'deckwerk-settings';
@@ -41,9 +49,10 @@ export function installSettingsShortcut(): void {
 }
 
 /**
- * The editor chrome's font and scale, from the DeckWerk menu. Each choice
- * applies the moment it is made, so there is nothing to confirm: Done only
- * closes, and Reset puts both back to DeckWerk's own.
+ * Everything the DeckWerk menu sets, in one place: the appearance, the
+ * chrome's font and scale, and the About line. Each choice applies the moment
+ * it is made, so there is nothing to confirm: Done only closes, and Reset
+ * puts all three back to how DeckWerk starts.
  */
 export function showSettingsDialog(): void {
   if (document.getElementById(SETTINGS_DIALOG_ID)) return;
@@ -65,12 +74,23 @@ export function showSettingsDialog(): void {
   title.id = 'deckwerk-settings-title';
   title.textContent = 'Settings';
 
-  const field = (label: string, select: HTMLSelectElement, className: string): HTMLLabelElement => {
-    const wrap = document.createElement('label');
+  const section = (heading: string, ...children: HTMLElement[]): HTMLElement => {
+    const group = document.createElement('section');
+    group.className = 'settings-section';
+    const label = document.createElement('h3');
+    label.className = 'settings-section-title';
+    label.id = `deckwerk-settings-${heading.toLowerCase()}`;
+    label.textContent = heading;
+    group.setAttribute('aria-labelledby', label.id);
+    group.append(label, ...children);
+    return group;
+  };
+  const field = (label: string, control: HTMLElement, className: string): HTMLElement => {
+    const wrap = document.createElement(control.tagName === 'SELECT' ? 'label' : 'div');
     wrap.className = `field ${className}`;
     const caption = document.createElement('span');
     caption.textContent = label;
-    wrap.append(caption, select);
+    wrap.append(caption, control);
     return wrap;
   };
   const option = (select: HTMLSelectElement, value: string, text: string, disabled = false): HTMLOptionElement => {
@@ -81,6 +101,35 @@ export function showSettingsDialog(): void {
     select.appendChild(node);
     return node;
   };
+
+  // The same three choices as the menu's Appearance section, as the
+  // inspector's segmented strip.
+  const theme = document.createElement('div');
+  theme.className = 'segmented-buttons settings-theme-buttons';
+  theme.setAttribute('role', 'group');
+  theme.setAttribute('aria-label', 'Theme');
+  const themeButtons = UI_THEME_CHOICES.map(({ label, preference }) => {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'segment-button';
+    button.dataset.value = preference;
+    button.textContent = label;
+    button.addEventListener('click', () => {
+      setUiThemePreference(preference);
+      showTheme();
+    });
+    theme.appendChild(button);
+    return button;
+  });
+  const showTheme = (): void => {
+    const current: UiThemePreference = storedUiThemePreference();
+    for (const button of themeButtons) {
+      const on = button.dataset.value === current;
+      button.classList.toggle('is-active', on);
+      button.setAttribute('aria-pressed', String(on));
+    }
+  };
+  showTheme();
 
   // '' is DeckWerk's own font; every other value is what storedUiFont holds.
   const font = document.createElement('select');
@@ -120,6 +169,15 @@ export function showSettingsDialog(): void {
     : 'Changes the editor around your slides. Slides keep their deck’s own fonts. '
       + 'To scale the interface, use your browser’s zoom.';
 
+  const about = document.createElement('div');
+  about.className = 'settings-about';
+  const identity = document.createElement('span');
+  identity.textContent = `DeckWerk ${version}`;
+  const aboutButton = document.createElement('button');
+  aboutButton.type = 'button';
+  aboutButton.textContent = 'About DeckWerk…';
+  about.append(identity, aboutButton);
+
   const actions = document.createElement('div');
   actions.className = 'workflow-actions';
   const reset = document.createElement('button');
@@ -131,20 +189,34 @@ export function showSettingsDialog(): void {
   done.className = 'primary';
   done.textContent = 'Done';
   actions.append(reset, done);
-  reset.addEventListener('click', () => {
-    resetUiPreferences();
+  const showAll = (): void => {
+    showTheme();
     showFont();
     showScale();
+  };
+  reset.addEventListener('click', () => {
+    setUiThemePreference('system');
+    resetUiPreferences();
+    showAll();
   });
+
+  // A choice made in another window (or its menu) while this is open.
+  const follow = (): void => showAll();
+  window.addEventListener('storage', follow);
 
   let finished = false;
   const dismiss = (): void => {
     if (finished) return;
     finished = true;
+    window.removeEventListener('storage', follow);
     overlay.remove();
     previousFocus?.focus();
   };
   done.addEventListener('click', dismiss);
+  aboutButton.addEventListener('click', () => {
+    dismiss();
+    showAboutDialog();
+  });
   overlay.addEventListener('pointerdown', (event) => {
     if (event.target === overlay) dismiss();
   });
@@ -152,10 +224,16 @@ export function showSettingsDialog(): void {
     if (event.key === 'Escape') dismiss();
   });
 
-  dialog.append(title, field('Interface font', font, 'settings-font'));
-  if (canSetUiScale()) dialog.append(field('Interface scale', scale, 'settings-scale'));
-  dialog.append(note, actions);
+  const interfaceFields: HTMLElement[] = [field('Font', font, 'settings-font')];
+  if (canSetUiScale()) interfaceFields.push(field('Scale', scale, 'settings-scale'));
+  dialog.append(
+    title,
+    section('Appearance', field('Theme', theme, 'settings-theme')),
+    section('Interface', ...interfaceFields, note),
+    section('About', about),
+    actions,
+  );
   overlay.appendChild(dialog);
   document.body.appendChild(overlay);
-  font.focus();
+  themeButtons.find((button) => button.classList.contains('is-active'))?.focus();
 }

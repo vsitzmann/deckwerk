@@ -3646,10 +3646,21 @@ button.deck-picker-row.active { border-color: var(--accent); }
 .web-export-detail { margin: 0; min-height: 3.6em; color: var(--muted); font-size: 12px; line-height: 1.5; }
 .pdf-export-builds { padding: 8px 0 4px; }
 .settings-dialog { width: min(440px, calc(100vw - 56px)); }
+.settings-section { display: flex; flex-direction: column; gap: 10px; padding-top: 12px; border-top: 1px solid var(--line); }
+.settings-section-title {
+  margin: 0;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
 .settings-dialog .field { margin-bottom: 0; }
-.settings-font { padding-top: 4px; }
+.settings-theme-buttons .segment-button { height: 30px; font-size: 11.5px; }
 .settings-note { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.5; }
+.settings-about { display: flex; align-items: center; justify-content: space-between; gap: 12px; color: var(--muted); }
 .settings-reset { margin-right: auto; }
+.settings-dialog .workflow-actions { padding-top: 12px; border-top: 1px solid var(--line); }
 
 /* Object names in the build and Morph lists carry colour swatches so two
    shapes of the same geometry are still told apart at a glance. */
@@ -4161,6 +4172,12 @@ button.cthread-where:disabled { cursor: default; opacity: 1; }
 .align-button:hover, .segment-button:hover { color: var(--text); }
 
 .align-button.is-active, .segment-button.is-active {
+  background: var(--accent);
+  color: #fff;
+}
+/* Hovering the chosen one keeps it chosen, rather than taking the generic
+   button hover's grey under its white label. */
+.align-button.is-active:hover:not(:disabled), .segment-button.is-active:hover:not(:disabled) {
   background: var(--accent);
   color: #fff;
 }

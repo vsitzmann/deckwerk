@@ -61,18 +61,24 @@ export function setUiThemePreference(preference: UiThemePreference): UiTheme {
   return applyUiTheme();
 }
 
+/** The appearance choices, in the order the menu and Settings offer them. */
+export const UI_THEME_CHOICES: ReadonlyArray<{ label: string; preference: UiThemePreference }> = [
+  { label: 'System', preference: 'system' },
+  { label: 'Light', preference: 'light' },
+  { label: 'Dark', preference: 'dark' },
+];
+
 /** The Appearance section of the DeckWerk menu. */
 export function appearanceMenuSection(): {
   label: string;
   options: { label: string; action: () => void; checked: () => boolean }[];
 } {
-  const option = (label: string, preference: UiThemePreference) => ({
-    label,
-    action: () => { setUiThemePreference(preference); },
-    checked: () => storedUiThemePreference() === preference,
-  });
   return {
     label: 'Appearance',
-    options: [option('System', 'system'), option('Light', 'light'), option('Dark', 'dark')],
+    options: UI_THEME_CHOICES.map(({ label, preference }) => ({
+      label,
+      action: () => { setUiThemePreference(preference); },
+      checked: () => storedUiThemePreference() === preference,
+    })),
   };
 }

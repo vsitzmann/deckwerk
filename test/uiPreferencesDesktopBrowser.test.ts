@@ -15,8 +15,8 @@ import {
 import { isEditorTarget, launchDesktopApp, materializeDesktopApp } from './support/desktopApp.js';
 
 /**
- * Settings → Interface font and Interface scale in the desktop app, opened
- * with Cmd/Ctrl+, and from the DeckWerk menu.
+ * Settings in the desktop app — the appearance and the interface font and
+ * scale — opened with Cmd/Ctrl+, and from the DeckWerk menu.
  *
  * The font reaches the chrome and stops at the slide; the scale is a real
  * window zoom, so the slide still fits its canvas afterwards; both survive a
@@ -105,6 +105,9 @@ describe.skipIf(!electronBinary)('interface font and scale in the desktop app', 
     await editor.clickByText('[role="menuitem"]', 'Settings…');
     await editor.choose('.settings-font select', 'system-ui', 'Interface font');
     await editor.choose('.settings-scale select', '1.2', 'Interface scale');
+    // The appearance lives here too, shared with the DeckWerk menu.
+    await editor.clickByText('.settings-theme button', 'Dark');
+    expect(await editor.evaluate<string>('document.documentElement.dataset.uiTheme')).toBe('dark');
 
     const after = (await eventually(async () => {
       const look = await editor!.evaluate<Look>(LOOK);
@@ -131,5 +134,6 @@ describe.skipIf(!electronBinary)('interface font and scale in the desktop app', 
       return look.zoom === before.zoom ? look : null;
     }, 'Reset did not restore 100%'))!;
     expect(reset.chromeFont).toBe(before.chromeFont);
+    expect(await editor.evaluate<string | null>(`localStorage.getItem('deckwerk.uiTheme')`)).toBeNull();
   }, 120_000);
 });
