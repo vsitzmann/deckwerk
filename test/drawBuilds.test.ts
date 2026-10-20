@@ -476,6 +476,8 @@ describe('choosing dissolve from the Build panel', () => {
       .toEqual([
         'appear', 'appear:dissolve', 'appear:blur', 'appear:paragraph',
         'disappear', 'disappear:dissolve', 'disappear:blur', 'play', 'pause',
+        // Any object can pulse for emphasis (equation builds add it for every element).
+        'pulse', 'pulse:lift',
       ]);
     const choose = (value: string) => {
       select().value = value;

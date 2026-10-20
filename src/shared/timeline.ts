@@ -1,5 +1,14 @@
 import type { Slide, SlideElement, TimelineEntry } from './deck.js';
 import { countParagraphs } from './paragraphs.js';
+import {
+  DEFAULT_PULSE_DURATION,
+  DEFAULT_TERM_DURATION,
+  applyTermAction,
+  initialTermStates,
+  isTermBuild,
+  termBuildLabels,
+  type TermState,
+} from './equationTerms.js';
 
 /**
  * Timeline reasoning, shared by the player and the editor's timeline panel.
@@ -44,11 +53,14 @@ export const DEFAULT_BLUR_DURATION = 1000;
  * any element in or out; `blur` fades it in out of a blur (or out into one);
  * `draw` draws a line or arrow in from its start.
  */
-export type BuildEffect = 'draw' | 'dissolve' | 'blur';
+export type BuildEffect = 'draw' | 'dissolve' | 'blur' | 'terms' | 'pulse';
 
 /** The effect an entry animates with, or null for an instant change. */
 export function buildEffect(entry: TimelineEntry, slide: Slide): BuildEffect | null {
   const { type, value } = entry.action;
+  // A term fades in (or changes colour) and a pulse swells and settles; both
+  // take time, so an "after previous" build waits them out like any other.
+  if (type === 'terms' || type === 'pulse') return type;
   if ((value === 'dissolve' || value === 'blur') && (type === 'appear' || type === 'disappear')) {
     return value;
   }
@@ -59,7 +71,8 @@ export function buildEffect(entry: TimelineEntry, slide: Slide): BuildEffect | n
 /** Milliseconds an animated build takes. */
 export function effectDuration(entry: TimelineEntry, effect: BuildEffect): number {
   return entry.action.duration
-    ?? (effect === 'draw' ? DEFAULT_DRAW_DURATION
+    ?? (effect === 'terms' ? DEFAULT_TERM_DURATION : effect === 'pulse' ? DEFAULT_PULSE_DURATION
+      : effect === 'draw' ? DEFAULT_DRAW_DURATION
       : effect === 'blur' ? DEFAULT_BLUR_DURATION : DEFAULT_DISSOLVE_DURATION);
 }
 
@@ -91,6 +104,24 @@ export function drawDuration(entry: TimelineEntry): number {
 export function expandTimeline(slide: Slide): ExpandedEntry[] {
   const out: ExpandedEntry[] = [];
   for (const entry of slide.timeline) {
+    // An equation's terms fan out the same way, one unit per term label, each
+    // naming its term so it can be run on its own.
+    if (isTermBuild(entry) && !entry.action.term) {
+      const labels = termBuildLabels(entry, slide);
+      if (labels.length > 0) {
+        labels.forEach((term, index) => out.push({
+          id: index === 0 ? entry.id : `${entry.id}#t${index}`,
+          sourceId: entry.id,
+          part: null,
+          partCount: 1,
+          trigger: index === 0
+            ? entry.trigger
+            : { on: entry.trigger.on === 'click' ? 'click' : 'afterPrev', ref: null, delay: entry.trigger.delay },
+          action: { ...entry.action, term },
+        }));
+        continue;
+      }
+    }
     if (!isParagraphBuild(entry, slide)) {
       out.push({ ...entry, sourceId: entry.id, part: null, partCount: 1 });
       continue;
@@ -163,6 +194,8 @@ export interface SlideState {
   seeks: Map<string, number>;
   /** For by-paragraph targets: how many leading paragraphs are revealed. */
   parts: Map<string, number>;
+  /** For equations with term builds: which terms are still hidden, and term colours. */
+  terms: Map<string, TermState>;
 }
 
 /**
@@ -194,6 +227,7 @@ export function resolveState(slide: Slide, step: number): SlideState {
         .filter((entry) => isParagraphBuild(entry, slide))
         .map((entry) => [entry.action.target, 0]),
     ),
+    terms: initialTermStates(slide),
   };
 
   const steps = groupIntoSteps(slide);
@@ -243,6 +277,13 @@ export function applyAction(
       break;
     case 'removeClass':
       if (typeof value === 'string') classSet(state, target).delete(value);
+      break;
+    case 'terms':
+      applyTermAction(state.terms, entry, slide);
+      break;
+    // A pulse changes nothing it leaves behind: the state after it is the
+    // state before it, which is what makes it safe to jump over.
+    case 'pulse':
       break;
   }
 }

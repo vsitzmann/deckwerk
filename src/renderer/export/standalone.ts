@@ -44,10 +44,12 @@ function boot(): void {
 
   // Deep-linking for humans and agents alike: index.html#7 opens slide 7.
   // With this, "render slide N" is one headless-chromium screenshot away —
-  // no app, no server.
+  // no app, no server. A link is a jump, never a transition: a capture that
+  // walks #6, #7, #8 in one page otherwise photographed slide 7's Morph from
+  // slide 6 in flight, with slide 6's objects still on it.
   const jumpToHash = () => {
     const n = Number.parseInt(location.hash.replace('#', ''), 10);
-    if (Number.isFinite(n) && n >= 1) player.goToSlide(n - 1);
+    if (Number.isFinite(n) && n >= 1) player.goTo({ slide: n - 1, step: 0 }, { morph: false });
   };
   window.addEventListener('hashchange', jumpToHash);
   jumpToHash();
