@@ -40,6 +40,17 @@ export const DEFAULT_DISSOLVE_DURATION = 1000;
 export const DEFAULT_BLUR_DURATION = 1000;
 /** How long a pop takes when its entry does not say. */
 export const DEFAULT_POP_DURATION = 500;
+/** The size a pop grows from, and the size it overshoots to, when its entry does not say. */
+export const DEFAULT_POP_FROM = 0.6;
+export const DEFAULT_POP_PEAK = 1.06;
+
+/** The sizes a pop moves through: from `from`, up to `peak`, settling at 1. */
+export function popScales(entry: TimelineEntry): { from: number; peak: number } {
+  return {
+    from: entry.action.popFrom ?? DEFAULT_POP_FROM,
+    peak: entry.action.popPeak ?? DEFAULT_POP_PEAK,
+  };
+}
 
 /**
  * The animated forms an `appear` or a `disappear` can take. `dissolve` fades

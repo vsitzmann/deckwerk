@@ -7,6 +7,7 @@ import {
   DEFAULT_DRAW_DURATION,
   buildEffect,
   effectDuration,
+  popScales,
   expandTimeline,
   groupIntoSteps,
   isParagraphBuild,
@@ -301,6 +302,10 @@ export class TimelinePanel {
             : variant === 'blur' ? DEFAULT_BLUR_DURATION
             : variant === 'pop' ? DEFAULT_POP_DURATION : DEFAULT_DISSOLVE_DURATION;
         } else delete e.action.duration;
+        if (variant !== 'pop') {
+          delete e.action.popFrom;
+          delete e.action.popPeak;
+        }
       }),
     );
 
@@ -311,6 +316,45 @@ export class TimelinePanel {
       { inputClass: 'delay-input build-duration', label: 'Animation time' },
     );
     durationWrap.classList.add('build-duration-wrap');
+
+    // A pop's two sizes, in percent of the object's own: where it starts and
+    // how far it overshoots before settling.
+    const sizes = popScales(entry);
+    const percentField = (
+      label: string,
+      inputClass: string,
+      value: number,
+      min: number,
+      max: number,
+      commit: (e: TimelineEntry, size: number) => void,
+    ): HTMLElement => {
+      const input = document.createElement('input');
+      input.type = 'number';
+      input.className = `delay-input ${inputClass}`;
+      input.min = String(min);
+      input.max = String(max);
+      input.step = '1';
+      input.value = String(Math.round(value * 100));
+      input.title = `${label}, in percent of the object's size`;
+      input.setAttribute('aria-label', `${label} in percent`);
+      input.addEventListener('change', () => {
+        const percent = Math.min(max, Math.max(min, Number(input.value) || 0));
+        input.value = String(percent);
+        this.mutate(entry.id, (e) => commit(e, percent / 100));
+      });
+      const unit = document.createElement('span');
+      unit.className = 'field-unit';
+      unit.textContent = '%';
+      unit.setAttribute('aria-hidden', 'true');
+      const wrap = document.createElement('span');
+      wrap.className = 'field-unit-wrap pop-size';
+      wrap.append(input, unit);
+      return wrap;
+    };
+    const popFrom = percentField('Starting size', 'build-pop-from', sizes.from, 0, 100,
+      (e, size) => { e.action.popFrom = size; });
+    const popPeak = percentField('Overshoot size', 'build-pop-peak', sizes.peak, 100, 200,
+      (e, size) => { e.action.popPeak = size; });
 
     // Each card is bound to one element — matching the numbered badge on the
     // canvas — rather than offering a dropdown to retarget it. A by-paragraph
@@ -432,6 +476,15 @@ export class TimelinePanel {
       over.className = 'build-action-label';
       over.textContent = 'over';
       what.append(over, durationWrap);
+    }
+    if (effect === 'pop') {
+      const from = document.createElement('span');
+      from.className = 'build-action-label';
+      from.textContent = 'from';
+      const peak = document.createElement('span');
+      peak.className = 'build-action-label';
+      peak.textContent = 'overshoot';
+      what.append(from, popFrom, peak, popPeak);
     }
     row.append(head, when, what);
 
