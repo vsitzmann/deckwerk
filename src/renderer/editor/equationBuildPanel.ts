@@ -2,9 +2,11 @@ import type { Slide, SlideElement, TimelineEntry } from '@shared/deck.js';
 import { makeId } from '@shared/geometry.js';
 import {
   DEFAULT_PULSE_DURATION,
-  DEFAULT_PULSE_SCALE,
   DEFAULT_TERM_COLOR,
   DEFAULT_TERM_DURATION,
+  defaultEmphasisDuration,
+  defaultEmphasisScale,
+  isEmphasisType,
   termBuildLabels,
   termLabels,
   termSource,
@@ -13,9 +15,10 @@ import { colorField } from './colorPicker.js';
 
 /**
  * The Build panel's equation builds: stepping through an equation's marked
- * terms (revealing or colouring each), and the emphasis pulse any object —
- * or one term — can take. Kept beside the panel rather than in it, so the
- * panel's own cards read as before and these choices plug into them.
+ * terms (revealing or colouring each), and the emphases any object — or one
+ * term — can take: a pulse, a jiggle, a pop. Kept beside the panel rather
+ * than in it, so the panel's own cards read as before and these choices plug
+ * into them.
  */
 
 type Text = Extract<SlideElement, { type: 'text' }>;
@@ -24,7 +27,7 @@ function termsOf(element: SlideElement | undefined): string[] {
   return element?.type === 'text' ? termLabels((element as Text).html) : [];
 }
 
-/** The action-menu choices: term builds on text with terms, a pulse on anything. */
+/** The action-menu choices: term builds on text with terms, an emphasis on anything. */
 export function addEquationActionOptions(
   select: HTMLSelectElement,
   entry: TimelineEntry,
@@ -43,20 +46,23 @@ export function addEquationActionOptions(
   add('pulse', 'pulse');
   // Lift applies to a whole object: a term pulse keeps the setting but only swells.
   add('pulse:lift', 'pulse (lift)');
+  add('jiggle', 'jiggle');
+  add('pop', 'pop');
 }
 
 /** The action-menu value for an equation build, or null for any other entry. */
 export function equationActionValue(entry: TimelineEntry): string | null {
   if (entry.action.type === 'terms') return entry.action.value === 'color' ? 'terms:color' : 'terms:appear';
   if (entry.action.type === 'pulse') return entry.action.value === 'lift' ? 'pulse:lift' : 'pulse';
+  if (isEmphasisType(entry.action.type)) return entry.action.type;
   return null;
 }
 
 /**
  * Settle an entry's fields after the action menu changed it. Runs after the
  * panel's own handling, which knows nothing of these fields: switching to a
- * term build or a pulse gives it its defaults, and switching away clears what
- * only those builds use.
+ * term build or an emphasis gives it its defaults, and switching away clears
+ * what only those builds use.
  */
 export function applyEquationActionChoice(entry: TimelineEntry, choice: string, accent?: string): void {
   const action = entry.action;
@@ -69,11 +75,14 @@ export function applyEquationActionChoice(entry: TimelineEntry, choice: string, 
     action.duration ??= DEFAULT_TERM_DURATION;
     return;
   }
-  if (choice === 'pulse' || choice === 'pulse:lift') {
-    action.type = 'pulse';
-    action.value = choice === 'pulse:lift' ? 'lift' : null;
+  const [type, variant] = choice.split(':');
+  if (isEmphasisType(type)) {
+    action.type = type;
+    action.value = variant === 'lift' ? 'lift' : null;
     delete action.color;
-    action.duration ??= DEFAULT_PULSE_DURATION;
+    // A jiggle turns rather than grows, so it has no size.
+    if (type === 'jiggle') delete action.scale;
+    action.duration ??= defaultEmphasisDuration(type);
     return;
   }
   // Leaving an equation build: its fields mean nothing to other actions.
@@ -85,8 +94,8 @@ export function applyEquationActionChoice(entry: TimelineEntry, choice: string, 
 
 /**
  * The extra lines of an equation build's card — which term, the highlight
- * colour, the pulse's size — and, for a card that steps through every term,
- * the read-only list of terms with their step numbers.
+ * colour, the size a pulse or a pop swells to — and, for a card that steps
+ * through every term, the read-only list of terms with their step numbers.
  */
 export function equationBuildControls(
   entry: TimelineEntry,
@@ -95,7 +104,7 @@ export function equationBuildControls(
   mutate: (fn: (entry: TimelineEntry) => void) => void,
 ): { fields: HTMLElement[]; list: HTMLElement | null } {
   const { type } = entry.action;
-  if (type !== 'terms' && type !== 'pulse') return { fields: [], list: null };
+  if (type !== 'terms' && !isEmphasisType(type)) return { fields: [], list: null };
   const target = slide.elements.find((element) => element.id === entry.action.target);
   const labels = termsOf(target);
   const fields: HTMLElement[] = [];
@@ -109,7 +118,7 @@ export function equationBuildControls(
   if (labels.length > 0 || entry.action.term) {
     const term = document.createElement('select');
     term.className = 'build-term';
-    term.title = type === 'pulse' ? 'What pulses' : 'Which terms this step builds';
+    term.title = type === 'terms' ? 'Which terms this step builds' : `What ${type}s`;
     term.setAttribute('aria-label', 'Term');
     const option = (value: string, text: string): void => {
       const opt = document.createElement('option');
@@ -117,7 +126,7 @@ export function equationBuildControls(
       opt.textContent = text;
       term.appendChild(opt);
     };
-    option('', type === 'pulse' ? 'whole object' : 'every term, in order');
+    option('', type === 'terms' ? 'every term, in order' : 'whole object');
     const known = entry.action.term && !labels.includes(entry.action.term)
       ? [...labels, entry.action.term] : labels;
     for (const name of known) option(name, `term ${name}`);
@@ -137,18 +146,19 @@ export function equationBuildControls(
     fields.push(color);
   }
 
-  if (type === 'pulse') {
+  if (type === 'pulse' || type === 'pop') {
+    const fallback = defaultEmphasisScale(type);
     const scale = document.createElement('input');
     scale.type = 'number';
     scale.className = 'delay-input build-scale';
     scale.min = '1';
     scale.max = '4';
     scale.step = '0.1';
-    scale.value = String(entry.action.scale ?? DEFAULT_PULSE_SCALE);
-    scale.title = 'How big the pulse gets, as a multiple of the original size';
-    scale.setAttribute('aria-label', 'Pulse scale');
+    scale.value = String(entry.action.scale ?? fallback);
+    scale.title = `How big the ${type} gets, as a multiple of the original size`;
+    scale.setAttribute('aria-label', type === 'pop' ? 'Pop scale' : 'Pulse scale');
     scale.addEventListener('change', () => {
-      const next = Math.min(4, Math.max(1, Number(scale.value) || DEFAULT_PULSE_SCALE));
+      const next = Math.min(4, Math.max(1, Number(scale.value) || fallback));
       scale.value = String(next);
       mutate((e) => { e.action.scale = next; });
     });

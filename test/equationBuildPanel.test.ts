@@ -84,4 +84,37 @@ describe('equation builds in the Build panel', () => {
     expect(plain).toMatchObject({ type: 'appear', value: null });
     expect(plain.term ?? plain.color ?? plain.scale).toBeUndefined();
   });
+
+  it('offers a jiggle and a pop beside the pulse, each with its own time and fields', () => {
+    const { store, host, button, change } = setUp();
+    store.select(['eq']);
+    button('Add pulse')!.click();
+    const action = () => host.querySelector<HTMLSelectElement>('select.build-action')!;
+    const options = [...action().options].map((option) => option.value);
+    expect(options.slice(options.indexOf('pulse'))).toEqual(['pulse', 'pulse:lift', 'jiggle', 'pop']);
+    change(host.querySelector<HTMLSelectElement>('select.build-term')!, '2');
+    change(host.querySelector<HTMLInputElement>('input.build-scale')!, '2');
+
+    // A pop keeps the term and the size, and takes its own, shorter time.
+    change(action(), 'pop');
+    expect(store.slide!.timeline[0].action).toMatchObject({ type: 'pop', value: null, term: '2', scale: 2, duration: 450 });
+    expect(action().value).toBe('pop');
+    expect(host.querySelector<HTMLInputElement>('input.build-scale')!.getAttribute('aria-label')).toBe('Pop scale');
+
+    // A jiggle turns rather than grows: no size, but still a term.
+    change(action(), 'jiggle');
+    expect(store.slide!.timeline[0].action).toMatchObject({ type: 'jiggle', value: null, term: '2', duration: 700 });
+    expect(store.slide!.timeline[0].action.scale).toBeUndefined();
+    expect(host.querySelector('input.build-scale')).toBeNull();
+    expect(host.querySelector<HTMLSelectElement>('select.build-term')!.value).toBe('2');
+    expect(host.querySelector<HTMLInputElement>('.build-duration')).not.toBeNull();
+
+    // A fresh pop sizes itself by its own default.
+    change(action(), 'pop');
+    expect(host.querySelector<HTMLInputElement>('input.build-scale')!.value).toBe('1.3');
+    change(action(), 'appear');
+    const plain = store.slide!.timeline[0].action;
+    expect(plain).toMatchObject({ type: 'appear', value: null });
+    expect(plain.term ?? plain.scale ?? plain.duration).toBeUndefined();
+  });
 });
