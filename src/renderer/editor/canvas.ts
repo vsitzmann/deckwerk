@@ -7893,6 +7893,17 @@ export function elementContainsPoint(
     return Math.hypot(point.x - nearestX, point.y - nearestY) <=
       Math.max(tolerance, el.strokeWidth / 2);
   }
+  // An unfilled path — a line drawn with the pen, outline art — is hit along
+  // its stroke, as a line is; its box is mostly empty slide.
+  if (el.type === 'shape' && el.shape === 'path' && !visiblePaint(el.fill)) {
+    const paths = pathOnCanvas(el);
+    if (paths) {
+      const size = el.pathSize ?? { w: el.w, h: el.h };
+      const width = el.strokeWidth * Math.sqrt((el.w / size.w) * (el.h / size.h));
+      const hit = nearestOnPath(paths, point);
+      return hit !== null && hit.distance <= Math.max(tolerance, width / 2);
+    }
+  }
   // Rotated elements render about their centre; undo the rotation on the
   // point so the axis-aligned bounds check matches what's on screen.
   let { x, y } = point;

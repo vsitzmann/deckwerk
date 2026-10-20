@@ -2,7 +2,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { emptyDeck, type ShapeEl, type SlideElement } from '../src/shared/deck.js';
 import { pathOnCanvas } from '../src/shared/pathNodes.js';
-import { EditorCanvas } from '../src/renderer/editor/canvas.js';
+import { EditorCanvas, elementContainsPoint } from '../src/renderer/editor/canvas.js';
 import { EditorStore } from '../src/renderer/editor/store.js';
 import { installCanvasDomShims } from './support/canvasHarness.js';
 
@@ -73,6 +73,21 @@ describe('resizing a path shape', () => {
     const handle = host.querySelector('.handle-se[data-element-id="path-1"]')!;
     drag(host, { x: 340, y: 340, target: handle }, { x: 440, y: 340 }, { x: 580, y: 340 });
     expect(shape()).toMatchObject({ w: 480, path: 'M12 2 L22 20 L2 20 Z', pathSize: { w: 24, h: 24 } });
+  });
+});
+
+describe('selecting a path', () => {
+  it('hits an unfilled path on its stroke, a filled one anywhere in its box', () => {
+    const line = pathShape({ fill: null, path: 'M 0 0 L 300 200' });
+    expect(elementContainsPoint(line, { x: 250, y: 200 }, 8)).toBe(true);
+    expect(elementContainsPoint(line, { x: 256, y: 196 }, 8)).toBe(true);
+    expect(elementContainsPoint(line, { x: 350, y: 120 }, 8)).toBe(false);
+    expect(elementContainsPoint(pathShape(), { x: 350, y: 120 }, 8)).toBe(true);
+    // Rotated a quarter turn about its centre, the line runs the other diagonal.
+    const turned = { ...line, rot: 90 };
+    expect(elementContainsPoint(turned, { x: 250, y: 200 }, 8)).toBe(true);
+    expect(elementContainsPoint(turned, { x: 200, y: 275 }, 8)).toBe(true);
+    expect(elementContainsPoint(turned, { x: 350, y: 120 }, 8)).toBe(false);
   });
 });
 
