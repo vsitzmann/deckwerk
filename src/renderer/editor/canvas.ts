@@ -33,7 +33,17 @@ import {
   stripTextMediaPayloads,
   textOnlyPastedHtml,
 } from '@shared/htmlSafety.js';
-import { isBaselineFormat, type BaselineFormat, type InlineTextFormat } from './textFormatting.js';
+import {
+  DECORATION_LINES,
+  decorationLineValue,
+  isBaselineFormat,
+  isDecorationFormat,
+  isDecorationTag,
+  otherDecoration,
+  type BaselineFormat,
+  type DecorationFormat,
+  type InlineTextFormat,
+} from './textFormatting.js';
 import { classifyMediaName, isPendingSrc, makePendingSrc, mediaFileName, pendingToken } from '@shared/media.js';
 import {
   normalizeParagraphHtml,
@@ -4540,11 +4550,13 @@ export class EditorCanvas {
           ? 'italic'
           : event.inputType === 'formatUnderline'
             ? 'underline'
-            : null;
+            : event.inputType === 'formatStrikeThrough'
+              ? 'strikethrough'
+              : null;
       if (nativeFormat) {
         // Electron/Chromium can route macOS editing commands through
         // beforeinput without delivering the corresponding Cmd+B/Cmd+I/Cmd+U
-        // keydown to the contenteditable. Own those semantic commands too so
+        // (or strikethrough) keydown to the contenteditable. Own those semantic commands too so
         // native menu/accelerator routing and physical keyboard routing have
         // identical, model-backed formatting behaviour.
         event.preventDefault();
@@ -4653,6 +4665,11 @@ export class EditorCanvas {
         this.toggleTextSelectionFormat(
           e.key === '=' || e.key === '+' ? 'superscript' : 'subscript',
         );
+      } else if ((e.metaKey || e.ctrlKey) && e.shiftKey && !e.altKey && e.key.toLowerCase() === 'x') {
+        // Strikethrough, as in Google Docs and Slides. Shift keeps it clear
+        // of Cut.
+        e.preventDefault();
+        this.toggleTextSelectionFormat('strikethrough');
       } else if (this.handleZoomShortcut(e)) {
         // The unshifted chords zoom the canvas here too: they mean nothing to
         // the text, and would otherwise zoom the whole page.
@@ -5270,6 +5287,7 @@ export class EditorCanvas {
       underline: link
         ? this.elementFormatState(link.element, link.content, 'underline')
         : this.textSelectionFormatState('underline'),
+      strikethrough: this.textSelectionFormatState('strikethrough'),
       superscript: this.textSelectionFormatState('superscript'),
       subscript: this.textSelectionFormatState('subscript'),
       runStyles: this.runStylesAtCaret(),
@@ -5377,8 +5395,8 @@ export class EditorCanvas {
     if (formats.italic !== has('italic')) {
       declarations.push(['fontStyle', formats.italic ? 'italic' : 'normal']);
     }
-    if (formats.underline !== has('underline')) {
-      declarations.push(['textDecorationLine', formats.underline ? 'underline' : 'none']);
+    if (formats.underline !== has('underline') || formats.strikethrough !== has('strikethrough')) {
+      declarations.push(['textDecorationLine', decorationLineValue(formats)]);
     }
     if (formats.superscript !== has('superscript') || formats.subscript !== has('subscript')) {
       declarations.push(...BASELINE_DECLARATIONS[
@@ -5818,7 +5836,26 @@ export class EditorCanvas {
         `${active ? 'Remove' : 'Apply'} ${format}`,
       );
     }
-    return this.applyTextSelectionStyle('textDecorationLine', active ? 'none' : 'underline');
+    return this.toggleTextSelectionDecoration(format, !active);
+  }
+
+  /**
+   * Switch one line on or off over the selection. Underline and
+   * strikethrough share `text-decoration-line`, so every run is written the
+   * value that keeps its own other line: striking through a sentence with one
+   * underlined word leaves that word underlined.
+   */
+  private toggleTextSelectionDecoration(format: DecorationFormat, on: boolean): boolean {
+    const other = otherDecoration(format);
+    const value = (otherOn: boolean): string => decorationLineValue({
+      [format]: on,
+      [other]: otherOn,
+    } as Record<DecorationFormat, boolean>);
+    return this.applyTextSelectionStyles(
+      [['textDecorationLine', value(this.textSelectionFormatState(other))]],
+      `Change selected text ${format}`,
+      (text, content) => [['textDecorationLine', value(this.textNodeFormatState(text, content, other))]],
+    );
   }
 
   textSelectionFormatState(format: InlineTextFormat): boolean {
@@ -6403,12 +6440,12 @@ export class EditorCanvas {
       if (format === 'italic' && node.style.fontStyle) {
         return node.style.fontStyle === 'italic';
       }
-      if (format === 'underline' && node.style.textDecorationLine) {
-        return node.style.textDecorationLine.includes('underline');
+      if (isDecorationFormat(format) && node.style.textDecorationLine) {
+        return node.style.textDecorationLine.includes(DECORATION_LINES[format]);
       }
       if (format === 'bold' && node.matches('b, strong')) return true;
       if (format === 'italic' && node.matches('i, em')) return true;
-      if (format === 'underline' && node.matches('u')) return true;
+      if (isDecorationFormat(format) && isDecorationTag(node, format)) return true;
     }
     const computed = start ? getComputedStyle(start) : null;
     if (baseline) return computed?.verticalAlign === baseline;
@@ -6417,7 +6454,8 @@ export class EditorCanvas {
       return computed?.fontWeight === 'bold' || weight >= 600;
     }
     if (format === 'italic') return computed?.fontStyle === 'italic';
-    return computed?.textDecorationLine.includes('underline') === true;
+    return isDecorationFormat(format)
+      && computed?.textDecorationLine.includes(DECORATION_LINES[format]) === true;
   }
 
   private applyTextSelectionStyle(property: TextRunStyleProperty, value: string): boolean {
@@ -6431,9 +6469,18 @@ export class EditorCanvas {
     return this.applyTextSelectionStyles([[property, value]], label);
   }
 
+  /**
+   * `perText`, when given, decides the declarations for each selected run in
+   * place of `declarations` (which a collapsed caret still uses): for a value
+   * that depends on what the run already has.
+   */
   private applyTextSelectionStyles(
     declarations: ReadonlyArray<readonly [TextRunStyleProperty, string]>,
     label: string,
+    perText?: (
+      text: Text,
+      content: HTMLElement,
+    ) => ReadonlyArray<readonly [TextRunStyleProperty, string]>,
   ): boolean {
     if (!this.editingId) return false;
     const content = this.slideLayer.querySelector<HTMLElement>(
@@ -6482,9 +6529,10 @@ export class EditorCanvas {
       if (end < text.data.length) text.splitText(end);
       const selected = start > 0 ? text.splitText(start) : text;
       selectedTexts.add(selected);
+      const own = perText ? perText(selected, content) : declarations;
       const applied = keepProportional && proportional[index]
-        ? declarations.filter(([property]) => property !== 'fontSize')
-        : declarations;
+        ? own.filter(([property]) => property !== 'fontSize')
+        : own;
       if (applied.length === 0) return;
       const span = document.createElement('span');
       for (const [property, value] of applied) span.style[property] = value;
@@ -6750,16 +6798,24 @@ export class EditorCanvas {
       this.commitTableDom('Change table cell typography');
       return true;
     }
-    const property = format === 'bold' ? 'fontWeight'
-      : format === 'italic' ? 'fontStyle' : 'textDecorationLine';
+    if (isDecorationFormat(format)) {
+      // Each cell keeps its own other line; see toggleTextSelectionDecoration.
+      const on = !this.tableCellTextFormatState(format);
+      const other = otherDecoration(format);
+      for (const cell of cells) {
+        cell.style.textDecorationLine = decorationLineValue({
+          [format]: on,
+          [other]: cell.style.textDecorationLine.includes(DECORATION_LINES[other]),
+        } as Record<DecorationFormat, boolean>);
+      }
+      this.commitTableDom('Change table cell typography');
+      return true;
+    }
+    const property = format === 'bold' ? 'fontWeight' : 'fontStyle';
     const active = cells.every((cell) => format === 'bold'
       ? Number.parseInt(cell.style.fontWeight, 10) >= 600
-      : format === 'italic'
-        ? cell.style.fontStyle === 'italic'
-        : cell.style.textDecorationLine.includes('underline'));
-    const value = format === 'bold' ? (active ? '400' : '700')
-      : format === 'italic' ? (active ? 'normal' : 'italic')
-        : active ? 'none' : 'underline';
+      : cell.style.fontStyle === 'italic');
+    const value = format === 'bold' ? (active ? '400' : '700') : active ? 'normal' : 'italic';
     return this.applyTableCellTextStyle(property, value);
   }
 
@@ -6785,7 +6841,7 @@ export class EditorCanvas {
       ? Number.parseInt(cell.style.fontWeight, 10) >= 600
       : format === 'italic'
         ? cell.style.fontStyle === 'italic'
-        : cell.style.textDecorationLine.includes('underline'));
+        : cell.style.textDecorationLine.includes(DECORATION_LINES[format]));
   }
 
   textComputedTypography(elementId: string): {

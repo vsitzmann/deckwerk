@@ -388,12 +388,15 @@ export function bindEditorKeys(deps: ShellDeps, clipboard: ClipboardActions): vo
       duplicateSelection(store);
       return;
     }
-    if (mod && ['b', 'i', 'u'].includes(e.key.toLowerCase())) {
+    // Strikethrough is Cmd/Ctrl+Shift+X (Google Docs and Slides), which has
+    // to be caught before Cmd/Ctrl+X cuts the box.
+    const strike = mod && e.shiftKey && !e.altKey && e.key.toLowerCase() === 'x';
+    if (strike || (mod && ['b', 'i', 'u'].includes(e.key.toLowerCase()))) {
       const texts = store.selectedElements()
         .filter((element): element is Extract<SlideElement, { type: 'text' }> => element.type === 'text');
       if (texts.length > 0) {
         e.preventDefault();
-        const format: TextFormat = e.key.toLowerCase() === 'b'
+        const format: TextFormat = strike ? 'strikethrough' : e.key.toLowerCase() === 'b'
           ? 'bold' : e.key.toLowerCase() === 'i' ? 'italic' : 'underline';
         const active = texts.every((element) => wholeTextFormatState(element, format));
         store.updateSelected((element) => {
