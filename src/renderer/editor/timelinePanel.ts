@@ -138,7 +138,8 @@ export class TimelinePanel {
       row.classList.toggle('selected', selection.has(element.id));
       renderElementLabel(row, element);
       const steps = numbersByTarget.get(element.id);
-      if (steps) row.dataset.steps = steps.join(' ');
+      // Written as the canvas badge writes them, so the two read alike.
+      if (steps) row.dataset.steps = steps.join(',');
       row.title = steps
         ? `${describeElement(element)} · step ${steps.join(', ')}`
         : describeElement(element);

@@ -18,6 +18,11 @@
   --accent: #3b82f6;
   --danger: #e0463c;
   --build-orange: #f59e0b;
+  /* Build-order numbers, on the canvas and in the Build panel. One fixed blue
+     in both UI themes, since the canvas badges sit on the slide, not the
+     chrome; white text, held up by the weight. */
+  --build-mark: #0588ff;
+  --on-build-mark: #fff;
 }
 
 * { box-sizing: border-box; }
@@ -1073,13 +1078,14 @@ body.panel-resizing iframe { pointer-events: none; }
   flex: none;
   display: grid;
   place-items: center;
-  min-width: 17px;
-  height: 17px;
-  padding: 0 4px;
-  border-radius: 9px;
-  background: var(--build-orange);
-  color: #fff;
-  font: 700 10.5px/1 system-ui, sans-serif;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 5px;
+  border-radius: 10px;
+  background: var(--build-mark);
+  color: var(--on-build-mark);
+  font: 600 11.5px/1 system-ui, sans-serif;
+  font-variant-numeric: tabular-nums;
 }
 
 /* Read-only paragraph rows inside a by-paragraph card: number + snippet. */
@@ -1134,20 +1140,28 @@ body.panel-resizing iframe { pointer-events: none; }
   font-weight: 650;
 }
 
-/* Numbered marker on the canvas for elements a build entry animates. */
+/* Numbered marker on the canvas for elements a build entry animates. Sized
+   in screen pixels: scale(var(--inv)) undoes the stage's zoom, so the badge
+   is the same 24px at any zoom and its text is laid out at that size rather
+   than magnified. A white ring and a soft shadow lift it off any slide,
+   photos included; several builds on one object widen it into a pill
+   ("1,3"). */
 .build-badge {
   position: absolute;
   z-index: 6;
   display: grid;
   place-items: center;
-  min-width: 18px;
-  height: 18px;
-  padding: 0 5px;
-  border-radius: 9px;
-  background: var(--build-orange);
-  box-shadow: 0 0 0 calc(1.5px * var(--inv, 1)) rgb(255 255 255 / 85%);
-  color: #fff;
-  font: 700 11px/1 system-ui, sans-serif;
+  min-width: 24px;
+  height: 24px;
+  padding: 0 7px;
+  border-radius: 12px;
+  background: var(--build-mark);
+  box-shadow: 0 0 0 2px #fff, 0 1px 5px 1px rgb(0 0 0 / 35%);
+  color: var(--on-build-mark);
+  font: 600 13px/1 system-ui, sans-serif;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
   transform: translate(-55%, -45%) scale(var(--inv, 1));
 }
 
@@ -4551,18 +4565,21 @@ button.ghost:hover:not(:disabled) { color: var(--text); background: transparent;
 .build-element-row[data-kind="shape-line"]::before { content: '╱'; }
 .build-element-row[data-kind="shape-arrow"]::before { content: '→'; }
 .build-element-row[data-kind="shape-path"]::before { content: '∿'; }
-/* The steps that animate this element, drawn as the same orange badge the
+/* The steps that animate this element, drawn as the same blue badge the
    canvas uses, from a data attribute so the row's text stays its name. */
 .build-element-row[data-steps]::after {
   content: attr(data-steps);
   flex: none;
+  min-width: 18px;
   margin-left: auto;
-  padding: 0 5px;
-  height: 15px;
-  border-radius: 8px;
-  background: var(--build-orange);
-  color: #000;
-  font: 700 9.5px/15px var(--mono);
+  padding: 0 6px;
+  height: 18px;
+  border-radius: 9px;
+  background: var(--build-mark);
+  color: var(--on-build-mark);
+  font: 600 11px/18px system-ui, sans-serif;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
   white-space: nowrap;
 }
 .build-elements-section > .panel-action { margin: 0 0 4px; }
@@ -4609,7 +4626,6 @@ button.ghost:hover:not(:disabled) { color: var(--text); background: transparent;
 .build-duration-wrap { width: 100%; }
 .timeline-row select.build-action { padding: 2px 20px 2px 6px; height: 24px; font: 10.5px var(--mono); }
 .timeline-row select.build-trigger { flex: none; }
-.build-num { min-width: 16px; height: 16px; font: 700 9.5px/1 var(--mono); color: #000; }
 
 /* --- Design: canvas previews, the Props layout picker, rail design captions --- */
 .design-slide-preview {
