@@ -4,6 +4,7 @@ import './editor.css';
 import '../collab/collab.css';
 import '../lightTheme.css';
 import { applyUiTheme } from '../uiTheme.js';
+import { applyUiPreferences } from '../uiPreferences.js';
 import { applyAgentOperations, applyAgentTransaction, type AgentOperation } from '@shared/agent.js';
 import type { Deck, SlideElement } from '@shared/deck.js';
 import { emptyDeck } from '@shared/deck.js';
@@ -23,6 +24,7 @@ import {
 import { AgentBridge, type HtmlSyncOutcome } from './agentBridge.js';
 import { AgentPanel } from './agentPanel.js';
 import { createDeckWerkButton } from './aboutDialog.js';
+import { installSettingsShortcut } from './settingsDialog.js';
 import { trackPreviewFrameRecovery } from '../player/previewFrameRecovery.js';
 import { CANVAS_NOTICE_EVENT, EditorCanvas } from './canvas.js';
 import { CssEditor } from './cssEditor.js';
@@ -64,6 +66,8 @@ import { applySpeakerNotes } from '@shared/speakerNotes.js';
 import { installResponsiveToolbar } from './responsiveToolbar.js';
 
 applyUiTheme();
+applyUiPreferences();
+installSettingsShortcut();
 
 /**
  * Editor shell: wires the panels to one store, owns the toolbar, the keyboard

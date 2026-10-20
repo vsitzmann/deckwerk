@@ -4,11 +4,13 @@ import '../editor/editor.css';
 import './collab.css';
 import '../lightTheme.css';
 import { applyUiTheme } from '../uiTheme.js';
+import { applyUiPreferences } from '../uiPreferences.js';
 import { emptyDeck } from '@shared/deck.js';
 import { setIdSuffix } from '@shared/geometry.js';
 import { CANVAS_NOTICE_EVENT, EditorCanvas } from '../editor/canvas.js';
 import { SpeakerNotesDrawer } from '../editor/speakerNotesDrawer.js';
 import { createDeckWerkButton } from '../editor/aboutDialog.js';
+import { installSettingsShortcut } from '../editor/settingsDialog.js';
 import { setCommentAuthor, setCommentLinks } from '../editor/comments.js';
 import { findComment } from '@shared/comments.js';
 import { CssEditor } from '../editor/cssEditor.js';
@@ -65,6 +67,8 @@ import { DesignWorkspace } from '../editor/designWorkspace.js';
 import { installResponsiveToolbar } from '../editor/responsiveToolbar.js';
 
 applyUiTheme();
+applyUiPreferences();
+installSettingsShortcut();
 
 /**
  * Browser collaboration shell: the same canvas, rail, inspector, theme

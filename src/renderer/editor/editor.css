@@ -52,8 +52,9 @@ html, body {
 /* Only the macOS app's hiddenInset title bar overlays the toolbar's left end,
    so only it needs the traffic lights cleared. Every other window—and the
    browser client, which has no title bar at all—starts its first control at
-   the toolbar's own padding. */
-body.mac-titlebar #toolbar { padding-left: 84px; }
+   the toolbar's own padding. The traffic lights do not zoom with the
+   interface scale, so neither does their gutter. */
+body.mac-titlebar #toolbar { padding-left: calc(84px / var(--ui-scale, 1)); }
 
 .bar-divider {
   width: 1px;
@@ -3644,6 +3645,22 @@ button.deck-picker-row.active { border-color: var(--accent); }
 .web-export-quality { padding-top: 4px; }
 .web-export-detail { margin: 0; min-height: 3.6em; color: var(--muted); font-size: 12px; line-height: 1.5; }
 .pdf-export-builds { padding: 8px 0 4px; }
+.settings-dialog { width: min(440px, calc(100vw - 56px)); }
+.settings-section { display: flex; flex-direction: column; gap: 10px; padding-top: 12px; border-top: 1px solid var(--line); }
+.settings-section-title {
+  margin: 0;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.settings-dialog .field { margin-bottom: 0; }
+.settings-theme-buttons .segment-button { height: 30px; font-size: 11.5px; }
+.settings-note { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.5; }
+.settings-about { display: flex; align-items: center; justify-content: space-between; gap: 12px; color: var(--muted); }
+.settings-reset { margin-right: auto; }
+.settings-dialog .workflow-actions { padding-top: 12px; border-top: 1px solid var(--line); }
 
 /* Object names in the build and Morph lists carry colour swatches so two
    shapes of the same geometry are still told apart at a glance. */
@@ -3790,6 +3807,8 @@ select.panel-action-select {
 .shape-menu-item:hover:not(:disabled) svg { color: #fff; }
 .shape-menu-item[aria-checked]::after { content: ''; width: 1em; margin-left: auto; text-align: right; }
 .shape-menu-item[aria-checked="true"]::after { content: '✓'; }
+.shape-menu-item[data-shortcut]::after { content: attr(data-shortcut); margin-left: auto; padding-left: 16px; color: var(--muted); }
+.shape-menu-item[data-shortcut]:hover:not(:disabled)::after { color: inherit; }
 .shape-menu-item svg { flex: none; color: var(--muted); }
 
 .table-picker-menu {
@@ -4153,6 +4172,12 @@ button.cthread-where:disabled { cursor: default; opacity: 1; }
 .align-button:hover, .segment-button:hover { color: var(--text); }
 
 .align-button.is-active, .segment-button.is-active {
+  background: var(--accent);
+  color: #fff;
+}
+/* Hovering the chosen one keeps it chosen, rather than taking the generic
+   button hover's grey under its white label. */
+.align-button.is-active:hover:not(:disabled), .segment-button.is-active:hover:not(:disabled) {
   background: var(--accent);
   color: #fff;
 }

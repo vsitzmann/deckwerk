@@ -1,12 +1,14 @@
 import { appearanceMenuSection } from '../uiTheme.js';
 import { createToolbarPicker } from './exportPicker.js';
+import { settingsShortcut, showSettingsDialog } from './settingsDialog.js';
 
 const ABOUT_DIALOG_ID = 'deckwerk-about';
 
 /**
  * The product wordmark at the leading edge of editor toolbars. It opens the
- * app menu: About, and the editor chrome's appearance — settings that are set
- * once rather than reached for while editing, so they stay out of the toolbar.
+ * app menu: About, Settings (the chrome's font and scale) and the chrome's
+ * appearance — things set once rather than reached for while editing, so they
+ * stay out of the toolbar.
  */
 export function createDeckWerkButton(): HTMLElement {
   const button = document.createElement('button');
@@ -16,6 +18,7 @@ export function createDeckWerkButton(): HTMLElement {
   button.title = 'DeckWerk';
   return createToolbarPicker('DeckWerk', [
     { label: 'About DeckWerk', action: showAboutDialog },
+    { label: 'Settings…', action: showSettingsDialog, shortcut: settingsShortcut() },
     appearanceMenuSection(),
   ], { trigger: button });
 }

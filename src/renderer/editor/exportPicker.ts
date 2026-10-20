@@ -3,6 +3,11 @@ export interface ToolbarPickerOption {
   action: () => void;
   /** Makes the entry one of a radio group, ticked while this returns true. */
   checked?: () => boolean;
+  /**
+   * The key chord that does the same: `label` is shown at the item's trailing
+   * edge, `keys` is its aria-keyshortcuts value.
+   */
+  shortcut?: { label: string; keys: string };
 }
 
 export interface ToolbarPickerSection {
@@ -94,6 +99,11 @@ export function createToolbarPicker(
       item.setAttribute('role', option.checked ? 'menuitemradio' : 'menuitem');
       if (option.checked) item.setAttribute('aria-checked', String(option.checked()));
       item.textContent = option.label;
+      if (option.shortcut) {
+        // Drawn by CSS, so the item's text stays its label alone.
+        item.dataset.shortcut = option.shortcut.label;
+        item.setAttribute('aria-keyshortcuts', option.shortcut.keys);
+      }
       item.addEventListener('click', () => {
         close();
         trigger.blur();

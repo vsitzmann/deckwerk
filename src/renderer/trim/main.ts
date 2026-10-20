@@ -2,10 +2,12 @@ import '../appChrome.css';
 import './trim.css';
 import '../lightTheme.css';
 import { applyUiTheme } from '../uiTheme.js';
+import { applyUiPreferences } from '../uiPreferences.js';
 import type { TrimRequest } from '@shared/ipc.js';
 import { clamp } from '@shared/geometry.js';
 
 applyUiTheme();
+applyUiPreferences();
 
 /**
  * Trim & crop: a thin UI over two ffmpeg operations and nothing else.
