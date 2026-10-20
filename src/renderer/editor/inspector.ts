@@ -184,6 +184,8 @@ export class Inspector {
   /** Marker paint for the list items touched by the live text selection. */
   textSelectionMarkerColor?: () => ListMarkerColorState | null;
   onApplyTextSelectionMarkerColor?: (value: string | null) => boolean;
+  /** Indent or outdent the paragraphs and list items the live selection touches. */
+  onShiftTextIndent?: (direction: 'in' | 'out') => boolean;
   tableSelection?: () => TableSelection | null;
   tableBorderSettings?: () => TableBorderSettings;
   onSetTableBorderColor?: (color: string) => void;
@@ -2149,6 +2151,44 @@ export class Inspector {
           listRow.lastElementChild?.classList.add('field-color-stacked');
         }
 
+        // Indent acts on lines, so like superscript it needs a caret: a list
+        // item moves a level (as Tab does), any other paragraph steps in.
+        {
+          const editing = this.editingText?.() ?? false;
+          const table = /<table\b/i.test(el.html);
+          const indentRow = document.createElement('div');
+          indentRow.className = 'text-list-row text-indent-row';
+          const indent = document.createElement('div');
+          indent.className = 'field text-indent';
+          const indentLabel = document.createElement('span');
+          indentLabel.textContent = 'Indent';
+          const strip = document.createElement('div');
+          strip.className = 'segmented-buttons';
+          strip.setAttribute('role', 'group');
+          for (const [direction, title] of [
+            ['out', 'Outdent (Cmd/Ctrl+[)'],
+            ['in', 'Indent (Cmd/Ctrl+])'],
+          ] as const) {
+            const choice = document.createElement('button');
+            choice.type = 'button';
+            choice.className = 'segment-button';
+            choice.dataset.direction = direction;
+            choice.title = !editing
+              ? `${title} — place the caret in the text first`
+              : table ? 'Indent does not apply to tables' : title;
+            choice.setAttribute('aria-label', title);
+            choice.disabled = !editing || table;
+            choice.appendChild(inlineGlyph(INDENT_GLYPHS[direction]));
+            // Keep the caret: a focus change would end the edit first.
+            choice.addEventListener('pointerdown', (event) => event.preventDefault());
+            choice.addEventListener('click', () => this.onShiftTextIndent?.(direction));
+            strip.appendChild(choice);
+          }
+          indent.append(indentLabel, strip);
+          indentRow.appendChild(indent);
+          layout.content.appendChild(indentRow);
+        }
+
         if (/<table\b/i.test(el.html)) {
           const table = optionSection('Table', 'text-table-options');
           const selected = this.tableSelection?.();
@@ -3433,6 +3473,12 @@ const LIST_GLYPHS = {
   None: '<path d="M2 3.5h10M2 7h10M2 10.5h10"/>',
   Bulleted: '<circle class="fill" cx="3" cy="3.5" r="1.2"/><circle class="fill" cx="3" cy="7" r="1.2"/><circle class="fill" cx="3" cy="10.5" r="1.2"/><path d="M6 3.5h6M6 7h6M6 10.5h6"/>',
   Numbered: '<path class="fill" d="M2.2 2.2h1.2v2.8h-.9V3h-.6zM2 6.3c0-.6.5-1 1.2-1s1.2.4 1.2 1c0 .4-.3.7-.8 1.1l-.5.4h1.3v.7H2v-.6l1.3-1.1c.3-.2.4-.4.4-.5 0-.2-.1-.3-.4-.3-.2 0-.4.1-.4.4zm.1 4.1h.8c0 .2.2.3.4.3s.4-.1.4-.3-.2-.3-.5-.3H3v-.6h.2c.3 0 .4-.1.4-.3s-.1-.3-.3-.3-.4.1-.4.3h-.8c0-.6.5-.9 1.2-.9s1.1.3 1.1.8c0 .3-.2.5-.5.6.3.1.6.3.6.7 0 .5-.5.9-1.2.9s-1.2-.4-1.2-.9z"/><path d="M6 3.5h6M6 7h6M6 10.5h6"/>',
+} as const;
+
+/** Outdent and Indent: the List glyph's three lines and an arrow beside them. */
+const INDENT_GLYPHS = {
+  out: '<path d="M6 3.5h6M6 7h6M6 10.5h6M4 5L2 7l2 2"/>',
+  in: '<path d="M6 3.5h6M6 7h6M6 10.5h6M2 5l2 2-2 2"/>',
 } as const;
 
 const SHAPE_KIND_GLYPHS = {

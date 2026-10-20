@@ -99,6 +99,7 @@ export function capabilities(): Capability[] {
         'One <li> per point; inline markup (<b>, <i>) works inside items.',
         'The whole list is one text element; the editor’s "Bulleted list" checkbox toggles the same markup.',
         'paragraphSpacing (px) spaces the items; unset keeps the theme default.',
+        'An item is indented a level by nesting a <ul>/<ol> inside the <li> above it. A paragraph outside a list is indented with data-indent="1" to "8" on its <p>, 1.4em a step, the same step as a list level.',
       ],
       elements: [
         text('cap-lists-title', 'Lists are markup, not characters', { x: 160, y: 90, w: 1600, h: 150 }, { class: ['role-title'] }),

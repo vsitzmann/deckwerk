@@ -56,6 +56,8 @@ import {
   LIST_MARKER_COLOR_ATTRIBUTE,
   LIST_MARKER_COLOR_PROPERTY,
   TYPING_STYLE_SENTINEL,
+  paragraphIndent,
+  setParagraphIndent,
   type ListMarkerColorState,
 } from '@shared/paragraphs.js';
 import {
@@ -394,6 +396,8 @@ function findTextTarget(
 }
 
 const TEXT_BLOCKS = 'td, th, li, p, h1, h2, h3, h4, h5, h6, blockquote, div';
+/** The paragraphs outside a list that the Indent buttons step in and out. */
+const INDENTABLE_BLOCKS = 'p, h1, h2, h3, h4, h5, h6, blockquote, div';
 
 /**
  * Whether a range reaches across two blocks of the edited text.
@@ -4566,6 +4570,15 @@ export class EditorCanvas {
         this.toggleTextSelectionFormat(
           e.key === '=' || e.key === '+' ? 'superscript' : 'subscript',
         );
+      } else if (
+        (e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey
+        && (e.code === 'BracketLeft' || e.code === 'BracketRight')
+      ) {
+        // Keynote's and Google Slides' indent chords, for paragraphs as well
+        // as list items. By physical key, as the arrange chords are.
+        e.preventDefault();
+        sealTextChunk();
+        this.shiftTextIndent(e.code === 'BracketRight' ? 'in' : 'out');
       } else if ((e.metaKey || e.ctrlKey) && e.shiftKey && !e.altKey && e.key.toLowerCase() === 'x') {
         // Strikethrough, as in Google Docs and Slides. Shift keeps it clear
         // of Cut.
@@ -5378,6 +5391,97 @@ export class EditorCanvas {
     const node = body.closest<HTMLElement>('.element');
     if (node) scheduleAutoFit(node);
     return true;
+  }
+
+  /**
+   * Indent or outdent everything the caret or the selection touches: the
+   * Indent buttons and Cmd/Ctrl+] and [. A list item moves one level, exactly
+   * as Tab and shift-Tab move it; a paragraph outside a list steps its own
+   * indent (see PARAGRAPH_INDENT_ATTRIBUTE). True when the request was taken,
+   * including one with nothing left to do, such as outdenting a flush line.
+   */
+  shiftTextIndent(direction: 'in' | 'out'): boolean {
+    if (!this.editingId || this.tableSelection) return false;
+    const body = this.slideLayer.querySelector<HTMLElement>(
+      `[data-element-id="${CSS.escape(this.editingId)}"] .text-content`,
+    );
+    if (!body) return false;
+    const live = window.getSelection();
+    const current = live && live.rangeCount > 0 ? live.getRangeAt(0) : null;
+    if (!current || !body.contains(current.commonAncestorContainer)) {
+      // Focus went to the panel: act on the bookmark taken before it did.
+      const saved = this.textSelectionRange;
+      if (!saved || !body.contains(saved.commonAncestorContainer)) return false;
+      live?.removeAllRanges();
+      live?.addRange(saved.cloneRange());
+    }
+    const range = live!.getRangeAt(0);
+    const touches = (node: Node): boolean => {
+      try {
+        return range.collapsed ? node.contains(range.startContainer) : range.intersectsNode(node);
+      } catch {
+        return false;
+      }
+    };
+    const items = this.touchedListItems(body, range);
+    let paragraphs = [...body.querySelectorAll<HTMLElement>(INDENTABLE_BLOCKS)]
+      .filter((block) => !block.closest('li, ul, ol, table') && touches(block))
+      .filter((block) => !block.querySelector(INDENTABLE_BLOCKS));
+    const offsets = this.textOffsetsForRange(body, range);
+    if (items.length === 0 && paragraphs.length === 0) {
+      // A one-line box is bare inline markup with no paragraph to carry the
+      // indent; the line the caret is on becomes one.
+      const line = this.bareLineAt(body, range);
+      if (!line || direction === 'out') return true;
+      paragraphs = [line];
+    }
+
+    let changed = false;
+    if (paragraphs.length > 0) {
+      for (const paragraph of paragraphs) {
+        const level = paragraphIndent(paragraph) + (direction === 'in' ? 1 : -1);
+        changed = setParagraphIndent(paragraph, level) || changed;
+      }
+      if (offsets) this.restoreTextRange(body, offsets);
+    }
+    if (items.length > 0) {
+      // A caret on an outer-level item has only its bullet left to give up,
+      // as with shift-Tab; that commits a step of its own.
+      if (direction === 'out' && !changed && this.unbulletCaretItem(body, 'outdent')) return true;
+      changed = this.shiftListItems(body, direction) || changed;
+    }
+    if (!changed) return true;
+    this.focusTextSurface(body);
+    const node = body.closest<HTMLElement>('.element');
+    if (node) scheduleAutoFit(node);
+    this.commitLiveTextDom(direction === 'in' ? 'Indent' : 'Outdent');
+    return true;
+  }
+
+  /**
+   * Wrap the run of bare inline markup the caret sits in, directly in the
+   * box, in a paragraph of its own, and return it. Null when the caret is
+   * inside a block already.
+   */
+  private bareLineAt(body: HTMLElement, range: Range): HTMLElement | null {
+    let top: Node | null = range.startContainer;
+    while (top && top.parentNode !== body) top = top.parentNode;
+    if (top === null && range.startContainer === body) {
+      top = body.childNodes[Math.min(range.startOffset, body.childNodes.length - 1)] ?? null;
+    }
+    const isBlock = (node: Node | null): boolean =>
+      node instanceof HTMLElement && node.matches(`${INDENTABLE_BLOCKS}, ul, ol, li, table, pre`);
+    if (!top || isBlock(top)) return null;
+    let first: Node = top;
+    while (first.previousSibling && !isBlock(first.previousSibling)) first = first.previousSibling;
+    const paragraph = document.createElement('p');
+    body.insertBefore(paragraph, first);
+    for (let node: Node | null = first; node && !isBlock(node);) {
+      const next: Node | null = node.nextSibling;
+      paragraph.appendChild(node);
+      node = next;
+    }
+    return paragraph;
   }
 
   /** Write the edited markup back to the deck as a single undoable change. */
