@@ -8,6 +8,7 @@ import { emptyDeck } from '@shared/deck.js';
 import { setIdSuffix } from '@shared/geometry.js';
 import { CANVAS_NOTICE_EVENT, EditorCanvas } from '../editor/canvas.js';
 import { SpeakerNotesDrawer } from '../editor/speakerNotesDrawer.js';
+import { CanvasRulers } from '../editor/rulers.js';
 import { createDeckWerkButton } from '../editor/aboutDialog.js';
 import { setCommentAuthor, setCommentLinks } from '../editor/comments.js';
 import { findComment } from '@shared/comments.js';
@@ -265,6 +266,9 @@ new SpeakerNotesDrawer(el('canvas'), store, {
   onInsetChange: (px) => canvas.setBottomInset(px),
   onStatus: setStatusMessage,
 });
+// The toggle only: Cmd/Ctrl+R, the desktop app's shortcut, is the browser's
+// reload here, and a page that swallowed it would surprise more than help.
+new CanvasRulers(el('canvas'), canvas, store);
 const inspector = new Inspector(el('inspector'), store);
 new TimelinePanel(el('timeline'), store);
 new HistoryPanel(el('history'), store);

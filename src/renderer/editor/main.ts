@@ -60,6 +60,7 @@ import { openEndCollaborationPopover } from '../collab/endCollaborationPopover.j
 import { setRenderInvariantChecks } from './renderInvariants.js';
 import { setSelectionInvariantChecks } from './selectionInvariants.js';
 import { SpeakerNotesDrawer } from './speakerNotesDrawer.js';
+import { CanvasRulers, isRulersShortcut, toggleRulers } from './rulers.js';
 import { applySpeakerNotes } from '@shared/speakerNotes.js';
 import { installResponsiveToolbar } from './responsiveToolbar.js';
 import { setSlideColorSource } from './colorPicker.js';
@@ -150,6 +151,16 @@ new SpeakerNotesDrawer(el('canvas'), store, {
   onInsetChange: (px) => canvas.setBottomInset(px),
   onStatus: setStatusMessage,
 });
+new CanvasRulers(el('canvas'), canvas, store, { shortcutHint: 'Cmd/Ctrl+R' });
+// Cmd/Ctrl+R shows and hides the rulers, as in Keynote, wherever focus is --
+// in the capture phase, because a text box being edited keeps its keys to
+// itself. Taking it also keeps Electron's default menu from reloading the
+// window on it; Cmd/Ctrl+Shift+R still force-reloads.
+window.addEventListener('keydown', (event) => {
+  if (!isRulersShortcut(event)) return;
+  event.preventDefault();
+  if (!event.repeat) toggleRulers();
+}, true);
 const inspector = new Inspector(el('inspector'), store);
 new TimelinePanel(el('timeline'), store);
 new HistoryPanel(el('history'), store);

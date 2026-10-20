@@ -841,6 +841,12 @@ export class EditorCanvas {
   private spacePan = false;
   /** Height of chrome covering the bottom of the host; see setBottomInset. */
   private bottomInset = 0;
+  /** Thickness of the rulers along the top and left of the host; see setRulerInset. */
+  private rulerInset = 0;
+  /** Where `rescale` last put the stage's top-left corner, in host pixels. */
+  private stageOrigin = { left: 0, top: 0 };
+  private viewportListeners = new Set<() => void>();
+  private zoomControls: HTMLElement;
   private drag: DragMode = { kind: 'none' };
   /**
    * Whether the pointer has moved far enough to count as a drag.
@@ -1073,9 +1079,9 @@ export class EditorCanvas {
     this.overlay = document.createElement('div');
     this.overlay.className = 'overlay-layer';
     this.stage.append(this.slideLayer, this.overlay);
-    const zoomControls = this.createZoomControls();
-    this.zoomInput = zoomControls.querySelector<HTMLInputElement>('.zoom-value')!;
-    this.host.replaceChildren(this.stage, zoomControls);
+    this.zoomControls = this.createZoomControls();
+    this.zoomInput = this.zoomControls.querySelector<HTMLInputElement>('.zoom-value')!;
+    this.host.replaceChildren(this.stage, this.zoomControls);
 
     new ResizeObserver(() => this.rescale()).observe(this.host);
     this.bindPointer();
@@ -1836,10 +1842,51 @@ export class EditorCanvas {
     setStyle(this.stage, 'transform', `scale(${scale})`);
     setStyle(this.stage, '--editor-inv-scale', String(1 / scale));
     setStyle(this.stage, 'transform-origin', 'top left');
-    setStyle(this.stage, 'left', `${(r.width - deck.canvas.w * scale) / 2 + this.pan.x}px`);
-    setStyle(this.stage, 'top', `${(r.height - deck.canvas.h * scale) / 2 + this.pan.y}px`);
+    // The viewport starts below and right of the rulers, when they are shown.
+    this.stageOrigin = {
+      left: this.rulerInset + (r.width - deck.canvas.w * scale) / 2 + this.pan.x,
+      top: this.rulerInset + (r.height - deck.canvas.h * scale) / 2 + this.pan.y,
+    };
+    setStyle(this.stage, 'left', `${this.stageOrigin.left}px`);
+    setStyle(this.stage, 'top', `${this.stageOrigin.top}px`);
     this.syncZoomInput();
     this.onViewportChange?.();
+    for (const listener of this.viewportListeners) listener();
+  }
+
+  /**
+   * Where slide space sits in the host: the host-pixel position of the
+   * slide's top-left corner, and host pixels per slide unit. The rulers
+   * read their scale from this.
+   */
+  stagePlacement(): { left: number; top: number; scale: number } {
+    return { ...this.stageOrigin, scale: this.scale };
+  }
+
+  /**
+   * Called after every `rescale` -- zoom, pan, a resize, an inset. Unlike
+   * `onViewportChange`, which the collaboration shell's presence overlay
+   * owns, any number of listeners can watch.
+   */
+  addViewportListener(listener: () => void): () => void {
+    this.viewportListeners.add(listener);
+    return () => this.viewportListeners.delete(listener);
+  }
+
+  /** Put a view control (the rulers toggle) at the start of the zoom pill. */
+  addViewControl(control: HTMLElement): void {
+    this.zoomControls.prepend(control);
+  }
+
+  /**
+   * Reserve `px` along the top and left of the host for the rulers, so the
+   * slide is fitted and centred beside them rather than underneath.
+   */
+  setRulerInset(px: number): void {
+    const next = Math.max(0, px);
+    if (next === this.rulerInset) return;
+    this.rulerInset = next;
+    this.rescale();
   }
 
   /** User-visible zoom percentage, relative to the normal fitted view. */
@@ -1858,10 +1905,16 @@ export class EditorCanvas {
     this.rescale();
   }
 
-  /** The part of the host the slide is laid out in: the host, less any bottom inset. */
+  /** The part of the host the slide is laid out in: the host, less the rulers and any bottom inset. */
   private viewportRect(): { left: number; top: number; width: number; height: number } {
     const r = this.host.getBoundingClientRect();
-    return { left: r.left, top: r.top, width: r.width, height: Math.max(0, r.height - this.bottomInset) };
+    const inset = this.rulerInset;
+    return {
+      left: r.left + inset,
+      top: r.top + inset,
+      width: Math.max(0, r.width - inset),
+      height: Math.max(0, r.height - inset - this.bottomInset),
+    };
   }
 
   /** Set zoom around the viewport centre. Exposed for shell actions and tests. */
@@ -2570,7 +2623,7 @@ export class EditorCanvas {
     // are ordinary application controls. Capturing their pointer on the canvas
     // changes the pointer-up target and prevents Chromium from synthesising a
     // click, which made all three welcome actions appear inert.
-    if (target.closest('.welcome-screen, .zoom-controls, .notes-toggle, .notes-drawer')) return;
+    if (target.closest('.welcome-screen, .zoom-controls, .notes-toggle, .notes-drawer, .canvas-ruler')) return;
     const slide = this.store.slide;
     if (!slide) return;
     // A press that reaches the canvas was not on a live page (the frame keeps
@@ -3292,7 +3345,7 @@ export class EditorCanvas {
     if (
       this.drag.kind === 'none'
       && (ev.target as HTMLElement | null)?.closest?.(
-        '.welcome-screen, .zoom-controls, .notes-toggle, .notes-drawer',
+        '.welcome-screen, .zoom-controls, .notes-toggle, .notes-drawer, .canvas-ruler',
       )
     ) {
       return;
@@ -7455,7 +7508,7 @@ function sameStructure(a: Slide, b: Slide, ignoreHtml = false): boolean {
 }
 
 /** Axis-aligned bounds of an element as rendered (rotation about its centre). */
-function rotatedBounds(el: SlideElement): Rect {
+export function rotatedBounds(el: SlideElement): Rect {
   if (!el.rot) return { x: el.x, y: el.y, w: el.w, h: el.h };
   const rad = (el.rot * Math.PI) / 180;
   const cos = Math.abs(Math.cos(rad));
