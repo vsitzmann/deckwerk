@@ -27,8 +27,10 @@ import { sidebarSelectionProbes } from './support/selectionSession.js';
  * selection, Cmd+A in both contexts, Backspace on a multi-slide rail
  * selection (which must ask first; cancelled, or confirmed and undone), and
  * resizing a selected word from the sidebar's Font size field, flipping
- * the selection from the sidebar, and panning and zooming the view with a
- * plain mouse and the keyboard (each time also showing or hiding the rulers).
+ * the selection from the sidebar, panning and zooming the view with a
+ * plain mouse and the keyboard (each time also showing or hiding the
+ * rulers), and picking up the pen to put it down again or to draw a line
+ * that is undone.
  *
  * After EVERY step five oracles run: the whole-editor invariant set from
  * selectionSession, keystroke routing via per-step nonce strings, an element
@@ -153,7 +155,7 @@ type OpName =
   | 'type nonce' | 'bold mid-word' | 'escape' | 'click empty' | 'marquee'
   | 'rail hop' | 'undo' | 'redo' | 'undo round-trip' | 'delete selection'
   | 'cmd+a' | 'click with stray hover' | 'rail multi-delete' | 'stack key' | 'spelling fix'
-  | 'size from sidebar' | 'flip from sidebar' | 'viewport gesture';
+  | 'size from sidebar' | 'flip from sidebar' | 'viewport gesture' | 'pen abandoned' | 'pen line undone';
 
 interface Violation { seed: number; step: number; op: OpName; oracle: string; detail: string }
 
@@ -368,6 +370,23 @@ describe.skipIf(electronBinary)('cross-context fuzz (skipped)', () => {
   it('needs Electron', () => expect(electronBinary).toBe(''));
 });
 
+/** Shape → Draw with Pen, from whichever copy of the toolbar's menu is showing. */
+async function openPen(): Promise<void> {
+  await session.cdp.evaluate(`[...document.querySelectorAll('.shape-menu-trigger')]
+    .find((node) => node.getBoundingClientRect().width > 0 && node.textContent?.trim() === 'Shape')?.click()`);
+  await session.cdp.clickByText('.shape-menu-item', 'Draw with Pen', 'Draw with Pen');
+  await wait(60);
+}
+
+/**
+ * Slides in the deck. The walks share one history, so a redo can bring back
+ * a confirmed whole-deck deletion (see 'rail multi-delete') and leave one.
+ */
+const slideCount = () => session.cdp.evaluate<number>('window.store.get().deck.slides.length');
+
+const penIsDown = () => session.cdp.evaluate<boolean>(
+  `document.querySelector('.canvas-host')?.classList.contains('pen-tool') ?? false`);
+
 /** The elements an op can aim at on the current slide, live. */
 function targetsOn(pre: CrossState): string[] {
   const known = [PARA, LIST, IMAGE, FAR];
@@ -410,6 +429,10 @@ function chooseOp(next: () => number, pre: CrossState): OpName {
   add('rail multi-delete', 1);
   add('stack key', 1);
   add('viewport gesture', 2);
+  if (pre.editing === null) {
+    add('pen abandoned', 1);
+    add('pen line undone', 1);
+  }
   return pick(next, ops);
 }
 
@@ -566,6 +589,7 @@ async function performOp(
       return 'same';
     }
     case 'rail hop': {
+      if (await slideCount() < 2) return 'same';
       const other = pre.slideIndex === 0 ? 1 : 0;
       await session.clickRail(other);
       if (next() < 0.6) await session.clickRail(pre.slideIndex);
@@ -645,6 +669,35 @@ async function performOp(
     case 'cmd+a':
       await session.chord('a', 'KeyA', 65, MOD, pre.editing !== null ? ['selectAll'] : undefined);
       return 'same';
+    case 'pen abandoned': {
+      // Shape → Draw with Pen, one point, Escape: nothing is drawn, and the
+      // pen is put down.
+      await openPen();
+      await session.cdp.clickWithin('.slide-layer', 0.45, 0.96, 'a pen point');
+      await session.key('Escape', 27);
+      if (await penIsDown()) flag('routing', 'Escape left the pen drawing');
+      return 'same';
+    }
+    case 'pen line undone': {
+      // Two points and Return draw a line; undo takes it away whole.
+      const before = await session.deckSnapshot();
+      const idsBefore = await session.allElementIds();
+      await openPen();
+      await session.cdp.clickWithin('.slide-layer', 0.45, 0.96, 'a pen point');
+      await session.cdp.clickWithin('.slide-layer', 0.6, 0.96, 'a second pen point');
+      await session.key('Enter', 13);
+      await wait(120);
+      if (await penIsDown()) flag('routing', 'Return left the pen drawing');
+      const drawn = await session.allElementIds();
+      if (drawn.length !== idsBefore.length + 1) {
+        flag('census', `the pen drew ${drawn.length - idsBefore.length} objects, not one`);
+      }
+      for (const id of drawn) producedIds.add(id);
+      await session.chord('z', 'KeyZ', 90, MOD);
+      await wait(250);
+      if (await session.deckSnapshot() !== before) flag('undoRoundTrip', 'undo did not take back the drawn line');
+      return 'same';
+    }
     case 'viewport gesture':
       await viewportGesture(next, pre, flag);
       return 'same';
@@ -657,6 +710,7 @@ async function performOp(
         `JSON.stringify(window.store.get().deck.slides.map((slide) => [slide.id, slide.elements.map((el) => el.id)]))`);
       const dialogOpen = () => session.cdp.evaluate<boolean>(
         `Boolean(document.querySelector('.workflow-dialog[role="alertdialog"]'))`);
+      if (await slideCount() < 2) return 'same';
       await session.clickRail(pre.slideIndex);
       await session.cdp.clickModified(`.rail-item[data-index="${pre.slideIndex === 0 ? 1 : 0}"]`,
         SHIFT, 'shift-click the other rail slide');

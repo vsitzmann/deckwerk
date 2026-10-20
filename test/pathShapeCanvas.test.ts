@@ -37,8 +37,9 @@ function setup(elements: SlideElement[] = []) {
 
 type PointerInit = { x: number; y: number; target?: Element; shift?: boolean; alt?: boolean; buttons?: number };
 
+/** A pointer event. Only a press goes to `target`: the canvas captures the pointer, so the rest reach it. */
 function pointer(host: HTMLElement, type: string, { x, y, target, shift, alt, buttons }: PointerInit): void {
-  (target ?? host).dispatchEvent(new PointerEvent(type, {
+  (type === 'pointerdown' ? target ?? host : host).dispatchEvent(new PointerEvent(type, {
     clientX: x, clientY: y, bubbles: true, pointerId: 1, button: 0,
     buttons: buttons ?? (type === 'pointerup' ? 0 : 1), shiftKey: shift, altKey: alt,
   }));
@@ -136,8 +137,8 @@ describe('drawing with the pen', () => {
         { x: 500, y: 400 },
       ],
     }]);
-    // The box hugs the curves, which bulge past both points.
-    expect(shape).toMatchObject({ x: 200, y: 355.56, w: 300, h: 88.89 });
+    // The box hugs the curves, which bulge past both points, in whole pixels.
+    expect(shape).toMatchObject({ x: 200, y: 355, w: 300, h: 90 });
     expect(store.history()).toHaveLength(1);
   });
 
@@ -150,7 +151,7 @@ describe('drawing with the pen', () => {
     expect((store.slide!.elements[0] as ShapeEl).path).toBe('M 0 0 L 200 0');
   });
 
-  it('finishes a line on a double-click', () => {
+  it('finishes a line on a double-click, without opening it for editing', () => {
     const { store, canvas, host } = setup();
     canvas.startPen();
     click(host, 100, 100);
@@ -159,6 +160,7 @@ describe('drawing with the pen', () => {
     host.dispatchEvent(new MouseEvent('dblclick', { clientX: 300, clientY: 300, bubbles: true }));
     expect(canvas.isDrawingPath()).toBe(false);
     expect((store.slide!.elements[0] as ShapeEl).path).toBe('M 0 0 L 200 200');
+    expect(canvas.pathEditingElement()).toBeNull();
   });
 
   it('takes back points with Backspace, and draws nothing from a single point', () => {
@@ -172,5 +174,107 @@ describe('drawing with the pen', () => {
     expect(canvas.isDrawingPath()).toBe(false);
     expect(store.slide!.elements).toHaveLength(0);
     expect(store.history()).toHaveLength(0);
+  });
+});
+
+/** An open S-curve, one smooth symmetric point in the middle: canvas 100,150 → 250,150 → 400,200. */
+const wave = () => pathShape({
+  h: 100, fill: null, path: 'M 0 100 C 50 100 100 50 150 50 C 200 50 250 100 300 100', pathSize: { w: 300, h: 100 },
+});
+
+function nodesOf(shape: ShapeEl) {
+  return pathOnCanvas(shape)!.flatMap((run) => run.nodes);
+}
+
+describe('editing a path\'s points', () => {
+  beforeEach(() => document.body.replaceChildren());
+
+  function editing(elements: SlideElement[] = [pathShape()]) {
+    const parts = setup(elements);
+    parts.store.select(['path-1']);
+    const [el] = elements;
+    parts.host.dispatchEvent(new MouseEvent('dblclick', {
+      clientX: el.x + el.w / 2, clientY: el.y + el.h / 2, bubbles: true,
+    }));
+    const anchor = (key: string) => parts.host.querySelector<HTMLElement>(`.path-anchor[data-path-node="${key}"]`)!;
+    const knob = (key: string) => parts.host.querySelector<HTMLElement>(`.path-knob[data-path-handle="${key}"]`)!;
+    return { ...parts, anchor, knob };
+  }
+
+  it('opens on a double-click, showing points instead of the box', () => {
+    const { canvas, host } = editing();
+    expect(canvas.pathEditingElement()).toBe('path-1');
+    expect(host.querySelectorAll('.path-anchor')).toHaveLength(2);
+    expect(host.querySelector('.handle-se')).toBeNull();
+    expect(host.querySelector('.sel-box.path-editing')).not.toBeNull();
+  });
+
+  it('drags a point with its handles, as one undo step', () => {
+    const { store, shape, anchor, host } = editing();
+    drag(host, { x: 400, y: 300, target: anchor('0:1') }, { x: 450, y: 320 }, { x: 500, y: 350 });
+    expect(nodesOf(shape())[1]).toEqual({ x: 500, y: 350, in: { x: 500, y: 150 } });
+    // The first point has not moved, and the box hugs the new outline.
+    expect(nodesOf(shape())[0]).toEqual({ x: 100, y: 300, out: { x: 100, y: 100 } });
+    expect(shape().pathSize).toEqual({ w: shape().w, h: shape().h });
+    expect(store.history()[0]?.label).toBe('Move point');
+    store.undo();
+    expect(shape().path).toBe('M 0 200 C 0 0 300 0 300 200 Z');
+  });
+
+  it('turns a smooth point\'s handles together, and one alone with Option', () => {
+    const { shape, anchor, knob, host } = editing([wave()]);
+    click(host, 250, 150, { target: anchor('0:1') });
+    expect(host.querySelectorAll('.path-knob')).toHaveLength(4);
+    drag(host, { x: 300, y: 150, target: knob('0:1:out') }, { x: 300, y: 175 }, { x: 300, y: 200 });
+    expect(nodesOf(shape())[1]).toMatchObject({ x: 250, y: 150, in: { x: 200, y: 100 }, out: { x: 300, y: 200 } });
+
+    drag(host, { x: 200, y: 100, target: knob('0:1:in'), alt: true }, { x: 190, y: 125, alt: true }, { x: 180, y: 150, alt: true });
+    expect(nodesOf(shape())[1]).toMatchObject({ in: { x: 180, y: 150 }, out: { x: 300, y: 200 } });
+  });
+
+  it('adds a point where the outline is clicked, without changing its shape', () => {
+    const { store, shape, host, canvas } = editing();
+    click(host, 250, 301);
+    const nodes = nodesOf(shape());
+    expect(nodes).toHaveLength(3);
+    expect(nodes[2]).toEqual({ x: 250, y: 300 });
+    expect(shape()).toMatchObject({ x: 100, y: 150, w: 300, h: 150 });
+    expect(store.history()[0]?.label).toBe('Add point');
+    expect(host.querySelector('.path-anchor.selected')?.getAttribute('data-path-node')).toBe('0:2');
+    expect(canvas.pathEditingElement()).toBe('path-1');
+  });
+
+  it('deletes the selected point with Delete, and the shape with its last segment', () => {
+    const { store, shape, anchor, host } = editing([wave()]);
+    click(host, 250, 150, { target: anchor('0:1') });
+    key('Delete');
+    // The neighbours keep their handles: a flat curve from one end to the other.
+    expect(shape().path).toBe('M 0 0 C 50 0 250 0 300 0');
+    expect(store.history()[0]?.label).toBe('Delete point');
+    click(host, 100, 150, { target: anchor('0:0') });
+    key('Delete');
+    expect(store.slide!.elements).toHaveLength(0);
+  });
+
+  it('makes a corner smooth on a double-click', () => {
+    const { shape, anchor, host } = editing([pathShape({ path: 'M 0 200 L 150 0 L 300 200 Z' })]);
+    click(host, 250, 100, { target: anchor('0:1') });
+    click(host, 250, 100, { target: anchor('0:1') });
+    expect(nodesOf(shape())[1].in).toBeDefined();
+    expect(nodesOf(shape())[1].out).toBeDefined();
+  });
+
+  it('ends with Escape, keeping the path selected, or with a click elsewhere', () => {
+    const { store, canvas, host } = editing();
+    key('Escape');
+    expect(canvas.pathEditingElement()).toBeNull();
+    expect([...store.get().selection]).toEqual(['path-1']);
+    expect(host.querySelector('.handle-se')).not.toBeNull();
+
+    host.dispatchEvent(new MouseEvent('dblclick', { clientX: 250, clientY: 250, bubbles: true }));
+    expect(canvas.pathEditingElement()).toBe('path-1');
+    click(host, 1200, 800);
+    expect(canvas.pathEditingElement()).toBeNull();
+    expect(store.get().selection.size).toBe(0);
   });
 });

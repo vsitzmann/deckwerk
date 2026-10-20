@@ -154,9 +154,12 @@ export function wireCanvasInspector(
   inspector.textComputedTypography = (elementId) => canvas.textComputedTypography(elementId);
   inspector.onToggleMask = (id) => canvas.toggleMaskMode(id);
   inspector.maskingElement = () => canvas.maskingElement();
+  inspector.onTogglePathEdit = (id) => canvas.togglePathEdit(id);
+  inspector.pathEditingElement = () => canvas.pathEditingElement();
   inspector.onSeekPreview = (id, t) => canvas.seekVideo(id, t);
   inspector.videoDuration = (id) => canvas.videoDuration(id);
   canvas.onMaskModeChange = () => inspector.render();
+  canvas.onPathEditChange = () => inspector.render();
   canvas.onTextEditModeChange = () => inspector.render();
   canvas.onTextFormatStateChange = () => inspector.render();
   canvas.onTableSelectionChange = () => inspector.render();
@@ -568,6 +571,12 @@ export function makeContextActions(
         if (openTrim) {
           items.push({ label: 'Edit w/ ffmpeg…', action: () => openTrim(el) });
         }
+      }
+      if (el.type === 'shape' && el.shape === 'path' && sel === 1) {
+        items.push('separator', {
+          label: canvas.pathEditingElement() === el.id ? 'Done editing points' : 'Edit points',
+          action: () => canvas.togglePathEdit(el.id),
+        });
       }
       if (el.type === 'web') {
         items.push({
