@@ -602,7 +602,7 @@ describe('line draw on an outline', () => {
     expect(shape().style.fillOpacity).toBe('0');
     vi.advanceTimersByTime(100);
     // The outline is complete and the fill is on its way in.
-    expect(traces()[0].style.strokeDashoffset).toBe('0');
+    expect(traces()[0].style.strokeDasharray).toBe('');
     expect(Number(shape().style.fillOpacity)).toBeGreaterThan(0);
     expect(Number(shape().style.fillOpacity)).toBeLessThan(1);
   });
@@ -621,6 +621,37 @@ describe('line draw on an outline', () => {
     expect(Number(traces()[0].style.strokeOpacity)).toBeLessThan(1);
   });
 
+  it('uncovers a brush stroke along its path with a mask, and traces a pencil with copies of it', () => {
+    const { player, svg, traces } = presentOutline(arrow({
+      shape: 'path', arrowEnd: false, fill: null, w: 400, h: 100, pathSize: { w: 400, h: 100 },
+      path: 'M 0 50 C 100 0 300 100 400 50', strokeStyle: 'brush', strokeWidth: 12,
+    }));
+    const brush = () => svg().querySelector<SVGElement>(':scope > .brush-stroke')!;
+    player.next();
+    vi.advanceTimersByTime(400);
+    const mask = svg().querySelector('mask')!;
+    expect(brush().getAttribute('mask')).toBe(`url(#${mask.id})`);
+    const [band] = [...mask.querySelectorAll<SVGElement>('.draw-trace')];
+    expect(band.getAttribute('d')).toBe('M 0 50 C 100 0 300 100 400 50');
+    expect(band.getAttribute('stroke-width')).toBe('28');
+    expect(Number(band.style.strokeDashoffset)).toBeGreaterThan(0);
+    vi.advanceTimersByTime(700);
+    expect(svg().querySelector('mask')).toBeNull();
+    expect(brush().hasAttribute('mask')).toBe(false);
+    expect(traces()).toHaveLength(0);
+
+    const pencil = presentOutline(arrow({
+      shape: 'path', arrowEnd: false, fill: '#c96442', w: 400, h: 100, pathSize: { w: 400, h: 100 },
+      path: 'M 0 100 C 0 0 400 0 400 100 Z', strokeStyle: 'pencil',
+    }));
+    pencil.player.next();
+    vi.advanceTimersByTime(300);
+    const [copy] = pencil.traces();
+    expect(copy.getAttribute('filter')).toMatch(/^url\(#pencil-/);
+    expect(pencil.svg().querySelector<SVGElement>(':scope > .shape-stroke')!.style.visibility).toBe('hidden');
+    expect(pencil.svg().querySelector<SVGElement>(':scope > .shape-fill')!.style.fillOpacity).toBe('0');
+  });
+
   it('draws a path\'s runs one after another, not all at once', () => {
     const { player, traces } = presentOutline(arrow({
       shape: 'path', arrowEnd: false, fill: '#805ad5', w: 200, h: 200, pathSize: { w: 200, h: 200 },
@@ -636,7 +667,7 @@ describe('line draw on an outline', () => {
     expect(traces()[1].style.strokeDashoffset).toBe('1000');
     expect(traces()[1].style.visibility).toBe('hidden');
     vi.advanceTimersByTime(400);
-    expect(traces()[0].style.strokeDashoffset).toBe('0');
+    expect(traces()[0].style.strokeDasharray).toBe('');
     expect(Number(traces()[1].style.strokeDashoffset)).toBeLessThan(1000);
   });
 });

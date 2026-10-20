@@ -138,6 +138,7 @@ const ELEMENT_PROPERTIES: Record<SlideElement['type'], PropertyDoc[]> = {
     { path: 'control', type: '{x,y}|null', description: 'Canvas-space quadratic curve control point.', example: { x: 600, y: 300 } },
     { path: 'braceDepth', type: 'number', description: 'For braces: signed distance from the chord to the point, along the element\'s own +y; half of it is the curl radius.', example: 40 },
     { path: 'path', type: 'SVG path|null', description: 'SVG path data for path shapes: closed with Z and filled for a shape, open with fill null for a line.', example: 'M0 100 C 0 0 100 0 100 100 Z' },
+    { path: 'strokeStyle', type: 'enum', values: ['pen', 'brush', 'pencil', 'marker'], description: 'How a path\'s stroke is drawn: pen (default) an even line, brush tapering at its ends, pencil grainy and thin, marker a flat see-through highlighter.', example: 'brush' },
     { path: 'pathSize', type: '{w,h}|null', description: 'Coordinate space of SVG path data, scaled to the box. Equal to the box (w,h) for a drawn path, so strokeWidth is in pixels and a resize redraws the path.', example: { w: 100, h: 100 } },
   ],
   html: [
