@@ -11,6 +11,7 @@ import {
   slidesToHtml,
   type MeasuredNode,
 } from '../src/shared/htmlSlides.js';
+import { parsePath, pathGeometry } from '../src/shared/pathNodes.js';
 
 /**
  * The pure half of HTML authoring: browser-measured facts in, deck objects out.
@@ -522,6 +523,40 @@ describe('deck objects become authored HTML', () => {
     expect(html).toContain('data-control="400,240"');
     expect(html).toContain('data-arrow-end="true"');
     expect(html).not.toContain('data-arrow-start');
+  });
+
+  it('round-trips a path drawn with the pen, curves and all', () => {
+    const deck = emptyDeck('Paths');
+    const drawn = pathGeometry([{
+      closed: true,
+      nodes: [
+        { x: 200, y: 300, in: { x: 150, y: 350 }, out: { x: 250, y: 250 } },
+        { x: 500, y: 300 },
+        { x: 350, y: 500, in: { x: 450, y: 520 }, out: { x: 250, y: 480 } },
+      ],
+    }]);
+    const shape = {
+      id: 'pen', type: 'shape' as const, ...drawn, rot: 0, z: 2, opacity: 1, class: [],
+      style: { filter: 'drop-shadow(0px 8px 24px rgba(0, 0, 0, 0.3))' }, shape: 'path' as const,
+      fill: '#c96442', stroke: '#111111', strokeWidth: 3, radius: 0, arrowStart: false, arrowEnd: false,
+    };
+    deck.slides[0].elements = [shape];
+    const html = slideToHtml(parseDeck(deck).slides[0], { w: 1920, h: 1080 });
+    expect(html).toContain(`data-path="${drawn.path}"`);
+    expect(html).toContain(`data-path-size="${drawn.pathSize!.w},${drawn.pathSize!.h}"`);
+    // Drawn by the same builder as the player's: the curves, in the path's own space.
+    expect(html).toContain(`viewBox="0 0 ${drawn.pathSize!.w} ${drawn.pathSize!.h}"`);
+    expect(html).toContain(`<path d="${drawn.path}"`);
+
+    const back = elementFromNode(node({
+      tag: 'div', html: '', rect: { x: drawn.x, y: drawn.y, w: drawn.w, h: drawn.h },
+      dataset: {
+        element: 'shape', shape: 'path', path: drawn.path!, pathSize: `${drawn.pathSize!.w},${drawn.pathSize!.h}`,
+        fill: '#c96442', stroke: '#111111', strokeWidth: '3',
+      },
+    }), 'pen', 2);
+    expect(back).toMatchObject({ shape: 'path', path: drawn.path, pathSize: drawn.pathSize, fill: '#c96442' });
+    expect(parsePath((back as { path: string }).path)).toEqual(parsePath(drawn.path!));
   });
 
   it('round-trips a curly brace and its signed depth', () => {

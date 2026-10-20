@@ -1,6 +1,7 @@
 import type { Deck, MediaEffect, Slide, SlideElement } from '@shared/deck.js';
 import { braceDepthOf } from '@shared/brace.js';
 import { flipElement, normalizeDegrees, type FlipAxis } from '@shared/flip.js';
+import { drawnAtPixelScale, redrawPathAtSize } from '@shared/pathNodes.js';
 import {
   paragraphsToList,
   paragraphsToOrderedList,
@@ -947,8 +948,13 @@ export class Inspector {
     const boxField = (key: 'x' | 'y' | 'w' | 'h'): HTMLElement => {
       const field = numberField(key.toUpperCase(), shared(key), (v) => {
         this.store.updateSelected((el) => {
-          if (key === 'w' || key === 'h') el[key] = Math.max(8, v);
-          else {
+          if (key === 'w' || key === 'h') {
+            const redraw = el.type === 'shape' && drawnAtPixelScale(el)
+              ? { path: el.path!, w: el.w, h: el.h }
+              : null;
+            el[key] = Math.max(8, v);
+            if (redraw && el.type === 'shape') redrawPathAtSize(el, redraw.path, redraw);
+          } else {
             const delta = v - el[key];
             el[key] = v;
             if (el.type === 'shape' && el.control) el.control[key] += delta;
