@@ -39,6 +39,7 @@ import {
 import { SlideRail } from '../editor/slideRail.js';
 import { EditorStore } from '../editor/store.js';
 import { createThemePanel } from '../editor/themePanel.js';
+import { BuildPreview } from '../editor/buildPreview.js';
 import { TimelinePanel } from '../editor/timelinePanel.js';
 import { CollabBridge } from './collabBridge.js';
 import { createConnectionNotice } from './connectionNotice.js';
@@ -270,7 +271,7 @@ new SpeakerNotesDrawer(el('canvas'), store, {
 // reload here, and a page that swallowed it would surprise more than help.
 new CanvasRulers(el('canvas'), canvas, store);
 const inspector = new Inspector(el('inspector'), store);
-new TimelinePanel(el('timeline'), store);
+new TimelinePanel(el('timeline'), store, new BuildPreview(canvas, store));
 new HistoryPanel(el('history'), store);
 const rail = new SlideRail(el('rail'), store);
 rail.onStatus = setStatusMessage;

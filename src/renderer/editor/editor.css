@@ -4676,6 +4676,18 @@ button.ghost:hover:not(:disabled) { color: var(--text); background: transparent;
 .build-elements-section > .panel-action { margin: 0 0 4px; }
 .build-add-paragraph { white-space: nowrap; }
 
+/* Preview and Play slide, beside the steps they play; the one playing reads Stop. */
+.build-steps-section .insp-subtitle-row { align-items: center; }
+.build-preview-controls { display: flex; flex: none; gap: 2px; }
+.build-preview-controls > button { white-space: nowrap; }
+.build-preview-controls > button.is-active,
+.build-preview-controls > button.is-active:hover:not(:disabled) { color: var(--accent); border-color: var(--line); }
+/* The preview plays over the slide from outside the canvas host (see
+   EditorCanvas.beginPlayback); the slide and its handles wait underneath. */
+.build-preview-shield { position: fixed; z-index: 30; overflow: hidden; }
+.build-preview-frame { position: absolute; }
+.canvas-host.build-previewing > .stage > :is(.slide-layer, .overlay-layer) { opacity: 0; }
+
 .step-label { margin-bottom: 4px; }
 .timeline-row { gap: 6px; padding: 6px; }
 .build-card-head { gap: 6px; }
