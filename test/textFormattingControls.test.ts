@@ -240,7 +240,7 @@ describe('text formatting from the inspector controls', () => {
     ]);
     expect(labels('.text-layout-options .field > span')).toEqual([
       'Size box to text', 'Auto-fit text to box', 'Disable automatic line breaks', 'List',
-      'Indent', 'Align', 'Vertical', 'Paragraph spacing', 'Line spacing',
+      'Bullet', 'Indent', 'Align', 'Vertical', 'Paragraph spacing', 'Line spacing',
     ]);
     expect(labels('.text-format-buttons button')).toEqual(['B', 'I', 'U', 'S', 'x²', 'x₂']);
     expect(labels('.number-step-buttons button'))
@@ -506,6 +506,47 @@ describe('text formatting from the inspector controls', () => {
     indentButton(inspectorHost, 'in').click();
     expect(textOf(store, 'text-1').html).toBe('<p data-indent="1">Only <b>line</b></p>');
     expect(contentOf(canvasHost, 'text-1').textContent).toBe('Only line');
+  });
+
+  const bulletSelect = (host: HTMLElement): HTMLSelectElement =>
+    field(host, 'Bullet').querySelector<HTMLSelectElement>('select')!;
+
+  it('styles the box\'s lists from the Bullet menu, and waits for a list to exist', () => {
+    const { store, inspectorHost } = setup([textElement('text-1', { html: '<p>One</p><p>Two</p>' })]);
+    expect(bulletSelect(inspectorHost).disabled).toBe(true);
+
+    pick(listSelect(inspectorHost), 'Bulleted');
+    expect(bulletSelect(inspectorHost).disabled).toBe(false);
+    expect(bulletSelect(inspectorHost).value).toBe('disc');
+    pick(bulletSelect(inspectorHost), 'square');
+    expect(textOf(store, 'text-1').html).toBe('<ul data-bullet="square"><li>One</li><li>Two</li></ul>');
+    expect(bulletSelect(inspectorHost).value).toBe('square');
+
+    // A numbering style numbers the list; the List control follows.
+    pick(bulletSelect(inspectorHost), 'upper-alpha');
+    expect(textOf(store, 'text-1').html).toBe('<ol data-bullet="upper-alpha"><li>One</li><li>Two</li></ol>');
+    expect(listSelect(inspectorHost).value).toBe('Numbered');
+    store.undo();
+    expect(textOf(store, 'text-1').html).toBe('<ul data-bullet="square"><li>One</li><li>Two</li></ul>');
+  });
+
+  it('restyles only the level the caret is in', () => {
+    const { store, canvas, canvasHost, inspectorHost } = setup([
+      textElement('text-1', { html: '<ul><li>One<ul><li>Two</li></ul></li><li>Three</li></ul>' }),
+    ]);
+    canvas.beginTextEdit('text-1');
+    caretAt(contentOf(canvasHost, 'text-1').querySelectorAll('li')[1].firstChild!, 2);
+    expect(bulletSelect(inspectorHost).value).toBe('dash');
+
+    pick(bulletSelect(inspectorHost), 'lower-roman');
+    expect(textOf(store, 'text-1').html)
+      .toBe('<ul><li>One<ol data-bullet="lower-roman"><li>Two</li></ol></li><li>Three</li></ul>');
+    expect(canvas.isEditing()).toBe(true);
+    expect(window.getSelection()!.anchorNode?.textContent).toBe('Two');
+    expect(bulletSelect(inspectorHost).value).toBe('lower-roman');
+
+    caretAt(contentOf(canvasHost, 'text-1').querySelectorAll('li')[2].firstChild!, 0);
+    expect(bulletSelect(inspectorHost).value).toBe('disc');
   });
 
   it('moves a list item a level with the Indent buttons, as Tab does', () => {

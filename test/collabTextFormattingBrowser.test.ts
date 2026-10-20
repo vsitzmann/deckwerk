@@ -209,6 +209,27 @@ describe.skipIf(!electronBinary)('text formatting in the collaboration browser',
       return painted;
     })()`), 'the bullet marker does not paint').toBe(true);
 
+    /* --- bullet style ----------------------------------------------------- */
+
+    const bulletSelect = await editor.evaluate<string>(`(() => {
+      const field = [...document.querySelectorAll('${PANEL} label.field')]
+        .find((node) => node.querySelector(':scope > span')?.textContent === 'Bullet');
+      if (!field) throw new Error('no Bullet dropdown in the panel');
+      field.querySelector('select').id = 'test-bullet-style';
+      return '#test-bullet-style';
+    })()`);
+    await editor.choose(bulletSelect, 'square', 'Bullet style dropdown');
+    const squared = await eventually(async () => editor!.evaluate<{ html: string; marker: string }>(`(() => ({
+      html: window.store.get().deck.slides[0].elements
+        .find((candidate) => candidate.id === '${BODY_ID}').html,
+      marker: getComputedStyle(
+        document.querySelector('#canvas [data-element-id="${BODY_ID}"] .text-body li'), '::before',
+      ).backgroundImage,
+    }))()`), 'the Bullet dropdown did not restyle the list',
+      (value) => value.html.includes('data-bullet'));
+    expect(squared.html).toBe('<ul data-bullet="square"><li>First point</li><li>Second point</li></ul>');
+    expect(squared.marker).toContain('linear-gradient');
+
     /* --- paragraph spacing ------------------------------------------------ */
 
     const spacingInput = await editor.evaluate<string>(`(() => {
@@ -321,7 +342,7 @@ describe.skipIf(!electronBinary)('text formatting in the collaboration browser',
       align: 'justify',
       valign: 'bottom',
       paragraphSpacing: 36,
-      html: '<ul><li>First point</li><li>Second point</li></ul>',
+      html: '<ul data-bullet="square"><li>First point</li><li>Second point</li></ul>',
       style: { color: THEME_SWATCH },
     });
     expect(title).toMatchObject({ align: 'center', style: { color: '#b3261e' } });
@@ -334,6 +355,7 @@ describe.skipIf(!electronBinary)('text formatting in the collaboration browser',
     // through the editor's document.
     const presented = await eventually(async () => editor!.evaluate<{
       bodyAlign: string; bodyColor: string; items: number; titleAlign: string; spacing: string;
+      marker: string;
     } | null>(`(() => {
       const frame = document.querySelector('iframe[src*="present.html"]');
       const doc = frame?.contentDocument;
@@ -347,7 +369,8 @@ describe.skipIf(!electronBinary)('text formatting in the collaboration browser',
         bodyColor: view.getComputedStyle(bodyText).color,
         items: bodyNode.querySelectorAll('li').length,
         titleAlign: view.getComputedStyle(titleText).textAlign,
-        spacing: bodyNode.style.getPropertyValue('--paragraph-spacing')
+        spacing: bodyNode.style.getPropertyValue('--paragraph-spacing'),
+        marker: view.getComputedStyle(bodyNode.querySelector('li'), '::before').backgroundImage
       };
     })()`), 'the presentation did not paint the formatted deck',
       (value) => value !== null && value.items === 2);
@@ -357,6 +380,9 @@ describe.skipIf(!electronBinary)('text formatting in the collaboration browser',
       items: 2,
       titleAlign: 'center',
       spacing: '36px',
+      // The square the editor drew, drawn the same way for the audience, in
+      // the text colour chosen since.
+      marker: 'linear-gradient(rgb(201, 100, 66), rgb(201, 100, 66))',
     });
   }, 90_000);
 });

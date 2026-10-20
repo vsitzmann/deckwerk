@@ -657,6 +657,20 @@ describe('deck objects become authored HTML', () => {
     expect(parsed).toMatchObject({ type: 'text', paragraphSpacing: 24 });
   });
 
+  it('keeps the marker style of a list an agent writes as its own object', () => {
+    const parsed = elementFromNode(node({
+      tag: 'ol',
+      html: '<li>a</li><li>b</li>',
+      dataset: { bullet: 'lower-roman' },
+    }), 'list', 1);
+    expect(parsed).toMatchObject({ type: 'text', html: '<ol data-bullet="lower-roman"><li>a</li><li>b</li></ol>' });
+    // Only the styles the player draws; anything else is the default marker.
+    const unknown = elementFromNode(node({
+      tag: 'ul', html: '<li>a</li>', dataset: { bullet: 'x" onclick="alert(1)' },
+    }), 'list', 1);
+    expect(unknown).toMatchObject({ type: 'text', html: '<ul><li>a</li></ul>' });
+  });
+
   it('carries the slide identity a bake-back needs to find its target', () => {
     const slide = emptyDeck('Deck').slides[0];
     slide.morphDuration = 1450;

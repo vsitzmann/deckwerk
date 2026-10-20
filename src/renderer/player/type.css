@@ -179,6 +179,50 @@
   content: counter(list-item) '.';
 }
 
+/*
+ * Marker styles (`data-bullet` on a list, the Bullet menu). Each one marks
+ * its own list's items only, so a nested list keeps its level's default above
+ * until it is given a style of its own. Disc, circle and square are drawn,
+ * like the default disc, so they keep its size in every typeface; the rest
+ * are glyphs, laid out like the numbers.
+ */
+.text-body ul[data-bullet] > li::before {
+  height: auto;
+  vertical-align: baseline;
+  background: none;
+}
+.text-body ul[data-bullet="disc"] > li::before,
+.text-body ul[data-bullet="circle"] > li::before {
+  height: 0.3125em;
+  vertical-align: 0.16em;
+}
+.text-body ul[data-bullet="disc"] > li::before {
+  background:
+    radial-gradient(circle closest-side, currentColor 100%, transparent 100%)
+    left top / 0.3125em 0.3125em no-repeat;
+}
+.text-body ul[data-bullet="circle"] > li::before {
+  background:
+    radial-gradient(circle closest-side, transparent calc(100% - 0.065em),
+      currentColor calc(100% - 0.065em), currentColor 100%, transparent 100%)
+    left top / 0.3125em 0.3125em no-repeat;
+}
+/* A little smaller than the disc, centred on the same height. */
+.text-body ul[data-bullet="square"] > li::before {
+  height: 0.28em;
+  vertical-align: 0.176em;
+  background: linear-gradient(currentColor, currentColor) left top / 0.28em 0.28em no-repeat;
+}
+.text-body ul[data-bullet="dash"] > li::before { content: '–'; }
+.text-body ul[data-bullet="triangle"] > li::before { content: '▸'; }
+.text-body ul[data-bullet="arrow"] > li::before { content: '➢'; }
+.text-body ul[data-bullet="check"] > li::before { content: '✓'; }
+.text-body ol[data-bullet="decimal-paren"] > li::before { content: counter(list-item) ')'; }
+.text-body ol[data-bullet="lower-alpha"] > li::before { content: counter(list-item, lower-alpha) '.'; }
+.text-body ol[data-bullet="upper-alpha"] > li::before { content: counter(list-item, upper-alpha) '.'; }
+.text-body ol[data-bullet="lower-roman"] > li::before { content: counter(list-item, lower-roman) '.'; }
+.text-body ol[data-bullet="upper-roman"] > li::before { content: counter(list-item, upper-roman) '.'; }
+
 /* An authored `list-style-type` is a request for one of the browser's markers
    — square, lower-roman, a string. Those items keep the native marker, and
    with it the approximate hanging indent it has always had. The item's own

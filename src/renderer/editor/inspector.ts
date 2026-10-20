@@ -8,6 +8,10 @@ import {
   listMarkerColorState,
   listToParagraphs,
   setListMarkerColor,
+  BULLET_STYLES,
+  bulletStyleState,
+  setBulletStyle,
+  type BulletStyle,
   type ListMarkerColorState,
 } from '@shared/paragraphs.js';
 import type {
@@ -184,6 +188,9 @@ export class Inspector {
   /** Marker paint for the list items touched by the live text selection. */
   textSelectionMarkerColor?: () => ListMarkerColorState | null;
   onApplyTextSelectionMarkerColor?: (value: string | null) => boolean;
+  /** Marker style of the lists holding the items the live selection touches. */
+  textSelectionBulletStyle?: () => { mixed: boolean; value: BulletStyle | null } | null;
+  onApplyTextSelectionBulletStyle?: (style: BulletStyle) => boolean;
   /** Indent or outdent the paragraphs and list items the live selection touches. */
   onShiftTextIndent?: (direction: 'in' | 'out') => boolean;
   tableSelection?: () => TableSelection | null;
@@ -2151,13 +2158,60 @@ export class Inspector {
           listRow.lastElementChild?.classList.add('field-color-stacked');
         }
 
-        // Indent acts on lines, so like superscript it needs a caret: a list
-        // item moves a level (as Tab does), any other paragraph steps in.
+        // The marker style of the list at the caret, or of the box's lists.
+        // Present without a list too, disabled, so turning one on does not
+        // move the rows below.
         {
-          const editing = this.editingText?.() ?? false;
           const table = /<table\b/i.test(el.html);
           const indentRow = document.createElement('div');
           indentRow.className = 'text-list-row text-indent-row';
+          const boxBullets = bulletStyleState(el.html);
+          const bullet = this.textSelectionBulletStyle?.()
+            ?? (boxBullets.hasList ? { mixed: boxBullets.value === null, value: boxBullets.value } : null);
+          const bulletField = document.createElement('label');
+          bulletField.className = 'field text-bullet-style';
+          const bulletLabel = document.createElement('span');
+          bulletLabel.textContent = 'Bullet';
+          const bulletSelect = document.createElement('select');
+          const placeholder = (text: string) => {
+            const option = document.createElement('option');
+            option.value = '';
+            option.textContent = text;
+            option.disabled = true;
+            bulletSelect.appendChild(option);
+          };
+          if (!bullet) placeholder('None');
+          else if (bullet.mixed) placeholder('Mixed');
+          for (const [ordered, group] of [[false, 'Bullets'], [true, 'Numbers']] as const) {
+            const optgroup = document.createElement('optgroup');
+            optgroup.label = group;
+            for (const choice of BULLET_STYLES.filter((style) => style.ordered === ordered)) {
+              const option = document.createElement('option');
+              option.value = choice.value;
+              option.textContent = `${choice.marker}  ${choice.label}`;
+              optgroup.appendChild(option);
+            }
+            bulletSelect.appendChild(optgroup);
+          }
+          bulletSelect.value = bullet?.value ?? '';
+          bulletSelect.disabled = !boxBullets.hasList || table;
+          bulletSelect.title = table
+            ? 'List styles do not apply to tables'
+            : boxBullets.hasList ? 'Marker style of this list level' : 'Turn on a list first';
+          bulletSelect.addEventListener('change', () => {
+            const style = BULLET_STYLES.find((choice) => choice.value === bulletSelect.value)?.value;
+            if (!style) return;
+            if (this.onApplyTextSelectionBulletStyle?.(style)) return;
+            this.store.updateSelected((target) => {
+              if (target.type === 'text') target.html = setBulletStyle(target.html, style);
+            }, { label: 'Change bullet style' });
+          });
+          bulletField.append(bulletLabel, bulletSelect);
+          indentRow.appendChild(bulletField);
+
+          // Indent acts on lines, so like superscript it needs a caret: a list
+          // item moves a level (as Tab does), any other paragraph steps in.
+          const editing = this.editingText?.() ?? false;
           const indent = document.createElement('div');
           indent.className = 'field text-indent';
           const indentLabel = document.createElement('span');

@@ -1,4 +1,5 @@
 import {
+  LIST_BULLET_ATTRIBUTE,
   LIST_MARKER_COLOR_ATTRIBUTE,
   LIST_MARKER_COLOR_PROPERTY,
 } from '@shared/paragraphs.js';
@@ -373,7 +374,10 @@ export function indentListItem(item: HTMLElement): boolean {
   const newList = (): HTMLElement => {
     const created = doc.createElement(list.tagName.toLowerCase());
     for (const attr of [...list.attributes]) {
-      if (attr.name !== 'start') created.setAttribute(attr.name, attr.value);
+      // A new level starts with that level's own marker, as in Keynote.
+      if (attr.name !== 'start' && attr.name !== LIST_BULLET_ATTRIBUTE) {
+        created.setAttribute(attr.name, attr.value);
+      }
     }
     return created;
   };

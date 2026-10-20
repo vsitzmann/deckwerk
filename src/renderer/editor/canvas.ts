@@ -58,6 +58,10 @@ import {
   TYPING_STYLE_SENTINEL,
   paragraphIndent,
   setParagraphIndent,
+  dropForeignBulletStyle,
+  listBulletStyle,
+  setListBulletStyle,
+  type BulletStyle,
   type ListMarkerColorState,
 } from '@shared/paragraphs.js';
 import {
@@ -5789,6 +5793,56 @@ export class EditorCanvas {
     return true;
   }
 
+  /**
+   * The marker style of the lists holding the items the caret or selection
+   * touches; null outside a list (the box's own lists answer then) and
+   * `mixed` when they differ.
+   */
+  textSelectionBulletStyle(): { mixed: boolean; value: BulletStyle | null } | null {
+    if (!this.editingId || this.tableSelection) return null;
+    const content = this.slideLayer.querySelector<HTMLElement>(
+      `[data-element-id="${CSS.escape(this.editingId)}"] .text-content`,
+    );
+    const range = content ? this.activeTextRange(content) : null;
+    if (!content || !range || !content.contains(range.commonAncestorContainer)) return null;
+    const lists = this.listsForRange(content, range);
+    if (lists.length === 0) return null;
+    const styles = lists.map(listBulletStyle);
+    const mixed = !styles.every((style) => style === styles[0]);
+    return { mixed, value: mixed ? null : styles[0] };
+  }
+
+  /**
+   * Give the lists holding the touched items a marker style. Each list is
+   * one level, so a caret in a sub-list restyles that level and no other;
+   * a numbered style turns a bulleted level into a numbered one.
+   */
+  applyTextSelectionBulletStyle(style: BulletStyle): boolean {
+    if (!this.editingId || this.tableSelection) return this.declineLiveTextFormat();
+    const content = this.slideLayer.querySelector<HTMLElement>(
+      `[data-element-id="${CSS.escape(this.editingId)}"] .text-content`,
+    );
+    const range = content ? this.activeTextRange(content) : null;
+    if (!content || !range || !content.contains(range.commonAncestorContainer)) return this.declineLiveTextFormat();
+    const lists = this.listsForRange(content, range);
+    if (lists.length === 0) return this.declineLiveTextFormat();
+    // Retagging moves the items into a new list; text offsets survive that.
+    const offsets = this.textOffsetsForRange(content, range);
+    for (const list of lists) setListBulletStyle(list, style);
+    if (offsets) this.restoreTextRange(content, offsets);
+    this.focusTextSurface(content);
+    this.commitLiveTextDom('Change bullet style');
+    return true;
+  }
+
+  /** The lists directly holding the items a Range touches, in document order. */
+  private listsForRange(content: HTMLElement, range: Range): HTMLElement[] {
+    const lists = this.listItemsForRange(content, range)
+      .map((item) => item.parentElement)
+      .filter((list): list is HTMLElement => Boolean(list) && /^(?:UL|OL)$/.test(list!.tagName));
+    return [...new Set(lists)];
+  }
+
   private listItemsForRange(content: HTMLElement, range: Range): HTMLElement[] {
     if (range.collapsed) {
       const container = range.startContainer instanceof Element
@@ -6198,6 +6252,7 @@ export class EditorCanvas {
           replacement.setAttribute(attr.name, attr.value);
         }
         while (list.firstChild) replacement.appendChild(list.firstChild);
+        dropForeignBulletStyle(replacement);
         list.replaceWith(replacement);
         changed = true;
         return replacement;

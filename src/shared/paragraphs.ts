@@ -30,6 +30,125 @@ export const LIST_MARKER_COLOR_PROPERTY = '--list-marker-color';
 export const PARAGRAPH_INDENT_ATTRIBUTE = 'data-indent';
 export const MAX_PARAGRAPH_INDENT = 8;
 
+/**
+ * A list's marker style, written on the `<ul>`/`<ol>` and drawn by type.css.
+ * It governs that list's own items only: a nested list keeps the default of
+ * its level (a dash under a disc, as in Keynote) until it is given one too.
+ */
+export const LIST_BULLET_ATTRIBUTE = 'data-bullet';
+
+export type BulletStyle =
+  | 'disc' | 'circle' | 'square' | 'dash' | 'triangle' | 'arrow' | 'check'
+  | 'decimal' | 'decimal-paren' | 'lower-alpha' | 'upper-alpha' | 'lower-roman' | 'upper-roman';
+
+/** Every style the Bullet menu offers, in its order; `marker` is how it looks. */
+export const BULLET_STYLES: ReadonlyArray<{
+  value: BulletStyle;
+  label: string;
+  marker: string;
+  ordered: boolean;
+}> = [
+  { value: 'disc', label: 'Disc', marker: '•', ordered: false },
+  { value: 'circle', label: 'Circle', marker: '◦', ordered: false },
+  { value: 'square', label: 'Square', marker: '▪', ordered: false },
+  { value: 'dash', label: 'Dash', marker: '–', ordered: false },
+  { value: 'triangle', label: 'Triangle', marker: '▸', ordered: false },
+  { value: 'arrow', label: 'Arrow', marker: '➢', ordered: false },
+  { value: 'check', label: 'Check', marker: '✓', ordered: false },
+  { value: 'decimal', label: 'Numbers', marker: '1.', ordered: true },
+  { value: 'decimal-paren', label: 'Numbers', marker: '1)', ordered: true },
+  { value: 'lower-alpha', label: 'Letters', marker: 'a.', ordered: true },
+  { value: 'upper-alpha', label: 'Capital letters', marker: 'A.', ordered: true },
+  { value: 'lower-roman', label: 'Roman numerals', marker: 'i.', ordered: true },
+  { value: 'upper-roman', label: 'Capital Roman numerals', marker: 'I.', ordered: true },
+];
+
+/** Whether a style numbers its items, and so belongs on an `<ol>`. */
+export function isOrderedBulletStyle(style: BulletStyle): boolean {
+  return BULLET_STYLES.find((choice) => choice.value === style)?.ordered ?? false;
+}
+
+/** How deep a list sits: 1 for an outermost list. */
+function listDepth(list: Element): number {
+  let depth = 1;
+  for (let parent = list.parentElement; parent; parent = parent.parentElement) {
+    if (LIST_TAGS.has(parent.tagName)) depth += 1;
+  }
+  return depth;
+}
+
+/**
+ * The style a list shows: its own when it has one that fits its tag, else
+ * its level's default — a disc, a dash below the outermost level, or
+ * numbers. A style for the other tag is ignored, as type.css ignores it.
+ */
+export function listBulletStyle(list: Element): BulletStyle {
+  const ordered = list.tagName === 'OL';
+  const own = BULLET_STYLES.find((choice) =>
+    choice.value === list.getAttribute(LIST_BULLET_ATTRIBUTE) && choice.ordered === ordered);
+  if (own) return own.value;
+  if (ordered) return 'decimal';
+  return listDepth(list) > 1 ? 'dash' : 'disc';
+}
+
+/**
+ * Give a list a marker style, retagging it `<ul>` ↔ `<ol>` when the style
+ * numbers and the list does not (or the other way round). Returns the list,
+ * which is a new element when it was retagged.
+ */
+export function setListBulletStyle(list: HTMLElement, style: BulletStyle): HTMLElement {
+  const tag = isOrderedBulletStyle(style) ? 'OL' : 'UL';
+  let target = list;
+  if (list.tagName !== tag) {
+    target = (list.ownerDocument ?? document).createElement(tag.toLowerCase());
+    for (const attr of [...list.attributes]) {
+      if (tag === 'UL' && attr.name === 'start') continue;
+      target.setAttribute(attr.name, attr.value);
+    }
+    while (list.firstChild) target.appendChild(list.firstChild);
+    list.replaceWith(target);
+  }
+  target.setAttribute(LIST_BULLET_ATTRIBUTE, style);
+  // A browser marker asked for in CSS would be drawn beside this one.
+  for (const node of [target, ...target.children] as HTMLElement[]) {
+    node.style.removeProperty('list-style-type');
+    if (!node.getAttribute('style')?.trim()) node.removeAttribute('style');
+  }
+  return target;
+}
+
+/** Drop a marker style that no longer fits a list just retagged `<ul>` ↔ `<ol>`. */
+export function dropForeignBulletStyle(list: Element): void {
+  const style = list.getAttribute(LIST_BULLET_ATTRIBUTE);
+  const choice = BULLET_STYLES.find((candidate) => candidate.value === style);
+  if (style !== null && choice?.ordered !== (list.tagName === 'OL')) {
+    list.removeAttribute(LIST_BULLET_ATTRIBUTE);
+  }
+}
+
+/** The marker style shared by a text's outermost lists; null when they differ. */
+export function bulletStyleState(html: string): { hasList: boolean; value: BulletStyle | null } {
+  const template = document.createElement('template');
+  template.innerHTML = html;
+  const lists = [...template.content.children].filter((child) => LIST_TAGS.has(child.tagName));
+  if (lists.length === 0) return { hasList: false, value: null };
+  const styles = lists.map(listBulletStyle);
+  return { hasList: true, value: styles.every((style) => style === styles[0]) ? styles[0] : null };
+}
+
+/** Give every outermost list of a text one marker style; nested lists keep theirs. */
+export function setBulletStyle(html: string, style: BulletStyle): string {
+  const template = document.createElement('template');
+  template.innerHTML = html;
+  const lists = [...template.content.children]
+    .filter((child): child is HTMLElement => LIST_TAGS.has(child.tagName));
+  if (lists.length === 0) return html;
+  for (const list of lists) setListBulletStyle(list, style);
+  const out = document.createElement('div');
+  out.append(template.content.cloneNode(true));
+  return out.innerHTML;
+}
+
 /** A paragraph's indent level, 0 when it has none. */
 export function paragraphIndent(block: Element): number {
   const level = Number.parseInt(block.getAttribute(PARAGRAPH_INDENT_ATTRIBUTE) ?? '', 10);
@@ -318,6 +437,7 @@ export function changeListType(html: string, ordered: boolean): string {
       replacement.setAttribute(attr.name, attr.value);
     }
     while (list.firstChild) replacement.appendChild(list.firstChild);
+    dropForeignBulletStyle(replacement);
     list.replaceWith(replacement);
     changed = true;
   }
@@ -875,7 +995,11 @@ function mergeAdjacentLists(root: ParentNode & Node): void {
     // that keeps them apart, and merging past it would move the text.
     const following = current.nextSibling;
     const next = following instanceof Element ? following : null;
-    if (next && LIST_TAGS.has(current.tagName) && next.tagName === current.tagName) {
+    if (
+      next && LIST_TAGS.has(current.tagName) && next.tagName === current.tagName
+      // Two lists the author styled apart are two lists.
+      && next.getAttribute(LIST_BULLET_ATTRIBUTE) === current.getAttribute(LIST_BULLET_ATTRIBUTE)
+    ) {
       while (next.firstChild) current.appendChild(next.firstChild);
       next.remove();
       continue;

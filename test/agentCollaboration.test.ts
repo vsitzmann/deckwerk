@@ -239,7 +239,7 @@ for (const kind of BACKENDS) describe.skipIf(!electronBinary)(`an agent working 
     // escaped, the line break and trailing space still there; the clip still
     // does not loop, unmute or autoplay; the region is not wrapped in its own
     // export box; the class's margin and object-position were not frozen in.
-    for (const id of ['details-math', 'details-framed', 'details-clip', 'details-curve', 'details-brace', 'details-arrow', 'details-region']) {
+    for (const id of ['details-math', 'details-lists', 'details-framed', 'details-clip', 'details-curve', 'details-brace', 'details-arrow', 'details-region']) {
       expect(element(after, id), id).toEqual(element(before, id));
     }
     expect(element(after, 'details-nudged')).toMatchObject({ x: 120, y: 420, w: 800, h: 80 });
