@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { SlideElement } from '../src/shared/deck.js';
-import { arrangeElements } from '../src/renderer/editor/arrange.js';
+import { arrangeElements, arrangeElementsAt } from '../src/renderer/editor/arrange.js';
 
 /** Stacking order: [ ] step the selection, Shift+[ ] send it to the back or front. */
 
@@ -50,5 +50,24 @@ describe('arranging the selection', () => {
     arrangeElements(elements, new Set(['a']), 'forward');
     expect(painted(elements)).toEqual(['b', 'a', 'c']);
     expect(new Set(elements.map((e) => e.z)).size).toBe(3);
+  });
+
+  it('places the selection with a given number of objects underneath', () => {
+    // An object-list drop: rows between the drop and the bottom stay underneath.
+    const elements = slide();
+    expect(arrangeElementsAt(elements, new Set(['d']), 1)).toBe(true);
+    expect(painted(elements)).toEqual(['a', 'd', 'b', 'c']);
+    arrangeElementsAt(elements, new Set(['a', 'c']), 2);
+    expect(painted(elements)).toEqual(['d', 'b', 'a', 'c']);
+    expect(elements.map((e) => e.z).sort()).toEqual([1, 2, 3, 4]);
+  });
+
+  it('clamps the place and reports a drop that moves nothing', () => {
+    const elements = slide();
+    expect(arrangeElementsAt(elements, new Set(['b']), 1)).toBe(false);
+    expect(arrangeElementsAt(elements, new Set(['b']), 99)).toBe(true);
+    expect(painted(elements)).toEqual(['a', 'c', 'd', 'b']);
+    expect(arrangeElementsAt(elements, new Set(['a']), -3)).toBe(false);
+    expect(arrangeElementsAt(elements, new Set(), 0)).toBe(false);
   });
 });
