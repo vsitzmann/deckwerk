@@ -130,6 +130,12 @@ export class Player {
   /** Build animations in flight. Calling one jumps it to its finished state. */
   private effects: Array<() => void> = [];
   private mediaListeners: Array<() => void> = [];
+  /** Builds of the current step not yet run; see `whenStepSettles`. */
+  private buildsDue = 0;
+  /** When the last build animation started on the current step ends, in `performance.now()` time. */
+  private animatedUntil = 0;
+  private settleWaiters: Array<() => void> = [];
+  private settleTimer: ReturnType<typeof setTimeout> | null = null;
   /** Videos already given a trim watcher, so listeners are not stacked. */
   private trimmed = new Set<string>();
   /**
@@ -281,6 +287,8 @@ export class Player {
 
   destroy(): void {
     this.clearPending();
+    if (this.settleTimer) clearTimeout(this.settleTimer);
+    this.settleWaiters = [];
     this.offBlobReady?.();
     this.offBlobReady = null;
     this.videoBlobs?.setInUse(null);
@@ -310,6 +318,34 @@ export class Player {
 
   getCursor(): Cursor {
     return { ...this.cursor };
+  }
+
+  /**
+   * Resolves once every build of the current step has run and finished
+   * animating: the moment a presenter's next click would find nothing still
+   * moving. For a caller that steps a slide by itself, like the editor's build
+   * preview. A build waiting on a video that never ends never settles, just as
+   * it never fires when presenting; moving to another step settles at once.
+   */
+  whenStepSettles(): Promise<void> {
+    return new Promise((resolve) => {
+      this.settleWaiters.push(resolve);
+      this.checkSettled();
+    });
+  }
+
+  private checkSettled(): void {
+    if (this.settleTimer) clearTimeout(this.settleTimer);
+    this.settleTimer = null;
+    if (this.buildsDue > 0 || this.settleWaiters.length === 0) return;
+    const left = this.animatedUntil - performance.now();
+    if (left > 0) {
+      this.settleTimer = setTimeout(() => this.checkSettled(), left);
+      return;
+    }
+    const waiters = this.settleWaiters;
+    this.settleWaiters = [];
+    for (const resolve of waiters) resolve();
   }
 
   /** Swap in a new deck, keeping the cursor where it still makes sense. */
@@ -1198,7 +1234,13 @@ export class Player {
     // instant ran with it.
     let latestEnd = 0;
     for (const entry of entries) {
-      const run = () => this.runEntry(slide, entry, state);
+      this.buildsDue += 1;
+      const run = () => {
+        this.buildsDue -= 1;
+        const duration = this.runEntry(slide, entry, state);
+        this.animatedUntil = Math.max(this.animatedUntil, performance.now() + duration);
+        this.checkSettled();
+      };
 
       if (entry.trigger.on === 'mediaEnd' && entry.trigger.ref) {
         this.onMediaEnd(entry.trigger.ref, () => {
@@ -1222,8 +1264,8 @@ export class Player {
     }
   }
 
-  /** One entry, live: its action, and the animation it is authored with. */
-  private runEntry(slide: Slide, entry: ExpandedEntry, state: SlideState): void {
+  /** One entry, live: its action, and the animation it is authored with. Returns how long that animation takes. */
+  private runEntry(slide: Slide, entry: ExpandedEntry, state: SlideState): number {
     const effect = buildEffect(entry, slide);
     const duration = effect ? effectDuration(entry, effect) : 0;
     const target = entry.action.target;
@@ -1235,6 +1277,7 @@ export class Player {
     this.applyState(slide, state);
     if (effect === 'draw') this.drawIn(slide, entry, duration);
     else if (fade && entry.action.type === 'appear') this.dissolveIn(target, duration, fade === 'blur');
+    return duration;
   }
 
   /**
@@ -1591,6 +1634,10 @@ export class Player {
     // The listeners those ids refer to have just been removed, so a fresh
     // watcher must be attached when the slide is drawn again.
     this.trimmed.clear();
+    // Whatever the step was waiting on will no longer run.
+    this.buildsDue = 0;
+    this.animatedUntil = 0;
+    this.checkSettled();
   }
 
   /** Blank the screen (the `B` key) without losing position. */
