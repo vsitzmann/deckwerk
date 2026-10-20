@@ -17,6 +17,14 @@ const rect = (over: Partial<Shape> = {}): Shape => ({
   ...over,
 } as Shape);
 
+type XY = { x: number; y: number };
+const sub = (a: XY, b: XY): XY => ({ x: a.x - b.x, y: a.y - b.y });
+const dot = (a: XY, b: XY): number => a.x * b.x + a.y * b.y;
+const cross = (a: XY, b: XY): number => a.x * b.y - a.y * b.x;
+const dist = (a: XY, b: XY): number => Math.hypot(a.x - b.x, a.y - b.y);
+const unit = (a: XY): XY => ({ x: a.x / (Math.hypot(a.x, a.y) || 1), y: a.y / (Math.hypot(a.x, a.y) || 1) });
+const lerp = (a: XY, b: XY, t: number): XY => ({ x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t });
+
 const node = (over: Partial<MeasuredNode>): MeasuredNode => ({
   tag: 'div', elementId: null, classes: [], dataset: {}, rect: { x: 0, y: 0, w: 400, h: 200 },
   rotation: 0, opacity: 1, style: {}, html: '', attrs: {}, ...over,
@@ -150,10 +158,128 @@ describe('arrowheads', () => {
     expect(head[1]).toBeCloseTo(1, 1);
     // Coming down from the bend, the base is above-left of the tip.
     expect((head[3] + head[5]) / 2).toBeLessThan(head[1]);
-    const end = /Q [\d.-]+ [\d.-]+ ([\d.-]+) ([\d.-]+)"/.exec(svg)!.slice(1).map(Number);
+    const end = /([\d.-]+) ([\d.-]+)" stroke-linejoin/.exec(svg)!.slice(1).map(Number);
     expect(Math.hypot(400 - end[0], 1 - end[1])).toBeCloseTo(24 + 1, 0);
     // The end without a head keeps its round cap.
     expect(svg).toContain('<circle cx="0" cy="1" r="2"');
+  });
+
+  it('meets its heads squarely wherever the bend handle is dragged', () => {
+    /** The stroke's path as cubic pieces, its ends and the directions it leaves and arrives in. */
+    const strokeOf = (svg: string) => {
+      const path = /<path d="(M [^"]+)" stroke-linejoin/.exec(svg);
+      if (!path) return null;
+      const tokens = path[1].split(' ');
+      const pieces: XY[][] = [];
+      let at: XY = { x: Number(tokens[1]), y: Number(tokens[2]) };
+      for (let i = 3; i < tokens.length;) {
+        const count = tokens[i] === 'C' ? 3 : 2;
+        const points = Array.from({ length: count }, (_, k) => ({ x: Number(tokens[i + 1 + 2 * k]), y: Number(tokens[i + 2 + 2 * k]) }));
+        // A quadratic as the cubic it is.
+        const piece = count === 3 ? [at, ...points] : [at, lerp(at, points[0], 2 / 3), lerp(points[1], points[0], 2 / 3), points[1]];
+        pieces.push(piece);
+        at = piece[3];
+        i += 1 + 2 * count;
+      }
+      const first = pieces[0];
+      const last = pieces[pieces.length - 1];
+      return {
+        pieces,
+        start: first[0], leaving: unit(sub(first.find((p) => dist(p, first[0]) > 0.5) ?? first[3], first[0])),
+        end: last[3], arriving: unit(sub(last[3], [...last].reverse().find((p) => dist(p, last[3]) > 0.5) ?? last[0])),
+      };
+    };
+    const cubicAt = ([a, b, c, d]: XY[], t: number): XY => {
+      const u = 1 - t;
+      const w = [u * u * u, 3 * u * u * t, 3 * u * t * t, t * t * t];
+      return { x: w[0] * a.x + w[1] * b.x + w[2] * c.x + w[3] * d.x, y: w[0] * a.y + w[1] * b.y + w[2] * c.y + w[3] * d.y };
+    };
+    /** How far a point lies from the curve the user drew, in the element's own coordinates. */
+    const offCurve = (el: Shape, p: XY): number => {
+      const cx = el.x + el.w / 2;
+      const cy = el.y + el.h / 2;
+      const r = (el.rot * Math.PI) / 180;
+      const dx = el.control!.x - cx;
+      const dy = el.control!.y - cy;
+      const c = { x: dx * Math.cos(r) + dy * Math.sin(r) + el.w / 2, y: -dx * Math.sin(r) + dy * Math.cos(r) + el.h / 2 };
+      const a = { x: 0, y: el.h / 2 };
+      const b = { x: el.w, y: el.h / 2 };
+      const curve = [a, lerp(a, c, 2 / 3), lerp(b, c, 2 / 3), b];
+      const off = (t: number) => dist(p, cubicAt(curve, Math.min(1, Math.max(0, t))));
+      // The nearest of many samples, then closed in on.
+      let best = 0;
+      for (let i = 1; i <= 2000; i++) if (off(i / 2000) < off(best)) best = i / 2000;
+      let lo = best - 1 / 2000;
+      let hi = best + 1 / 2000;
+      for (let k = 0; k < 60; k++) {
+        const m1 = lo + (hi - lo) / 3;
+        const m2 = hi - (hi - lo) / 3;
+        if (off(m1) < off(m2)) hi = m2;
+        else lo = m1;
+      }
+      return off((lo + hi) / 2);
+    };
+    const cases: Partial<Shape>[] = [];
+    const bends = [
+      { x: 200, y: -200 }, { x: 200, y: 600 }, { x: 390, y: -60 }, { x: 380, y: 40 }, { x: 420, y: -20 },
+      { x: 600, y: 1 }, { x: 600, y: -150 }, { x: -200, y: -100 }, { x: 400, y: -300 }, { x: 0, y: 300 },
+      { x: 20, y: -30 }, { x: 200, y: -1500 },
+    ];
+    for (const control of bends) {
+      cases.push({ control });
+      cases.push({ control, arrowStart: true });
+      cases.push({ control, arrowStart: true, strokeWidth: 20, arrowSize: 60 });
+      cases.push({ control, strokeWidth: 12, arrowSize: 4 });
+      // Short, scaled up, and turned on the slide (the control is in slide space).
+      cases.push({ control: { x: control.x * 0.15, y: control.y * 0.15 }, w: 60, arrowStart: true });
+      cases.push({ control: { x: control.x * 3, y: control.y * 3 }, w: 1200, strokeWidth: 10 });
+      const r = (35 * Math.PI) / 180;
+      const turn = (p: XY): XY => ({
+        x: 500 + (p.x - 200) * Math.cos(r) - (p.y - 1) * Math.sin(r),
+        y: 301 + (p.x - 200) * Math.sin(r) + (p.y - 1) * Math.cos(r),
+      });
+      cases.push({ x: 300, y: 300, rot: 35, control: turn(control), arrowStart: true });
+    }
+    for (const over of cases) {
+      const el = arrow(over);
+      for (const progress of [1, 0.6]) {
+        const svg = shapeSvg(el, { drawProgress: progress });
+        const { heads } = parts(svg);
+        const line = strokeOf(svg);
+        const size = length(heads[0]);
+        // Heads that meet in the middle leave no line to meet.
+        if (!line) {
+          expect(heads, JSON.stringify(over)).toHaveLength(2);
+          continue;
+        }
+        const tail = Math.min(el.strokeWidth, 2);
+        for (const [i, head] of heads.entries()) {
+          const atStart = el.arrowStart && i === 0;
+          const tip = { x: head[0], y: head[1] };
+          const base = { x: (head[2] + head[head.length - 2]) / 2, y: (head[3] + head[head.length - 1]) / 2 };
+          const axis = unit(sub(tip, base));
+          const label = `${JSON.stringify(over)} at ${progress}, ${atStart ? 'start' : 'end'}`;
+          // The head sits on the curve the user drew, its tip on the endpoint.
+          if (progress === 1) expect(dist(tip, atStart ? { x: 0, y: 1 } : { x: el.w, y: 1 }), label).toBeLessThan(0.05);
+          if (progress === 1) expect(offCurve(el, base), label).toBeLessThan(0.3);
+          // The line ends on the head's axis, inside its tail: past the base, short of the tail's end.
+          const end = atStart ? line.start : line.end;
+          const back = sub(tip, end);
+          expect(Math.abs(cross(back, axis)), label).toBeLessThan(0.1);
+          expect(dot(back, axis), label).toBeGreaterThan(size - 0.05);
+          expect(dot(back, axis), label).toBeLessThan(size + tail + 0.05);
+          // And arrives running straight into it, without a kink.
+          const running = atStart ? { x: -line.leaving.x, y: -line.leaving.y } : line.arriving;
+          expect(dot(running, axis), label).toBeGreaterThan(Math.cos((2 * Math.PI) / 180));
+        }
+        // The line keeps to the curve: easing into a head bends it a little, never away.
+        if (progress === 1) {
+          for (const piece of line.pieces) {
+            for (let k = 0; k <= 20; k++) expect(offCurve(el, cubicAt(piece, k / 20)), JSON.stringify(over)).toBeLessThan(Math.max(1, size * 0.2));
+          }
+        }
+      }
+    }
   });
 
   it('shares a short line between its heads instead of crossing them', () => {
