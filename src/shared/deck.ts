@@ -420,10 +420,11 @@ export const ActionSchema = z.object({
    * line or arrow in from its start to its end. On `appear` or `disappear`,
    * `"dissolve"` fades the element in or out and `"blur"` brings it into (or
    * takes it out of) focus as it fades. On `appear`, `"pop"` grows the
-   * element in from smaller, overshoots a little and settles.
+   * element in from smaller, overshoots a little and settles, and
+   * `"keyboard"` types text in a character at a time behind a moving caret.
    */
   value: z.union([z.number(), z.string()]).nullable().default(null),
-  /** Milliseconds an animated build takes (`"draw"`, `"dissolve"`, `"blur"`, `"pop"`). */
+  /** Milliseconds an animated build takes (any of the animated values above). */
   duration: z.number().min(0).optional(),
   /** On a `"pop"`: the size it grows from, as a fraction of its own (default 0.6). */
   popFrom: z.number().min(0).max(1).optional(),

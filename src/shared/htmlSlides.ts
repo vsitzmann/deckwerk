@@ -1516,7 +1516,8 @@ export function elementFromNode(
 /**
  * `data-build="click"`, `data-build="afterPrev"`, `data-build="afterPrev+500"`.
  * `data-build-effect="dissolve"` fades the element in, `"blur"` brings it into
- * focus as it fades, `"pop"` grows it in with a slight overshoot, and on a line or arrow
+ * focus as it fades, `"pop"` grows it in with a slight overshoot, `"keyboard"`
+ * types text in a character at a time behind a caret, and on a line or arrow
  * `data-build-effect="draw"` draws it in; `data-build-duration` is the time in ms.
  * A pop's sizes ride beside it: `data-build-pop-from="0.6"` (where it starts)
  * and `data-build-pop-peak="1.06"` (how far it overshoots before settling).

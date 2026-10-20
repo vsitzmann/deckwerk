@@ -279,6 +279,8 @@ export class TimelinePanel {
     optionAfter('appear:dissolve', 'dissolve in', 'appear');
     optionAfter('appear:blur', 'blur in', 'appear:dissolve');
     optionAfter('appear:pop', 'pop in', 'appear:blur');
+    // Keynote's name for it. Only text has characters to type.
+    if (targetEl?.type === 'text') optionAfter('appear:keyboard', 'keyboard', 'appear:pop');
     // Keynote's name for it: a shape drawn in as if by a pen.
     if (targetEl?.type === 'shape') optionAfter('appear:draw', 'line draw', 'appear:blur');
     optionAfter('disappear:dissolve', 'dissolve out', 'disappear');

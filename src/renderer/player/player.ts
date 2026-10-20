@@ -1237,6 +1237,7 @@ export class Player {
     if (effect === 'draw') this.drawIn(slide, entry, duration);
     else if (fade && entry.action.type === 'appear') this.dissolveIn(target, duration, fade === 'blur');
     else if (effect === 'pop') this.popIn(target, duration, popScales(entry));
+    else if (effect === 'keyboard') this.keyboardIn(target, duration);
   }
 
   /**
@@ -1287,6 +1288,86 @@ export class Player {
       { duration, fill: 'none' },
     );
     this.effects.push(() => animation.finish());
+  }
+
+  /**
+   * Type text in as Keynote's Keyboard does: a caret, a thin bar in the
+   * text's colour and at its size, steps along the text in reading order and
+   * each character appears where it stood, the caret wrapping to the next
+   * line with the words. Once the last character is in, the caret goes.
+   *
+   * While it types, every character sits in a span of its own and the caret
+   * is an empty inline between two of them: a hidden character keeps its
+   * room and the caret takes none, so no line breaks or moves while the
+   * text comes in. Afterwards the original text goes back, so the resting
+   * slide is the markup the renderer made. A list item's marker comes with
+   * its first character.
+   */
+  private keyboardIn(id: string, duration: number): void {
+    const node = this.nodeFor(id);
+    if (!node || duration <= 0 || node.style.visibility === 'hidden') return;
+    const content = node.querySelector<HTMLElement>('.text-content') ?? node;
+    const { units, restore } = splitCharacters(content);
+    if (units.length === 0) {
+      restore();
+      return;
+    }
+    const visibility = units.map((unit) => unit.style.visibility);
+    for (const unit of units) unit.style.visibility = 'hidden';
+    // A marker is drawn by its item's ::before, which no span can hold.
+    const markers = [...content.querySelectorAll('li')]
+      .map((item) => ({ item, first: units.findIndex((unit) => item.contains(unit)), classed: item.hasAttribute('class') }))
+      .filter((marker) => marker.first >= 0);
+    for (const { item } of markers) item.classList.add('build-unmarked');
+    const caret = document.createElement('span');
+    caret.className = 'build-caret';
+    caret.setAttribute('aria-hidden', 'true');
+    // A word joiner: no width and no place to break a line, but a line box
+    // for the bar to stand in.
+    caret.textContent = '\u2060';
+    units[0].before(caret);
+
+    // One keystroke per character, and one more for the caret to stand after
+    // the last before it goes, all within the build's time.
+    const step = duration / (units.length + 1);
+    const started = performance.now();
+    let shown = 0;
+    let done = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const finish = (): void => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      caret.remove();
+      units.forEach((unit, index) => { unit.style.visibility = visibility[index]; });
+      for (const { item, classed } of markers) {
+        item.classList.remove('build-unmarked');
+        if (!classed && item.classList.length === 0) item.removeAttribute('class');
+      }
+      restore();
+    };
+    const tick = (): void => {
+      if (done) return;
+      const elapsed = performance.now() - started;
+      // A re-render replaced the text, or the time is up.
+      if (!caret.isConnected || elapsed >= duration) {
+        finish();
+        return;
+      }
+      const due = Math.min(units.length, Math.floor(elapsed / step));
+      if (due > shown) {
+        for (; shown < due; shown++) {
+          units[shown].style.visibility = visibility[shown];
+          for (const marker of markers) {
+            if (marker.first === shown) marker.item.classList.remove('build-unmarked');
+          }
+        }
+        units[shown - 1].after(caret);
+      }
+      timer = setTimeout(tick, Math.max(0, started + (shown + 1) * step - performance.now()));
+    };
+    timer = setTimeout(tick, step);
+    this.effects.push(finish);
   }
 
   /**
@@ -1812,6 +1893,55 @@ export function matchMorphElements(
 
 /** How far out of focus a blur build starts (or ends), in canvas px. */
 const BLUR_RADIUS = 24;
+
+/**
+ * Lay every character of some rendered text in a span of its own, in reading
+ * order, spaces included, for a build that brings text in a character at a
+ * time. A formula or a picture in the text is one unit, left as it is.
+ * `restore` puts the original text nodes back (and does nothing to text a
+ * re-render has already replaced).
+ *
+ * Characters are graphemes, so an accented letter or an emoji is one key.
+ */
+function splitCharacters(root: HTMLElement): { units: HTMLElement[]; restore: () => void } {
+  const units: HTMLElement[] = [];
+  const swaps: Array<{ text: Text; parts: Node[] }> = [];
+  const segmenter = typeof Intl !== 'undefined' && 'Segmenter' in Intl
+    ? new Intl.Segmenter(undefined, { granularity: 'grapheme' }) : null;
+  const graphemes = (text: string): string[] => (segmenter
+    ? [...segmenter.segment(text)].map((part) => part.segment) : Array.from(text));
+  const visit = (parent: Node): void => {
+    for (const child of [...parent.childNodes]) {
+      if (child.nodeType === Node.TEXT_NODE) {
+        const text = child as Text;
+        if (!text.data) continue;
+        const parts = graphemes(text.data).map((grapheme) => {
+          const span = document.createElement('span');
+          span.dataset.typed = 'character';
+          span.textContent = grapheme;
+          units.push(span);
+          return span;
+        });
+        text.replaceWith(...parts);
+        swaps.push({ text, parts });
+      } else if (child instanceof HTMLElement) {
+        if (child.matches('.katex, img, video, iframe, canvas')) units.push(child);
+        else visit(child);
+      }
+    }
+  };
+  visit(root);
+  const restore = (): void => {
+    for (const { text, parts } of swaps) {
+      const first = parts[0];
+      if (!first.parentNode) continue;
+      first.parentNode.insertBefore(text, first);
+      for (const part of parts) part.parentNode?.removeChild(part);
+    }
+    swaps.length = 0;
+  };
+  return { units, restore };
+}
 
 /**
  * Replace the `<video>` nodes in a cloned subtree with a still of the frame the
