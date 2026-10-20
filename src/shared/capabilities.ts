@@ -57,7 +57,7 @@ export function capabilities(): Capability[] {
         'role-title, role-heading, role-body, role-caption are the vocabulary.',
         'An inline `style` overrides the theme and should be a deliberate one-off.',
         'contentStyle applies CSS to the inner text content rather than the positioned box; use it for glyph paint such as gradient text, text strokes and shadows.',
-        'html may contain inline markup: <b>, <i>, <br>, <span>.',
+        'html may contain inline markup: <b>, <i>, <u>, <s> (strikethrough), <br>, <span>.',
         'paragraphSpacing (px) sets the gap between paragraphs and between bullets; unset keeps the theme default.',
         "align sets the horizontal setting of the type — 'left', 'center', 'right' or 'justify'.",
         "valign places the text inside its box — 'top', 'middle' or 'bottom' — which is what keeps a caption sitting against a figure rather than floating.",
@@ -99,6 +99,8 @@ export function capabilities(): Capability[] {
         'One <li> per point; inline markup (<b>, <i>) works inside items.',
         'The whole list is one text element; the editor’s "Bulleted list" checkbox toggles the same markup.',
         'paragraphSpacing (px) spaces the items; unset keeps the theme default.',
+        'Marker style is data-bullet on the <ul>/<ol>: disc, circle, square, dash, triangle, arrow or check on a <ul>; decimal (1.), decimal-paren (1)), lower-alpha, upper-alpha, lower-roman or upper-roman on an <ol>. It marks that list’s own items: a nested list keeps its level’s default (a dash under a disc, numbers in an <ol>) unless it carries its own.',
+        'An item is indented a level by nesting a <ul>/<ol> inside the <li> above it. A paragraph outside a list is indented with data-indent="1" to "8" on its <p>, 1.4em a step, the same step as a list level.',
       ],
       elements: [
         text('cap-lists-title', 'Lists are markup, not characters', { x: 160, y: 90, w: 1600, h: 150 }, { class: ['role-title'] }),

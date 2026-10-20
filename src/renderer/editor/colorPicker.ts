@@ -479,7 +479,10 @@ export function colorField(
     }
     popover.append(paletteTitle, palette, plane, hueLabel, opacityLabel, values, clearButton);
     paint();
-    openAnchoredPopover(trigger, popover, { focus: false });
+    // From a side panel the picker opens beside it, as Keynote's does, so
+    // it never sits on the rows under the swatch (a table's border presets
+    // under its border colour, say).
+    openAnchoredPopover(trigger, popover, { focus: false, beside: trigger.closest('#side') });
   });
 
   wrap.append(fieldLabel, trigger);

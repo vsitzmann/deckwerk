@@ -206,6 +206,14 @@ export function agentFixtureDeck(): Deck {
           text('details-math', 'Energy $E = mc^2$ costs \\$5\nand then $$\\int_0^1 x\\,dx$$ done ', { x: 120, y: 80, w: 1680, h: 300 }, { autoFit: false }),
           // A theme class with a margin, and one that frames the picture.
           text('details-nudged', 'Nudged by its class', { x: 120, y: 420, w: 800, h: 80 }, { class: ['role-body', 'nudged'] }),
+          // Paragraph indent, strikethrough and marker styles: attributes and
+          // lines inside the markup, none of which CSS on the box can say.
+          text(
+            'details-lists',
+            '<p data-indent="1">Indented, <s>struck</s></p><ul data-bullet="square"><li>Square<ol data-bullet="lower-roman"><li>Roman</li></ol></li></ul>',
+            { x: 120, y: 540, w: 600, h: 220 },
+            { autoFit: false },
+          ),
           { id: 'details-framed', type: 'image', x: 1000, y: 420, w: 400, h: 300, src: 'assets/pic.png', fit: 'cover', class: ['framed'], sourceBox: null },
           { id: 'details-clip', type: 'video', x: 1450, y: 420, w: 400, h: 225, src: 'assets/clip.mp4', loop: false, muted: false, autoplay: false },
           { id: 'details-curve', type: 'shape', shape: 'line', x: 120, y: 800, w: 600, h: 4, control: null, stroke: '#333333' },

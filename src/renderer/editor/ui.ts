@@ -40,10 +40,23 @@ export function closePopover(): void {
   }
 }
 
-function placePopover(popover: HTMLElement, anchor: HTMLElement): void {
+function placePopover(popover: HTMLElement, anchor: HTMLElement, beside?: Element | null): void {
   document.body.appendChild(popover);
   const anchorRect = anchor.getBoundingClientRect();
   const rect = popover.getBoundingClientRect();
+  if (beside) {
+    // Outside the panel, level with the control, so the panel's other rows
+    // stay in view and in reach while the popover is open.
+    const panel = beside.getBoundingClientRect();
+    const sideLeft = panel.left - 6 - rect.width >= 8 ? panel.left - 6 - rect.width
+      : panel.right + 6 + rect.width <= window.innerWidth - 8 ? panel.right + 6
+        : null;
+    if (sideLeft !== null) {
+      popover.style.left = `${sideLeft}px`;
+      popover.style.top = `${Math.max(8, Math.min(anchorRect.top, window.innerHeight - rect.height - 8))}px`;
+      return;
+    }
+  }
   const left = Math.max(8, Math.min(anchorRect.left, window.innerWidth - rect.width - 8));
   let top = anchorRect.bottom + 6;
   if (top + rect.height > window.innerHeight - 8) top = Math.max(8, anchorRect.top - rect.height - 6);
@@ -70,10 +83,14 @@ function bindDismiss(popover: HTMLElement, anchor: HTMLElement): void {
 export function openAnchoredPopover(
   anchor: HTMLElement,
   popover: HTMLElement,
-  options: { focus?: boolean } = {},
+  options: {
+    focus?: boolean;
+    /** Open beside this container rather than over it, when there is room. */
+    beside?: Element | null;
+  } = {},
 ): void {
   closePopover();
-  placePopover(popover, anchor);
+  placePopover(popover, anchor, options.beside);
   bindDismiss(popover, anchor);
   if (options.focus !== false) {
     popover.querySelector<HTMLElement>(

@@ -33,7 +33,17 @@ import {
   stripTextMediaPayloads,
   textOnlyPastedHtml,
 } from '@shared/htmlSafety.js';
-import { isBaselineFormat, type BaselineFormat, type InlineTextFormat } from './textFormatting.js';
+import {
+  DECORATION_LINES,
+  decorationLineValue,
+  isBaselineFormat,
+  isDecorationFormat,
+  isDecorationTag,
+  otherDecoration,
+  type BaselineFormat,
+  type DecorationFormat,
+  type InlineTextFormat,
+} from './textFormatting.js';
 import { classifyMediaName, isPendingSrc, makePendingSrc, mediaFileName, pendingToken } from '@shared/media.js';
 import {
   normalizeParagraphHtml,
@@ -46,6 +56,12 @@ import {
   LIST_MARKER_COLOR_ATTRIBUTE,
   LIST_MARKER_COLOR_PROPERTY,
   TYPING_STYLE_SENTINEL,
+  paragraphIndent,
+  setParagraphIndent,
+  dropForeignBulletStyle,
+  listBulletStyle,
+  setListBulletStyle,
+  type BulletStyle,
   type ListMarkerColorState,
 } from '@shared/paragraphs.js';
 import {
@@ -384,6 +400,8 @@ function findTextTarget(
 }
 
 const TEXT_BLOCKS = 'td, th, li, p, h1, h2, h3, h4, h5, h6, blockquote, div';
+/** The paragraphs outside a list that the Indent buttons step in and out. */
+const INDENTABLE_BLOCKS = 'p, h1, h2, h3, h4, h5, h6, blockquote, div';
 
 /**
  * Whether a range reaches across two blocks of the edited text.
@@ -4475,11 +4493,13 @@ export class EditorCanvas {
           ? 'italic'
           : event.inputType === 'formatUnderline'
             ? 'underline'
-            : null;
+            : event.inputType === 'formatStrikeThrough'
+              ? 'strikethrough'
+              : null;
       if (nativeFormat) {
         // Electron/Chromium can route macOS editing commands through
         // beforeinput without delivering the corresponding Cmd+B/Cmd+I/Cmd+U
-        // keydown to the contenteditable. Own those semantic commands too so
+        // (or strikethrough) keydown to the contenteditable. Own those semantic commands too so
         // native menu/accelerator routing and physical keyboard routing have
         // identical, model-backed formatting behaviour.
         event.preventDefault();
@@ -4554,6 +4574,20 @@ export class EditorCanvas {
         this.toggleTextSelectionFormat(
           e.key === '=' || e.key === '+' ? 'superscript' : 'subscript',
         );
+      } else if (
+        (e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey
+        && (e.code === 'BracketLeft' || e.code === 'BracketRight')
+      ) {
+        // Keynote's and Google Slides' indent chords, for paragraphs as well
+        // as list items. By physical key, as the arrange chords are.
+        e.preventDefault();
+        sealTextChunk();
+        this.shiftTextIndent(e.code === 'BracketRight' ? 'in' : 'out');
+      } else if ((e.metaKey || e.ctrlKey) && e.shiftKey && !e.altKey && e.key.toLowerCase() === 'x') {
+        // Strikethrough, as in Google Docs and Slides. Shift keeps it clear
+        // of Cut.
+        e.preventDefault();
+        this.toggleTextSelectionFormat('strikethrough');
       } else if (this.handleZoomShortcut(e)) {
         // The unshifted chords zoom the canvas here too: they mean nothing to
         // the text, and would otherwise zoom the whole page.
@@ -5171,6 +5205,7 @@ export class EditorCanvas {
       underline: link
         ? this.elementFormatState(link.element, link.content, 'underline')
         : this.textSelectionFormatState('underline'),
+      strikethrough: this.textSelectionFormatState('strikethrough'),
       superscript: this.textSelectionFormatState('superscript'),
       subscript: this.textSelectionFormatState('subscript'),
       runStyles: this.runStylesAtCaret(),
@@ -5278,8 +5313,8 @@ export class EditorCanvas {
     if (formats.italic !== has('italic')) {
       declarations.push(['fontStyle', formats.italic ? 'italic' : 'normal']);
     }
-    if (formats.underline !== has('underline')) {
-      declarations.push(['textDecorationLine', formats.underline ? 'underline' : 'none']);
+    if (formats.underline !== has('underline') || formats.strikethrough !== has('strikethrough')) {
+      declarations.push(['textDecorationLine', decorationLineValue(formats)]);
     }
     if (formats.superscript !== has('superscript') || formats.subscript !== has('subscript')) {
       declarations.push(...BASELINE_DECLARATIONS[
@@ -5360,6 +5395,97 @@ export class EditorCanvas {
     const node = body.closest<HTMLElement>('.element');
     if (node) scheduleAutoFit(node);
     return true;
+  }
+
+  /**
+   * Indent or outdent everything the caret or the selection touches: the
+   * Indent buttons and Cmd/Ctrl+] and [. A list item moves one level, exactly
+   * as Tab and shift-Tab move it; a paragraph outside a list steps its own
+   * indent (see PARAGRAPH_INDENT_ATTRIBUTE). True when the request was taken,
+   * including one with nothing left to do, such as outdenting a flush line.
+   */
+  shiftTextIndent(direction: 'in' | 'out'): boolean {
+    if (!this.editingId || this.tableSelection) return false;
+    const body = this.slideLayer.querySelector<HTMLElement>(
+      `[data-element-id="${CSS.escape(this.editingId)}"] .text-content`,
+    );
+    if (!body) return false;
+    const live = window.getSelection();
+    const current = live && live.rangeCount > 0 ? live.getRangeAt(0) : null;
+    if (!current || !body.contains(current.commonAncestorContainer)) {
+      // Focus went to the panel: act on the bookmark taken before it did.
+      const saved = this.textSelectionRange;
+      if (!saved || !body.contains(saved.commonAncestorContainer)) return false;
+      live?.removeAllRanges();
+      live?.addRange(saved.cloneRange());
+    }
+    const range = live!.getRangeAt(0);
+    const touches = (node: Node): boolean => {
+      try {
+        return range.collapsed ? node.contains(range.startContainer) : range.intersectsNode(node);
+      } catch {
+        return false;
+      }
+    };
+    const items = this.touchedListItems(body, range);
+    let paragraphs = [...body.querySelectorAll<HTMLElement>(INDENTABLE_BLOCKS)]
+      .filter((block) => !block.closest('li, ul, ol, table') && touches(block))
+      .filter((block) => !block.querySelector(INDENTABLE_BLOCKS));
+    const offsets = this.textOffsetsForRange(body, range);
+    if (items.length === 0 && paragraphs.length === 0) {
+      // A one-line box is bare inline markup with no paragraph to carry the
+      // indent; the line the caret is on becomes one.
+      const line = this.bareLineAt(body, range);
+      if (!line || direction === 'out') return true;
+      paragraphs = [line];
+    }
+
+    let changed = false;
+    if (paragraphs.length > 0) {
+      for (const paragraph of paragraphs) {
+        const level = paragraphIndent(paragraph) + (direction === 'in' ? 1 : -1);
+        changed = setParagraphIndent(paragraph, level) || changed;
+      }
+      if (offsets) this.restoreTextRange(body, offsets);
+    }
+    if (items.length > 0) {
+      // A caret on an outer-level item has only its bullet left to give up,
+      // as with shift-Tab; that commits a step of its own.
+      if (direction === 'out' && !changed && this.unbulletCaretItem(body, 'outdent')) return true;
+      changed = this.shiftListItems(body, direction) || changed;
+    }
+    if (!changed) return true;
+    this.focusTextSurface(body);
+    const node = body.closest<HTMLElement>('.element');
+    if (node) scheduleAutoFit(node);
+    this.commitLiveTextDom(direction === 'in' ? 'Indent' : 'Outdent');
+    return true;
+  }
+
+  /**
+   * Wrap the run of bare inline markup the caret sits in, directly in the
+   * box, in a paragraph of its own, and return it. Null when the caret is
+   * inside a block already.
+   */
+  private bareLineAt(body: HTMLElement, range: Range): HTMLElement | null {
+    let top: Node | null = range.startContainer;
+    while (top && top.parentNode !== body) top = top.parentNode;
+    if (top === null && range.startContainer === body) {
+      top = body.childNodes[Math.min(range.startOffset, body.childNodes.length - 1)] ?? null;
+    }
+    const isBlock = (node: Node | null): boolean =>
+      node instanceof HTMLElement && node.matches(`${INDENTABLE_BLOCKS}, ul, ol, li, table, pre`);
+    if (!top || isBlock(top)) return null;
+    let first: Node = top;
+    while (first.previousSibling && !isBlock(first.previousSibling)) first = first.previousSibling;
+    const paragraph = document.createElement('p');
+    body.insertBefore(paragraph, first);
+    for (let node: Node | null = first; node && !isBlock(node);) {
+      const next: Node | null = node.nextSibling;
+      paragraph.appendChild(node);
+      node = next;
+    }
+    return paragraph;
   }
 
   /** Write the edited markup back to the deck as a single undoable change. */
@@ -5667,6 +5793,56 @@ export class EditorCanvas {
     return true;
   }
 
+  /**
+   * The marker style of the lists holding the items the caret or selection
+   * touches; null outside a list (the box's own lists answer then) and
+   * `mixed` when they differ.
+   */
+  textSelectionBulletStyle(): { mixed: boolean; value: BulletStyle | null } | null {
+    if (!this.editingId || this.tableSelection) return null;
+    const content = this.slideLayer.querySelector<HTMLElement>(
+      `[data-element-id="${CSS.escape(this.editingId)}"] .text-content`,
+    );
+    const range = content ? this.activeTextRange(content) : null;
+    if (!content || !range || !content.contains(range.commonAncestorContainer)) return null;
+    const lists = this.listsForRange(content, range);
+    if (lists.length === 0) return null;
+    const styles = lists.map(listBulletStyle);
+    const mixed = !styles.every((style) => style === styles[0]);
+    return { mixed, value: mixed ? null : styles[0] };
+  }
+
+  /**
+   * Give the lists holding the touched items a marker style. Each list is
+   * one level, so a caret in a sub-list restyles that level and no other;
+   * a numbered style turns a bulleted level into a numbered one.
+   */
+  applyTextSelectionBulletStyle(style: BulletStyle): boolean {
+    if (!this.editingId || this.tableSelection) return this.declineLiveTextFormat();
+    const content = this.slideLayer.querySelector<HTMLElement>(
+      `[data-element-id="${CSS.escape(this.editingId)}"] .text-content`,
+    );
+    const range = content ? this.activeTextRange(content) : null;
+    if (!content || !range || !content.contains(range.commonAncestorContainer)) return this.declineLiveTextFormat();
+    const lists = this.listsForRange(content, range);
+    if (lists.length === 0) return this.declineLiveTextFormat();
+    // Retagging moves the items into a new list; text offsets survive that.
+    const offsets = this.textOffsetsForRange(content, range);
+    for (const list of lists) setListBulletStyle(list, style);
+    if (offsets) this.restoreTextRange(content, offsets);
+    this.focusTextSurface(content);
+    this.commitLiveTextDom('Change bullet style');
+    return true;
+  }
+
+  /** The lists directly holding the items a Range touches, in document order. */
+  private listsForRange(content: HTMLElement, range: Range): HTMLElement[] {
+    const lists = this.listItemsForRange(content, range)
+      .map((item) => item.parentElement)
+      .filter((list): list is HTMLElement => Boolean(list) && /^(?:UL|OL)$/.test(list!.tagName));
+    return [...new Set(lists)];
+  }
+
   private listItemsForRange(content: HTMLElement, range: Range): HTMLElement[] {
     if (range.collapsed) {
       const container = range.startContainer instanceof Element
@@ -5707,7 +5883,26 @@ export class EditorCanvas {
         `${active ? 'Remove' : 'Apply'} ${format}`,
       );
     }
-    return this.applyTextSelectionStyle('textDecorationLine', active ? 'none' : 'underline');
+    return this.toggleTextSelectionDecoration(format, !active);
+  }
+
+  /**
+   * Switch one line on or off over the selection. Underline and
+   * strikethrough share `text-decoration-line`, so every run is written the
+   * value that keeps its own other line: striking through a sentence with one
+   * underlined word leaves that word underlined.
+   */
+  private toggleTextSelectionDecoration(format: DecorationFormat, on: boolean): boolean {
+    const other = otherDecoration(format);
+    const value = (otherOn: boolean): string => decorationLineValue({
+      [format]: on,
+      [other]: otherOn,
+    } as Record<DecorationFormat, boolean>);
+    return this.applyTextSelectionStyles(
+      [['textDecorationLine', value(this.textSelectionFormatState(other))]],
+      `Change selected text ${format}`,
+      (text, content) => [['textDecorationLine', value(this.textNodeFormatState(text, content, other))]],
+    );
   }
 
   textSelectionFormatState(format: InlineTextFormat): boolean {
@@ -6057,6 +6252,7 @@ export class EditorCanvas {
           replacement.setAttribute(attr.name, attr.value);
         }
         while (list.firstChild) replacement.appendChild(list.firstChild);
+        dropForeignBulletStyle(replacement);
         list.replaceWith(replacement);
         changed = true;
         return replacement;
@@ -6292,12 +6488,12 @@ export class EditorCanvas {
       if (format === 'italic' && node.style.fontStyle) {
         return node.style.fontStyle === 'italic';
       }
-      if (format === 'underline' && node.style.textDecorationLine) {
-        return node.style.textDecorationLine.includes('underline');
+      if (isDecorationFormat(format) && node.style.textDecorationLine) {
+        return node.style.textDecorationLine.includes(DECORATION_LINES[format]);
       }
       if (format === 'bold' && node.matches('b, strong')) return true;
       if (format === 'italic' && node.matches('i, em')) return true;
-      if (format === 'underline' && node.matches('u')) return true;
+      if (isDecorationFormat(format) && isDecorationTag(node, format)) return true;
     }
     const computed = start ? getComputedStyle(start) : null;
     if (baseline) return computed?.verticalAlign === baseline;
@@ -6306,7 +6502,8 @@ export class EditorCanvas {
       return computed?.fontWeight === 'bold' || weight >= 600;
     }
     if (format === 'italic') return computed?.fontStyle === 'italic';
-    return computed?.textDecorationLine.includes('underline') === true;
+    return isDecorationFormat(format)
+      && computed?.textDecorationLine.includes(DECORATION_LINES[format]) === true;
   }
 
   private applyTextSelectionStyle(property: TextRunStyleProperty, value: string): boolean {
@@ -6320,9 +6517,18 @@ export class EditorCanvas {
     return this.applyTextSelectionStyles([[property, value]], label);
   }
 
+  /**
+   * `perText`, when given, decides the declarations for each selected run in
+   * place of `declarations` (which a collapsed caret still uses): for a value
+   * that depends on what the run already has.
+   */
   private applyTextSelectionStyles(
     declarations: ReadonlyArray<readonly [TextRunStyleProperty, string]>,
     label: string,
+    perText?: (
+      text: Text,
+      content: HTMLElement,
+    ) => ReadonlyArray<readonly [TextRunStyleProperty, string]>,
   ): boolean {
     if (!this.editingId) return false;
     const content = this.slideLayer.querySelector<HTMLElement>(
@@ -6371,9 +6577,10 @@ export class EditorCanvas {
       if (end < text.data.length) text.splitText(end);
       const selected = start > 0 ? text.splitText(start) : text;
       selectedTexts.add(selected);
+      const own = perText ? perText(selected, content) : declarations;
       const applied = keepProportional && proportional[index]
-        ? declarations.filter(([property]) => property !== 'fontSize')
-        : declarations;
+        ? own.filter(([property]) => property !== 'fontSize')
+        : own;
       if (applied.length === 0) return;
       const span = document.createElement('span');
       for (const [property, value] of applied) span.style[property] = value;
@@ -6639,16 +6846,24 @@ export class EditorCanvas {
       this.commitTableDom('Change table cell typography');
       return true;
     }
-    const property = format === 'bold' ? 'fontWeight'
-      : format === 'italic' ? 'fontStyle' : 'textDecorationLine';
+    if (isDecorationFormat(format)) {
+      // Each cell keeps its own other line; see toggleTextSelectionDecoration.
+      const on = !this.tableCellTextFormatState(format);
+      const other = otherDecoration(format);
+      for (const cell of cells) {
+        cell.style.textDecorationLine = decorationLineValue({
+          [format]: on,
+          [other]: cell.style.textDecorationLine.includes(DECORATION_LINES[other]),
+        } as Record<DecorationFormat, boolean>);
+      }
+      this.commitTableDom('Change table cell typography');
+      return true;
+    }
+    const property = format === 'bold' ? 'fontWeight' : 'fontStyle';
     const active = cells.every((cell) => format === 'bold'
       ? Number.parseInt(cell.style.fontWeight, 10) >= 600
-      : format === 'italic'
-        ? cell.style.fontStyle === 'italic'
-        : cell.style.textDecorationLine.includes('underline'));
-    const value = format === 'bold' ? (active ? '400' : '700')
-      : format === 'italic' ? (active ? 'normal' : 'italic')
-        : active ? 'none' : 'underline';
+      : cell.style.fontStyle === 'italic');
+    const value = format === 'bold' ? (active ? '400' : '700') : active ? 'normal' : 'italic';
     return this.applyTableCellTextStyle(property, value);
   }
 
@@ -6674,7 +6889,7 @@ export class EditorCanvas {
       ? Number.parseInt(cell.style.fontWeight, 10) >= 600
       : format === 'italic'
         ? cell.style.fontStyle === 'italic'
-        : cell.style.textDecorationLine.includes('underline'));
+        : cell.style.textDecorationLine.includes(DECORATION_LINES[format]));
   }
 
   textComputedTypography(elementId: string): {

@@ -2,10 +2,16 @@ import type { SlideElement } from '@shared/deck.js';
 import { isRelativeFontSize } from '@shared/htmlSafety.js';
 
 type TextElement = Extract<SlideElement, { type: 'text' }>;
-export type TextFormat = 'bold' | 'italic' | 'underline';
+export type TextFormat = 'bold' | 'italic' | 'underline' | 'strikethrough';
+/**
+ * Underline and strikethrough are two independent toggles written to one CSS
+ * property, `text-decoration-line`. Whatever sets one has to carry the other
+ * along in the same value, or switching one on would switch the other off.
+ */
+export type DecorationFormat = 'underline' | 'strikethrough';
 /**
  * Superscript and subscript are one exclusive baseline choice rather than a
- * third independent toggle, and — unlike bold, italic and underline — they
+ * third independent toggle, and — unlike bold, italic and the lines — they
  * only ever describe a run inside a box. Raising a whole box is meaningless
  * (a block has no baseline to shift against), so these two live outside
  * `TextFormat`: the whole-box helpers below deliberately do not accept them.
@@ -15,6 +21,41 @@ export type InlineTextFormat = TextFormat | BaselineFormat;
 
 export function isBaselineFormat(format: InlineTextFormat): format is BaselineFormat {
   return format === 'superscript' || format === 'subscript';
+}
+
+export function isDecorationFormat(format: InlineTextFormat): format is DecorationFormat {
+  return format === 'underline' || format === 'strikethrough';
+}
+
+/** The `text-decoration-line` keyword each line format paints. */
+export const DECORATION_LINES: Record<DecorationFormat, string> = {
+  underline: 'underline',
+  strikethrough: 'line-through',
+};
+
+/** Tags that paint each line in the tag dialect (`<u>`, `<s>`). */
+const DECORATION_TAGS: Record<DecorationFormat, string> = {
+  underline: 'U',
+  strikethrough: 'S, STRIKE, DEL',
+};
+
+/** Whether a tag paints this line by itself, the way `<u>` underlines. */
+export function isDecorationTag(element: Element, format: DecorationFormat): boolean {
+  return DECORATION_TAGS[format].split(', ').includes(element.tagName);
+}
+
+/** The other line, the one a change to `format` must leave as it was. */
+export function otherDecoration(format: DecorationFormat): DecorationFormat {
+  return format === 'underline' ? 'strikethrough' : 'underline';
+}
+
+/** One `text-decoration-line` value that paints exactly these lines. */
+export function decorationLineValue(lines: Record<DecorationFormat, boolean>): string {
+  const value = (Object.keys(DECORATION_LINES) as DecorationFormat[])
+    .filter((format) => lines[format])
+    .map((format) => DECORATION_LINES[format])
+    .join(' ');
+  return value || 'none';
 }
 
 function serialized(fragment: DocumentFragment): string {
@@ -235,8 +276,8 @@ function textNodeState(text: Text, format: TextFormat): boolean {
       if (/^(I|EM)$/.test(node.tagName)) return true;
     } else {
       const declared = node.style.textDecorationLine || node.style.textDecoration;
-      if (declared) return declared.includes('underline');
-      if (node.tagName === 'U') return true;
+      if (declared) return declared.includes(DECORATION_LINES[format]);
+      if (isDecorationTag(node, format)) return true;
     }
   }
   return false;
@@ -287,8 +328,11 @@ export function wholeTextFormatState(
     const declared = element.style['font-style'];
     if (declared) return declared === 'italic';
   } else {
+    // A box-level line paints every character. A box that declares only the
+    // *other* line still has its runs to ask: the two share one property, so
+    // a struck-through box of underlined runs reads both.
     const declared = element.style['text-decoration'];
-    if (declared) return declared.includes('underline');
+    if (declared?.includes(DECORATION_LINES[format])) return true;
   }
   return htmlFormatState(element.html, format) ?? false;
 }
@@ -300,7 +344,84 @@ export function setWholeTextFormat(
 ): void {
   if (format === 'bold') setWholeTextStyle(element, 'font-weight', active ? '700' : '400');
   else if (format === 'italic') setWholeTextStyle(element, 'font-style', active ? 'italic' : 'normal');
-  else setWholeTextStyle(element, 'text-decoration', active ? 'underline' : 'none');
+  else setWholeTextDecoration(element, format, active);
+}
+
+/**
+ * Switch one line on or off across the whole box, leaving the other line on
+ * exactly the runs that had it. The box declares a line only when every
+ * character has it; each run says the rest for itself.
+ */
+function setWholeTextDecoration(
+  element: TextElement,
+  format: DecorationFormat,
+  active: boolean,
+): void {
+  const other = otherDecoration(format);
+  const lines = { [format]: active, [other]: wholeTextFormatState(element, other) } as
+    Record<DecorationFormat, boolean>;
+  element.style = { ...element.style, 'text-decoration': decorationLineValue(lines) };
+  recordTextOverride(element, 'text-decoration', true);
+  element.html = setHtmlTextDecoration(element.html, format, active);
+}
+
+/**
+ * Rewrite every run's `text-decoration-line` so `format` is on or off and the
+ * other line stays as each run had it.
+ *
+ * A line painted by an ancestor cannot be taken off by a descendant, so the
+ * lines move to the runs themselves: tags (`<u>`, `<s>`) become the span
+ * dialect the editor writes, every existing declaration comes off, and each
+ * run's value is written on the closest element that holds only text sharing
+ * that value — its parent when it can, a new span around it when not.
+ */
+function setHtmlTextDecoration(html: string, format: DecorationFormat, active: boolean): string {
+  const template = document.createElement('template');
+  template.innerHTML = html;
+  const other = otherDecoration(format);
+  const values = new Map<Text, string>();
+  const walker = document.createTreeWalker(template.content, NodeFilter.SHOW_TEXT);
+  for (let current = walker.nextNode(); current; current = walker.nextNode()) {
+    const text = current as Text;
+    if (!text.data) continue;
+    values.set(text, decorationLineValue({
+      [format]: active,
+      [other]: textNodeState(text, other),
+    } as Record<DecorationFormat, boolean>));
+  }
+  if (values.size === 0) return html;
+
+  for (const node of [...template.content.querySelectorAll<HTMLElement>('u, s, strike, del')].reverse()) {
+    const span = document.createElement('span');
+    for (const attribute of [...node.attributes]) span.setAttribute(attribute.name, attribute.value);
+    span.append(...node.childNodes);
+    node.replaceWith(span);
+  }
+  for (const node of template.content.querySelectorAll<HTMLElement>('*')) {
+    node.style.removeProperty('text-decoration');
+    node.style.removeProperty('text-decoration-line');
+    removeEmptyStyleAttribute(node);
+  }
+
+  const uniform = (host: HTMLElement, value: string): boolean => {
+    const inner = document.createTreeWalker(host, NodeFilter.SHOW_TEXT);
+    for (let current = inner.nextNode(); current; current = inner.nextNode()) {
+      const own = values.get(current as Text);
+      if (own !== undefined && own !== value) return false;
+    }
+    return true;
+  };
+  for (const [text, value] of values) {
+    let host = text.parentElement;
+    if (!host || !uniform(host, value)) {
+      const span = document.createElement('span');
+      text.replaceWith(span);
+      span.appendChild(text);
+      host = span;
+    }
+    host.style.setProperty('text-decoration-line', value);
+  }
+  return serialized(template.content);
 }
 
 export function toggleWholeTextFormat(element: TextElement, format: TextFormat): void {

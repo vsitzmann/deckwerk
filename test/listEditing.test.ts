@@ -2,6 +2,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   caretAtBlockStart,
+  indentListItem,
   isEmptyListItem,
   isTopLevelListItem,
   listItemParagraphs,
@@ -9,6 +10,14 @@ import {
   outdentListItem,
   unbulletListItems,
 } from '../src/renderer/editor/listEditing.js';
+import {
+  bulletStyleState,
+  changeListType,
+  listBulletStyle,
+  normalizeParagraphHtml,
+  setBulletStyle,
+  setListBulletStyle,
+} from '../src/shared/paragraphs.js';
 
 /**
  * The paragraph-level list surgery behind "None", Return on an empty bullet
@@ -304,5 +313,56 @@ describe('unbulletListItems and stray sub-lists', () => {
     unbulletListItems([one]);
     expect(body.textContent).toBe('onetwothreefour');
     expect([...body.querySelectorAll(':scope > p')].map((p) => p.textContent)).toEqual(['one', 'two', 'three']);
+  });
+});
+
+describe('bullet styles', () => {
+  it('gives each level its own default until a list carries a style', () => {
+    const body = content('<ul><li>a<ul><li>b<ol><li>c</li></ol></li></ul></li></ul>');
+    const [outer, inner, numbered] = [...body.querySelectorAll<HTMLElement>('ul, ol')];
+    expect([outer, inner, numbered].map(listBulletStyle)).toEqual(['disc', 'dash', 'decimal']);
+    // A style for the other kind of list is not this one's.
+    numbered.setAttribute('data-bullet', 'square');
+    expect(listBulletStyle(numbered)).toBe('decimal');
+    // Styling the outer level leaves the levels inside it alone.
+    setListBulletStyle(outer, 'arrow');
+    expect([outer, inner].map(listBulletStyle)).toEqual(['arrow', 'dash']);
+  });
+
+  it('retags a list for a numbered style and back, keeping its items and their order', () => {
+    const body = content('<ul style="list-style-type: square"><li style="list-style-type: circle">a</li><li>b</li></ul>');
+    const numbered = setListBulletStyle(body.querySelector('ul')!, 'lower-roman');
+    // The browser's own marker would be drawn beside the new one.
+    expect(body.innerHTML).toBe('<ol data-bullet="lower-roman"><li>a</li><li>b</li></ol>');
+    numbered.setAttribute('start', '3');
+    setListBulletStyle(numbered, 'check');
+    expect(body.innerHTML).toBe('<ul data-bullet="check"><li>a</li><li>b</li></ul>');
+  });
+
+  it('reads and sets the outermost lists of a box, which is what the box-level menu means', () => {
+    expect(bulletStyleState('<p>none</p>')).toEqual({ hasList: false, value: null });
+    expect(bulletStyleState('<ul data-bullet="square"><li>a</li></ul><p>x</p><ul><li>b</li></ul>'))
+      .toEqual({ hasList: true, value: null });
+    expect(setBulletStyle('<ul><li>a<ul><li>b</li></ul></li></ul>', 'decimal-paren'))
+      .toBe('<ol data-bullet="decimal-paren"><li>a<ul><li>b</li></ul></li></ol>');
+  });
+
+  it('drops a style that stops fitting when the List control switches kind', () => {
+    expect(changeListType('<ul data-bullet="square"><li>a</li></ul>', true)).toBe('<ol><li>a</li></ol>');
+    expect(changeListType('<ol data-bullet="lower-alpha" start="2"><li>a</li></ol>', false))
+      .toBe('<ul><li>a</li></ul>');
+  });
+
+  it('keeps two lists the author styled apart as two lists', () => {
+    expect(normalizeParagraphHtml('<ul data-bullet="square"><li>a</li></ul><ul data-bullet="check"><li>b</li></ul>'))
+      .toBe('<ul data-bullet="square"><li>a</li></ul><ul data-bullet="check"><li>b</li></ul>');
+    expect(normalizeParagraphHtml('<ul data-bullet="check"><li>a</li></ul><ul data-bullet="check"><li>b</li></ul>'))
+      .toBe('<ul data-bullet="check"><li>a</li><li>b</li></ul>');
+  });
+
+  it('starts a new level with that level\'s default when an item is indented', () => {
+    const body = content('<ul data-bullet="square"><li>a</li><li>b</li></ul>');
+    indentListItem(items(body)[1]);
+    expect(body.innerHTML).toBe('<ul data-bullet="square"><li>a<ul><li>b</li></ul></li></ul>');
   });
 });

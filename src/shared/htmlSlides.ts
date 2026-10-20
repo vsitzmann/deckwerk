@@ -4,7 +4,7 @@ import type { Deck, MediaEffect, Slide, SlideElement, TimelineEntry } from './de
 import { fitAutoTextElement } from './autoFit.js';
 import { KATEX_AUTO_RENDER_JS, KATEX_CSS, KATEX_JS } from './katexInline.js';
 import { shapeSvg } from './shapeSvg.js';
-import { applyTableColumnWidths } from './paragraphs.js';
+import { applyTableColumnWidths, BULLET_STYLES, LIST_BULLET_ATTRIBUTE } from './paragraphs.js';
 import { normalizeHtmlLineHeights, normalizeStyleLineHeight } from './lineHeight.js';
 import { layoutMaster, placeNewPlaceholders, syncSlideWithLayoutMaster, type FixedLayout } from './layoutMasters.js';
 import {
@@ -1114,6 +1114,13 @@ function countSlides(count: number): string {
   return `${count} slide${count === 1 ? '' : 's'}`;
 }
 
+/** A list's own marker style, as an attribute for its rebuilt tag; known styles only. */
+function listBulletAttribute(style: string | undefined): string {
+  return BULLET_STYLES.some((choice) => choice.value === style)
+    ? ` ${LIST_BULLET_ATTRIBUTE}="${style}"`
+    : '';
+}
+
 /**
  * Inline CSS worth keeping once an element is absolutely positioned.
  *
@@ -1463,9 +1470,10 @@ export function elementFromNode(
     ...effectsFromNode(node, base.style),
     type: 'text',
     // A list is one text object; without its own tag around the items the
-    // markers and indentation would not survive into the deck.
+    // markers and indentation would not survive into the deck — nor would the
+    // marker style the tag carries.
     html: normalizeHtmlLineHeights(node.tag === 'ul' || node.tag === 'ol'
-      ? `<${node.tag}>${node.html.trim()}</${node.tag}>`
+      ? `<${node.tag}${listBulletAttribute(node.dataset.bullet)}>${node.html.trim()}</${node.tag}>`
       // A deck text box's own markup is kept exactly: the player shows it
       // pre-wrap, so even a trailing space is something it holds.
       : node.preformatted ? node.html : node.html.trim()),

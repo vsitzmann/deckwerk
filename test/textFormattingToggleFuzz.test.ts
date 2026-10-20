@@ -18,7 +18,7 @@ import { extraFuzzSeeds } from './support/fuzzSeeds.js';
  */
 
 const TEXT = 'Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor.';
-type Format = 'bold' | 'italic' | 'underline' | 'superscript' | 'subscript';
+type Format = 'bold' | 'italic' | 'underline' | 'strikethrough' | 'superscript' | 'subscript';
 const FORMATS: Format[] = ['bold', 'italic', 'underline', 'superscript', 'subscript'];
 /** The baseline formats are one exclusive choice: turning one on turns the other off. */
 const OPPOSITE: Partial<Record<Format, Format>> = {
@@ -87,10 +87,13 @@ function selectOffsets(root: HTMLElement, start: number, end: number): void {
 function toggleShortcut(content: HTMLElement, format: Format): void {
   const key = format === 'italic' ? 'i'
     : format === 'underline' ? 'u'
-      : format === 'superscript' ? '='
-        : format === 'subscript' ? '-' : 'b';
+      : format === 'strikethrough' ? 'x'
+        : format === 'superscript' ? '='
+          : format === 'subscript' ? '-' : 'b';
   const event = new KeyboardEvent('keydown', {
-    key, metaKey: true, shiftKey: format === 'superscript' || format === 'subscript',
+    key,
+    metaKey: true,
+    shiftKey: format === 'superscript' || format === 'subscript' || format === 'strikethrough',
     bubbles: true, cancelable: true,
   });
   content.dispatchEvent(event);
@@ -100,7 +103,8 @@ function toggleShortcut(content: HTMLElement, format: Format): void {
 function toggleButton(inspectorHost: HTMLElement, format: Format): void {
   const label = format === 'italic' ? 'Italic (Cmd/Ctrl+I)'
     : format === 'underline' ? 'Underline (Cmd/Ctrl+U)'
-      : format === 'superscript' ? 'Superscript (Cmd/Ctrl+Shift+=)'
+      : format === 'strikethrough' ? 'Strikethrough (Cmd/Ctrl+Shift+X)'
+        : format === 'superscript' ? 'Superscript (Cmd/Ctrl+Shift+=)'
         : format === 'subscript' ? 'Subscript (Cmd/Ctrl+Shift+-)' : 'Bold (Cmd/Ctrl+B)';
   const button = inspectorHost.querySelector<HTMLButtonElement>(
     `button[aria-label="${label}"]`,
@@ -143,10 +147,9 @@ function effectiveFormat(node: Text, root: HTMLElement, format: Format): boolean
       }
       if (current.matches('b, strong')) return true;
     } else {
-      if (current.style.textDecorationLine) {
-        return current.style.textDecorationLine.includes('underline');
-      }
-      if (current.matches('u')) return true;
+      const line = format === 'underline' ? 'underline' : 'line-through';
+      if (current.style.textDecorationLine) return current.style.textDecorationLine.includes(line);
+      if (current.matches(format === 'underline' ? 'u' : 's, strike, del')) return true;
     }
   }
   return false;
@@ -264,6 +267,7 @@ describe('stateful inline text formatting fuzzing', () => {
         bold: Array(TEXT.length).fill(false),
         italic: Array(TEXT.length).fill(false),
         underline: Array(TEXT.length).fill(false),
+        strikethrough: Array(TEXT.length).fill(false),
         superscript: Array(TEXT.length).fill(false),
         subscript: Array(TEXT.length).fill(false),
       };
@@ -295,6 +299,36 @@ describe('stateful inline text formatting fuzzing', () => {
         if (other) {
           expect(formatMap(content, other), `seed ${seed}, step ${step + 1}: ${other}`)
             .toEqual(expected[other]);
+        }
+      }
+    });
+  }
+
+  // Underline and strikethrough are written to one property; neither may
+  // take the other off, on any run, however the selections overlap.
+  for (const seed of [...new Set([3301, 8821, 15013, ...extraFuzzSeeds()])]) {
+    it(`keeps underline and strikethrough independent for seed ${seed}`, () => {
+      const { store, content, inspectorHost } = setup();
+      const lines: Format[] = ['underline', 'strikethrough', 'bold'];
+      const expected = Object.fromEntries(
+        lines.map((format) => [format, Array(TEXT.length).fill(false)]),
+      ) as Record<Format, boolean[]>;
+      const random = mulberry32(seed);
+
+      for (let step = 0; step < 60; step += 1) {
+        const format = lines[Math.floor(random() * lines.length)];
+        const start = Math.floor(random() * (TEXT.length - 1));
+        const end = start + 1 + Math.floor(random() * Math.min(18, TEXT.length - start - 1));
+        selectOffsets(content, start, end);
+        const next = !expected[format][start];
+        if (random() < 0.5) toggleShortcut(content, format);
+        else toggleButton(inspectorHost, format);
+        expected[format].fill(next, start, end);
+
+        expect(savedText(store), `seed ${seed}, step ${step + 1}: saved text`).toBe(TEXT);
+        for (const line of lines) {
+          expect(formatMap(content, line), `seed ${seed}, step ${step + 1}: ${line}`)
+            .toEqual(expected[line]);
         }
       }
     });
