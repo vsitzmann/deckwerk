@@ -17,6 +17,9 @@
   --muted: #565f89;
   --accent: #7aa2f7;
   --accent-soft: rgb(122 162 247 / 12%);
+  /* Labels on an accent fill: the panel's near-black, since white on this
+     light blue is too faint to read. */
+  --on-accent: var(--panel);
   --green: #9ece6a;
   --yellow: #e0af68;
   --danger: #f7768e;
@@ -58,7 +61,7 @@ button.primary,
 button.ui-button-primary {
   border-color: var(--accent);
   background: var(--accent-soft);
-  color: var(--accent);
+  color: var(--accent-text, var(--accent));
   font-weight: 600;
 }
 
@@ -145,7 +148,7 @@ input:focus-visible {
 .workflow-dialog h2,
 .app-dialog h2 {
   margin: 0;
-  color: var(--accent);
+  color: var(--accent-text, var(--accent));
   font: 600 14px var(--mono);
   letter-spacing: .08em;
   text-transform: uppercase;

@@ -66,6 +66,10 @@ describe.skipIf(!electronBinary)('light mode', () => {
     // System follows the machine's appearance, so pin Dark first.
     await choose('Dark');
     expect(await editor.evaluate<string>('document.documentElement.dataset.uiTheme')).toBe('dark');
+    // Labels on the dark theme's light-blue fills are the panel's near-black.
+    expect(await editor.evaluate<string>(
+      `getComputedStyle(document.documentElement).getPropertyValue('--on-accent').trim()`,
+    )).toBe('#1a1b26');
     await choose('Light');
     expect(await editor.evaluate<string>('document.documentElement.dataset.uiTheme')).toBe('light');
     await editor.click('.brand-button', 'the DeckWerk menu');
