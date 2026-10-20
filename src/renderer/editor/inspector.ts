@@ -1,6 +1,7 @@
-import type { Deck, MediaEffect, Slide, SlideElement } from '@shared/deck.js';
+import { STROKE_STYLES, type Deck, type MediaEffect, type Slide, type SlideElement, type StrokeStyle } from '@shared/deck.js';
 import { braceDepthOf } from '@shared/brace.js';
 import { drawnAtPixelScale, redrawPathAtSize } from '@shared/pathNodes.js';
+import { STROKE_STYLE_GLYPHS, STROKE_STYLE_LABELS, strokeStyleOf } from '@shared/strokeStyles.js';
 import {
   paragraphsToList,
   paragraphsToOrderedList,
@@ -2431,6 +2432,23 @@ export class Inspector {
             }),
           ),
         );
+        // How a path's stroke is drawn: pen, brush, pencil, marker.
+        if (el.shape === 'path') {
+          style.content.appendChild(
+            segmentedSelectField(
+              'Stroke style',
+              STROKE_STYLES.map((value) => ({
+                value, title: STROKE_STYLE_LABELS[value], icon: STROKE_STYLE_GLYPHS[value],
+              })),
+              strokeStyleOf(el),
+              (v) => this.store.updateSelected((e) => {
+                if (e.type !== 'shape') return;
+                if (v === 'pen') delete e.strokeStyle;
+                else e.strokeStyle = v as StrokeStyle;
+              }, { label: 'Change stroke style' }),
+            ),
+          );
+        }
         const brace = el.shape === 'brace';
         const stroked = el.shape === 'line' || el.shape === 'arrow' || brace;
         const paint = document.createElement('div');

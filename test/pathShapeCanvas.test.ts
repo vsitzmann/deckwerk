@@ -5,6 +5,7 @@ import { pathOnCanvas } from '../src/shared/pathNodes.js';
 import { EditorCanvas, elementContainsPoint } from '../src/renderer/editor/canvas.js';
 import { EditorStore } from '../src/renderer/editor/store.js';
 import { createPenButton } from '../src/renderer/editor/elementCreation.js';
+import { Inspector } from '../src/renderer/editor/inspector.js';
 import { installCanvasDomShims } from './support/canvasHarness.js';
 
 /**
@@ -106,8 +107,9 @@ describe('drawing with the pen', () => {
 
   it('takes the pen up and puts it down from the toolbar, pressed while it draws', () => {
     const { store, canvas, host } = setup();
-    const button = createPenButton(canvas);
-    document.body.appendChild(button);
+    const control = createPenButton(canvas);
+    document.body.appendChild(control);
+    const button = control.querySelector<HTMLButtonElement>('.pen-tool-button')!;
     button.click();
     expect(canvas.isDrawingPath()).toBe(true);
     expect(button.getAttribute('aria-pressed')).toBe('true');
@@ -118,6 +120,49 @@ describe('drawing with the pen', () => {
     expect(canvas.isDrawingPath()).toBe(false);
     expect(button.getAttribute('aria-pressed')).toBe('false');
     expect((store.slide!.elements[0] as ShapeEl).path).toBe('M 0 0 L 200 0');
+  });
+
+  it('draws in the style chosen from the Pen button\'s menu', () => {
+    const { store, canvas, host } = setup();
+    const control = createPenButton(canvas);
+    document.body.appendChild(control);
+    control.querySelector<HTMLButtonElement>('.pen-tool-menu')!.click();
+    const items = [...control.querySelectorAll<HTMLButtonElement>('.pen-style-menu .shape-menu-item')];
+    expect(items.map((item) => item.textContent)).toEqual(['Pen', 'Brush', 'Pencil', 'Marker']);
+    expect(items[0].getAttribute('aria-checked')).toBe('true');
+    items[1].click();
+    expect(canvas.isDrawingPath()).toBe(true);
+    expect(control.querySelector('.pen-style-menu')).toBeNull();
+    click(host, 100, 300);
+    click(host, 300, 100);
+    click(host, 500, 300);
+    click(host, 100, 300);
+    const [shape] = store.slide!.elements as ShapeEl[];
+    // A brushed shape keeps its stroke, in the brush's width.
+    expect(shape).toMatchObject({ strokeStyle: 'brush', strokeWidth: 12 });
+    expect(shape.fill).toBeTruthy();
+    expect(shape.stroke).toBeTruthy();
+    // The pen stays a brush until another style is chosen.
+    control.querySelector<HTMLButtonElement>('.pen-tool-menu')!.click();
+    expect(control.querySelector('[data-pen-style="brush"]')!.getAttribute('aria-checked')).toBe('true');
+  });
+
+  it('changes a path\'s stroke style from Props, the pen leaving no field behind', () => {
+    const { store } = setup([pathShape()]);
+    store.select(['path-1']);
+    const panel = document.createElement('div');
+    document.body.appendChild(panel);
+    const inspector = new Inspector(panel, store);
+    inspector.render();
+    const choose = (style: string) => {
+      panel.querySelector<HTMLButtonElement>(`.segment-button[title="${style}"]`)!.click();
+    };
+    choose('Pencil');
+    expect((store.slide!.elements[0] as ShapeEl).strokeStyle).toBe('pencil');
+    expect(store.history()[0]?.label).toBe('Change stroke style');
+    inspector.render();
+    choose('Pen');
+    expect('strokeStyle' in store.slide!.elements[0]).toBe(false);
   });
 
   it('clicks corners and finishes an open line with Return, as one undo step', () => {

@@ -28,6 +28,18 @@ export const STROKE_STYLE_LABELS: Record<StrokeStyle, string> = {
   pen: 'Pen', brush: 'Brush', pencil: 'Pencil', marker: 'Marker',
 };
 
+/**
+ * A small picture of each style, in a 14-unit box, for menus and the
+ * inspector. Widths and dashes are inline styles so that a stylesheet setting
+ * every stroke in a glyph does not flatten them.
+ */
+export const STROKE_STYLE_GLYPHS: Record<StrokeStyle, string> = {
+  pen: '<path d="M2 10.5C4 3.5 8 12.5 12 3.5"/>',
+  brush: '<path class="fill" d="M1.8 11.6C3.6 4.6 7.4 10.4 12.4 2.8C8.6 12.6 5 8 1.8 11.6Z"/>',
+  pencil: '<path d="M2 10.5C4 3.5 8 12.5 12 3.5" style="stroke-width:1;stroke-dasharray:1.4 .9"/>',
+  marker: '<path d="M2 10.5C4 3.5 8 12.5 12 3.5" style="stroke-width:3.4;stroke-linecap:butt;opacity:.5"/>',
+};
+
 const round = (value: number): number => Math.round(value * 100) / 100 + 0;
 
 /**

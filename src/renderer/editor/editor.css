@@ -3789,6 +3789,22 @@ select.panel-action-select {
   border-color: var(--line);
 }
 
+/* The Pen: the tool itself, and a narrow segment for how it draws. */
+.pen-tool-control { display: inline-flex; }
+.pen-tool-control .pen-tool-button { border-radius: 6px 0 0 6px; }
+.pen-tool-menu {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  padding: 0;
+  border-left: 0;
+  border-radius: 0 6px 6px 0;
+}
+.pen-tool-menu svg { color: var(--muted); }
+.pen-tool-menu[aria-expanded="true"] { background: var(--panel-2); border-color: var(--line); }
+.pen-style-glyph * { fill: none; stroke: currentcolor; stroke-width: 1.4; stroke-linecap: round; stroke-linejoin: round; }
+.pen-style-glyph .fill { fill: currentcolor; stroke: none; }
+
 /* The Pen stays pressed while it is drawing. */
 .pen-tool-button[aria-pressed="true"],
 .pen-tool-button[aria-pressed="true"]:hover:not(:disabled) {
