@@ -4,6 +4,7 @@ import { NEW_MEDIA_FIT } from '@shared/deck.js';
 import { lineSpacingValue } from '@shared/lineHeight.js';
 import { canHoldText, shapeToTextBox } from '@shared/shapeText.js';
 import { moveCorner, polygonPoints } from '@shared/polygonShape.js';
+import { drawnAtPixelScale, redrawPathAtSize } from '@shared/pathNodes.js';
 import { braceDepthToward, bracePolyline, braceTip } from '@shared/brace.js';
 import { type Rect, fitScale, makeId } from '@shared/geometry.js';
 
@@ -764,6 +765,8 @@ type ResizeOrigin = Rect & {
    * proportions, and is put back if Shift is let go mid-drag. */
   fit?: 'cover' | 'contain' | 'fill';
   control?: { x: number; y: number } | null;
+  /** A path drawn one unit to the pixel, which a resize redraws at the new size. */
+  path?: string;
 };
 
 type DragMode =
@@ -2711,6 +2714,9 @@ export class EditorCanvas {
             ...((selected.type === 'shape' && selected.control)
               ? { control: { ...selected.control } }
               : {}),
+            ...((selected.type === 'shape' && drawnAtPixelScale(selected))
+              ? { path: selected.path! }
+              : {}),
           });
         }
         this.drag = {
@@ -3115,6 +3121,12 @@ export class EditorCanvas {
           if (el.type === 'shape' && origin.control) {
             const control = resizePointByScale(origin.control, origin, resized, scaleX, scaleY);
             el.control = { x: Math.round(control.x), y: Math.round(control.y) };
+          }
+          // A drawn path is redrawn at the new size rather than stretched by
+          // its viewBox, which would stretch its stroke too: a line drawn
+          // with the pen keeps its width however its box is pulled.
+          if (el.type === 'shape' && origin.path) {
+            redrawPathAtSize(el, origin.path, origin);
           }
         });
         for (const id of drag.origins.keys()) this.syncTableHeight(id);
@@ -7323,12 +7335,14 @@ function sameStructure(a: Slide, b: Slide, ignoreHtml = false): boolean {
       JSON.stringify(x.effects ?? []) !== JSON.stringify(y.effects ?? [])
     ) return false;
     // Shape paint and kind live on SVG children; wrapper-only updates cannot
-    // apply them. Rebuild when they change (including rect -> ellipse).
+    // apply them. Rebuild when they change (including rect -> ellipse). The
+    // path itself is geometry: the patch redraws the SVG (`syncShapeBody`),
+    // so dragging a point does not rebuild the slide on every frame.
     if (x.type === 'shape' && y.type === 'shape') {
       if (
         x.shape !== y.shape || x.fill !== y.fill || x.stroke !== y.stroke ||
         x.strokeWidth !== y.strokeWidth || x.radius !== y.radius ||
-        x.path !== y.path || x.arrowStart !== y.arrowStart || x.arrowEnd !== y.arrowEnd ||
+        x.arrowStart !== y.arrowStart || x.arrowEnd !== y.arrowEnd ||
         Boolean(x.control) !== Boolean(y.control)
       ) return false;
     }

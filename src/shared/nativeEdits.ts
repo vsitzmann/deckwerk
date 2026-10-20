@@ -137,8 +137,8 @@ const ELEMENT_PROPERTIES: Record<SlideElement['type'], PropertyDoc[]> = {
     { path: 'arrowSize', type: 'number > 0', description: 'Arrowhead length in pixels; unset means six stroke widths, and it is never drawn shorter than the line is wide.', example: 24 },
     { path: 'control', type: '{x,y}|null', description: 'Canvas-space quadratic curve control point.', example: { x: 600, y: 300 } },
     { path: 'braceDepth', type: 'number', description: 'For braces: signed distance from the chord to the point, along the element\'s own +y; half of it is the curl radius.', example: 40 },
-    { path: 'path', type: 'SVG path|null', description: 'SVG path data for path shapes.', example: 'M0 0 L100 100' },
-    { path: 'pathSize', type: '{w,h}|null', description: 'Coordinate space of SVG path data.', example: { w: 100, h: 100 } },
+    { path: 'path', type: 'SVG path|null', description: 'SVG path data for path shapes: closed with Z and filled for a shape, open with fill null for a line.', example: 'M0 100 C 0 0 100 0 100 100 Z' },
+    { path: 'pathSize', type: '{w,h}|null', description: 'Coordinate space of SVG path data, scaled to the box. Equal to the box (w,h) for a drawn path, so strokeWidth is in pixels and a resize redraws the path.', example: { w: 100, h: 100 } },
   ],
   html: [
     { path: 'html', type: 'string', description: 'Markup held by this isolated fallback object.', example: '<div>Fallback</div>' },
