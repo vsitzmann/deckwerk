@@ -5,6 +5,8 @@ import { lineSpacingValue } from '@shared/lineHeight.js';
 import { canHoldText, shapeToTextBox } from '@shared/shapeText.js';
 import { moveCorner, polygonPoints } from '@shared/polygonShape.js';
 import { drawnAtPixelScale, redrawPathAtSize } from '@shared/pathNodes.js';
+import { PEN_POINT_SCREEN_PX, PenDraft, penOverlay } from './pathTools.js';
+import { insertPath } from './elementCreation.js';
 import { braceDepthToward, bracePolyline, braceTip } from '@shared/brace.js';
 import { type Rect, fitScale, makeId } from '@shared/geometry.js';
 
@@ -1035,6 +1037,18 @@ export class EditorCanvas {
   private buildBadgesVisible = false;
   /** The crop as it was when the current mask drag began. */
   private maskOrigin: { x: number; y: number; w: number; h: number } | null = null;
+  /**
+   * The pen's drawing in progress (Shape → Draw with Pen). While there is one,
+   * every press on the canvas places a point; the deck changes only when the
+   * drawing is finished, as one new path shape.
+   */
+  private pen: PenDraft | null = null;
+  /**
+   * When the pen last finished an open line with a double-click. That
+   * gesture's own `dblclick` arrives afterwards and lands on the new path,
+   * where it would open its points for editing.
+   */
+  private penFinishedAt = Number.NEGATIVE_INFINITY;
 
   /** Notified when mask mode turns on or off, so the inspector can relabel. */
   onMaskModeChange?: (elementId: string | null) => void;
@@ -1129,6 +1143,9 @@ export class EditorCanvas {
     this.keptSelection.schedule();
     const { deck, slideIndex, selection } = this.store.get();
     const slide = deck.slides[slideIndex];
+    // A drawing belongs to the slide it was begun on, and selecting anything
+    // (a click in the rail, a new text box) puts the pen down.
+    if (this.pen && (this.pen.slideId !== slide?.id || selection.size > 0)) this.endPen();
     if (!slide) {
       this.slideLayer.replaceChildren();
       this.overlay.replaceChildren();
@@ -2408,6 +2425,8 @@ export class EditorCanvas {
       }
     }
 
+    if (this.pen) frag.appendChild(penOverlay(this.pen, this.scale, deck.canvas));
+
     if (this.marquee) {
       const m = document.createElement('div');
       m.className = 'marquee';
@@ -2482,6 +2501,9 @@ export class EditorCanvas {
     // Modifier state changes do not cause pointermove, so mirror the gesture
     // modifier onto the canvas host to let CSS swap the handle cursor while it
     // is hovered.
+    // Ahead of the shell's own shortcuts: while the pen is drawing, Return,
+    // Escape, Backspace and undo belong to the drawing.
+    window.addEventListener('keydown', (ev) => this.onPenKey(ev), true);
     window.addEventListener('keydown', (ev) => {
       if (isCommandModifierKey(ev.key) || commandModifier(ev)) this.setRotationModifier(true);
       if (ev.key === 'Escape' && this.liveWebIds.size > 0 && !this.editingId) this.endWebLive();
@@ -2568,6 +2590,11 @@ export class EditorCanvas {
     // hover-only pointermove events.
     this.onPointerSample?.(point);
     this.host.setPointerCapture(ev.pointerId);
+
+    if (this.pen) {
+      this.penPointerDown(ev, point, secondClick);
+      return;
+    }
 
     // A click away from the active crop window is the implicit "Done" action.
     // Keep the click alive after leaving mask mode so it can still select the
@@ -2795,6 +2822,13 @@ export class EditorCanvas {
     // Presence: report the pointer in slide space whether hovering or
     // dragging, so collaborators see the cursor move, not only the edits.
     this.onPointerSample?.(this.toCanvas(ev));
+    if (this.pen) {
+      // Hovering moves the preview; with the button down, the press pulls
+      // out the new point's handles.
+      this.pen.move(this.toCanvas(ev), ev.shiftKey, DRAG_THRESHOLD_PX / this.scale);
+      this.redrawOverlay();
+      return;
+    }
     if (this.drag.kind === 'none') return;
     // Only a held button drags. See `isHoverMove`.
     if (isHoverMove(ev)) return;
@@ -3269,6 +3303,12 @@ export class EditorCanvas {
     ) {
       return;
     }
+    if (this.pen) {
+      this.host.releasePointerCapture?.(ev.pointerId);
+      if (this.pen.up()) this.finishPen(true);
+      else this.redrawOverlay();
+      return;
+    }
     const textEdit = !this.dragStarted ? this.pendingTextEdit : null;
     const mediaToggle = !this.dragStarted ? this.pendingMediaToggle : null;
     this.pendingMediaToggle = null;
@@ -3435,6 +3475,8 @@ export class EditorCanvas {
    * play a video, crop a picture (and double-click again to leave the crop).
    */
   private onDoubleClick(ev: PointerEvent | MouseEvent): void {
+    // The pen reads its own double-click, from the presses (penPointerDown).
+    if (this.pen || ev.timeStamp - this.penFinishedAt <= DOUBLE_CLICK_MS) return;
     // Once editing is active, native browser double-click selection owns this
     // gesture. Calling beginTextEdit again would select the entire text box and
     // replace the word selection the browser just made. Under heavy renderer
@@ -3503,6 +3545,88 @@ export class EditorCanvas {
       if (ev.timeStamp - this.mediaToggledAt <= DOUBLE_CLICK_MS) return;
       this.toggleMedia(hit.id);
     }
+  }
+
+  /** Start drawing a path with the pen (Shape → Draw with Pen). */
+  startPen(): void {
+    const slide = this.store.slide;
+    if (!slide) return;
+    if (this.editingId) this.endTextEditing(true);
+    if (this.maskingId) this.toggleMaskMode(null);
+    this.endWebLive();
+    this.pen = new PenDraft(slide.id);
+    this.host.classList.add('pen-tool');
+    this.store.clearSelection();
+    this.redrawOverlay();
+    this.notice('Click to add points, drag to curve. Click the first point to close the shape; Return to finish a line.');
+  }
+
+  /** Whether the pen is drawing. */
+  isDrawingPath(): boolean {
+    return this.pen !== null;
+  }
+
+  /** Put the pen down without adding anything. */
+  private endPen(): void {
+    if (!this.pen) return;
+    this.pen = null;
+    this.host.classList.remove('pen-tool');
+    this.redrawOverlay();
+    // Take the pen's instructions out of the status bar.
+    this.notice('');
+  }
+
+  /**
+   * Finish the drawing: closed, a filled shape; open, a line. Fewer than two
+   * points draw nothing, and the pen is simply put down.
+   */
+  private finishPen(closed: boolean): void {
+    const pen = this.pen;
+    if (!pen) return;
+    this.endPen();
+    const run = pen.result(closed);
+    const index = this.store.get().deck.slides.findIndex((slide) => slide.id === pen.slideId);
+    if (!run || index < 0) return;
+    insertPath(this.store, index, run);
+  }
+
+  private penPointerDown(ev: PointerEvent, point: XY, secondClick: boolean): void {
+    const pen = this.pen!;
+    const tolerance = PEN_POINT_SCREEN_PX / this.scale;
+    // The second press of a double-click on the point the first one placed
+    // finishes the line there.
+    if (secondClick && pen.onLast(point, tolerance)) {
+      if (pen.nodes.length < 2) return;
+      this.penFinishedAt = ev.timeStamp;
+      this.finishPen(false);
+      return;
+    }
+    pen.down(point, ev.shiftKey, tolerance);
+    this.redrawOverlay();
+  }
+
+  private onPenKey(ev: KeyboardEvent): void {
+    if (!this.pen) return;
+    const t = ev.target instanceof HTMLElement ? ev.target : null;
+    if (t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName))) return;
+    const undo = (ev.metaKey || ev.ctrlKey) && !ev.shiftKey && ev.key.toLowerCase() === 'z';
+    if (ev.key === 'Enter' || ev.key === 'Escape') {
+      this.finishPen(false);
+    } else if (ev.key === 'Backspace' || ev.key === 'Delete' || undo) {
+      this.pen.removeLast();
+      this.redrawOverlay();
+    } else {
+      return;
+    }
+    ev.preventDefault();
+    ev.stopImmediatePropagation();
+  }
+
+  /** Redraw just the chrome over the slide, for state the deck does not hold. */
+  private redrawOverlay(): void {
+    const { deck, slideIndex, selection } = this.store.get();
+    const slide = deck.slides[slideIndex];
+    if (slide) this.drawOverlay(deck, slide.elements, selection);
   }
 
   /** Whether this web element's page is currently running on the canvas. */

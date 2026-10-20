@@ -532,7 +532,7 @@ function buildToolbar(): void {
   mid.className = 'bar-group deck-only bar-center';
   mid.append(
     barIconButton('Text', TEXT_ICON, () => addText()),
-    createShapeInsertPicker(store),
+    createShapeInsertPicker(store, { drawPath: () => canvas.startPen() }),
     createTableInsertPicker(store),
   );
 
