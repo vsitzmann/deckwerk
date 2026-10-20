@@ -40,8 +40,8 @@ describe('shared application chrome', () => {
   it('reserves the macOS traffic-light gutter only in the inset desktop window', () => {
     const css = source('src/renderer/editor/editor.css');
     const shell = source('src/renderer/editor/main.ts');
-    expect(css).toContain('body.mac-titlebar #toolbar { padding-left: 84px; }');
+    expect(css).toContain('body.mac-titlebar #toolbar { padding-left: calc(84px / var(--ui-scale, 1)); }');
     expect(shell).toContain("document.body.classList.add('mac-titlebar')");
-    expect(css.match(/padding-left:\s*84px/g)).toHaveLength(1);
+    expect(css.match(/padding-left:[^;]*84px/g)).toHaveLength(1);
   });
 });

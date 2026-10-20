@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer, webUtils } from 'electron';
+import { contextBridge, ipcRenderer, webFrame, webUtils } from 'electron';
 import type { Deck } from '@shared/deck.js';
 import type { DeckHistoryDocument } from '@shared/deckHistory.js';
 import type { ClipboardReadResult, ClipboardWriteRequest } from '@shared/clipboard.js';
@@ -61,6 +61,10 @@ ipcRenderer.on(IPC.deckKey, (_e, key: string) => {
  * nodeIntegration is off, so this surface is deliberately small and explicit.
  */
 const api = {
+  /** Zoom this window's chrome (Settings → Interface scale, uiPreferences.ts). */
+  setUiScale: (factor: number): void => {
+    if (Number.isFinite(factor) && factor > 0) webFrame.setZoomFactor(factor);
+  },
   /** A PNG data URL of this window as it looks now; null if it could not be read. */
   captureWindow: (): Promise<string | null> => ipcRenderer.invoke(IPC.windowCapture),
   /**

@@ -2,6 +2,7 @@ import '../appChrome.css';
 import './raster.css';
 import '../lightTheme.css';
 import { applyUiTheme } from '../uiTheme.js';
+import { applyUiPreferences } from '../uiPreferences.js';
 import type { RasterTarget } from '@shared/ipc.js';
 import {
   bitmapPoint,
@@ -14,6 +15,7 @@ import {
 } from './painting.js';
 
 applyUiTheme();
+applyUiPreferences();
 
 const el = <T extends HTMLElement>(id: string): T => {
   const node = document.getElementById(id);
