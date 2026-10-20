@@ -2,7 +2,9 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { electronBinary, eventually, wait } from './support/browserSession.js';
 import {
   CONTENT,
+  OTHER_TEXT_ID,
   startListEditingSession,
+  TEXT_ID,
   type ListEditingSession,
 } from './support/listEditingSession.js';
 
@@ -167,5 +169,47 @@ describe.skipIf(!electronBinary)('line height follows the font size', () => {
     expect((await linePitch('alpha')).pitch).toBeCloseTo(56, 0);
     await setField('Font size', '20');
     expect((await linePitch('alpha')).pitch).toBeCloseTo(40, 0);
+  });
+
+  // The test above failed now and then on CI with 120px lines: font size 60.
+  // The Line spacing commit's echo from the server landed between the 2 and
+  // the 0 of "20" and rebuilt the panel. Chromium blurs a focused field it
+  // removes, the blur committed the "2" (clamped to 6px), and the 0 typed
+  // into the rebuilt field made it 60. Here a collaborator's edit lands
+  // there on purpose.
+  it('a collaborator\'s edit landing mid-typing neither commits nor drops a half-typed size', {
+    timeout: 120_000,
+  }, async () => {
+    await start('line-height-remote-mid-typing');
+    await session.reset('<p>alpha<br>beta</p>');
+    await selectBox();
+    const id = 'line-height-font-size';
+    expect(await session.cdp.evaluate<boolean>(`(() => {
+      const field = [...document.querySelectorAll('#inspector .field-number')]
+        .find((node) => node.querySelector('span')?.textContent === 'Font size');
+      const input = field?.querySelector('input');
+      if (!input) return false;
+      input.id = ${JSON.stringify(id)};
+      return true;
+    })()`), 'no "Font size" field in Props').toBe(true);
+    await session.cdp.click(`#${id}`, 'Font size');
+    await session.cdp.evaluate(`document.querySelector('#${id}').select()`);
+    await session.cdp.typeKeys('2');
+    await session.cdp.evaluate(`(() => {
+      const deck = structuredClone(window.store.get().deck);
+      deck.slides[0].elements.find((element) => element.id === ${JSON.stringify(OTHER_TEXT_ID)}).x += 40;
+      window.store.applyRemote(deck, 'Move the other box');
+      return true;
+    })()`);
+    await wait(150);
+    expect(await session.cdp.evaluate<string>(`window.store.get().deck.slides[0].elements
+      .find((element) => element.id === ${JSON.stringify(TEXT_ID)}).style['font-size'] ?? 'theme'`),
+    'the half-typed size was committed').toBe('theme');
+    await session.cdp.typeKeys('0');
+    await session.cdp.key('Enter', 13);
+    await wait(150);
+    const after = await linePitch('alpha');
+    expect(after.fontSize, 'the typed size').toBe(20);
+    expect(after.pitch).toBeCloseTo(20 * 1.4, 0);
   });
 });
