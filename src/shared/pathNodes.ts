@@ -669,6 +669,16 @@ export function setPathOnCanvas(el: ShapeEl, paths: SubPath[]): void {
     return { x: unrotated.x - el.x, y: unrotated.y - el.y };
   });
   const bounds = pathBounds(local) ?? { x: 0, y: 0, w: 0, h: 0 };
+  if (!el.rot) {
+    // An upright box takes whole pixels, grown out to them, so its X, Y, W
+    // and H read as the integers every other object has.
+    const left = Math.floor(el.x + bounds.x + 1e-6);
+    const top = Math.floor(el.y + bounds.y + 1e-6);
+    bounds.w = Math.ceil(el.x + bounds.x + bounds.w - 1e-6) - left;
+    bounds.h = Math.ceil(el.y + bounds.y + bounds.h - 1e-6) - top;
+    bounds.x = left - el.x;
+    bounds.y = top - el.y;
+  }
   const w = Math.max(1, bounds.w);
   const h = Math.max(1, bounds.h);
   // The new box's centre, carried back onto the canvas through the rotation.

@@ -200,6 +200,10 @@ describe('path shapes on the canvas', () => {
       pathSize: { w: 300, h: 150 },
       path: 'M 0 150 C 0 -50 300 -50 300 150',
     });
+    // An upright box is grown out to whole pixels; the drawing stays put.
+    expect(pathGeometry([{ closed: false, nodes: [{ x: 10.5, y: 20.4 }, { x: 200.25, y: 80.6 }] }])).toEqual({
+      x: 10, y: 20, w: 191, h: 61, pathSize: { w: 191, h: 61 }, path: 'M 0.5 0.4 L 190.25 60.6',
+    });
   });
 
   it('moves one anchor and leaves the rest where they were, rotated or not', () => {

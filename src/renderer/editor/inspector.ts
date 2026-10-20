@@ -214,6 +214,10 @@ export class Inspector {
   onToggleMask?: (elementId: string) => void;
   /** Which element is currently in mask mode, so the button can reflect it. */
   maskingElement?: () => string | null;
+  /** Start or stop editing a path's points on the canvas. */
+  onTogglePathEdit?: (elementId: string) => void;
+  /** Which path's points are being edited, so the button can reflect it. */
+  pathEditingElement?: () => string | null;
   /** Show the frame at a given time on the canvas while a trim handle moves. */
   onSeekPreview?: (elementId: string, time: number) => void;
   /** Clip length from the canvas video element, when ffprobe cannot say. */
@@ -2415,10 +2419,10 @@ export class Inspector {
           { value: 'arrow', title: 'Arrow', icon: SHAPE_KIND_GLYPHS.arrow },
           { value: 'brace', title: 'Curly brace', icon: SHAPE_KIND_GLYPHS.brace },
         ];
-        // Imported vector art keeps its geometry as a path; it can be shown
+        // A path (drawn with the pen, or imported vector art) can be shown
         // but not chosen, since there is no path to switch another kind to.
         if (el.shape === 'path') {
-          kinds.push({ value: 'path', title: 'Path (drag its corners on the slide)', icon: SHAPE_KIND_GLYPHS.path });
+          kinds.push({ value: 'path', title: 'Path (double-click it to edit its points)', icon: SHAPE_KIND_GLYPHS.path });
         }
         style.content.appendChild(
           segmentedSelectField('Kind', kinds, el.shape, (v) =>
@@ -2471,6 +2475,14 @@ export class Inspector {
             ),
           );
           style.content.appendChild(nums);
+          if (el.shape === 'path' && this.onTogglePathEdit) {
+            const editing = this.pathEditingElement?.() === el.id;
+            style.content.appendChild(button(
+              editing ? 'Done editing points' : 'Edit points',
+              () => this.onTogglePathEdit?.(el.id),
+              'panel-action path-edit-toggle',
+            ));
+          }
         } else if (brace) {
           const row = document.createElement('div');
           row.className = 'compact-field-row';

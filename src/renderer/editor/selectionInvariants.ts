@@ -3,13 +3,13 @@
  *
  * Selection-ish state lives in several places at once: the store's element and
  * slide selections, the canvas's edit session (`editingId`), crop session
- * (`maskingId`) and table cell range, the browser's own Selection, keyboard
- * focus, and the DOM chrome that renders each of them (`.editing`,
- * contenteditable, `.editor-table-selected`, the kept-selection highlight,
- * `.sel-box`, the rail rows). No type ties them together, so every gesture
- * handler has to reconcile them by hand — and the recurring "typing goes to
- * one box while another looks selected" family of bugs is exactly those
- * reconciliations being missed.
+ * (`maskingId`), point-editing session (`pathEditId`) and table cell range,
+ * the browser's own Selection, keyboard focus, and the DOM chrome that renders
+ * each of them (`.editing`, contenteditable, `.editor-table-selected`, the
+ * kept-selection highlight, `.sel-box`, the rail rows). No type ties them
+ * together, so every gesture handler has to reconcile them by hand — and the
+ * recurring "typing goes to one box while another looks selected" family of
+ * bugs is exactly those reconciliations being missed.
  *
  * This module makes that class of bug loud instead of latent, the same way
  * `renderInvariants` does for model/DOM drift: after the dust of a render
@@ -37,6 +37,8 @@ export interface SelectionSnapshot {
   slideSelection: ReadonlySet<string>;
   editingId: string | null;
   maskingId: string | null;
+  /** The path whose points are being edited (absent: none). */
+  pathEditId?: string | null;
   tableSelection: TableSelection | null;
   slideLayer: HTMLElement;
   overlay: HTMLElement;
@@ -64,6 +66,15 @@ export function findSelectionViolations(snap: SelectionSnapshot): string[] {
   }
   if (maskingId !== null && !ids.has(maskingId)) {
     problems.push(`cropping ${maskingId}, which is not on the current slide`);
+  }
+  const pathEditId = snap.pathEditId ?? null;
+  if (pathEditId !== null) {
+    if (editingId !== null || maskingId !== null) {
+      problems.push(`editing the points of ${pathEditId} while ${editingId ?? maskingId} is in another mode`);
+    }
+    if (selection.length !== 1 || selection[0] !== pathEditId) {
+      problems.push(`editing the points of ${pathEditId} while the selection is ${show(selection)}`);
+    }
   }
 
   // --- editing implies being the selection ----------------------------------
