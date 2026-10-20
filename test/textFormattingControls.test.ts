@@ -240,7 +240,7 @@ describe('text formatting from the inspector controls', () => {
     ]);
     expect(labels('.text-layout-options .field > span')).toEqual([
       'Size box to text', 'Auto-fit text to box', 'Disable automatic line breaks', 'List',
-      'Align', 'Vertical', 'Paragraph spacing', 'Line spacing',
+      'Indent', 'Align', 'Vertical', 'Paragraph spacing', 'Line spacing',
     ]);
     expect(labels('.text-format-buttons button')).toEqual(['B', 'I', 'U', 'S', 'x²', 'x₂']);
     expect(labels('.number-step-buttons button'))
@@ -448,6 +448,81 @@ describe('text formatting from the inspector controls', () => {
 
     store.undo();
     expect(textOf(store, 'text-1').html).toBe(original);
+  });
+
+  /** Put a collapsed caret at `offset` into `node`, as a click would. */
+  function caretAt(node: Node, offset: number): void {
+    const caret = document.createRange();
+    caret.setStart(node, offset);
+    caret.collapse(true);
+    window.getSelection()!.removeAllRanges();
+    window.getSelection()!.addRange(caret);
+    document.dispatchEvent(new Event('selectionchange'));
+  }
+
+  const indentButton = (host: HTMLElement, direction: 'in' | 'out'): HTMLButtonElement =>
+    field(host, 'Indent').querySelector<HTMLButtonElement>(`button[data-direction="${direction}"]`)!;
+
+  it('steps a paragraph in and out with the Indent buttons and keeps the caret in it', () => {
+    const original = '<p>First</p><p>Second</p>';
+    const { store, canvas, canvasHost, inspectorHost } = setup([
+      textElement('text-1', { html: original }),
+    ]);
+    // Indent acts on lines, so it waits for a caret, as superscript does.
+    expect(indentButton(inspectorHost, 'in').disabled).toBe(true);
+    canvas.beginTextEdit('text-1');
+    expect(indentButton(inspectorHost, 'in').disabled).toBe(false);
+    caretAt(contentOf(canvasHost, 'text-1').querySelectorAll('p')[1].firstChild!, 3);
+
+    indentButton(inspectorHost, 'in').click();
+    indentButton(inspectorHost, 'in').click();
+    expect(textOf(store, 'text-1').html).toBe('<p>First</p><p data-indent="2">Second</p>');
+    expect(canvas.isEditing()).toBe(true);
+    expect(window.getSelection()!.anchorNode?.textContent).toBe('Second');
+
+    indentButton(inspectorHost, 'out').click();
+    expect(textOf(store, 'text-1').html).toBe('<p>First</p><p data-indent="1">Second</p>');
+    // Cmd/Ctrl+[ is the same command from the keyboard.
+    const chord = new KeyboardEvent('keydown', {
+      key: '[', code: 'BracketLeft', metaKey: true, bubbles: true, cancelable: true,
+    });
+    contentOf(canvasHost, 'text-1').dispatchEvent(chord);
+    expect(chord.defaultPrevented).toBe(true);
+    expect(textOf(store, 'text-1').html).toBe(original);
+    // A flush line has nowhere further out to go.
+    indentButton(inspectorHost, 'out').click();
+    expect(textOf(store, 'text-1').html).toBe(original);
+
+    store.undo();
+    expect(textOf(store, 'text-1').html).toBe('<p>First</p><p data-indent="1">Second</p>');
+  });
+
+  it('indents a one-line box by giving its line a paragraph to carry the indent', () => {
+    const { store, canvas, canvasHost, inspectorHost } = setup([
+      textElement('text-1', { html: 'Only <b>line</b>' }),
+    ]);
+    canvas.beginTextEdit('text-1');
+    caretAt(contentOf(canvasHost, 'text-1').firstChild!, 2);
+    indentButton(inspectorHost, 'in').click();
+    expect(textOf(store, 'text-1').html).toBe('<p data-indent="1">Only <b>line</b></p>');
+    expect(contentOf(canvasHost, 'text-1').textContent).toBe('Only line');
+  });
+
+  it('moves a list item a level with the Indent buttons, as Tab does', () => {
+    const { store, canvas, canvasHost, inspectorHost } = setup([
+      textElement('text-1', { html: '<ul><li>One</li><li>Two</li></ul>' }),
+    ]);
+    canvas.beginTextEdit('text-1');
+    caretAt(contentOf(canvasHost, 'text-1').querySelectorAll('li')[1].firstChild!, 1);
+
+    indentButton(inspectorHost, 'in').click();
+    expect(textOf(store, 'text-1').html).toBe('<ul><li>One<ul><li>Two</li></ul></li></ul>');
+    indentButton(inspectorHost, 'out').click();
+    expect(textOf(store, 'text-1').html).toBe('<ul><li>One</li><li>Two</li></ul>');
+    // At the outer level the bullet is all an item has left to give up.
+    indentButton(inspectorHost, 'out').click();
+    expect(textOf(store, 'text-1').html).toBe('<ul><li>One</li></ul><p>Two</p>');
+    expect(canvas.isEditing()).toBe(true);
   });
 
   it.each([

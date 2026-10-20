@@ -229,6 +229,18 @@
   padding-left: 1.4em;
 }
 
+/* An indented paragraph outside a list (`data-indent`, the Indent buttons)
+   steps in by the same 1.4em per level. Items indent by nesting instead, so
+   the attribute is ignored on one. */
+.text-body [data-indent="1"]:not(li) { margin-left: 1.4em; }
+.text-body [data-indent="2"]:not(li) { margin-left: 2.8em; }
+.text-body [data-indent="3"]:not(li) { margin-left: 4.2em; }
+.text-body [data-indent="4"]:not(li) { margin-left: 5.6em; }
+.text-body [data-indent="5"]:not(li) { margin-left: 7em; }
+.text-body [data-indent="6"]:not(li) { margin-left: 8.4em; }
+.text-body [data-indent="7"]:not(li) { margin-left: 9.8em; }
+.text-body [data-indent="8"]:not(li) { margin-left: 11.2em; }
+
 /* An authored marker colour is independent of character-level text runs.
    Without this opt-in, markers keep following the list item's colour and
    theme.css can continue to style them normally. The drawn disc takes its

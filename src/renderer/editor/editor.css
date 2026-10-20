@@ -4412,6 +4412,9 @@ button.cthread-where:disabled { cursor: default; opacity: 1; }
 }
 .text-list-row:has(> .field-color-stacked) { grid-template-columns: minmax(0, 1fr) 98px; }
 .text-list-row > .field { margin-bottom: 0; min-width: 0; }
+/* Indent sits under the marker colour, the same width. */
+.text-indent-row { grid-template-columns: minmax(0, 1fr) 98px; }
+.text-indent-row > .text-indent { grid-column: 2; }
 .font-fallback-note[hidden] { display: none; }
 .font-fallback-note {
   padding: 0;

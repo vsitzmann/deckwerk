@@ -135,6 +135,7 @@ export function wireCanvasInspector(
   inspector.onApplyTextSelectionMarkerColor = (value) =>
     canvas.applyTextSelectionMarkerColor(value);
   inspector.textSelectionMarkerColor = () => canvas.textSelectionMarkerColor();
+  inspector.onShiftTextIndent = (direction) => canvas.shiftTextIndent(direction);
   inspector.tableSelection = () => canvas.tableSelectionInfo();
   inspector.tableBorderSettings = () => canvas.tableBorderSettings();
   inspector.onSetTableBorderColor = (color) =>

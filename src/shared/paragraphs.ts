@@ -29,6 +29,34 @@ export const LIST_MARKER_COLOR_PROPERTY = '--list-marker-color';
  * number -- and it goes when it holds no list any more.
  */
 export const LIST_HOLDER_ATTRIBUTE = 'data-list-holder';
+
+/**
+ * How many steps a paragraph outside a list is indented, each one the width
+ * a nested list level steps in (type.css). List items indent by nesting, so
+ * the attribute means nothing on an item.
+ */
+export const PARAGRAPH_INDENT_ATTRIBUTE = 'data-indent';
+export const MAX_PARAGRAPH_INDENT = 8;
+
+/** A paragraph's indent level, 0 when it has none. */
+export function paragraphIndent(block: Element): number {
+  const level = Number.parseInt(block.getAttribute(PARAGRAPH_INDENT_ATTRIBUTE) ?? '', 10);
+  return Number.isFinite(level) ? Math.max(0, Math.min(MAX_PARAGRAPH_INDENT, level)) : 0;
+}
+
+/** Give a paragraph an indent level, clamped; reports whether it changed. */
+export function setParagraphIndent(block: Element, level: number): boolean {
+  const next = Math.max(0, Math.min(MAX_PARAGRAPH_INDENT, Math.round(level)));
+  const written = block.getAttribute(PARAGRAPH_INDENT_ATTRIBUTE);
+  if (next === 0) {
+    if (written === null) return false;
+    block.removeAttribute(PARAGRAPH_INDENT_ATTRIBUTE);
+    return true;
+  }
+  if (written === String(next)) return false;
+  block.setAttribute(PARAGRAPH_INDENT_ATTRIBUTE, String(next));
+  return true;
+}
 /** Inline wrappers that only format their text. */
 const INLINE_FORMAT_TAGS = new Set([
   'SPAN', 'FONT', 'B', 'STRONG', 'I', 'EM', 'U', 'S', 'STRIKE', 'DEL', 'INS',
@@ -186,7 +214,10 @@ export function paragraphsToList(html: string, ordered = false): string {
       const match = marker.exec(block.textContent ?? '');
       if (match) removeLeadingText(block, match[0].length);
       const li = document.createElement('li');
-      for (const attr of [...block.attributes]) li.setAttribute(attr.name, attr.value);
+      for (const attr of [...block.attributes]) {
+        // An item is indented by nesting, never by the paragraph's attribute.
+        if (attr.name !== PARAGRAPH_INDENT_ATTRIBUTE) li.setAttribute(attr.name, attr.value);
+      }
       while (block.firstChild) li.appendChild(block.firstChild);
       list.appendChild(li);
       block.remove();
