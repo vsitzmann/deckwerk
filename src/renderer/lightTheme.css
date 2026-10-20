@@ -2,38 +2,14 @@
    active when <html data-ui-theme="light">; the slides keep their own theme.
 
    Like Keynote, the chrome is near-black on light grey with a single accent,
-   #0588ff. Every colour is a step of one OKLCH palette: Tailwind v4's, plus
-   the accent's own steps on the same hue. Each hue has one job: zinc for
-   text, lines and surfaces; azure for what is selected, active, focused or a
-   link; red for errors and destructive actions; green for success; amber
-   for the canvas marks that must stand apart from a selection (builds,
-   comments) and for warnings. Shades are fixed per use: the accent itself
-   for fills, outlines and focus rings, with semibold white labels on its
-   fills (white on #0588ff is 3.5:1); one step darker for accent-coloured
-   text, which clears WCAG AA on the panels; 700 for red, green and amber
-   text and outlines; 500 for fills under dark text; 100 for hover grounds;
-   50 for selected grounds. Section headings and dialog titles are plain
-   text, not coloured. */
+   #0588ff. The roles are the dark theme's (appChrome.css) on lighter steps
+   of the same palette: the accent itself for fills, outlines and focus rings,
+   with semibold white labels on its fills (white on #0588ff is 3.5:1); one
+   step darker for accent-coloured text, which clears WCAG AA on the panels;
+   700 for red, green and amber text and outlines; 500 for fills under dark
+   text; 100 for hover grounds; 50 for selected grounds. */
 :root[data-ui-theme="light"] {
-  --zinc-50: oklch(98.5% 0 0);
-  --zinc-100: oklch(96.7% 0.001 286.375);
-  --zinc-200: oklch(92% 0.004 286.32);
-  --zinc-300: oklch(87.1% 0.006 286.286);
-  --zinc-600: oklch(44.2% 0.017 285.786);
-  --zinc-900: oklch(21% 0.006 285.885);
-  --azure-50: oklch(97% 0.014 254.26);
-  --azure-100: oklch(95% 0.024 254.26);
-  --azure-500: oklch(63.24% 0.2014 254.26);
-  --azure-600: oklch(53.24% 0.191 254.26);
-  --red-50: oklch(97.1% 0.013 17.38);
-  --red-700: oklch(50.5% 0.213 27.518);
-  --red-800: oklch(44.4% 0.177 26.899);
-  --green-700: oklch(52.7% 0.154 150.069);
-  --amber-500: oklch(76.9% 0.188 70.08);
-  --amber-700: oklch(55.5% 0.163 48.998);
-
   color-scheme: light;
-  accent-color: var(--accent);
   --bg: var(--zinc-100);
   --panel: var(--zinc-50);
   --panel-2: var(--zinc-100);
@@ -47,6 +23,7 @@
   --accent-hover: var(--azure-100);
   --on-accent: white;
   --danger: var(--red-700);
+  --on-danger: white;
   --danger-soft: var(--red-50);
   --danger-hover: var(--red-800);
   --green: var(--green-700);
@@ -58,13 +35,9 @@
 }
 
 /* The few chrome colours that are written out rather than taken from a token. */
-:root[data-ui-theme="light"] .canvas-host { background: var(--canvas-ground); }
 :root[data-ui-theme="light"] .canvas-host .stage {
   box-shadow: 0 0 0 1px var(--line), 0 14px 40px rgb(0 0 0 / 16%);
 }
-:root[data-ui-theme="light"] button.primary:hover:not(:disabled) { background: var(--accent-hover); }
-:root[data-ui-theme="light"] .rail-item.selected { background: var(--accent-soft); border-color: var(--accent); }
-:root[data-ui-theme="light"] .rail-item.selected .rail-thumb { --rail-thumb-stroke: var(--accent); }
 /* Modal backdrop: a soft scrim rather than the dark theme's near-black. */
 :root[data-ui-theme="light"] .workflow-overlay,
 :root[data-ui-theme="light"] .app-dialog-backdrop,
@@ -73,56 +46,12 @@
 /* Trim window: the ffmpeg command readout. The viewers stay dark, like the canvas. */
 :root[data-ui-theme="light"] #command { background: var(--panel-2); }
 
-/* Labels on an accent fill are semibold: white on #0588ff is light, and the
-   heavier stroke carries it. */
-:root[data-ui-theme="light"] .align-button.is-active,
-:root[data-ui-theme="light"] .segment-button.is-active,
-:root[data-ui-theme="light"] .toggle-segment:has(> input:checked),
-:root[data-ui-theme="light"] .shape-menu-item:hover:not(:disabled),
-:root[data-ui-theme="light"] .chat-completions .shape-menu-item.is-active,
-:root[data-ui-theme="light"] .chat-compose .chat-compose-actions button:last-child,
-:root[data-ui-theme="light"] .comment-compose button,
-:root[data-ui-theme="light"] .agent-chat-action.ui-button-primary,
-:root[data-ui-theme="light"] .mask-action-row .mask-reset-segment,
-:root[data-ui-theme="light"] .design-slide-preview-banner,
-:root[data-ui-theme="light"] .crop-size { font-weight: 600; }
-/* The active tab's label is accent text; a bar of the accent itself marks it. */
-:root[data-ui-theme="light"] #side-tabs button.active { box-shadow: inset 0 2px 0 var(--accent); }
-
-/* Headings are text, not decoration: the dark theme's green panel titles,
-   amber section heads and accent dialog titles all read as plain text here. */
-:root[data-ui-theme="light"] .insp-title,
-:root[data-ui-theme="light"] .insp-group h3,
-:root[data-ui-theme="light"] .insp-subtitle,
-:root[data-ui-theme="light"] .workflow-dialog h2,
-:root[data-ui-theme="light"] .app-dialog h2,
-:root[data-ui-theme="light"] .morph-modal > header h2 { color: var(--text); }
-:root[data-ui-theme="light"] .layout-editor-header > div:first-child span { color: var(--muted); }
-
-/* A build step's trigger is its headline, in text colour. */
-:root[data-ui-theme="light"] .timeline-row select.build-trigger { border-color: var(--line); color: var(--text); }
-
-/* A colour written as raw CSS rather than taken from the theme: a warning. */
-:root[data-ui-theme="light"] .color-picker-css-badge { background: var(--yellow); }
-:root[data-ui-theme="light"] .cthread-head .cthread-resolve { color: var(--accent-text); }
-
-/* Agent chat. */
-:root[data-ui-theme="light"] .agent-chat-status[data-state="ready"]::before { background: var(--green); }
-:root[data-ui-theme="light"] .agent-chat-fast-mode.active {
-  border-color: var(--accent);
-  background: var(--accent-soft);
-  color: var(--accent-text);
-}
-:root[data-ui-theme="light"] .agent-chat-message-system .agent-chat-message-body,
-:root[data-ui-theme="light"] .agent-chat-message.error .agent-chat-message-body { color: var(--danger); }
-
 /* End collaboration: the dark theme paints this popover dark whatever the tokens say. */
 :root[data-ui-theme="light"] #end-collaboration-popover {
   background: var(--danger-soft);
   box-shadow: 0 14px 38px rgb(0 0 0 / 16%);
 }
 :root[data-ui-theme="light"] #end-collaboration-popover::before { background: var(--danger-soft); }
-:root[data-ui-theme="light"] #end-collaboration-popover h2 { color: var(--danger); }
 :root[data-ui-theme="light"] .end-collaboration-actions button { border-color: var(--line); }
 :root[data-ui-theme="light"] .end-collaboration-actions .end-collaboration-confirm { border-color: var(--danger); }
 :root[data-ui-theme="light"] .end-collaboration-actions .end-collaboration-confirm:hover:not(:disabled) {

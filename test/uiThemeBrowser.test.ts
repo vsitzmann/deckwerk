@@ -21,8 +21,8 @@ import { collabClientDir } from './support/collabClient.js';
  *
  * Appearance → Light in the DeckWerk menu turns the chrome light (the slide
  * keeps its own theme), the menu then ticks Light, and the choice survives a
- * reload. Headings are near-black text and the one accent marks what is
- * active, rather than the dark theme's green, amber and blue.
+ * reload. In both themes headings are plain text and one accent marks what
+ * is active, with no green or amber decoration.
  */
 const DECK_ID = 'light';
 
@@ -66,10 +66,17 @@ describe.skipIf(!electronBinary)('light mode', () => {
     // System follows the machine's appearance, so pin Dark first.
     await choose('Dark');
     expect(await editor.evaluate<string>('document.documentElement.dataset.uiTheme')).toBe('dark');
-    // Labels on the dark theme's light-blue fills are the panel's near-black.
+    // Dark is neutral too: near-white headings, one blue for what is active,
+    // and white labels on its fills.
+    const colour = (selector: string) =>
+      editor!.evaluate<string>(`getComputedStyle(document.querySelector(${JSON.stringify(selector)})).color`);
+    await eventually(async () => colour('#inspector .insp-title'), 'no inspector title',
+      (value) => value === 'oklch(0.92 0.004 286.32)');
+    expect(await colour('body')).toBe('oklch(0.92 0.004 286.32)');
+    expect(await colour('#side-tabs button.active')).toBe('oklch(0.75 0.13 254.26)');
     expect(await editor.evaluate<string>(
       `getComputedStyle(document.documentElement).getPropertyValue('--on-accent').trim()`,
-    )).toBe('#1a1b26');
+    )).toBe('white');
     await choose('Light');
     expect(await editor.evaluate<string>('document.documentElement.dataset.uiTheme')).toBe('light');
     await editor.click('.brand-button', 'the DeckWerk menu');
@@ -82,8 +89,6 @@ describe.skipIf(!electronBinary)('light mode', () => {
       .toBe('oklch(0.92 0.004 286.32)');
     const text = 'oklch(0.21 0.006 285.885)';
     const accentText = 'oklch(0.5324 0.191 254.26)';
-    const colour = (selector: string) =>
-      editor!.evaluate<string>(`getComputedStyle(document.querySelector(${JSON.stringify(selector)})).color`);
     expect(await colour('body')).toBe(text);
     expect(await colour('#inspector .insp-title')).toBe(text);
     expect(await colour('#side-tabs button.active')).toBe(accentText);
