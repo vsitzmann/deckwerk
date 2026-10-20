@@ -12,6 +12,7 @@ import {
 import { renameRetiredFields } from './fieldAliases.js';
 import { contentOf, keepComments, keepSlideComments, mergeComments, setComments } from './comments.js';
 import { braceDepthOf } from './brace.js';
+import { authoredFlips } from './flip.js';
 
 export const AGENT_PROTOCOL_VERSION = 1 as const;
 
@@ -21,7 +22,9 @@ export const ComputedElementSceneSchema = z.object({
   id: z.string(),
   type: z.string(),
   selected: z.boolean(),
-  authored: RectSchema.extend({ rot: z.number(), z: z.number(), opacity: z.number() }),
+  authored: RectSchema.extend({
+    rot: z.number(), flipX: z.boolean().optional(), flipY: z.boolean().optional(), z: z.number(), opacity: z.number(),
+  }),
   rendered: RectSchema.nullable(),
   computedStyle: z.record(z.string()),
   text: z.object({
@@ -503,7 +506,7 @@ function authoredElementScene(element: SlideElement, selected: Set<string>): Com
     selected: selected.has(element.id),
     authored: {
       x: element.x, y: element.y, w: element.w, h: element.h,
-      rot: element.rot, z: element.z, opacity: element.opacity,
+      rot: element.rot, ...authoredFlips(element), z: element.z, opacity: element.opacity,
     },
     rendered: null,
     computedStyle: {},

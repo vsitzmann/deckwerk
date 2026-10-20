@@ -1,4 +1,5 @@
 import type { ShapeEl } from './deck.js';
+import { flipsOf } from './flip.js';
 
 /**
  * Polygons drawn as path shapes: a trapezoid, a parallelogram, any
@@ -54,10 +55,10 @@ export function polygonPath(points: XY[]): string {
   return `M ${points.map((p) => `${round(p.x)} ${round(p.y)}`).join(' L ')} Z`;
 }
 
-/** Where a corner (in path space) sits on the canvas, rotation included. */
+/** Where a corner (in path space) sits on the canvas, flips and rotation included. */
 export function cornerOnCanvas(el: ShapeEl, corner: XY): XY {
   const size = el.pathSize ?? { w: el.w, h: el.h };
-  const local = { x: (corner.x / size.w) * el.w, y: (corner.y / size.h) * el.h };
+  const local = flipped(el, { x: (corner.x / size.w) * el.w, y: (corner.y / size.h) * el.h });
   return rotateAbout(
     { x: el.x + local.x, y: el.y + local.y },
     { x: el.x + el.w / 2, y: el.y + el.h / 2 },
@@ -65,11 +66,21 @@ export function cornerOnCanvas(el: ShapeEl, corner: XY): XY {
   );
 }
 
-/** The same point in the element's own unrotated frame (canvas units, origin at its top-left). */
+/**
+ * Where a point of the element's own frame (canvas units, origin at its
+ * top-left) is drawn once its flips mirror it about the centre -- still
+ * unrotated. Its own inverse.
+ */
+export function flipped(el: ShapeEl, local: XY): XY {
+  const { flipX, flipY } = flipsOf(el);
+  return { x: flipX ? el.w - local.x : local.x, y: flipY ? el.h - local.y : local.y };
+}
+
+/** The same point in the element's own unrotated, unflipped frame (canvas units, origin at its top-left). */
 function toLocal(el: ShapeEl, point: XY): XY {
   const centre = { x: el.x + el.w / 2, y: el.y + el.h / 2 };
   const unrotated = rotateAbout(point, centre, -el.rot);
-  return { x: unrotated.x - el.x, y: unrotated.y - el.y };
+  return flipped(el, { x: unrotated.x - el.x, y: unrotated.y - el.y });
 }
 
 function rotateAbout(point: XY, centre: XY, degrees: number): XY {
@@ -101,10 +112,13 @@ export function moveCorner(el: ShapeEl, index: number, to: XY): void {
   const minY = Math.min(...local.map((p) => p.y));
   const w = Math.max(1, Math.max(...local.map((p) => p.x)) - minX);
   const h = Math.max(1, Math.max(...local.map((p) => p.y)) - minY);
-  // The new box's centre, carried back onto the canvas through the old rotation.
+  // The new box's centre, carried back onto the canvas through the old flips
+  // and rotation; the new box flips about its own centre, so the corners land
+  // where they were.
   const oldCentre = { x: el.x + el.w / 2, y: el.y + el.h / 2 };
+  const middle = flipped(el, { x: minX + w / 2, y: minY + h / 2 });
   const centre = rotateAbout(
-    { x: el.x + minX + w / 2, y: el.y + minY + h / 2 },
+    { x: el.x + middle.x, y: el.y + middle.y },
     oldCentre,
     el.rot,
   );

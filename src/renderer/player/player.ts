@@ -1127,8 +1127,14 @@ export class Player {
       return;
     }
 
-    const { x: _fx, y: _fy, w: _fw, h: _fh, rot: _fr, z: _fz, id: _fi, morphId: _fm, lineageId: _fl, ...fromLook } = from;
-    const { x: _tx, y: _ty, w: _tw, h: _th, rot: _tr, z: _tz, id: _ti, morphId: _tm, lineageId: _tl, ...toLook } = to;
+    const {
+      x: _fx, y: _fy, w: _fw, h: _fh, rot: _fr, flipX: _ffx, flipY: _ffy, z: _fz, id: _fi, morphId: _fm, lineageId: _fl,
+      ...fromLook
+    } = from;
+    const {
+      x: _tx, y: _ty, w: _tw, h: _th, rot: _tr, flipX: _tfx, flipY: _tfy, z: _tz, id: _ti, morphId: _tm, lineageId: _tl,
+      ...toLook
+    } = to;
     if (JSON.stringify(fromLook) === JSON.stringify(toLook)) return;
     const source = previousNodes.get(from.id);
     if (!source || !node.animate) return;

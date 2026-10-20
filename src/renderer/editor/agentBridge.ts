@@ -1,4 +1,5 @@
 import { braceDepthOf } from '@shared/brace.js';
+import { authoredFlips } from '@shared/flip.js';
 import {
   AGENT_PROTOCOL_VERSION,
   applyAgentTransaction,
@@ -389,7 +390,7 @@ function computedElement(
     selected: selectedIds.has(element.id),
     authored: {
       x: element.x, y: element.y, w: element.w, h: element.h,
-      rot: element.rot, z: element.z, opacity: element.opacity,
+      rot: element.rot, ...authoredFlips(element), z: element.z, opacity: element.opacity,
     },
     rendered: rect ? {
       x: rect.left - rootRect.left,
