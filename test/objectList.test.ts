@@ -5,7 +5,10 @@ import { paintOrder } from '../src/renderer/editor/arrange.js';
 import { ObjectList } from '../src/renderer/editor/objectList.js';
 import { EditorStore } from '../src/renderer/editor/store.js';
 
-/** The object list: the slide's objects front to back, picked and restacked by row. */
+/**
+ * The object list: the slide's objects front to back, each with a miniature,
+ * picked and restacked by row.
+ */
 
 const text = (id: string, z: number, html: string, extra: Partial<SlideElement> = {}) => ({
   id, type: 'text', x: 0, y: 0, w: 100, h: 50, rot: 0, z, opacity: 1,
@@ -35,11 +38,11 @@ function fixture(): Deck {
 }
 
 function mount(deck = fixture()) {
+  (globalThis as unknown as { window: Window }).window.api = { assetUrl: (src: string) => src } as never;
   const store = new EditorStore(deck, '/tmp/objects');
   const host = document.createElement('aside');
   document.body.appendChild(host);
   const list = new ObjectList(host, store);
-  document.body.appendChild(list.toggle);
   const ids = () => [...host.querySelectorAll<HTMLElement>('.object-list-row')].map((row) => row.dataset.elementId);
   const row = (id: string) => host.querySelector<HTMLElement>(`.object-list-row[data-element-id="${id}"]`)!;
   const selected = () => [...host.querySelectorAll<HTMLElement>('.object-list-row.selected')].map((r) => r.dataset.elementId);
@@ -78,15 +81,39 @@ describe('object list', () => {
   });
 
   it('lists every object front-most first, named and marked by kind', () => {
-    const { list, host, ids, row } = mount();
-    list.setVisible(true);
+    const { host, ids, row } = mount();
     expect(ids()).toEqual(['master', 'note', 'box', 'title']);
     expect(row('box').dataset.kind).toBe('shape-rect');
-    expect(row('box').textContent).toBe('rectangle, blue');
-    expect(row('title').textContent).toBe('Results');
+    const name = (id: string) => row(id).querySelector('.element-label-text')!.textContent;
+    expect(name('box')).toBe('rectangle, blue');
+    expect(name('title')).toBe('Results');
+    expect(row('box').querySelector('.object-list-thumb')!.getAttribute('aria-hidden')).toBe('true');
     expect(row('master').classList.contains('locked')).toBe(true);
     expect(row('master').draggable).toBe(false);
     expect(host.querySelector('.object-list-count')!.textContent).toBe('4');
+  });
+
+  it('draws each row a miniature of its own object with the slide renderer', () => {
+    const { row } = mount();
+    const thumb = row('box').querySelector<HTMLElement>('.object-list-thumb')!;
+    // A slide surface holding this one object and nothing else.
+    const drawn = [...thumb.querySelectorAll<HTMLElement>('[data-element-id]')].map((node) => node.dataset.elementId);
+    expect(drawn).toEqual(['box']);
+    expect(thumb.querySelector('.slide')).not.toBeNull();
+    expect(row('title').querySelector('.object-list-thumb')!.textContent).toBe('Results');
+    // Hidden until its build on the slide; drawn in its row all the same.
+    expect(row('note').querySelector('.object-list-thumb [data-element-id="note"]')).not.toBeNull();
+  });
+
+  it('redraws only the rows whose object changed', () => {
+    const { store, row } = mount();
+    const box = row('box');
+    const title = row('title');
+    store.select(['title']);
+    store.updateSelected((element) => { element.x += 40; });
+    expect(row('box')).toBe(box);
+    expect(row('title')).not.toBe(title);
+    expect(row('title').classList.contains('selected')).toBe(true);
   });
 
   it('selects like the canvas: a click picks one, Shift and Cmd add and drop', () => {
@@ -171,17 +198,18 @@ describe('object list', () => {
     expect(ids()).toEqual(['added', 'master', 'note', 'title']);
   });
 
-  it('toggles from its button and remembers being open', () => {
+  it('opens by default, folds to its toggle, and remembers being closed', () => {
     const first = mount();
-    expect(first.list.visible).toBe(false);
-    expect(first.list.toggle.getAttribute('aria-pressed')).toBe('false');
-    first.list.toggle.click();
-    expect(first.host.hidden).toBe(false);
+    expect(first.list.visible).toBe(true);
+    expect(first.host.querySelector('.object-list-header .object-list-toggle')).toBe(first.list.toggle);
     expect(first.list.toggle.getAttribute('aria-pressed')).toBe('true');
+    first.list.toggle.click();
+    expect(first.host.classList.contains('collapsed')).toBe(true);
+    expect(first.list.toggle.getAttribute('aria-pressed')).toBe('false');
     const next = mount();
-    expect(next.list.visible).toBe(true);
+    expect(next.list.visible).toBe(false);
     next.list.toggle.click();
-    expect(mount().list.visible).toBe(false);
+    expect(mount().list.visible).toBe(true);
   });
 
   it('says so when the slide is empty', () => {

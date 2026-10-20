@@ -168,7 +168,7 @@ new TimelinePanel(el('timeline'), store, new BuildPreview(canvas, store));
 new HistoryPanel(el('history'), store);
 const rail = new SlideRail(el('rail'), store);
 rail.onStatus = setStatusMessage;
-const objectList = new ObjectList(el('objects'), store);
+new ObjectList(el('objects'), store);
 const editorBody = el('body');
 const railDivider = document.createElement('div');
 railDivider.className = 'panel-resize-divider panel-resize-rail';
@@ -207,7 +207,7 @@ makePanelResizable(objectsDivider, {
     initial: 220,
     min: 160,
     max: () => Math.min(420, window.innerWidth - 760),
-    edge: 'left',
+    edge: 'right',
   },
 });
 let agentSessionBridge: CollabBridge | null = null;
@@ -1030,7 +1030,6 @@ function buildTabs(): void {
     b.addEventListener('click', () => showPanel(panel.id));
     tabs.appendChild(b);
   }
-  tabs.after(objectList.toggle);
   showPanel('inspector');
 }
 

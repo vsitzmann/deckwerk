@@ -1,10 +1,17 @@
-import type { SlideElement } from '@shared/deck.js';
+import type { Deck, Slide, SlideElement } from '@shared/deck.js';
+import { releasePreviewVideos } from '../player/previewPoster.js';
+import { renderSlide } from '../player/render.js';
 import { arrangeSelectionAt, paintOrder } from './arrange.js';
-import { describeElement, elementKind, renderElementLabel } from './elementLabel.js';
+import { describeElement, elementKind } from './elementLabel.js';
+import { previewSurface } from './slideRail.js';
 import type { EditorStore } from './store.js';
 
-/** Whether the list is open, per machine, like the panel sizes. */
+/** Whether the list is open, per machine, like the panel sizes. Open unless closed. */
 const VISIBLE_KEY = 'deckwerk.editor.object-list';
+
+/** The miniature's frame, in CSS pixels; editor.css draws the same box. */
+const THUMB_W = 54;
+const THUMB_H = 36;
 
 const LAYERS_ICON =
   '<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">' +
@@ -13,7 +20,8 @@ const LAYERS_ICON =
 
 /**
  * The object list: every object on the current slide in stacking order, the
- * front-most at the top, as in Keynote's Object List and Figma's layers.
+ * front-most at the top, as in Keynote's Object List and Figma's layers. Each
+ * row carries a miniature of its object, drawn by the player's renderer.
  *
  * It is another view of the canvas selection — a row lights up when its object
  * is selected, and picking rows selects objects with the canvas's modifiers —
@@ -29,6 +37,13 @@ export class ObjectList {
   private list: HTMLElement;
   /** The elements array last drawn: a selection change only moves the highlight. */
   private drawn: readonly SlideElement[] | null = null;
+  /**
+   * Rows by element object. The store keeps an untouched element's object
+   * across commits, so an edit redraws only the rows of what it changed.
+   */
+  private rowCache = new Map<SlideElement, HTMLButtonElement>();
+  /** What every miniature on the list shares: the slide, its ground and the canvas. */
+  private drawnContext = '';
   private highlighted = new Set<string>();
   private stale = false;
   /** Ids being dragged, while a restack is in progress. */
@@ -42,6 +57,14 @@ export class ObjectList {
     this.store = store;
     host.classList.add('object-list');
 
+    // The toggle heads the column and stays when the column folds to a
+    // strip, so a closed list is one click from coming back.
+    this.toggle = document.createElement('button');
+    this.toggle.type = 'button';
+    this.toggle.className = 'object-list-toggle';
+    this.toggle.innerHTML = LAYERS_ICON;
+    this.toggle.setAttribute('aria-label', 'Object list');
+    this.toggle.addEventListener('click', () => this.setVisible(!this.visible));
     const header = document.createElement('header');
     header.className = 'object-list-header';
     const title = document.createElement('h3');
@@ -49,7 +72,7 @@ export class ObjectList {
     title.textContent = 'Objects';
     this.count = document.createElement('span');
     this.count.className = 'object-list-count';
-    header.append(title, this.count);
+    header.append(this.toggle, title, this.count);
     const hint = document.createElement('p');
     hint.className = 'insp-hint object-list-hint';
     hint.textContent = 'Front to back. Drag to restack.';
@@ -61,23 +84,16 @@ export class ObjectList {
     host.replaceChildren(header, hint, this.list);
     this.bindDrop();
 
-    this.toggle = document.createElement('button');
-    this.toggle.type = 'button';
-    this.toggle.className = 'object-list-toggle';
-    this.toggle.innerHTML = LAYERS_ICON;
-    this.toggle.setAttribute('aria-label', 'Object list');
-    this.toggle.addEventListener('click', () => this.setVisible(this.host.hidden));
-
     store.subscribe(() => this.onStoreChange());
     this.setVisible(readVisible(), false);
   }
 
   get visible(): boolean {
-    return !this.host.hidden;
+    return !this.host.classList.contains('collapsed');
   }
 
   setVisible(visible: boolean, remember = true): void {
-    this.host.hidden = !visible;
+    this.host.classList.toggle('collapsed', !visible);
     this.toggle.setAttribute('aria-pressed', String(visible));
     this.toggle.title = visible ? 'Hide object list' : 'Show object list';
     if (remember) {
@@ -91,9 +107,9 @@ export class ObjectList {
   }
 
   private onStoreChange(): void {
-    // A hidden list costs nothing; a rebuild under a drag would pull the row
+    // A folded list costs nothing; a rebuild under a drag would pull the row
     // being dragged out from under the pointer. Both catch up afterwards.
-    if (this.host.hidden || this.dragging) {
+    if (!this.visible || this.dragging) {
       this.stale = true;
       return;
     }
@@ -102,26 +118,56 @@ export class ObjectList {
 
   render(): void {
     this.stale = false;
-    const elements = this.store.slide?.elements ?? [];
-    if (elements !== this.drawn) this.build(elements);
-    this.syncSelection();
+    const { deck } = this.store.get();
+    const slide = this.store.slide;
+    const elements = slide?.elements ?? [];
+    let rebuilt = false;
+    if (elements !== this.drawn) {
+      this.build(deck, slide, elements);
+      rebuilt = true;
+    }
+    this.syncSelection(rebuilt);
   }
 
-  private build(elements: readonly SlideElement[]): void {
+  private build(deck: Deck, slide: Slide | undefined, elements: readonly SlideElement[]): void {
     this.drawn = elements;
-    this.highlighted = new Set();
-    const rows: HTMLElement[] = paintOrder(elements).reverse().map((element) => this.row(element));
+    const context = slide
+      ? `${slide.id}|${slide.layout ?? ''}|${JSON.stringify(slide.background)}|${deck.canvas.w}x${deck.canvas.h}`
+      : '';
+    if (context !== this.drawnContext) {
+      this.drawnContext = context;
+      this.dropRows(new Set());
+    }
+    const order = paintOrder(elements).reverse();
+    const rows: HTMLElement[] = order.map((element) => {
+      let row = this.rowCache.get(element);
+      if (!row) {
+        row = this.row(deck, slide!, element);
+        this.rowCache.set(element, row);
+      }
+      return row;
+    });
+    this.dropRows(new Set(order));
     if (rows.length === 0) {
       const empty = document.createElement('p');
       empty.className = 'insp-hint object-list-empty';
       empty.textContent = 'No objects on this slide.';
       rows.push(empty);
     }
-    this.list.replaceChildren(...rows);
+    patchChildren(this.list, rows);
     this.count.textContent = elements.length > 0 ? String(elements.length) : '';
   }
 
-  private row(element: SlideElement): HTMLButtonElement {
+  /** Forget every cached row whose element is not in `keep`. */
+  private dropRows(keep: ReadonlySet<SlideElement>): void {
+    for (const [element, row] of this.rowCache) {
+      if (keep.has(element)) continue;
+      this.rowCache.delete(element);
+      releasePreviewVideos(row);
+    }
+  }
+
+  private row(deck: Deck, slide: Slide, element: SlideElement): HTMLButtonElement {
     const row = document.createElement('button');
     row.type = 'button';
     row.className = 'object-list-row';
@@ -129,7 +175,10 @@ export class ObjectList {
     row.setAttribute('aria-selected', 'false');
     row.dataset.elementId = element.id;
     row.dataset.kind = elementKind(element);
-    renderElementLabel(row, element);
+    const name = document.createElement('span');
+    name.className = 'element-label-text';
+    name.textContent = describeElement(element);
+    row.append(elementThumb(deck, slide, element), name);
     // A layout's own objects are drawn on the slide but edited in the layout,
     // as on the canvas: listed for the stacking order, not picked or moved.
     const locked = Boolean(element.layoutMasterId);
@@ -248,9 +297,9 @@ export class ObjectList {
     return chip;
   }
 
-  private syncSelection(): void {
+  private syncSelection(force = false): void {
     const { selection } = this.store.get();
-    if (sameSet(selection, this.highlighted)) return;
+    if (!force && sameSet(selection, this.highlighted)) return;
     this.highlighted = new Set(selection);
     let first: HTMLElement | null = null;
     for (const row of this.rows()) {
@@ -265,11 +314,86 @@ export class ObjectList {
   }
 }
 
+/**
+ * The object alone, cut out of its slide: a slide holding only this element,
+ * drawn by the same renderer and machinery as the rail's thumbnails and
+ * cropped to the element's rotated bounds. It sits on its slide's own ground,
+ * so white text on a dark slide stays legible and the layout's rules apply,
+ * and an element parked off the slide is drawn all the same.
+ */
+function elementThumb(deck: Deck, slide: Slide, element: SlideElement): HTMLElement {
+  const frame = document.createElement('span');
+  frame.className = 'object-list-thumb';
+  frame.setAttribute('aria-hidden', 'true');
+  const crop = thumbCrop(element);
+  const surface = previewSurface({ ...slide, elements: [element], timeline: [] }, deck.canvas);
+  surface.style.width = `${crop.w}px`;
+  surface.style.height = `${crop.h}px`;
+  surface.style.transform = `scale(${THUMB_W / crop.w})`;
+  const root = surface.firstElementChild as HTMLElement | null;
+  if (root) {
+    // The slide keeps its canvas size and moves under the crop window, so the
+    // element is drawn exactly where and how the slide draws it.
+    root.style.inset = 'auto';
+    root.style.left = `${-crop.x}px`;
+    root.style.top = `${-crop.y}px`;
+    root.style.width = `${deck.canvas.w}px`;
+    root.style.height = `${deck.canvas.h}px`;
+    root.style.overflow = 'visible';
+    root.style.background = 'none';
+    // The ground fills the whole window, past the canvas edge too.
+    const ground = renderSlide({ ...slide, elements: [], timeline: [] }, {
+      resolveSrc: (src) => window.api.assetUrl(src),
+      mediaPreload: 'metadata',
+    });
+    surface.insertBefore(ground, root);
+  }
+  frame.appendChild(surface);
+  return frame;
+}
+
+/**
+ * The slide region a miniature shows: the element's bounds as drawn (rotation
+ * included, with room for its stroke), widened to the frame's proportions
+ * around their centre, and never magnified past the slide's own size.
+ */
+export function thumbCrop(el: SlideElement): { x: number; y: number; w: number; h: number } {
+  const rad = ((el.rot ?? 0) * Math.PI) / 180;
+  const cos = Math.abs(Math.cos(rad));
+  const sin = Math.abs(Math.sin(rad));
+  const stroke = el.type === 'shape' ? el.strokeWidth ?? 0 : 0;
+  const drawnW = el.w * cos + el.h * sin;
+  const drawnH = el.w * sin + el.h * cos;
+  const pad = Math.max(drawnW, drawnH) * 0.06 + stroke;
+  const w = Math.max(drawnW + pad * 2, (drawnH + pad * 2) * (THUMB_W / THUMB_H), THUMB_W);
+  const h = w * (THUMB_H / THUMB_W);
+  return { x: el.x + el.w / 2 - w / 2, y: el.y + el.h / 2 - h / 2, w, h };
+}
+
+/**
+ * Bring `host`'s children to `nodes` with the fewest moves, as the slide rail
+ * does: a row that stays where it was never leaves the document, so its
+ * miniature keeps its decoded picture.
+ */
+function patchChildren(host: HTMLElement, nodes: HTMLElement[]): void {
+  const wanted = new Set<Element>(nodes);
+  for (let k = 0; k < nodes.length; k++) {
+    let current: Element | null = host.children[k] ?? null;
+    while (current && !wanted.has(current)) {
+      const next: Element | null = current.nextElementSibling;
+      current.remove();
+      current = next;
+    }
+    if (current !== nodes[k]) host.insertBefore(nodes[k], current);
+  }
+  while (host.children.length > nodes.length) host.lastElementChild?.remove();
+}
+
 function readVisible(): boolean {
   try {
-    return window.localStorage.getItem(VISIBLE_KEY) === '1';
+    return window.localStorage.getItem(VISIBLE_KEY) !== '0';
   } catch {
-    return false;
+    return true;
   }
 }
 
