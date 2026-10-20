@@ -95,9 +95,9 @@ describe('equation builds in the Build panel', () => {
     change(host.querySelector<HTMLSelectElement>('select.build-term')!, '2');
     change(host.querySelector<HTMLInputElement>('input.build-scale')!, '2');
 
-    // A pop keeps the term and the size, and takes its own, shorter time.
+    // A pop keeps the term and the size, and takes its own time.
     change(action(), 'pop');
-    expect(store.slide!.timeline[0].action).toMatchObject({ type: 'pop', value: null, term: '2', scale: 2, duration: 450 });
+    expect(store.slide!.timeline[0].action).toMatchObject({ type: 'pop', value: null, term: '2', scale: 2, duration: 700 });
     expect(action().value).toBe('pop');
     expect(host.querySelector<HTMLInputElement>('input.build-scale')!.getAttribute('aria-label')).toBe('Pop scale');
 

@@ -94,9 +94,9 @@ export const DEFAULT_PULSE_DURATION = 800;
 export const DEFAULT_PULSE_SCALE = 1.6;
 /** How long a jiggle wobbles when its entry does not say. */
 export const DEFAULT_JIGGLE_DURATION = 700;
-/** How long a pop takes, swell and snap back, when its entry does not say. */
-export const DEFAULT_POP_ACTION_DURATION = 450;
-/** How far a pop swells its target at the peak: less than a pulse, and quicker. */
+/** How long a pop takes, swelling and settling back, when its entry does not say. */
+export const DEFAULT_POP_ACTION_DURATION = 700;
+/** How far a pop swells its target at the peak: less than a pulse. */
 export const DEFAULT_POP_ACTION_SCALE = 1.3;
 /** The highlight a `color` term build paints when its entry names none. */
 export const DEFAULT_TERM_COLOR = '#d9480f';
@@ -117,8 +117,8 @@ export function isTermBuild(entry: TimelineEntry): boolean {
 /**
  * Keynote's Action builds: a moment of motion that points at an object, or at
  * one term of its equation, and leaves it exactly as it was. A `pulse` swells
- * and settles, a `jiggle` wobbles side to side, and a `pop` swells sharply and
- * snaps back with a small overshoot.
+ * out at once and settles, a `jiggle` wobbles side to side, and a `pop` is a
+ * smooth, gentle bump: it eases up to its size and eases back down.
  */
 export const EMPHASIS_TYPES = ['pulse', 'jiggle', 'pop'] as const;
 export type EmphasisType = (typeof EMPHASIS_TYPES)[number];

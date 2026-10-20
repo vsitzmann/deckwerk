@@ -176,7 +176,7 @@ describe('term builds on the timeline', () => {
     expect(buildEffect(jiggle, slide)).toBe('emphasis');
     expect(effectDuration(jiggle, 'emphasis')).toBe(700);
     expect(buildEffect(pop, slide)).toBe('emphasis');
-    expect(effectDuration(pop, 'emphasis')).toBe(450);
+    expect(effectDuration(pop, 'emphasis')).toBe(700);
     expect(effectDuration({ ...pop, action: { ...pop.action, duration: 200 } }, 'emphasis')).toBe(200);
     // Jumping over either is a no-op: every step resolves to the opening state.
     const before = resolveState(slide, 0);

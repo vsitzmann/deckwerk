@@ -101,7 +101,7 @@ describe('the Player with a jiggle and a pop', () => {
     return { transforms: frames.map((frame) => String(frame.transform)), options };
   }
 
-  it('wobbles side to side, then swells and snaps back past its size, ending where each began', () => {
+  it('wobbles side to side, then swells smoothly and eases back, ending where each began', () => {
     const { player, host, animate } = mount(emphases());
     player.goTo({ slide: 0, step: 0 });
     const box = host.querySelector('[data-element-id="box"]')!;
@@ -125,10 +125,14 @@ describe('the Player with a jiggle and a pop', () => {
     expect(scales[0]).toBe(1);
     expect(scales.at(-1)).toBe(1);
     expect(Math.max(...scales)).toBe(1.3);
-    // The snap back overshoots: for a moment it is smaller than it was.
-    expect(Math.min(...scales)).toBeLessThan(1);
-    expect(scales.indexOf(1.3)).toBeLessThan(scales.indexOf(Math.min(...scales)));
-    expect(pop.options).toMatchObject({ duration: 450, fill: 'none' });
+    // One bump, never below its own size, at the top halfway, eased the same
+    // way out of rest, into the top and back to rest.
+    expect(Math.min(...scales)).toBe(1);
+    expect(scales).toEqual([1, 1.3, 1]);
+    const frames = animate.mock.calls[animate.mock.contexts.lastIndexOf(box)][0] as Keyframe[];
+    expect(frames.map((frame) => frame.offset)).toEqual([0, 0.5, 1]);
+    expect(frames[0].easing).toBe(frames[1].easing);
+    expect(pop.options).toMatchObject({ duration: 700, fill: 'none' });
 
     // Neither left anything behind, and jumping back over them plays nothing.
     expect(box.getAttribute('style')).not.toContain('rotate');

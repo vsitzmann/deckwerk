@@ -84,7 +84,7 @@ function fixtureDeck(): Deck {
       { id: 'q', trigger: click, action: { type: 'pulse', target: 'box', value: null, scale: 1.6, duration: 800 } },
       { id: 'j', trigger: click, action: { type: 'jiggle', target: 'terms', value: null, term: '2', duration: 700 } },
       { id: 'k', trigger: click, action: { type: 'jiggle', target: 'box', value: null, duration: 700 } },
-      { id: 'o', trigger: click, action: { type: 'pop', target: 'box', value: null, scale: 1.3, duration: 450 } },
+      { id: 'o', trigger: click, action: { type: 'pop', target: 'box', value: null, scale: 1.3, duration: 700 } },
       { id: 'n', trigger: click, action: { type: 'jiggle', target: 'note', value: null, duration: 700 } },
       { id: 'm', trigger: click, action: { type: 'pop', target: 'note', value: null, scale: 1.3, duration: 700 } },
       { id: 'c', trigger: click, action: { type: 'jiggle', target: 'card', value: null, duration: 700 } },
@@ -313,23 +313,35 @@ describe.skipIf(!electronBinary)('equation motion in the browser', () => {
     expect(boxJiggle.after).toBe('same');
     expect(boxJiggle.transform).toBe('none');
 
-    // --- Pop the object: 1.3× a quarter of the way in, then for a moment
-    // smaller than it was, and back exactly.
-    const pop = await page.evaluate<{ before: number; peak: number; under: number; after: number; transform: string }>(`(() => {
+    // --- Pop the object: a smooth bump, 1.15× a quarter of the way in,
+    // 1.3× at the top halfway, never smaller than it was, and back exactly.
+    const pop = await page.evaluate<{ before: number; widths: number[]; after: number; transform: string }>(`(() => {
       const node = document.querySelector('[data-element-id="box"]');
       const width = () => node.getBoundingClientRect().width;
       const before = width();
       window.dispatchEvent(new MouseEvent('click', { bubbles: true }));
       const animations = document.getAnimations();
-      for (const a of animations) { a.pause(); a.currentTime = 112.5; }
-      const peak = width();
-      for (const a of animations) a.currentTime = 247.5;
-      const under = width();
+      const widths = [];
+      for (let t = 0; t <= 700; t += 35) {
+        for (const a of animations) { a.pause(); a.currentTime = t; }
+        widths.push(width());
+      }
       for (const a of animations) a.finish();
-      return { before, peak, under, after: width(), transform: getComputedStyle(node).transform };
+      return { before, widths, after: width(), transform: getComputedStyle(node).transform };
     })()`);
-    expect(pop.peak / pop.before).toBeCloseTo(1.3, 2);
-    expect(pop.under / pop.before).toBeCloseTo(0.91, 2);
+    const scales = pop.widths.map((width) => width / pop.before);
+    expect(scales[5]).toBeCloseTo(1.15, 2);
+    expect(scales[10]).toBeCloseTo(1.3, 2);
+    expect(scales[15]).toBeCloseTo(1.15, 2);
+    // Up and down once: rising to the middle, falling after, never below 1,
+    // and gentle at both ends rather than leaping out.
+    scales.forEach((scale, i) => {
+      expect(scale).toBeGreaterThanOrEqual(1 - 1e-6);
+      if (i > 0 && i <= 10) expect(scale).toBeGreaterThan(scales[i - 1]);
+      if (i > 10) expect(scale).toBeLessThan(scales[i - 1]);
+    });
+    expect(scales[1] - 1).toBeLessThan(0.02);
+    expect(scales[19] - 1).toBeLessThan(0.02);
     expect(pop.after).toBe(pop.before);
     expect(pop.transform).toBe('none');
 

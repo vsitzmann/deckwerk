@@ -118,8 +118,9 @@ export function prepareEquationEffect(
 type EmphasisFrames = (around: (local: string) => string) => Keyframe[];
 
 /**
- * A pulse: out to `scale` with an ease-out, and back with an ease-in-out, so
- * the term lingers big for a beat and settles rather than bouncing.
+ * A pulse: out to `scale` with an ease-out, so it leaps from the first frame
+ * and is at full size by 40%, and back with an ease-in-out over the longer
+ * rest, so it lingers big for a beat and settles rather than bouncing.
  */
 function pulseFrames(scale: number): EmphasisFrames {
   return (around) => [
@@ -130,18 +131,17 @@ function pulseFrames(scale: number): EmphasisFrames {
 }
 
 /**
- * A pop: a sharp swell to `scale` in the first quarter, a quick snap back
- * that overshoots a little below the original size, and one small rebound
- * before it settles — more abrupt than a pulse, and springy where a pulse is
- * smooth.
+ * A pop: a smooth bump, symmetric about its middle. It eases into growing,
+ * eases to a stop at full size halfway, eases back down and settles softly
+ * at its own size: a sine ease-in-out each way, never below its own size.
+ * Where a pulse jumps out at once and lingers big, a pop starts and ends
+ * gently and turns at the top without a pause.
  */
 function popFrames(scale: number): EmphasisFrames {
-  const swell = scale - 1;
+  const sine = 'cubic-bezier(.37,0,.63,1)';
   return (around) => [
-    { transform: around('scale(1)'), offset: 0, easing: 'cubic-bezier(.2,.9,.3,1)' },
-    { transform: around(`scale(${scale})`), offset: 0.25, easing: 'cubic-bezier(.6,0,.8,.4)' },
-    { transform: around(`scale(${1 - swell * 0.3})`), offset: 0.55, easing: 'ease-in-out' },
-    { transform: around(`scale(${1 + swell * 0.08})`), offset: 0.8, easing: 'ease-in-out' },
+    { transform: around('scale(1)'), offset: 0, easing: sine },
+    { transform: around(`scale(${scale})`), offset: 0.5, easing: sine },
     { transform: around('scale(1)'), offset: 1 },
   ];
 }

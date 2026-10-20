@@ -24,7 +24,7 @@ import { EMPHASIS_TYPES, isEmphasisType, isTermLabel, type EmphasisType } from '
  *
  *   data-jiggle="click"             wobble the object, or one term, side to side
  *   data-jiggle-term, data-jiggle-duration
- *   data-pop="click"                swell sharply and snap back
+ *   data-pop="click"                swell smoothly and ease back down
  *   data-pop-term, data-pop-scale, data-pop-duration
  *
  * A page states an object's first build of each kind; further ones (a second
