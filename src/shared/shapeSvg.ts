@@ -81,6 +81,9 @@ export function shapeSvg(el: Shape, options: { drawProgress?: number } = {}): st
 
 type XY = { x: number; y: number };
 
+/** Where a curved line stops inside a head's tail, the way it runs there, and where it leaves the curve to get there. */
+type Stop = { point: XY; run: XY; ease: number };
+
 /**
  * A line or arrow: the stroke, plus a filled head at each arrowed end.
  *
@@ -122,39 +125,75 @@ function lineSvg(el: Shape, stroke: string, paint: string, progress = 1): string
   const heads: string[] = [];
   let t0 = 0;
   let t1 = 1;
-  // A head points the way the line runs where it meets the head's base, so
-  // on a curve the line's end and the head's tail line up without a kink.
-  const along = (t: number, toward: XY): XY => {
-    const d = quadraticTangent(p0, p1, p2, t);
-    const base = at(t);
-    const sign = d.x * (toward.x - base.x) + d.y * (toward.y - base.y) < 0 ? -1 : 1;
-    return { x: base.x - sign * d.x, y: base.y - sign * d.y };
+  // A head's base sits on the line, `size` back from its tip, and it points
+  // from there to the tip. On a curve that chord is not quite the way the
+  // curve runs there, so the last few head lengths of the curve are eased
+  // onto it: the line arrives running straight into the head's tail, on its
+  // axis, however hard the curve bends at the end.
+  const ends: Stop[] = [];
+  const head = (from: 0 | 1): void => {
+    const tip = at(from);
+    const base = at(paramAtDistance(at, from, size));
+    const axis = unit({ x: tip.x - base.x, y: tip.y - base.y })
+      ?? unit(quadraticTangent(p0, p1, p2, from)) ?? { x: 1, y: 0 };
+    heads.push(headPath(tip, { x: tip.x - axis.x, y: tip.y - axis.y }, size, width, tail));
+    const away = from ? 1 : -1;
+    ends[from] = {
+      point: { x: tip.x - axis.x * trim, y: tip.y - axis.y * trim },
+      run: { x: axis.x * away, y: axis.y * away },
+      ease: paramAtDistance(at, from, trim + 3 * size),
+    };
   };
   if (startHead) {
-    heads.push(headPath(p0, along(paramAtDistance(at, 0, size), p0), size, width, tail));
+    head(0);
     t0 = paramAtDistance(at, 0, trim);
   }
   if (endHead) {
-    heads.push(headPath(p2, along(paramAtDistance(at, 1, size), p2), size, width, tail));
+    head(1);
     t1 = paramAtDistance(at, 1, trim);
   }
   const n = (value: number): string => String(Math.round(value * 100) / 100 + 0);
+  const pt = (p: XY): string => `${n(p.x)} ${n(p.y)}`;
   let line = '';
   // Heads that meet leave no line to draw between them.
   if (t1 > t0) {
-    const a = at(t0);
-    const b = at(t1);
     if (local) {
-      // The piece of the curve between t0 and t1 is itself a quadratic. Its
-      // ends are square, to sit inside the heads' tails; an end with no head
-      // gets its round cap back as a dot.
-      const c = quadraticBlossom(p0, p1, p2, t0, t1);
-      line = `<path d="M ${n(a.x)} ${n(a.y)} Q ${n(c.x)} ${n(c.y)} ${n(b.x)} ${n(b.y)}"`
-        + ` stroke-linejoin="round" ${paint}/>`;
+      // The curve between `a` and `b` as a cubic, an end that stops in a head
+      // moved onto its axis and turned along it, its handle as long as before.
+      const piece = (a: number, b: number, start?: Stop, end?: Stop): string => {
+        const c = quadraticBlossom(p0, p1, p2, a, b);
+        const from = at(a);
+        const to = at(b);
+        const handle = (p: XY, stop: Stop | undefined, sign: number): XY => {
+          const reach = (2 / 3) * Math.hypot(c.x - p.x, c.y - p.y);
+          return stop
+            ? { x: stop.point.x + sign * stop.run.x * reach, y: stop.point.y + sign * stop.run.y * reach }
+            : { x: p.x + (c.x - p.x) * (2 / 3), y: p.y + (c.y - p.y) * (2 / 3) };
+        };
+        return ` C ${pt(handle(from, start, 1))} ${pt(handle(to, end, -1))} ${pt(end?.point ?? to)}`;
+      };
+      // Its ends are square, to sit inside the heads' tails; an end with no
+      // head gets its round cap back as a dot.
+      const first = ends[0]?.point ?? at(0);
+      const last = ends[1]?.point ?? at(1);
+      const a = ends[0]?.ease ?? 0;
+      const b = ends[1]?.ease ?? 1;
+      let d = `M ${pt(first)}`;
+      if (b > a) {
+        // The curve itself between the eased ends: a piece of a quadratic is a quadratic.
+        if (ends[0]) d += piece(t0, a, ends[0]);
+        d += ` Q ${pt(quadraticBlossom(p0, p1, p2, a, b))} ${pt(at(b))}`;
+        if (ends[1]) d += piece(b, t1, undefined, ends[1]);
+      } else {
+        d += piece(t0, t1, ends[0], ends[1]);
+      }
+      line = `<path d="${d}" stroke-linejoin="round" ${paint}/>`;
       const dot = (p: XY): string => `<circle cx="${n(p.x)}" cy="${n(p.y)}" r="${n(el.strokeWidth / 2)}" fill="${stroke}"/>`;
-      if (!startHead) line += dot(a);
-      if (!endHead) line += dot(b);
+      if (!startHead) line += dot(first);
+      if (!endHead) line += dot(last);
     } else {
+      const a = at(t0);
+      const b = at(t1);
       line = `<line x1="${n(a.x)}" y1="${n(a.y)}" x2="${n(b.x)}" y2="${n(b.y)}" ${paint}/>`;
     }
   }
@@ -198,6 +237,12 @@ function quadraticTangent(p0: XY, p1: XY, p2: XY, t: number): XY {
     x: 2 * (1 - t) * (p1.x - p0.x) + 2 * t * (p2.x - p1.x),
     y: 2 * (1 - t) * (p1.y - p0.y) + 2 * t * (p2.y - p1.y),
   };
+}
+
+/** A vector scaled to length one, or null when it has no direction. */
+function unit(v: XY): XY | null {
+  const length = Math.hypot(v.x, v.y);
+  return length > 1e-9 ? { x: v.x / length, y: v.y / length } : null;
 }
 
 /** The control point of the quadratic's piece between `a` and `b` (its blossom). */
