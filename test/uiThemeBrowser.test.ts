@@ -21,7 +21,8 @@ import { collabClientDir } from './support/collabClient.js';
  *
  * Appearance → Light in the DeckWerk menu turns the chrome light (the slide
  * keeps its own theme), the menu then ticks Light, and the choice survives a
- * reload.
+ * reload. Headings are near-black text and the one accent marks what is
+ * active, rather than the dark theme's green, amber and blue.
  */
 const DECK_ID = 'light';
 
@@ -72,9 +73,16 @@ describe.skipIf(!electronBinary)('light mode', () => {
       `[...document.querySelectorAll('[role="menuitemradio"]')].find((i) => i.textContent === 'Light').getAttribute('aria-checked')`,
     )).toBe('true');
     expect(await editor.evaluate<string>('getComputedStyle(document.getElementById("toolbar")).backgroundColor'))
-      .toBe('rgb(248, 249, 251)');
+      .toBe('oklch(0.985 0 0)');
     expect(await editor.evaluate<string>('getComputedStyle(document.querySelector(".canvas-host")).backgroundColor'))
-      .toBe('rgb(223, 226, 232)');
+      .toBe('oklch(0.92 0.004 286.32)');
+    const text = 'oklch(0.21 0.006 285.885)';
+    const accent = 'oklch(0.488 0.243 264.376)';
+    const colour = (selector: string) =>
+      editor!.evaluate<string>(`getComputedStyle(document.querySelector(${JSON.stringify(selector)})).color`);
+    expect(await colour('body')).toBe(text);
+    expect(await colour('#inspector .insp-title')).toBe(text);
+    expect(await colour('#side-tabs button.active')).toBe(accent);
 
     await editor.evaluate('location.reload()');
     await eventually(async () => editor!.evaluate<string | undefined>('document.documentElement.dataset.uiTheme'),

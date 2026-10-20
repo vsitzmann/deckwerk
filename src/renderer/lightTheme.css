@@ -1,30 +1,114 @@
 /* Light editor chrome: the same layout with the colours turned over. Only
-   active when <html data-ui-theme="light">; the slides keep their own theme. */
+   active when <html data-ui-theme="light">; the slides keep their own theme.
+
+   Like Keynote, the chrome is near-black on light grey with a single accent.
+   Every colour is a step of Tailwind v4's palette (OKLCH, so equal steps look
+   equal), and each hue has one job: zinc for text, lines and surfaces; blue
+   for what is selected, active, focused or a link; red for errors and
+   destructive actions; green for success; amber for the canvas marks that
+   must stand apart from a selection (builds, comments) and for warnings.
+   Shades are fixed per use, the same for every hue: 700 for coloured text,
+   icons, outlines and solid fills under white text (the lowest step at which
+   red, green and amber text still clear WCAG AA on the panels); 500 for
+   fills under dark text; 100 for hover grounds; 50 for selected grounds.
+   Section headings and dialog titles are plain text, not coloured. */
 :root[data-ui-theme="light"] {
+  --zinc-50: oklch(98.5% 0 0);
+  --zinc-100: oklch(96.7% 0.001 286.375);
+  --zinc-200: oklch(92% 0.004 286.32);
+  --zinc-300: oklch(87.1% 0.006 286.286);
+  --zinc-600: oklch(44.2% 0.017 285.786);
+  --zinc-900: oklch(21% 0.006 285.885);
+  --blue-50: oklch(97% 0.014 254.604);
+  --blue-100: oklch(93.2% 0.032 255.585);
+  --blue-700: oklch(48.8% 0.243 264.376);
+  --red-50: oklch(97.1% 0.013 17.38);
+  --red-700: oklch(50.5% 0.213 27.518);
+  --red-800: oklch(44.4% 0.177 26.899);
+  --green-700: oklch(52.7% 0.154 150.069);
+  --amber-500: oklch(76.9% 0.188 70.08);
+  --amber-700: oklch(55.5% 0.163 48.998);
+
   color-scheme: light;
-  --bg: #eceef2;
-  --panel: #f8f9fb;
-  --panel-2: #e9ecf1;
-  --line: #d3d7df;
-  --text: #1f2330;
-  --muted: #6b7283;
-  --accent: #3b63d8;
-  --accent-soft: rgb(59 99 216 / 12%);
-  --green: #3f8a2e;
-  --yellow: #a86f12;
-  --danger: #c93a54;
+  accent-color: var(--accent);
+  --bg: var(--zinc-100);
+  --panel: var(--zinc-50);
+  --panel-2: var(--zinc-100);
+  --canvas-ground: var(--zinc-200);
+  --line: var(--zinc-300);
+  --text: var(--zinc-900);
+  --muted: var(--zinc-600);
+  --accent: var(--blue-700);
+  --accent-soft: var(--blue-50);
+  --accent-hover: var(--blue-100);
+  --danger: var(--red-700);
+  --danger-soft: var(--red-50);
+  --danger-hover: var(--red-800);
+  --green: var(--green-700);
+  --yellow: var(--amber-700);
+  --build-orange: var(--amber-500);
+  --comment: var(--amber-500);
+  --mark-text: var(--zinc-900);
+  --scrim: color-mix(in oklch, var(--zinc-900) 28%, transparent);
   --shadow: 0 1px 2px rgb(0 0 0 / 12%);
 }
 
 /* The few chrome colours that are written out rather than taken from a token. */
-:root[data-ui-theme="light"] .canvas-host { background: #dfe2e8; }
+:root[data-ui-theme="light"] .canvas-host { background: var(--canvas-ground); }
 :root[data-ui-theme="light"] .canvas-host .stage {
   box-shadow: 0 0 0 1px var(--line), 0 14px 40px rgb(0 0 0 / 16%);
 }
-:root[data-ui-theme="light"] button.primary:hover:not(:disabled) { background: rgb(59 99 216 / 18%); }
-:root[data-ui-theme="light"] .rail-item.selected { background: rgb(59 99 216 / 7%); border-color: rgb(59 99 216 / 55%); }
-:root[data-ui-theme="light"] .rail-item.selected .rail-thumb { --rail-thumb-stroke: rgb(59 99 216 / 65%); }
+:root[data-ui-theme="light"] button.primary:hover:not(:disabled) { background: var(--accent-hover); }
+:root[data-ui-theme="light"] .rail-item.selected { background: var(--accent-soft); border-color: var(--accent); }
+:root[data-ui-theme="light"] .rail-item.selected .rail-thumb { --rail-thumb-stroke: var(--accent); }
 /* Modal backdrop: a soft scrim rather than the dark theme's near-black. */
-:root[data-ui-theme="light"] .workflow-overlay { background: rgb(31 35 48 / 28%); }
+:root[data-ui-theme="light"] .workflow-overlay,
+:root[data-ui-theme="light"] .app-dialog-backdrop,
+:root[data-ui-theme="light"] .morph-modal-backdrop,
+:root[data-ui-theme="light"] .agent-history-dialog::backdrop { background: var(--scrim); }
 /* Trim window: the ffmpeg command readout. The viewers stay dark, like the canvas. */
 :root[data-ui-theme="light"] #command { background: var(--panel-2); }
+
+/* Headings are text, not decoration: the dark theme's green panel titles,
+   amber section heads and accent dialog titles all read as plain text here. */
+:root[data-ui-theme="light"] .insp-title,
+:root[data-ui-theme="light"] .insp-group h3,
+:root[data-ui-theme="light"] .insp-subtitle,
+:root[data-ui-theme="light"] .workflow-dialog h2,
+:root[data-ui-theme="light"] .app-dialog h2,
+:root[data-ui-theme="light"] .morph-modal > header h2 { color: var(--text); }
+:root[data-ui-theme="light"] .layout-editor-header > div:first-child span { color: var(--muted); }
+
+/* A build step's trigger is its headline, in text colour; the amber stays on
+   the numbered marks that tie the step to its object on the canvas. */
+:root[data-ui-theme="light"] .timeline-row select.build-trigger { border-color: var(--line); color: var(--text); }
+:root[data-ui-theme="light"] .build-num,
+:root[data-ui-theme="light"] .build-badge { color: var(--mark-text); }
+
+/* A colour written as raw CSS rather than taken from the theme: a warning. */
+:root[data-ui-theme="light"] .color-picker-css-badge { background: var(--yellow); }
+:root[data-ui-theme="light"] .cthread-head .cthread-resolve { color: var(--accent); }
+
+/* Agent chat. */
+:root[data-ui-theme="light"] .agent-chat-status[data-state="ready"]::before { background: var(--green); }
+:root[data-ui-theme="light"] .agent-chat-fast-mode.active {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+:root[data-ui-theme="light"] .agent-chat-message-system .agent-chat-message-body,
+:root[data-ui-theme="light"] .agent-chat-message.error .agent-chat-message-body { color: var(--danger); }
+
+/* End collaboration: the dark theme paints this popover dark whatever the tokens say. */
+:root[data-ui-theme="light"] #end-collaboration-popover {
+  background: var(--danger-soft);
+  box-shadow: 0 14px 38px rgb(0 0 0 / 16%);
+}
+:root[data-ui-theme="light"] #end-collaboration-popover::before { background: var(--danger-soft); }
+:root[data-ui-theme="light"] #end-collaboration-popover h2 { color: var(--danger); }
+:root[data-ui-theme="light"] .end-collaboration-actions button { border-color: var(--line); }
+:root[data-ui-theme="light"] .end-collaboration-actions .end-collaboration-confirm { border-color: var(--danger); }
+:root[data-ui-theme="light"] .end-collaboration-actions .end-collaboration-confirm:hover:not(:disabled) {
+  border-color: var(--danger-hover);
+  background: var(--danger-hover);
+}
