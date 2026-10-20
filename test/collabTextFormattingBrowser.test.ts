@@ -133,7 +133,7 @@ describe.skipIf(!electronBinary)('text formatting in the collaboration browser',
     // tab. Nothing below assumes which side panel happened to open first.
     const panelLabels = await editor.evaluate<string[]>(
       `[...document.querySelectorAll('#side-tabs button')].map((b) => b.textContent.trim())`);
-    expect(panelLabels).toEqual(['Props', 'Design', 'Build', 'History', 'Chat']);
+    expect(panelLabels).toEqual(['Props', 'Design', 'Build', 'History', 'Media', 'Chat']);
     await editor.click('#side-tabs button[data-panel="themePanel"]', 'Design tab');
     await editor.click('#side-tabs button[data-panel="inspector"]', 'Props tab');
     expect(await editor.evaluate<boolean>(

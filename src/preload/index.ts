@@ -4,6 +4,7 @@ import type { DeckHistoryDocument } from '@shared/deckHistory.js';
 import type { ClipboardReadResult, ClipboardWriteRequest } from '@shared/clipboard.js';
 import type { ClipboardImageSource } from '@shared/clipboardImages.js';
 import { IPC } from '@shared/ipc.js';
+import { DECK_ASSET_IPC, type DeckAssetListing, type DeckAssetTrashResult } from '@shared/mediaIndex.js';
 import type {
   AgentContextDraft,
   AgentPanelState,
@@ -35,6 +36,7 @@ import type {
   VideoPosterRequest,
   VideoPosterResult,
   WebExportRequest,
+  ImportedMeshPage,
 } from '@shared/ipc.js';
 
 /**
@@ -116,6 +118,16 @@ const api = {
       progressToken,
     ),
   /**
+   * Turn dropped 3D models (.glb, .gltf, .obj) into one interactive page in
+   * the deck, ready for a web element. The browser collab client uploads the
+   * bytes instead (netApi.ts).
+   */
+  importMeshFiles: (files: File[]): Promise<ImportedMeshPage> =>
+    ipcRenderer.invoke(
+      IPC.meshImport,
+      files.map((file) => webUtils.getPathForFile(file)).filter(Boolean),
+    ),
+  /**
    * Import an image that a drag or a paste only pointed at — a remote URL or
    * an inline `data:` payload. The renderer cannot fetch cross-origin bytes
    * itself, so the main process goes and gets them.
@@ -138,6 +150,11 @@ const api = {
    */
   videoPoster: (req: VideoPosterRequest): Promise<VideoPosterResult> =>
     ipcRenderer.invoke(IPC.videoPoster, req),
+  /** The Media panel: every file in the deck's assets/ and what refers to it. */
+  listDeckAssets: (): Promise<DeckAssetListing> => ipcRenderer.invoke(DECK_ASSET_IPC.list),
+  /** Move unused asset files to the system Trash, rechecked against `deck` and the saved deck. */
+  trashDeckAssets: (files: string[], deck: Deck): Promise<DeckAssetTrashResult> =>
+    ipcRenderer.invoke(DECK_ASSET_IPC.trash, files, deck),
 
   /**
    * A dropped File carries no usable path once context isolation is on;

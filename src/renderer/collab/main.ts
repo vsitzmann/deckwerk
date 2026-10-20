@@ -19,6 +19,7 @@ import {
 } from '../editor/exportPicker.js';
 import { showPdfExportDialog } from '../editor/pdfExportDialog.js';
 import { HistoryPanel } from '../editor/historyPanel.js';
+import { MediaPanel, installMediaDrop } from '../editor/mediaPanel.js';
 import {
   createShapeInsertPicker,
   createTableInsertPicker,
@@ -261,6 +262,11 @@ new SpeakerNotesDrawer(el('canvas'), store, {
 const inspector = new Inspector(el('inspector'), store);
 new TimelinePanel(el('timeline'), store);
 new HistoryPanel(el('history'), store);
+const mediaPanel = new MediaPanel(el('media'), store, {
+  setStatusMessage,
+  beginOperation: (message) => operationProgress.begin(message),
+});
+installMediaDrop(el('canvas'), store, mediaPanel);
 const rail = new SlideRail(el('rail'), store);
 rail.onStatus = setStatusMessage;
 // The CSS buffer backs the Theme panel and live theme sync. Like the desktop
@@ -1069,11 +1075,12 @@ const PANELS = [
   { id: 'themePanel', label: 'Design' },
   { id: 'timeline', label: 'Build' },
   { id: 'history', label: 'History' },
+  { id: 'media', label: 'Media' },
   { id: 'chat', label: 'Chat' },
 ] as const;
 
 /** Tabs that stay open while several slides are selected: they are not about one slide. */
-const DECK_LEVEL_PANELS: ReadonlySet<string> = new Set(['themePanel', 'inspector', 'chat']);
+const DECK_LEVEL_PANELS: ReadonlySet<string> = new Set(['themePanel', 'inspector', 'chat', 'media']);
 
 let activePanelId = 'inspector';
 

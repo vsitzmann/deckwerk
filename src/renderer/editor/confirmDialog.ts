@@ -14,6 +14,8 @@ export interface ConfirmDialogOptions {
   description: string;
   confirmLabel: string;
   cancelLabel?: string;
+  /** Things the action touches, each named on its own line in a scrolling list. */
+  items?: string[];
   /** Paint the confirm button as destructive (`button.danger`). */
   destructive?: boolean;
   returnFocus?: HTMLElement | null;
@@ -83,7 +85,18 @@ export function showConfirmDialog(options: ConfirmDialogOptions): Promise<boolea
       if (event.key !== 'Tab') event.stopPropagation();
     });
 
-    dialog.append(title, description, actions);
+    dialog.append(title, description);
+    if (options.items && options.items.length > 0) {
+      const list = document.createElement('ul');
+      list.className = 'confirm-dialog-items';
+      for (const item of options.items) {
+        const row = document.createElement('li');
+        row.textContent = item;
+        list.appendChild(row);
+      }
+      dialog.appendChild(list);
+    }
+    dialog.append(actions);
     overlay.appendChild(dialog);
     document.body.appendChild(overlay);
     confirm.focus();

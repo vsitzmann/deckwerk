@@ -152,7 +152,7 @@ type OpName =
   | 'type nonce' | 'bold mid-word' | 'escape' | 'click empty' | 'marquee'
   | 'rail hop' | 'undo' | 'redo' | 'undo round-trip' | 'delete selection'
   | 'cmd+a' | 'click with stray hover' | 'rail multi-delete' | 'stack key' | 'spelling fix'
-  | 'size from sidebar' | 'viewport gesture';
+  | 'media reveal' | 'media add' | 'size from sidebar' | 'viewport gesture';
 
 interface Violation { seed: number; step: number; op: OpName; oracle: string; detail: string }
 
@@ -407,6 +407,8 @@ function chooseOp(next: () => number, pre: CrossState): OpName {
   add('cmd+a', 1);
   add('rail multi-delete', 1);
   add('stack key', 1);
+  add('media reveal', 1);
+  add('media add', 1);
   add('viewport gesture', 2);
   return pick(next, ops);
 }
@@ -546,6 +548,9 @@ async function performOp(
       return 'same';
     }
     case 'rail hop': {
+      // A redo of a confirmed whole-deck delete (or an undo back into the
+      // previous walk's history) can leave one slide: nowhere to hop to.
+      if (await session.cdp.evaluate<number>('window.store.get().deck.slides.length') < 2) return 'same';
       const other = pre.slideIndex === 0 ? 1 : 0;
       await session.clickRail(other);
       if (next() < 0.6) await session.clickRail(pre.slideIndex);
@@ -680,6 +685,54 @@ async function performOp(
         flag('undoRoundTrip', `undo after the confirmed slide deletion did not restore the deck: ${await snapshot()}`);
       }
       return 'same';
+    }
+    case 'media reveal': {
+      // The Media tab's slide number, mid-edit or not: go to the slide the
+      // picture is on and select every copy of it there, editing nothing.
+      const row = '#media .media-item[data-media-src="assets/pic.png"]';
+      await session.cdp.clickByText('#side-tabs button', 'Media');
+      const slideIndex = await session.cdp.evaluate<number | null>(`(() => {
+        const link = document.querySelector('${row} .media-slide-link');
+        return link ? Number(link.dataset.slideIndex) : null;
+      })()`);
+      if (slideIndex !== null) {
+        await session.cdp.click(`${row} .media-slide-link[data-slide-index="${slideIndex}"]`, 'media slide link');
+        await wait(150);
+        const post = await session.state();
+        const sources = await session.cdp.evaluate<string[]>(`(() => {
+          const state = window.store.get();
+          const slide = state.deck.slides[state.slideIndex];
+          return [...state.selection].map((id) => slide.elements.find((el) => el.id === id)?.src ?? '(none)');
+        })()`);
+        if (post.slideIndex !== slideIndex) flag('routing', `revealing from the Media tab showed slide ${post.slideIndex + 1}, not ${slideIndex + 1}`);
+        if (post.editing !== null) flag('routing', `revealing from the Media tab left ${post.editing} in a text edit`);
+        if (sources.length === 0 || sources.some((src) => src !== 'assets/pic.png')) {
+          flag('routing', `revealing the picture selected [${sources.join(', ')}]`);
+        }
+      }
+      await session.cdp.clickByText('#side-tabs button', 'Props');
+      return 'same';
+    }
+    case 'media add': {
+      // "+" in the Media tab, mid-edit or not: exactly one new picture on the
+      // current slide, of the same file, and nothing else touched.
+      const before = await session.allElementIds();
+      await session.cdp.clickByText('#side-tabs button', 'Media');
+      const add = '#media .media-item[data-media-src="assets/pic.png"] .media-add';
+      const present = await session.cdp.evaluate<boolean>(`Boolean(document.querySelector('${add}'))`);
+      if (present) {
+        await session.cdp.click(add, 'media add');
+        await wait(250);
+      }
+      await session.cdp.clickByText('#side-tabs button', 'Props');
+      const after = await session.allElementIds();
+      const added = after.filter((id) => !before.includes(id));
+      if (present && added.length !== 1) flag('census', `"+" in the Media tab added [${added.join(', ')}]`);
+      if (!present && added.length > 0) flag('census', `the Media tab added [${added.join(', ')}] without a row to add from`);
+      if (before.some((id) => !after.includes(id))) flag('census', 'adding from the Media tab removed elements');
+      // A later walk's undo may reach back and bring the copy back: it is known.
+      for (const id of added) producedIds.add(id);
+      return after;
     }
     case 'spelling fix': {
       // Type a misspelling, wait for Harper's mark, and take the first
