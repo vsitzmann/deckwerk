@@ -5,6 +5,8 @@ import { elementFollowsLayout, layoutGeometryFor, realignElementToLayout } from 
 import { EditorCanvas } from './canvas.js';
 import { ARRANGE_LABELS, arrangeSelection } from './arrange.js';
 import { setCircularMask } from '@shared/mediaMask.js';
+import { wipeCandidates, wipeOfPair } from '@shared/compare.js';
+import { arrangeWipe } from './compareEdits.js';
 import { classifyMediaName, isPendingSrc } from '@shared/media.js';
 import { mediaNaturalSize } from './mediaNatural.js';
 import { Inspector } from './inspector.js';
@@ -522,6 +524,16 @@ export function makeContextActions(
             const slide = deck.slides.find((candidate) => candidate.elements.some((e) => e.id === el.id));
             if (slide) realignElementToLayout(slide, el.id, deck.layoutMasters);
           }, { label: 'Reset to layout position' }),
+        });
+      }
+      // Two pictures selected, not yet a wipe: stack them into one.
+      const elements = store.slide?.elements ?? [];
+      const pair = wipeCandidates(elements, store.get().selection);
+      if (pair && pair.some((member) => member.id === el.id)
+        && !wipeOfPair(elements, pair.map((member) => member.id))) {
+        items.push('separator', {
+          label: 'Arrange as wipe',
+          action: () => arrangeWipe(store, [pair[0].id, pair[1].id]),
         });
       }
       if (el.type === 'image' || el.type === 'video') {

@@ -40,6 +40,20 @@ Effects work on both images and videos.
 
 > Screenshot placeholder: Media with two effects applied.
 
+### Compare two clips
+
+Select two videos (or two pictures) and click **Wipe** in the chip that appears under them, or right-click and choose **Arrange as wipe**. They are stacked in one box, split by a divider: the left-hand one shows left of it, the other right of it. Videos are set to play in sync. While presenting, drag the divider to move it.
+
+When the two clips differ in length, choose how long they run with **Length**, in the same chip or under **Props → Wipe**:
+
+- **Shortest** cuts both to the shorter clip, so they loop together. This is the default.
+- **Hold last** runs to the longer clip; the shorter one freezes on its last frame until the longer one finishes.
+- **Black** runs to the longer clip; the shorter one goes black.
+
+Each clip's length is its trimmed range. Videos side by side can play in sync too: select them and turn on **Play in sync** under **Props**, where the same **Length** choice appears.
+
+> Screenshot placeholder: Two clips arranged as a wipe, with the Length chip.
+
 ### Download the original
 
 Right-click an image or video and choose **Download original…** to save the file you dropped, exactly as it was: an iPhone photo comes back as its HEIC and a screen recording as its own movie, not the PNG or H.264 copy DeckWerk shows on the slide. Crops, masks and effects are not applied. In the web editor the item is **Download original** and the file goes to the browser's downloads.

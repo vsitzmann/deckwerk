@@ -1,9 +1,16 @@
 import type { SlideElement } from '@shared/deck.js';
-import { arrangeAsWipe, clampWipe, isCompareMedia } from '@shared/compare.js';
+import {
+  DEFAULT_SYNC_LENGTH,
+  arrangeAsWipe,
+  clampWipe,
+  isCompareMedia,
+  type SyncLength,
+} from '@shared/compare.js';
 import type { EditorStore } from './store.js';
 
 /**
- * The inspector's edits to a before/after wipe, each one named, undoable
+ * The edits to a before/after wipe and a synced group -- from the inspector,
+ * the canvas's chip and the context menu -- each one named, undoable
  * change on the current slide. They address elements by id rather than
  * through the selection: the divider lives on the wipe's top layer, and the
  * person may well have the layer beneath it selected.
@@ -43,3 +50,25 @@ export function clearWipe(store: EditorStore, topId: string): void {
     delete top.wipe;
   }, 'Turn off wipe');
 }
+
+/**
+ * Set how long sync group `group` runs when its clips differ in length. It is
+ * written on every member, as the group itself is; the default is written as
+ * nothing, so a deck that never chose stays as it was.
+ */
+export function setSyncLength(store: EditorStore, group: string, mode: SyncLength): void {
+  onSlide(store, (elements) => {
+    for (const element of elements) {
+      if (element.type !== 'video' || element.syncGroup !== group) continue;
+      if (mode === DEFAULT_SYNC_LENGTH) delete element.syncLength;
+      else element.syncLength = mode;
+    }
+  }, 'Change sync length');
+}
+
+/** The menu labels and hover text for each length setting, shared by the inspector and the canvas chip. */
+export const SYNC_LENGTH_CHOICES: ReadonlyArray<{ value: SyncLength; text: string; title: string }> = [
+  { value: 'shortest', text: 'Shortest', title: 'End with the shortest clip, cutting the longer ones' },
+  { value: 'hold', text: 'Hold last', title: 'Run to the longest clip; shorter ones freeze on their last frame' },
+  { value: 'black', text: 'Black', title: 'Run to the longest clip; shorter ones go black when they end' },
+];
