@@ -213,7 +213,9 @@ describe('shared editor controls', () => {
     left.getBoundingClientRect = () => toolbar.classList.contains('toolbar-compact-file')
       ? rect(0, 120)
       : rect(0, toolbar.classList.contains('toolbar-hide-deck-name') ? 430 : 450);
-    center.getBoundingClientRect = () => deckControlsVisible ? rect(400, 220) : rect(0, 0);
+    center.getBoundingClientRect = () => deckControlsVisible
+      ? rect(400, toolbar.classList.contains('toolbar-compact-insert') ? 120 : 220)
+      : rect(0, 0);
     right.getBoundingClientRect = () => deckControlsVisible
       ? rect(660, toolbar.classList.contains('toolbar-compact-secondary') ? 100 : 240)
       : rect(0, 0);
@@ -226,6 +228,12 @@ describe('shared editor controls', () => {
     Object.defineProperty(toolbar, 'clientWidth', { configurable: true, value: 500 });
     refreshResponsiveToolbar(toolbar);
     expect(toolbar.classList.contains('toolbar-compact-secondary')).toBe(true);
+    expect(toolbar.classList.contains('toolbar-compact-insert')).toBe(false);
+
+    // Narrower still, Insert keeps its icons and drops its words.
+    Object.defineProperty(toolbar, 'clientWidth', { configurable: true, value: 420 });
+    refreshResponsiveToolbar(toolbar);
+    expect(toolbar.classList.contains('toolbar-compact-insert')).toBe(true);
 
     deckControlsVisible = false;
     refreshResponsiveToolbar(toolbar);

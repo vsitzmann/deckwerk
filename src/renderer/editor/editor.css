@@ -116,6 +116,7 @@ body.welcome-mode .toolbar-expanded-file-actions { display: inline-flex; }
 }
 #toolbar.toolbar-compact-secondary .toolbar-expanded-secondary-actions { display: none; }
 #toolbar.toolbar-compact-secondary .toolbar-compact-secondary-action { display: inline-block; }
+#toolbar.toolbar-compact-insert .bar-center :is(.bar-icon-button, .shape-menu-trigger) > span { display: none; }
 
 .bar-right { margin-left: auto; }
 
