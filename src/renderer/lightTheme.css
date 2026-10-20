@@ -60,3 +60,9 @@
   border-color: var(--danger-hover);
   background: var(--danger-hover);
 }
+
+/* Object rows in the Build and object lists: a white wash vanishes on white. */
+:root[data-ui-theme="light"] .build-element-row:hover,
+:root[data-ui-theme="light"] .object-list-row:hover:not(.locked) { background: rgb(31 35 48 / 5%); }
+:root[data-ui-theme="light"] .build-element-row.selected,
+:root[data-ui-theme="light"] .object-list-row.selected { background: var(--accent-soft); }
