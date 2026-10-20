@@ -4385,17 +4385,45 @@ button.cthread-where:disabled { cursor: default; opacity: 1; }
 .field-segmented { position: relative; }
 .field-segmented:focus-within .segmented-buttons { box-shadow: 0 0 0 1px var(--accent); }
 
-/* --- 1. Geometry: opacity and arrange share the last row --- */
+/* --- 1. Geometry: one labelled row each for Position, Size and Rotate, as
+   Keynote's Arrange pane has them, then Opacity and Layer --- */
 
-.geometry-bottom-row {
+.geometry-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 128px;
+  grid-template-columns: 56px repeat(2, minmax(0, 1fr));
   align-items: end;
-  gap: 8px;
+  gap: 6px;
+  margin-bottom: 8px;
 }
-.geometry-bottom-row > .field { margin-bottom: 0; min-width: 0; }
-.geometry-bottom-row .field-opacity-controls { height: 28px; grid-template-columns: minmax(0, 1fr) 36px; gap: 6px; }
-.geometry-bottom-row .field-opacity output { font-size: 10.5px; }
+.geometry-row:last-child { margin-bottom: 0; }
+.geometry-row > .field { margin-bottom: 0; min-width: 0; }
+/* The row's name sits level with its inputs, not with their captions. */
+.geometry-row-label {
+  overflow: hidden;
+  color: var(--text);
+  font: 10px var(--mono);
+  letter-spacing: 0.08em;
+  line-height: 32px;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+/* Flip and Arrange stand as tall as the number fields beside them. */
+.geometry-row .align-strip { box-sizing: border-box; height: 32px; }
+.geometry-row .align-strip > .align-strip-button { height: 100%; }
+.geometry-rotate {
+  display: grid;
+  grid-template-columns: 40px minmax(0, 1fr);
+  align-items: end;
+  gap: 6px;
+  min-width: 0;
+}
+.geometry-rotate > .field { margin-bottom: 0; min-width: 0; }
+/* Opacity spans both cells; the row already names it. */
+.geometry-row > .geometry-opacity { grid-column: 2 / -1; }
+.geometry-opacity > span { display: none; }
+.geometry-opacity .field-opacity-controls { height: 32px; grid-template-columns: minmax(0, 1fr) 36px; gap: 6px; margin-bottom: 0; }
+.geometry-opacity output { font-size: 10.5px; }
 .field-arrange .align-strip { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); }
 .z-order-row { grid-template-columns: none; gap: 0; }
 .z-order-row button { padding: 0; font-size: inherit; }

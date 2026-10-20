@@ -26,9 +26,9 @@ import { sidebarSelectionProbes } from './support/selectionSession.js';
  * Cmd+B mid-word, undo/redo at random points, Backspace with an element
  * selection, Cmd+A in both contexts, Backspace on a multi-slide rail
  * selection (which must ask first; cancelled, or confirmed and undone), and
- * resizing a selected word from the sidebar's Font size field, and
- * panning and zooming the view with a plain mouse and the keyboard (each
- * time also showing or hiding the rulers).
+ * resizing a selected word from the sidebar's Font size field, flipping
+ * the selection from the sidebar, and panning and zooming the view with a
+ * plain mouse and the keyboard (each time also showing or hiding the rulers).
  *
  * After EVERY step five oracles run: the whole-editor invariant set from
  * selectionSession, keystroke routing via per-step nonce strings, an element
@@ -153,7 +153,7 @@ type OpName =
   | 'type nonce' | 'bold mid-word' | 'escape' | 'click empty' | 'marquee'
   | 'rail hop' | 'undo' | 'redo' | 'undo round-trip' | 'delete selection'
   | 'cmd+a' | 'click with stray hover' | 'rail multi-delete' | 'stack key' | 'spelling fix'
-  | 'size from sidebar' | 'viewport gesture';
+  | 'size from sidebar' | 'flip from sidebar' | 'viewport gesture';
 
 interface Violation { seed: number; step: number; op: OpName; oracle: string; detail: string }
 
@@ -405,6 +405,7 @@ function chooseOp(next: () => number, pre: CrossState): OpName {
   add('redo', 1);
   add('undo round-trip', 1);
   if (pre.editing === null && pre.selection.length > 0) add('delete selection', 2);
+  if (pre.editing === null && pre.selection.length > 0) add('flip from sidebar', 1);
   add('cmd+a', 1);
   add('rail multi-delete', 1);
   add('stack key', 1);
@@ -522,6 +523,24 @@ async function performOp(
       if (kept.length > 0) {
         flag('routing', `the kept selection ${JSON.stringify(kept)} survived the click back`
           + ` into ${editing}`);
+      }
+      return 'same';
+    }
+    case 'flip from sidebar': {
+      // Props → Geometry → Flip, with a real click: every selected object
+      // mirrors where it stands (its box never moves) and nothing else does.
+      const axis = pick(next, ['horizontal', 'vertical'] as const);
+      const read = (fields: string) => session.cdp.evaluate<string>(
+        `JSON.stringify(window.store.selectedElements().map((e) => [e.id, ${fields}]))`,
+      );
+      const boxes = await read('e.x, e.y, e.w, e.h');
+      const flips = await read('Boolean(e.flipX), Boolean(e.flipY)');
+      await session.cdp.click(`.geometry-section button[data-flip="${axis}"]`, `Flip ${axis}`);
+      await wait(80);
+      const after = await read('e.x, e.y, e.w, e.h');
+      if (after !== boxes) flag('routing', `flipping ${axis} moved the selection: ${boxes} -> ${after}`);
+      if (await read('Boolean(e.flipX), Boolean(e.flipY)') === flips) {
+        flag('routing', `flipping ${axis} left ${pre.selection.join(', ')} unflipped`);
       }
       return 'same';
     }
