@@ -38,13 +38,27 @@ export const DEFAULT_DRAW_DURATION = 600;
 export const DEFAULT_DISSOLVE_DURATION = 1000;
 /** How long a blur takes when its entry does not say. */
 export const DEFAULT_BLUR_DURATION = 1000;
+/** How long a pop takes when its entry does not say. */
+export const DEFAULT_POP_DURATION = 500;
+/** The size a pop grows from, and the size it overshoots to, when its entry does not say. */
+export const DEFAULT_POP_FROM = 0.6;
+export const DEFAULT_POP_PEAK = 1.06;
+
+/** The sizes a pop moves through: from `from`, up to `peak`, settling at 1. */
+export function popScales(entry: TimelineEntry): { from: number; peak: number } {
+  return {
+    from: entry.action.popFrom ?? DEFAULT_POP_FROM,
+    peak: entry.action.popPeak ?? DEFAULT_POP_PEAK,
+  };
+}
 
 /**
  * The animated forms an `appear` or a `disappear` can take. `dissolve` fades
  * any element in or out; `blur` fades it in out of a blur (or out into one);
- * `draw` draws a line or arrow in from its start.
+ * `draw` draws a line or arrow in from its start; `pop` (appear only) grows the
+ * element in from smaller, overshoots a little and settles.
  */
-export type BuildEffect = 'draw' | 'dissolve' | 'blur';
+export type BuildEffect = 'draw' | 'dissolve' | 'blur' | 'pop';
 
 /** The effect an entry animates with, or null for an instant change. */
 export function buildEffect(entry: TimelineEntry, slide: Slide): BuildEffect | null {
@@ -52,6 +66,7 @@ export function buildEffect(entry: TimelineEntry, slide: Slide): BuildEffect | n
   if ((value === 'dissolve' || value === 'blur') && (type === 'appear' || type === 'disappear')) {
     return value;
   }
+  if (value === 'pop' && type === 'appear') return 'pop';
   if (isDrawBuild(entry, slide)) return 'draw';
   return null;
 }
@@ -60,7 +75,8 @@ export function buildEffect(entry: TimelineEntry, slide: Slide): BuildEffect | n
 export function effectDuration(entry: TimelineEntry, effect: BuildEffect): number {
   return entry.action.duration
     ?? (effect === 'draw' ? DEFAULT_DRAW_DURATION
-      : effect === 'blur' ? DEFAULT_BLUR_DURATION : DEFAULT_DISSOLVE_DURATION);
+      : effect === 'blur' ? DEFAULT_BLUR_DURATION
+      : effect === 'pop' ? DEFAULT_POP_DURATION : DEFAULT_DISSOLVE_DURATION);
 }
 
 /**

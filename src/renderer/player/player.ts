@@ -8,6 +8,7 @@ import {
   effectDuration,
   groupIntoSteps,
   nextCursor,
+  popScales,
   prevCursor,
   resolveState,
   stepCount,
@@ -1235,6 +1236,7 @@ export class Player {
     this.applyState(slide, state);
     if (effect === 'draw') this.drawIn(slide, entry, duration);
     else if (fade && entry.action.type === 'appear') this.dissolveIn(target, duration, fade === 'blur');
+    else if (effect === 'pop') this.popIn(target, duration, popScales(entry));
   }
 
   /**
@@ -1263,6 +1265,26 @@ export class Player {
     const animation = node.animate(
       this.fadeFrames(node, blurred, true),
       { duration, easing: 'ease-in-out', fill: 'none' },
+    );
+    this.effects.push(() => animation.finish());
+  }
+
+  /**
+   * Pop an element in: it fades in while growing from smaller, overshoots its
+   * size a little and settles. `scale` composes with the element's own
+   * transform (a rotation), so nothing about its resting look changes.
+   */
+  private popIn(id: string, duration: number, scales: { from: number; peak: number }): void {
+    const node = this.nodeFor(id);
+    if (!node?.animate || duration <= 0 || node.style.visibility === 'hidden') return;
+    const opacity = getComputedStyle(node).opacity || '1';
+    const animation = node.animate(
+      [
+        { opacity: '0', scale: String(scales.from), easing: 'cubic-bezier(.2,.8,.3,1)' },
+        { opacity, scale: String(scales.peak), offset: 0.6, easing: 'cubic-bezier(.4,0,.4,1)' },
+        { opacity, scale: '1' },
+      ],
+      { duration, fill: 'none' },
     );
     this.effects.push(() => animation.finish());
   }
