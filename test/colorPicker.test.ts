@@ -114,6 +114,41 @@ describe('color picker', () => {
     expect(onChange).toHaveBeenLastCalledWith('rgba(10, 20, 30, 0.42)');
   });
 
+  it('opens beside the side panel, level with its swatch, not over the rows under it', () => {
+    // jsdom has no layout: give the panel, the swatch and the popover boxes.
+    const boxes: Record<string, [number, number, number, number]> = {
+      side: [700, 0, 324, 768],
+      'color-picker-trigger': [960, 300, 46, 28],
+      'color-picker-popover': [0, 0, 276, 369],
+    };
+    const rect = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect')
+      .mockImplementation(function (this: HTMLElement) {
+        const key = this.id === 'side' ? 'side' : [...this.classList].find((name) => name in boxes);
+        const [x, y, width, height] = key ? boxes[key] : [0, 0, 0, 0];
+        return DOMRect.fromRect({ x, y, width, height });
+      });
+    try {
+      const side = document.createElement('aside');
+      side.id = 'side';
+      const field = colorField('Border color', '#1d7d45', vi.fn());
+      side.appendChild(field);
+      document.body.appendChild(side);
+      field.querySelector<HTMLButtonElement>('.color-picker-trigger')!.click();
+      const picker = document.querySelector<HTMLElement>('.color-picker-popover')!;
+      expect(picker.style.left).toBe(`${700 - 6 - 276}px`);
+      expect(picker.style.top).toBe('300px');
+      closePopover();
+
+      // No room beside a panel that fills the window: under the swatch again.
+      boxes.side = [0, 0, 1024, 768];
+      field.querySelector<HTMLButtonElement>('.color-picker-trigger')!.click();
+      const under = document.querySelector<HTMLElement>('.color-picker-popover')!;
+      expect(under.style.top).toBe(`${300 + 28 + 6}px`);
+    } finally {
+      rect.mockRestore();
+    }
+  });
+
   it('normalizes supported CSS color forms for previewing', () => {
     expect(colorForInput('#abc8')).toBe('#aabbcc');
     expect(parseCssColor('#abc8')?.a).toBeCloseTo(0.533, 2);
