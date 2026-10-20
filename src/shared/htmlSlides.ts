@@ -10,6 +10,7 @@ import {
   pageBuildKind,
 } from './equationBuildHtml.js';
 import { shapeSvg } from './shapeSvg.js';
+import { bakeEndpointFlips, canonicalOrientation, elementTransform, orientationFromMatrix, sameOrientation } from './flip.js';
 import { applyTableColumnWidths } from './paragraphs.js';
 import { normalizeHtmlLineHeights, normalizeStyleLineHeight } from './lineHeight.js';
 import { compareDataAttrs, compareFromDataset } from './compare.js';
@@ -47,8 +48,10 @@ export interface MeasuredNode {
   dataset: Record<string, string>;
   /** Border box relative to the slide's top-left, in canvas pixels. */
   rect: { x: number; y: number; w: number; h: number };
-  /** Clockwise degrees from the computed transform. */
+  /** Clockwise degrees from the computed transform: where its x axis points. */
   rotation: number;
+  /** The computed transform mirrors (its determinant is negative): a flip. */
+  mirrored?: boolean;
   opacity: number;
   /** The node's inline declarations, as authored. Filtered on the way to an element. */
   style: Record<string, string>;
@@ -727,8 +730,8 @@ function mergedWithConcurrentEdits(
 /** Whether an object on `slide` is still what the export recorded. */
 function matchesBase(slide: Slide, element: SlideElement, base: ElementBase): boolean {
   return elementFingerprint(element, buildSpec(slide, element.id)) === base.content
-    && (['x', 'y', 'w', 'h', 'rot'] as const).every((key, index) =>
-      Math.abs(element[key] - base.box[index]) <= GEOMETRY_TOLERANCE);
+    && baseBox(element).every((value, index) =>
+      Math.abs(value - base.box[index]) <= GEOMETRY_TOLERANCE);
 }
 
 /**
@@ -747,9 +750,13 @@ function matchesBase(slide: Slide, element: SlideElement, base: ElementBase): bo
  */
 function reconciledElements(previous: Slide, compiled: SlideElement[]): SlideElement[] {
   const before = new Map(previous.elements.map((element) => [element.id, element]));
-  const reconciled = compiled.map((element) => {
-    const old = before.get(element.id);
-    if (!old || old.type !== element.type) return element;
+  const reconciled = compiled.map((measured) => {
+    const old = before.get(measured.id);
+    if (!old || old.type !== measured.type) return measured;
+    // A page cannot tell a flip from the other flip turned half way round;
+    // when it draws the same, the deck's own spelling stands.
+    const element = sameOrientation(old, measured, GEOMETRY_TOLERANCE)
+      ? withOrientation(measured, old) : measured;
     if (sameElement(old, element)) return { ...structuredClone(old), z: element.z };
     const next: Record<string, unknown> = { ...element };
     for (const key of ['x', 'y', 'w', 'h', 'rot'] as const) {
@@ -778,6 +785,16 @@ function reconciledElements(previous: Slide, compiled: SlideElement[]): SlideEle
   return unchangedOrder
     ? reconciled.map((element) => ({ ...element, z: before.get(element.id)!.z }))
     : reconciled;
+}
+
+/** `element` turned and flipped exactly as `like` is. */
+function withOrientation(element: SlideElement, like: SlideElement): SlideElement {
+  const next = { ...element, rot: like.rot };
+  delete next.flipX;
+  delete next.flipY;
+  if (like.flipX !== undefined) next.flipX = like.flipX;
+  if (like.flipY !== undefined) next.flipY = like.flipY;
+  return next;
 }
 
 /** Less than a browser's 1/64 px layout unit, plus the compile's rounding to hundredths. */
@@ -907,7 +924,11 @@ function pageEffect(previous: TimelineEntry['action'], page: TimelineEntry['acti
 /** What an export recorded about one object: its content, and its box exactly. */
 export interface ElementBase {
   content: string;
-  /** x, y, w, h, rot — compared with the measuring slack, never hashed. */
+  /**
+   * x, y, w, h, rot — compared with the measuring slack, never hashed. The
+   * rotation is the one a page reads back (`canonicalOrientation`), since a
+   * flip can come back spelt as the other flip half a turn round.
+   */
   box: number[];
 }
 
@@ -932,7 +953,7 @@ const SLIDE_PROPS = ['name', 'background', 'layout', 'morphFromPrevious', 'morph
 export function slideBase(slide: Slide): SlideBase {
   const elements = new Map(slide.elements.map((element) => [element.id, {
     content: elementFingerprint(element, buildSpec(slide, element.id)),
-    box: [element.x, element.y, element.w, element.h, element.rot],
+    box: baseBox(element),
   }]));
   const props = propsFingerprint(slide);
   const ranked = [...slide.elements]
@@ -958,10 +979,16 @@ function propsFingerprint(slide: Slide): string {
  * as good as absent; and its appearance build, which the page states too.
  */
 function elementFingerprint(element: SlideElement, build: string): string {
-  const form: Record<string, unknown> = { ...element, build };
+  const { flipX, flipY } = canonicalOrientation(element);
+  const form: Record<string, unknown> = { ...element, flipX, flipY, build };
   for (const key of ['x', 'y', 'w', 'h', 'rot', 'z', 'comments', 'layoutMasterId', 'css', 'sandboxed']) delete form[key];
   for (const [key, value] of Object.entries(form)) if (value === false || value === null) delete form[key];
   return fingerprint(sortedJson(form)!);
+}
+
+/** The box an export records, with the rotation a page reads back. */
+function baseBox(element: SlideElement): number[] {
+  return [element.x, element.y, element.w, element.h, canonicalOrientation(element).rot];
 }
 
 /** An object's first appearance, as `data-build` states it. */
@@ -1301,6 +1328,17 @@ export function elementFromNode(
   id: string,
   z: number,
 ): SlideElement | null {
+  const element = elementFromMeasured(node, id, z);
+  // A line is drawn between its ends: a flip it was authored with moves them.
+  if (element) bakeEndpointFlips(element);
+  return element;
+}
+
+function elementFromMeasured(
+  node: MeasuredNode,
+  id: string,
+  z: number,
+): SlideElement | null {
   if (node.rect.w <= 0 || node.rect.h <= 0) return null;
   const contentStyle = contentStyleFrom(node.dataset.contentStyle);
 
@@ -1310,7 +1348,7 @@ export function elementFromNode(
     y: round(node.rect.y),
     w: round(node.rect.w),
     h: round(node.rect.h),
-    rot: round(node.rotation),
+    ...orientationFromMatrix(node.rotation, node.mirrored === true),
     z,
     opacity: node.opacity,
     class: node.classes,
@@ -1654,7 +1692,7 @@ export function slideToHtml(slide: Slide, canvas: { w: number; h: number }): str
 function elementToHtml(element: SlideElement, build?: TimelineEntry, base?: string, extraAttrs: string[] = []): string {
   const position = `position:absolute; left:${element.x}px; top:${element.y}px;`
     + ` width:${element.w}px; height:${element.h}px;`
-    + (element.rot ? ` transform:rotate(${element.rot}deg);` : '')
+    + (elementTransform(element) ? ` transform:${elementTransform(element)};` : '')
     + (element.opacity !== 1 ? ` opacity:${element.opacity};` : '');
   const inline = Object.entries(element.style)
     .filter(([property]) => !typedPropertyOwnsCss(element, property))

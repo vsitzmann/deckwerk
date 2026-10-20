@@ -93,6 +93,14 @@ const BaseElement = z.object({
   h: z.number().positive(),
   /** Clockwise degrees about the element's centre. */
   rot: z.number().default(0),
+  /**
+   * Mirrored left to right (`flipX`) or top to bottom (`flipY`) in the
+   * element's own frame, before `rot` turns it, so the box itself never moves.
+   * Absent means not flipped. Lines, arrows and braces ignore both: their
+   * flip is folded into their endpoints instead (see flip.ts).
+   */
+  flipX: z.boolean().optional(),
+  flipY: z.boolean().optional(),
   /** Paint order within the slide; ties break on array order. */
   z: z.number().int().default(0),
   opacity: z.number().min(0).max(1).default(1),

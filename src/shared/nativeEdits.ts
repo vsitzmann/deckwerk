@@ -70,6 +70,16 @@ const COMMON_ELEMENT_PROPERTIES: PropertyDoc[] = [
   { path: 'w', type: 'positive number', description: 'Element box width in canvas pixels.', example: 1640 },
   { path: 'h', type: 'positive number', description: 'Element box height in canvas pixels.', example: 120 },
   { path: 'rot', type: 'number', description: 'Clockwise rotation in degrees.', example: 0 },
+  {
+    path: 'flipX', type: 'boolean',
+    description: 'Mirrored left to right in the element\'s own frame, before rot; the box does not move. Ignored on lines, arrows and braces, which are mirrored by moving their endpoints.',
+    example: true, unset: 'Unset to show it unflipped.',
+  },
+  {
+    path: 'flipY', type: 'boolean',
+    description: 'Mirrored top to bottom in the element\'s own frame, before rot; the box does not move. Ignored on lines, arrows and braces.',
+    example: true, unset: 'Unset to show it unflipped.',
+  },
   { path: 'z', type: 'integer', description: 'Paint order; larger values are in front.', example: 10 },
   { path: 'opacity', type: 'number 0..1', description: 'Element opacity.', example: 1 },
   { path: 'class', type: 'string[]', description: 'Theme classes such as role-title or role-body.', example: ['role-title'] },
@@ -333,7 +343,7 @@ function allowedSlidePath(path: string): boolean {
 }
 
 function allowedElementPath(type: SlideElement['type'], path: string): boolean {
-  const common = new Set(['x', 'y', 'w', 'h', 'rot', 'z', 'opacity', 'class', 'morphId']);
+  const common = new Set(['x', 'y', 'w', 'h', 'rot', 'flipX', 'flipY', 'z', 'opacity', 'class', 'morphId']);
   if (common.has(path) || path.startsWith('style.')) return true;
   if (type === 'text' && path.startsWith('contentStyle.')) return true;
   const typePaths = new Set(ELEMENT_PROPERTIES[type].map((property) => property.path.replace(/\.<[^>]+>$/, '')));

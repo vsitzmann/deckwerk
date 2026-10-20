@@ -239,11 +239,38 @@ for (const kind of BACKENDS) describe.skipIf(!electronBinary)(`an agent working 
     // escaped, the line break and trailing space still there; the clip still
     // does not loop, unmute or autoplay; the region is not wrapped in its own
     // export box; the class's margin and object-position were not frozen in.
-    for (const id of ['details-math', 'details-framed', 'details-clip', 'details-curve', 'details-brace', 'details-arrow', 'details-region']) {
+    for (const id of ['details-math', 'details-framed', 'details-clip', 'details-curve', 'details-brace', 'details-mirrored', 'details-arrow', 'details-region']) {
       expect(element(after, id), id).toEqual(element(before, id));
     }
     expect(element(after, 'details-nudged')).toMatchObject({ x: 120, y: 420, w: 800, h: 80 });
     expect(after.morphFromPrevious).toBe(false);
+  });
+
+  it('lands a mirror the agent writes as a flip, and folds a mirrored line into its ends', async () => {
+    const workspace = await open(kind);
+    const before = await workspace.deck();
+    const page = (await exportPage(workspace, 'media,details'))
+      .replace('left:800px; top:120px; width:400px; height:300px;', '$& transform:rotate(30deg) scaleX(-1);')
+      .replace('left:120px; top:800px; width:600px; height:4px;', '$& transform:scaleX(-1);');
+    await workspace.write('mirror.html', page);
+    const result = landed(await apply(workspace, 'mirror.html'), workspace);
+    expect(result.changes.replaced.sort()).toEqual(['details', 'media']);
+    const deck = await workspace.deck();
+    const box = slideById(deck, 'media').elements.find((element) => element.id === 'media-box')!;
+    expect(box).toMatchObject({ x: 800, y: 120, w: 400, h: 300, rot: 30, flipX: true });
+    expect(box.flipY).toBeUndefined();
+    // A line has no flags: drawn the other way round, it runs the other way.
+    const line = slideById(deck, 'details').elements.find((element) => element.id === 'details-curve')!;
+    expect(line).toMatchObject({ x: 120, y: 800, w: 600, h: 4, rot: 180 });
+    expect(line.flipX).toBeUndefined();
+    // Saving the page again is no change: the flip reads back as it landed.
+    // (A hosted bridge answers a page it has already synced with that sync's
+    // reply, marked idempotent.)
+    const againResult = await apply(workspace, 'mirror.html');
+    const again = landed(againResult, workspace);
+    if (!againResult.json.idempotent) expect(again).toMatchObject({ applied: false, changes: { replaced: [] } });
+    expect(await workspace.deck()).toEqual(deck);
+    expect(slideById(deck, 'opening')).toEqual(slideById(before, 'opening'));
   });
 
   it('replaces only the slide the agent edited in a page that holds them all', async () => {

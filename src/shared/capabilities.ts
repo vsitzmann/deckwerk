@@ -348,6 +348,34 @@ export function capabilities(): Capability[] {
       ],
     },
     {
+      id: 'flip',
+      what: 'Any object mirrored left to right or top to bottom, as Keynote\'s Flip does it.',
+      when: 'A pointer or a photo that should face the other way, without redrawing or re-exporting it.',
+      notes: [
+        'flipX: true mirrors an object left to right and flipY: true top to bottom, in its own frame before rot turns it; the box (x, y, w, h) does not move. Absent means not flipped. Text stays live and editable, drawn mirrored.',
+        'In HTML a flip is part of the transform: transform: rotate(30deg) scaleX(-1). A page cannot tell flipY from flipX turned half way round, so a mirror written on a page comes back as whichever needs the smaller rotation.',
+        'Lines, arrows and braces carry no flags (any are ignored): reverse one with rot + 180 or by moving its ends. A mirror written on a page is folded into its endpoints, curve control point and brace depth.',
+        'Props → Geometry → Flip mirrors along the slide\'s own axes whatever the rotation: the flag toggles and rot becomes −rot.',
+      ],
+      elements: [
+        text('cap-flip-title', 'Flipped objects', TITLE, { class: ['role-title'] }),
+        {
+          id: 'cap-flip-plain', type: 'shape', x: 360, y: 360, w: 480, h: 300, rot: 0, z: 2,
+          opacity: 1, class: [], style: {}, shape: 'path', fill: '#2563eb', stroke: null,
+          strokeWidth: 0, radius: 0, arrowStart: false, arrowEnd: false,
+          path: 'M0,90 L300,90 L300,0 L480,150 L300,300 L300,210 L0,210 Z', pathSize: { w: 480, h: 300 },
+        },
+        {
+          id: 'cap-flip-mirrored', type: 'shape', x: 1080, y: 360, w: 480, h: 300, rot: 0, z: 2,
+          flipX: true,
+          opacity: 1, class: [], style: {}, shape: 'path', fill: '#ec6b14', stroke: null,
+          strokeWidth: 0, radius: 0, arrowStart: false, arrowEnd: false,
+          path: 'M0,90 L300,90 L300,0 L480,150 L300,300 L300,210 L0,210 Z', pathSize: { w: 480, h: 300 },
+        },
+        text('cap-flip-caption', 'The same path; the right one has flipX: true.', CAPTION, { class: ['role-caption'] }),
+      ],
+    },
+    {
       id: 'builds',
       what: 'Timeline builds: reveal objects on click or after the previous step.',
       when: 'Walking an audience through a slide one point at a time.',

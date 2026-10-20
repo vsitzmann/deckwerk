@@ -2,6 +2,7 @@ import { curvedShadowClasses } from '@shared/shapeShadow.js';
 import { MIRRORED_TEXT_STYLE_PROPERTIES } from '@shared/deck.js';
 import type { Deck, MediaEffect, Slide, SlideElement } from '@shared/deck.js';
 import { fitScale } from '@shared/geometry.js';
+import { elementTransform } from '@shared/flip.js';
 import { fitAutoTextElement } from '@shared/autoFit.js';
 import { isPendingSrc, pendingName, pendingToken } from '@shared/media.js';
 import { gateVideoLoad } from './mediaLoadGate.js';
@@ -262,8 +263,8 @@ export function renderElement(
 }
 
 /**
- * Write the wrapper box -- geometry, opacity, rotation and the element's own
- * CSS -- onto a node.
+ * Write the wrapper box -- geometry, opacity, rotation, flips and the
+ * element's own CSS -- onto a node.
  *
  * Shared with the editor rather than private to `renderElement`, because the
  * editor patches existing nodes in place for non-structural changes instead of
@@ -297,7 +298,7 @@ export function applyElementBoxStyles(
   s.width = `${el.w}px`;
   s.height = `${el.h}px`;
   s.opacity = String(el.opacity);
-  s.transform = el.rot ? `rotate(${el.rot}deg)` : '';
+  s.transform = elementTransform(el);
   for (const [k, v] of Object.entries(el.style)) {
     if (typedPropertyOwnsCss(el, k)) {
       s.removeProperty(k);

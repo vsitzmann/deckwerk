@@ -884,6 +884,14 @@ export function measureSlides(doc: Document): MeasuredSlide[] {
     return Math.round(Math.atan2(b, a) * (180 / Math.PI) * 100) / 100;
   };
 
+  /** Whether the computed transform mirrors the node: a flip, horizontal or vertical. */
+  const mirroredOf = (node: HTMLElement): boolean => {
+    const values = computed(node).transform.match(/matrix\(([^)]+)\)/);
+    if (!values) return false;
+    const [a, b, c, d] = values[1].split(',').map(Number);
+    return a * d - b * c < 0;
+  };
+
   const typeOf = (node: HTMLElement): string => {
     const tag = node.tagName.toLowerCase();
     if (tag === 'img') return 'image';
@@ -911,6 +919,7 @@ export function measureSlides(doc: Document): MeasuredSlide[] {
     svg: HTMLElement,
     origin: DOMRect,
     rotation: number,
+    mirrored: boolean,
   ): MeasuredNode | null => {
     const tag = (node: Element): string => node.tagName.toLowerCase();
     if (!independent) return null;
@@ -948,6 +957,7 @@ export function measureSlides(doc: Document): MeasuredSlide[] {
       elementId: svg.dataset.elementId ?? null,
       classes: [],
       rotation,
+      ...(mirrored ? { mirrored } : {}),
       opacity: Number(computed(svg).opacity) || 1,
       style: {},
       html: '',
@@ -987,9 +997,10 @@ export function measureSlides(doc: Document): MeasuredSlide[] {
       const thickness = Math.max(1, strokeWidth * scale);
       const angle = Math.round(Math.atan2(to.y - from.y, to.x - from.x)
         * (180 / Math.PI) * 100) / 100;
+      // In a mirrored frame the line turns the other way.
       return {
         ...common,
-        rotation: Math.round((rotation + angle) * 100) / 100,
+        rotation: Math.round((mirrored ? rotation - angle : rotation + angle) * 100) / 100,
         dataset: dataset({
           shape: marker('marker-start') || marker('marker-end') ? 'arrow' : 'line',
           strokeWidth: String(Math.round(thickness * 100) / 100),
@@ -1075,12 +1086,13 @@ export function measureSlides(doc: Document): MeasuredSlide[] {
     origin: DOMRect,
     rotation: number,
     rawStyle: string | null,
+    mirrored: boolean,
   ): MeasuredNode => {
     const rect = node.getBoundingClientRect();
     const style = computed(node);
     const tag = node.tagName.toLowerCase();
     if (tag === 'svg') {
-      const shape = svgShape(node, origin, rotation);
+      const shape = svgShape(node, origin, rotation, mirrored);
       if (shape) return shape;
     }
     // Inline declarations only, never computed ones. A computed style is
@@ -1268,6 +1280,7 @@ export function measureSlides(doc: Document): MeasuredSlide[] {
       dataset: { ...node.dataset } as Record<string, string>,
       rect: box,
       rotation,
+      ...(mirrored ? { mirrored } : {}),
       // Verbatim markup still carries its authored CSS inside the isolated
       // shadow root. Reapplying presentation or opacity to the slide-element
       // wrapper doubles filters, borders and alpha (a .24 SVG became .0576).
@@ -1560,12 +1573,14 @@ export function measureSlides(doc: Document): MeasuredSlide[] {
     // Force layout with the new classes applied before anything is measured.
     void doc.body.offsetHeight;
 
-    // Rotation is recorded, then taken off before measuring: a bounding rect
-    // is axis-aligned, so a 543x1 rule at 90 degrees would otherwise measure
-    // 1x543 and come back as a different shape. The deck stores the
-    // *untransformed* box and rotates about its centre at render time, which
-    // is exactly what the page reports with the transform removed.
+    // Rotation (and whether the transform mirrors, a flip) is recorded, then
+    // taken off before measuring: a bounding rect is axis-aligned, so a 543x1
+    // rule at 90 degrees would otherwise measure 1x543 and come back as a
+    // different shape. The deck stores the *untransformed* box and rotates
+    // about its centre at render time, which is exactly what the page
+    // reports with the transform removed.
     const angles = objects.map(angleOf);
+    const mirrors = objects.map(mirroredOf);
     // Snapshot the style attributes first: assigning through node.style
     // re-serialises the whole attribute, which would rewrite every authored
     // #000000 as rgb(0, 0, 0) before we ever read it.
@@ -1574,7 +1589,7 @@ export function measureSlides(doc: Document): MeasuredSlide[] {
     void doc.body.offsetHeight;
 
     const origin = root.getBoundingClientRect();
-    const nodes = objects.map((node, index) => measure(node, origin, angles[index], rawStyles[index]));
+    const nodes = objects.map((node, index) => measure(node, origin, angles[index], rawStyles[index], mirrors[index]));
     // Put the attribute back exactly as authored — not through the CSSOM, which
     // would leave an empty `style=""` behind and re-serialise every colour — so
     // measuring the same document again reads what the first pass read.

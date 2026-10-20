@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { SlideElement } from '../src/shared/deck.js';
+import { elementTransform } from '../src/shared/flip.js';
 import {
   morphTransforms,
   type Rect,
@@ -69,6 +70,10 @@ function parseTransform(transform: string): { linear: Matrix; move: Point } {
       linear = multiply(linear, [args[0], 0, 0, 1]);
       continue;
     }
+    if (name === 'scaleY') {
+      linear = multiply(linear, [1, 0, 0, args[0]]);
+      continue;
+    }
     throw new Error(`unsupported transform function: ${name}`);
   }
   return { linear, move };
@@ -103,11 +108,11 @@ function box(element: SlideElement): Rect {
 
 /**
  * Where a rect of an element is really painted: the element's own transform
- * (an authored one, or the rotation the renderer writes for `rot`) applied
+ * (an authored one, or the rotation and flips the renderer writes) applied
  * about the element's centre.
  */
 function painted(element: SlideElement, rect: Rect): Point[] {
-  const transform = element.style.transform ?? (element.rot ? `rotate(${element.rot}deg)` : 'none');
+  const transform = element.style.transform ?? (elementTransform(element) || 'none');
   return corners(rect).map((point) => applyTransform(transform, center(element), point));
 }
 
@@ -184,6 +189,19 @@ describe('Morph start state', () => {
     );
   });
 
+  it('starts a flipped object drawn as it was and settles on the target\'s own flips', () => {
+    const from = shape({ x: 100, y: 80, w: 400, h: 200, rot: 30, flipY: true });
+    const to = shape({ x: 900, y: 600, w: 200, h: 100, flipX: true });
+
+    expectSameShape(atStart(from, to, box(to)), painted(from, box(from)));
+    const { final } = morphTransforms(from, to);
+    expect(final).toBe('scaleX(-1)');
+    expectSameShape(
+      corners(box(to)).map((point) => applyTransform(final, center(to), point)),
+      painted(to, box(to)),
+    );
+  });
+
   it('keeps a hairline rule where it was instead of scaling it into orbit', () => {
     // A vertical rule's box width is whatever the geometry rounded to. Dividing
     // by it gives a scale in the thousands (or, at zero, an Infinity the
@@ -232,6 +250,18 @@ describe('Morph start state', () => {
       const to = text({ x: 120, y: 700, w: 1680, h: 160, align: 'left' });
       const sourceInk: Rect = { x: 660, y: 118, w: 600, h: 74 };
       const targetInk: Rect = { x: 120, y: 718, w: 600, h: 74 };
+      const layout: TextLayout = { sourceInk, targetInk, fontScale: 1, squeeze: 1 };
+
+      expectSameShape(atStart(from, to, targetInk, layout), painted(from, sourceInk));
+    });
+
+    it('lands on the glyphs of a flipped, turned title', () => {
+      // The ink sits off-centre in its box, so the anchor fold has to mirror
+      // it the way the flip drew it, or the text starts on the wrong side.
+      const from = text({ x: 100, y: 100, w: 1200, h: 160, rot: 20, flipX: true });
+      const to = text({ x: 300, y: 600, w: 900, h: 160 });
+      const sourceInk: Rect = { x: 100, y: 118, w: 600, h: 74 };
+      const targetInk: Rect = { x: 300, y: 618, w: 600, h: 74 };
       const layout: TextLayout = { sourceInk, targetInk, fontScale: 1, squeeze: 1 };
 
       expectSameShape(atStart(from, to, targetInk, layout), painted(from, sourceInk));

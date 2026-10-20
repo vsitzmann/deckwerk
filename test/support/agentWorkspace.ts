@@ -211,6 +211,9 @@ export function agentFixtureDeck(): Deck {
           { id: 'details-curve', type: 'shape', shape: 'line', x: 120, y: 800, w: 600, h: 4, control: null, stroke: '#333333' },
           // A rotated brace pointing to its own −y: its depth rides on a data attribute.
           { id: 'details-brace', type: 'shape', shape: 'brace', x: 1200, y: 990, w: 500, h: 2, rot: 30, braceDepth: -50, stroke: '#333333' },
+          // Flipped and turned: a page reads this back as flipY at −60°, the
+          // same drawing, so it must come back spelt as the deck spells it.
+          { id: 'details-mirrored', type: 'shape', shape: 'path', x: 1450, y: 760, w: 300, h: 160, rot: 120, flipX: true, fill: '#cc5533', path: 'M0,0 L300,80 L0,160 Z', pathSize: { w: 300, h: 160 } },
           // A thick arrow with a head smaller than its width would give it.
           { id: 'details-arrow', type: 'shape', shape: 'arrow', x: 120, y: 1000, w: 500, h: 2, strokeWidth: 10, arrowEnd: true, arrowSize: 36, stroke: '#333333' },
           {

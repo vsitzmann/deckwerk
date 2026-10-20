@@ -37,12 +37,12 @@ pulse it, and pair two equations with `data-morph` to move them glyph by glyph),
 in `theme.css`; file-local `<style>` rules do not remain as the deck stylesheet.
 
 Import images/video with `slide-agent asset import` and use the exact returned
-path. For builds, Morph, crops, masks, media frames, trim, shapes, and slide
-backgrounds, request only the matching named recipe:
+path. For builds, Morph, crops, masks, media frames, trim, shapes, flips, and
+slide backgrounds, request only the matching named recipe:
 
     slide-agent capabilities builds morph morph-target
     slide-agent capabilities equation-builds equation-morph equation-morph-target
-    slide-agent capabilities image crop mask media-frame video shapes
+    slide-agent capabilities image crop mask media-frame video shapes flip
     slide-agent capabilities video-compare
     slide-agent capabilities text-roles lists auto-fit latex background background-image
     slide-agent capabilities comments web-element html-element
