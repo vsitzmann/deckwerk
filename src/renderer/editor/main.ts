@@ -52,6 +52,7 @@ import { SlideRail } from './slideRail.js';
 import { installWindowApiPosterProvider } from '../player/previewPosterProvider.js';
 import { EditorStore } from './store.js';
 import { statusBarText } from './statusBar.js';
+import { BuildPreview } from './buildPreview.js';
 import { TimelinePanel } from './timelinePanel.js';
 import { WelcomeScreen } from './welcomeScreen.js';
 import { CollabBridge } from '../collab/collabBridge.js';
@@ -147,7 +148,7 @@ new SpeakerNotesDrawer(el('canvas'), store, {
   onStatus: setStatusMessage,
 });
 const inspector = new Inspector(el('inspector'), store);
-new TimelinePanel(el('timeline'), store);
+new TimelinePanel(el('timeline'), store, new BuildPreview(canvas, store));
 new HistoryPanel(el('history'), store);
 const rail = new SlideRail(el('rail'), store);
 rail.onStatus = setStatusMessage;

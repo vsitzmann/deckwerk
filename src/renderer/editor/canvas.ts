@@ -1030,6 +1030,8 @@ export class EditorCanvas {
    */
   private maskingId: string | null = null;
   private buildBadgesVisible = false;
+  /** The Build panel's preview, laid over the slide while it plays; see beginPlayback. */
+  private playback: { shield: HTMLElement; frame: HTMLElement } | null = null;
   /** The crop as it was when the current mask drag began. */
   private maskOrigin: { x: number; y: number; w: number; h: number } | null = null;
 
@@ -1799,6 +1801,7 @@ export class EditorCanvas {
     setStyle(this.stage, 'left', `${(r.width - deck.canvas.w * scale) / 2 + this.pan.x}px`);
     setStyle(this.stage, 'top', `${(r.height - deck.canvas.h * scale) / 2 + this.pan.y}px`);
     this.syncZoomInput();
+    this.placePlayback();
     this.onViewportChange?.();
   }
 
@@ -1816,6 +1819,59 @@ export class EditorCanvas {
     if (next === this.bottomInset) return;
     this.bottomInset = next;
     this.rescale();
+  }
+
+  /**
+   * Lay a surface over the slide, at the same place and size and the current
+   * zoom, for the Build panel's preview to play it on; the slide and its
+   * selection chrome are hidden underneath until `end`. The surface lives
+   * outside the canvas host, so none of the editor's canvas styling (empty
+   * placeholders shown, table chrome) reaches what plays: it looks the way
+   * presenting does. A shield over the canvas takes every press meanwhile and
+   * reports it to `onPress`, so a click ends the preview without selecting.
+   */
+  beginPlayback(onPress: () => void): { surface: HTMLElement; end: () => void } {
+    const shield = document.createElement('div');
+    shield.className = 'build-preview-shield';
+    const frame = document.createElement('div');
+    frame.className = 'build-preview-frame';
+    shield.appendChild(frame);
+    shield.addEventListener('pointerdown', (event) => {
+      event.preventDefault();
+      onPress();
+    });
+    shield.addEventListener('wheel', (event) => event.preventDefault(), { passive: false });
+    shield.addEventListener('contextmenu', (event) => event.preventDefault());
+    document.body.appendChild(shield);
+    const playback = { shield, frame };
+    this.playback = playback;
+    this.host.classList.add('build-previewing');
+    this.placePlayback();
+    return {
+      surface: frame,
+      end: () => {
+        shield.remove();
+        if (this.playback !== playback) return;
+        this.playback = null;
+        this.host.classList.remove('build-previewing');
+      },
+    };
+  }
+
+  /** Keep the preview over the slide through a resize, zoom or pan. */
+  private placePlayback(): void {
+    if (!this.playback) return;
+    const { shield, frame } = this.playback;
+    const host = this.host.getBoundingClientRect();
+    const { canvas } = this.store.get().deck;
+    shield.style.left = `${host.left}px`;
+    shield.style.top = `${host.top}px`;
+    shield.style.width = `${host.width}px`;
+    shield.style.height = `${host.height}px`;
+    frame.style.left = this.stage.style.left;
+    frame.style.top = this.stage.style.top;
+    frame.style.width = `${canvas.w * this.scale}px`;
+    frame.style.height = `${canvas.h * this.scale}px`;
   }
 
   /** The part of the host the slide is laid out in: the host, less any bottom inset. */
