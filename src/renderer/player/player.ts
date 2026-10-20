@@ -13,6 +13,9 @@ import {
   stepCount,
 } from '@shared/timeline.js';
 import { arrowHeadSize, shapeSvg } from '@shared/shapeSvg.js';
+import { followerCorrection, followerTarget, syncGroupsOf } from './videoSync.js';
+import { mountGroupScrubber } from './groupScrubber.js';
+import { mountWipeDrag } from './wipe.js';
 import {
   applyStageScale,
   fitAutoTextElement,
@@ -37,6 +40,7 @@ import {
 import { morphTransforms, type Rect, type TextLayout } from './morphTransform.js';
 import { isPendingSrc } from '@shared/media.js';
 import { WEB_BRIDGE_SOURCE, isWebBridgeAction, type WebBridgeEvent } from '@shared/webBridge.js';
+import { formatVideoRate, nextVideoRate, type VideoRateChange } from './videoRate.js';
 
 /**
  * The runtime that owns navigation and turns timeline entries into DOM and
@@ -132,6 +136,21 @@ export class Player {
   private mediaListeners: Array<() => void> = [];
   /** Videos already given a trim watcher, so listeners are not stacked. */
   private trimmed = new Set<string>();
+  /** Sync groups whose clock is already running on the current slide. */
+  private syncedGroups = new Set<string>();
+  /** Wipe dividers and group scrubbers are live for the current step. */
+  private compareMounted = false;
+  /** Sync groups the presenter paused from their scrubber, on slide `heldSlide`. */
+  private heldGroups = new Set<string>();
+  private heldSlide: string | null = null;
+  /**
+   * The presenter's playback speed for the videos on slide `rateSlide`
+   * (videoRate.ts). It belongs to the slide: leaving it returns to 1×.
+   */
+  private videoRate = 1;
+  private rateSlide: string | null = null;
+  private rateBadge: HTMLElement | null = null;
+  private rateBadgeTimer: ReturnType<typeof setTimeout> | null = null;
   /**
    * Videos the current build state says should be running, and the recovery
    * bookkeeping for keeping them that way. See `keepPlaying`.
@@ -281,6 +300,8 @@ export class Player {
 
   destroy(): void {
     this.clearPending();
+    if (this.rateBadgeTimer) clearTimeout(this.rateBadgeTimer);
+    this.rateBadge?.remove();
     this.offBlobReady?.();
     this.offBlobReady = null;
     this.videoBlobs?.setInUse(null);
@@ -1292,6 +1313,10 @@ export class Player {
   /** Reconcile the DOM and media playback with a computed slide state. */
   private applyState(slide: Slide, state: SlideState): void {
     applyStaticSlideState(this.stage, slide, state);
+    if (this.rateSlide !== slide.id) {
+      this.rateSlide = slide.id;
+      this.videoRate = 1;
+    }
     for (const el of slide.elements) {
       const node = this.stage.querySelector<HTMLElement>(
         `[data-element-id="${CSS.escape(el.id)}"]`,
@@ -1317,6 +1342,9 @@ export class Player {
         continue;
       }
 
+      // Pooled videos arrive with whatever speed their last slide left them at.
+      if (video.playbackRate !== this.videoRate) video.playbackRate = this.videoRate;
+
       if (state.playing.has(el.id) && state.visible.has(el.id) && !this.blanked) {
         this.keepPlaying(el.id, video);
       } else {
@@ -1324,6 +1352,123 @@ export class Player {
         this.playAttempts.delete(el.id);
         if (!video.paused) video.pause();
       }
+    }
+    this.syncVideoGroups(slide);
+    this.mountCompareControls(slide);
+  }
+
+  /**
+   * The presenter's hands on a comparison: a draggable wipe divider, and a
+   * scrubber with play/pause for each sync group and each lone video
+   * (wipe.ts, groupScrubber.ts).
+   *
+   * A group the presenter paused stays paused through the slide's later
+   * builds -- they would otherwise restart it -- until it is played again or
+   * the slide is left. Pausing withdraws the play intent `keepPlaying`
+   * records, or its recovery would start the clips again a moment later.
+   */
+  private mountCompareControls(slide: Slide): void {
+    if (this.heldSlide !== slide.id) {
+      this.heldGroups.clear();
+      this.heldSlide = slide.id;
+    }
+    const groups = syncGroupsOf(slide.elements);
+    // A video outside any group gets the same bar, as a group of one. One that
+    // shows its own controls already has a scrubber.
+    for (const el of slide.elements) {
+      if (el.type !== 'video' || el.controls || (el.syncGroup && groups.has(el.syncGroup))) continue;
+      groups.set(`solo:${el.id}`, [el]);
+    }
+    const videoOf = (id: string) => this.stage
+      .querySelector<HTMLElement>(`[data-element-id="${CSS.escape(id)}"]`)?.querySelector('video') ?? null;
+    const setPlaying = (members: Array<{ id: string }>, playing: boolean): void => {
+      for (const el of members) {
+        const video = videoOf(el.id);
+        if (!video || video.dataset.holdFrame === 'true') continue;
+        const node = video.closest<HTMLElement>('[data-element-id]');
+        if (playing && !this.blanked && node?.style.visibility !== 'hidden') {
+          this.keepPlaying(el.id, video);
+        } else if (!playing) {
+          this.intendedPlaying.delete(el.id);
+          this.playAttempts.delete(el.id);
+          if (!video.paused) video.pause();
+        }
+      }
+    };
+    for (const [group, members] of groups) {
+      if (this.heldGroups.has(group)) setPlaying(members, false);
+    }
+    if (this.compareMounted) return;
+    const root = this.stage.firstElementChild as HTMLElement | null;
+    if (!root) return;
+    this.compareMounted = true;
+    this.mediaListeners.push(mountWipeDrag(root));
+    for (const [group, members] of groups) {
+      const leaderVideo = videoOf(members[0].id);
+      if (!leaderVideo) continue;
+      this.mediaListeners.push(mountGroupScrubber(root, {
+        members,
+        leaderVideo,
+        setPlaying: (playing) => {
+          if (playing) this.heldGroups.delete(group);
+          else this.heldGroups.add(group);
+          setPlaying(members, playing);
+        },
+        getRate: () => this.videoRate,
+        setRate: (rate) => this.setVideoRate(rate, false),
+      }));
+    }
+  }
+
+  /**
+   * Run one clock per sync group on the slide.
+   *
+   * The leader plays as any video does; every frame, each follower is put
+   * where the leader's elapsed time says it should be. Followers keep their
+   * own play intent (a follower hidden by a build stays paused), but while
+   * they play they are kept in step: by bending the playback rate for small
+   * drift, so nothing visibly jumps, and by seeking after a loop or a stall.
+   */
+  private syncVideoGroups(slide: Slide): void {
+    for (const [group, members] of syncGroupsOf(slide.elements)) {
+      if (this.syncedGroups.has(group)) continue;
+      const videoOf = (id: string) => this.stage
+        .querySelector<HTMLElement>(`[data-element-id="${CSS.escape(id)}"]`)?.querySelector('video') ?? null;
+      const leaderVideo = videoOf(members[0].id);
+      if (!leaderVideo) continue;
+      this.syncedGroups.add(group);
+      const leader = members[0];
+      const followers = members.slice(1);
+      let frame = 0;
+      const tick = (): void => {
+        if (!leaderVideo.isConnected) return;
+        const playing = !leaderVideo.paused;
+        for (const el of followers) {
+          const video = videoOf(el.id);
+          if (!video || video.dataset.holdFrame === 'true') continue;
+          const target = followerTarget(
+            { time: leaderVideo.currentTime, start: leader.start },
+            { start: el.start, end: el.end, duration: video.duration },
+          );
+          const followerPlaying = playing && this.intendedPlaying.has(el.id);
+          const fix = followerCorrection(video.currentTime, target, followerPlaying);
+          if (fix.seek !== undefined) video.currentTime = fix.seek;
+          // The correction bends the presenter's speed, not normal speed.
+          const rate = fix.rate * this.videoRate;
+          if (video.playbackRate !== rate) video.playbackRate = rate;
+          if (!playing && !video.paused) video.pause();
+          if (followerPlaying && video.paused) void video.play().catch(() => {});
+        }
+        frame = requestAnimationFrame(tick);
+      };
+      frame = requestAnimationFrame(tick);
+      this.mediaListeners.push(() => {
+        cancelAnimationFrame(frame);
+        for (const el of followers) {
+          const video = videoOf(el.id);
+          if (video) video.playbackRate = this.videoRate;
+        }
+      });
     }
   }
 
@@ -1591,6 +1736,48 @@ export class Player {
     // The listeners those ids refer to have just been removed, so a fresh
     // watcher must be attached when the slide is drawn again.
     this.trimmed.clear();
+    this.syncedGroups.clear();
+    this.compareMounted = false;
+  }
+
+  /**
+   * Speed every video on the current slide up or down together (the `>` and
+   * `<` keys), and show the new speed for a moment. Returns the new rate.
+   */
+  changeVideoRate(change: VideoRateChange): number {
+    return this.setVideoRate(nextVideoRate(this.videoRate, change));
+  }
+
+  /** Set the current slide's video speed directly (the hover bar's slider). */
+  setVideoRate(rate: number, badge = true): number {
+    this.videoRate = rate;
+    this.rateSlide = this.deck.slides[this.cursor.slide]?.id ?? null;
+    // Sync-group followers pick the rate up on their next correction tick.
+    for (const video of this.stage.querySelectorAll('video')) video.playbackRate = this.videoRate;
+    if (badge) this.showRateBadge();
+    return this.videoRate;
+  }
+
+  getVideoRate(): number {
+    return this.videoRate;
+  }
+
+  private showRateBadge(): void {
+    if (typeof document === 'undefined') return;
+    if (!this.rateBadge) {
+      const badge = document.createElement('div');
+      badge.className = 'player-rate-badge';
+      badge.setAttribute('role', 'status');
+      this.rateBadge = badge;
+    }
+    if (!this.rateBadge.isConnected) {
+      if (getComputedStyle(this.container).position === 'static') this.container.style.position = 'relative';
+      this.container.appendChild(this.rateBadge);
+    }
+    this.rateBadge.textContent = formatVideoRate(this.videoRate);
+    this.rateBadge.classList.add('visible');
+    if (this.rateBadgeTimer) clearTimeout(this.rateBadgeTimer);
+    this.rateBadgeTimer = setTimeout(() => this.rateBadge?.classList.remove('visible'), 1200);
   }
 
   /** Blank the screen (the `B` key) without losing position. */

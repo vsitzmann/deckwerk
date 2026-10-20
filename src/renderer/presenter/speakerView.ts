@@ -6,6 +6,7 @@ import { freezePreviewVideos, releasePreviewVideos } from '../player/previewPost
 import { applyStageScale, renderSlide, rewriteCssAssetUrls } from '../player/render.js';
 import { applyStaticSlideState } from '../player/staticState.js';
 import { formatElapsed, formatWallClock, presentationLabel } from './model.js';
+import { videoRateChangeForKey } from '../player/videoRate.js';
 
 /**
  * Speaker View: current and next slide, speaker notes, build position, presentation and slide
@@ -227,6 +228,8 @@ export function bindSpeakerKeys(
       onCommand({ type: 'toggleBlank' });
     } else if (key === 'Escape') {
       onCommand({ type: 'exit' });
+    } else if (videoRateChangeForKey(key)) {
+      onCommand({ type: 'videoRate', change: videoRateChangeForKey(key)! });
     } else {
       return;
     }

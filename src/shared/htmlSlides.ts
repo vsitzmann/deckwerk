@@ -6,6 +6,7 @@ import { KATEX_AUTO_RENDER_JS, KATEX_CSS, KATEX_JS } from './katexInline.js';
 import { shapeSvg } from './shapeSvg.js';
 import { applyTableColumnWidths } from './paragraphs.js';
 import { normalizeHtmlLineHeights, normalizeStyleLineHeight } from './lineHeight.js';
+import { compareDataAttrs, compareFromDataset } from './compare.js';
 import { layoutMaster, placeNewPlaceholders, syncSlideWithLayoutMaster, type FixedLayout } from './layoutMasters.js';
 import {
   cssMediaBorder,
@@ -1286,7 +1287,11 @@ export function elementFromNode(
   // not authored element CSS and must not accumulate in the deck on every
   // HTML round trip.
   delete mediaBase.style.overflow;
-  const mediaDecoration = mediaDecorationFromNode(node, mediaBase.style);
+  const mediaDecoration = {
+    ...mediaDecorationFromNode(node, mediaBase.style),
+    // A before/after wipe's top layer (shared/compare.ts).
+    ...compareFromDataset(node.dataset),
+  };
 
   // A cropped picture is exported as a window with the media inside it, the
   // way the player renders one, so the wrapper — not the `<img>` — is the
@@ -1316,6 +1321,7 @@ export function elementFromNode(
       start,
       end,
       poster: node.dataset.poster ?? null,
+      ...(node.dataset.syncGroup ? { syncGroup: node.dataset.syncGroup } : {}),
     };
   }
 
@@ -1349,6 +1355,7 @@ export function elementFromNode(
       end,
       poster: node.attrs.poster ?? null,
       sourceBox: cropFrom(node.dataset.crop),
+      ...(node.dataset.syncGroup ? { syncGroup: node.dataset.syncGroup } : {}),
     };
   }
 
@@ -1682,7 +1689,8 @@ function elementToHtml(element: SlideElement, build?: TimelineEntry, base?: stri
     case 'video': {
       const flags = `${element.loop ? ' loop' : ''}${element.muted ? ' muted' : ''}`
         + `${element.autoplay ? ' autoplay' : ''}${element.controls ? ' controls' : ''}`;
-      const trim = ` data-trim="${element.start},${element.end ?? ''}"`;
+      const trim = ` data-trim="${element.start},${element.end ?? ''}"`
+        + (element.syncGroup ? ` data-sync-group="${escape(element.syncGroup)}"` : '');
       if (element.sourceBox) {
         return `  <div ${attrs} data-element="video"`
           + ` data-src="${escape(element.src)}" data-fit="${element.fit}"${trim}`
@@ -1849,7 +1857,7 @@ function mediaDataAttrs(element: Extract<SlideElement, { type: 'image' | 'video'
   const mask = element.maskShape !== undefined
     ? ` data-mask-shape="${element.maskShape}"`
     : '';
-  return border + radius + mask;
+  return border + radius + mask + compareDataAttrs(element);
 }
 
 function effectsDataAttrs(

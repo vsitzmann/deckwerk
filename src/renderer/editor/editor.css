@@ -1749,6 +1749,12 @@ input[type="range"] { accent-color: var(--accent); padding: 0; background: trans
 .z-order-row button { min-width: 0; padding: 4px 2px; font-size: 10px; }
 
 .video-playback-options > .panel-action { margin: 0 0 7px; }
+/* Play in sync: under the flag strip, and its status line when the video is grouped. */
+.video-playback-options > .field-check { margin: 8px 0 0; }
+.video-playback-options > .insp-hint { margin: 8px 0 6px; }
+/* Wipe: the divider slider, then its one action. */
+.media-compare-options > .field-opacity { margin-bottom: 0; }
+.media-compare-options > .panel-action { margin: 8px 0 0; }
 .video-checkbox-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));

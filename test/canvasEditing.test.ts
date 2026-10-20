@@ -2826,18 +2826,21 @@ describe('same-kind multi-selection properties', () => {
     expect(optionSections.map((section) => section.querySelector('h4')?.textContent))
       .toEqual([
         'Playback',
+        'Compare',
         'Mask',
         'Border',
         'Effects',
       ]);
     expect(optionSections[0].querySelectorAll('.video-checkbox-grid > .field-check')).toHaveLength(4);
+    // Exactly two clips selected can be stacked as a before/after wipe.
+    expect(optionSections[1].textContent).toContain('Arrange as wipe');
     // Keep-aspect-ratio clips like the mask does, so it lives in that section.
-    expect(optionSections[1].textContent).toContain('Keep aspect ratio');
-    expect(optionSections[1].textContent).toContain('Corner radius');
-    expect(optionSections[1].textContent).toContain('Circular mask');
-    expect(optionSections[2].textContent).toContain('Color');
-    expect(optionSections[2].textContent).toContain('Width');
-    expect(optionSections[2].textContent).not.toContain('Corner radius');
+    expect(optionSections[2].textContent).toContain('Keep aspect ratio');
+    expect(optionSections[2].textContent).toContain('Corner radius');
+    expect(optionSections[2].textContent).toContain('Circular mask');
+    expect(optionSections[3].textContent).toContain('Color');
+    expect(optionSections[3].textContent).toContain('Width');
+    expect(optionSections[3].textContent).not.toContain('Corner radius');
     const autoplay = [...videoGroup.querySelectorAll<HTMLLabelElement>('label')]
       .find((label) => label.querySelector('span')?.textContent === 'Autoplay')!
       .querySelector<HTMLInputElement>('input')!;

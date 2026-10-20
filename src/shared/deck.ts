@@ -231,6 +231,12 @@ const ImageElement = BaseElement.extend({
   borderWidth: z.number().min(0).optional(),
   borderRadius: z.number().min(0).optional(),
   /**
+   * The upper layer of a before/after wipe, exactly as on a video: a still
+   * over a still, or a still over a clip. See `compare` on VideoElement.
+   */
+  compare: z.enum(['wipe']).optional(),
+  wipe: z.number().min(0).max(1).optional(),
+  /**
    * A crop, expressed as where the *whole* image sits relative to this
    * element's box. The element box is the visible window; anything outside it
    * is clipped.
@@ -264,6 +270,25 @@ const VideoElement = BaseElement.extend({
   start: z.number().min(0).default(0),
   end: z.number().min(0).nullable().default(null),
   poster: z.string().nullable().default(null),
+  /**
+   * Videos on a slide that share a sync group play from one clock while
+   * presenting: the first of them (in z order) leads and the rest follow its
+   * time, measured from each one's own in-point, so a real clip and its
+   * simulation stay frame-matched however long the talk dwells on them.
+   */
+  syncGroup: z.string().min(1).optional(),
+  /**
+   * A before/after wipe. On the upper of two pictures stacked in one box,
+   * `compare: 'wipe'` shows this one only left of a vertical divider and
+   * whatever lies beneath it (usually its sync partner, or a still) right of
+   * it. `wipe` is where the divider sits, as a fraction of the box's width
+   * (default 0.5); the presenter can drag it while presenting, which moves the
+   * divider on screen without editing the deck. Set on the top layer only, so
+   * there is one position and nothing to disagree about; the helpers that
+   * read, write and arrange it live in src/shared/compare.ts.
+   */
+  compare: z.enum(['wipe']).optional(),
+  wipe: z.number().min(0).max(1).optional(),
   /**
    * Crop, expressed exactly as on an image: where the *whole* video sits
    * relative to this element's box, which acts as the visible window.
