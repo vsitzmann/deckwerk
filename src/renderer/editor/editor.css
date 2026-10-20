@@ -1954,6 +1954,10 @@ input[type="range"] { accent-color: var(--accent); padding: 0; background: trans
   --danger: #f7768e;      /* pastel red */
   --radius: 0;
   --mono: "Monaspace Krypton", monospace;
+  /* Slide rail thumbnails: a light hairline and a soft drop, so a black
+     slide still has an edge against the dark rail. */
+  --rail-thumb-hairline: rgb(255 255 255 / 22%);
+  --rail-thumb-lift: 0 1px 3px rgb(0 0 0 / 60%);
 }
 
 html, body {
@@ -2026,12 +2030,21 @@ button.primary:hover:not(:disabled) { background: rgb(122 162 247 / 22%); }
 .rail-item.active .rail-num { color: var(--accent); }
 
 .rail-thumb {
-  --rail-thumb-stroke: var(--line);
+  --rail-thumb-stroke: var(--rail-thumb-hairline);
   border: 0;
-  /* Keep the stroke out of the thumbnail's layout box. The rendered slide
-     fills this box exactly, so a real border offsets it toward the top-left
-     and clips the opposite edges instead of framing it symmetrically. */
+  box-shadow: var(--rail-thumb-lift);
+}
+/* Keep the stroke out of the thumbnail's layout box. The rendered slide
+   fills this box exactly, so a real border offsets it toward the top-left
+   and clips the opposite edges instead of framing it symmetrically. The
+   slide also paints over the box's own inset shadow, so the stroke lives on
+   an overlay drawn above it. */
+.rail-thumb::after {
+  content: "";
+  position: absolute;
+  inset: 0;
   box-shadow: inset 0 0 0 1px var(--rail-thumb-stroke);
+  pointer-events: none;
 }
 .rail-item.selected .rail-thumb { --rail-thumb-stroke: rgb(122 162 247 / 65%); }
 .rail-item.active .rail-thumb { --rail-thumb-stroke: var(--accent); }
@@ -3895,7 +3908,7 @@ select.panel-action-select {
 .comment-slide-mark[data-count]::after { transform: translate(-30%, 30%) scale(var(--inv, 1)); transform-origin: top right; }
 
 .rail-item.has-comments .rail-thumb {
-  box-shadow: inset 0 0 0 1px var(--rail-thumb-stroke, var(--line)), 0 0 0 2px var(--comment);
+  box-shadow: 0 0 0 2px var(--comment), var(--rail-thumb-lift);
 }
 .rail-comment-count {
   position: absolute;
