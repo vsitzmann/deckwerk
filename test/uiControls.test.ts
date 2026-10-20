@@ -91,7 +91,7 @@ describe('shared editor controls', () => {
       expect(source).toContain("createToolbarPicker('Import…'");
       expect(source).toContain("label: 'Keynote…'");
       expect(source).toContain("barIconButton('Text'");
-      expect(source).toContain('createShapeInsertPicker(store)');
+      expect(source).toContain('createShapeInsertPicker(store, { drawPath: () => canvas.startPen() })');
       expect(source).not.toContain("menuButton('File'");
       expect(source).not.toContain("menuButton('Insert'");
     }

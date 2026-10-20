@@ -238,7 +238,7 @@ export class DesignWorkspace {
     tools.className = 'layout-editor-tools';
     tools.append(
       barButton('Text', () => masterCanvas.beginTextEdit(insertText(masterStore).id)),
-      createShapeInsertPicker(masterStore),
+      createShapeInsertPicker(masterStore, { drawPath: () => masterCanvas.startPen() }),
       barButton('Duplicate', () => duplicateUnlocked(masterStore)),
       barButton('Delete', () => deleteUnlocked(masterStore)),
     );

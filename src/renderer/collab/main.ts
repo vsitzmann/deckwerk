@@ -990,7 +990,7 @@ function buildToolbar(): void {
   mid.append(
     // Straight into the new box, its placeholder selected: typing replaces it.
     barIconButton('Text', TEXT_ICON, () => canvas.beginTextEdit(insertText(store).id)),
-    createShapeInsertPicker(store),
+    createShapeInsertPicker(store, { drawPath: () => canvas.startPen() }),
     createTableInsertPicker(store),
     createMediaButton(mediaHost),
   );

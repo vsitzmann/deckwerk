@@ -937,6 +937,64 @@ body.panel-resizing iframe { pointer-events: none; }
   transform: translate(-50%, -50%) rotate(45deg) !important;
 }
 
+/* The pen and point editing: the outline being drawn or edited, the segment
+   the next click would add, and the points and their handles — square points,
+   round handles, as in every vector editor. Canvas coordinates, counter-scaled
+   by --inv like the rest of the selection chrome. */
+.canvas-host.pen-tool,
+.canvas-host.pen-tool .stage * { cursor: crosshair !important; }
+
+.path-overlay {
+  position: absolute;
+  left: 0;
+  top: 0;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.path-overlay path {
+  fill: none;
+  stroke: var(--accent);
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.path-overlay-outline { stroke-width: calc(1.5px * var(--inv)); }
+.path-overlay-stalks { stroke-width: calc(1px * var(--inv)); }
+.path-overlay-preview {
+  stroke-width: calc(1px * var(--inv));
+  stroke-dasharray: calc(4px * var(--inv)) calc(3px * var(--inv));
+}
+
+.path-anchor,
+.path-knob {
+  position: absolute;
+  box-sizing: border-box;
+  width: calc(9px * var(--inv));
+  height: calc(9px * var(--inv));
+  transform: translate(-50%, -50%);
+  border: calc(1.5px * var(--inv)) solid var(--accent);
+  background: #fff;
+  pointer-events: auto;
+  cursor: move;
+}
+
+.path-anchor { border-radius: calc(1.5px * var(--inv)); z-index: 1; }
+.path-anchor.selected { background: var(--accent); }
+/* The first point, under a pen that would close the shape there. */
+.path-anchor.closing {
+  box-shadow: 0 0 0 calc(3px * var(--inv)) color-mix(in srgb, var(--accent) 35%, transparent);
+}
+
+.path-knob {
+  width: calc(7px * var(--inv));
+  height: calc(7px * var(--inv));
+  border-radius: 50%;
+}
+
+/* A path whose points are being edited shows them, not its box. */
+.sel-box.path-editing { outline: none; }
+
 .guide {
   position: absolute;
   background: #ff2d55;

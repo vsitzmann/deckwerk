@@ -2,6 +2,7 @@ import type { ShapeEl, TextEl } from '@shared/deck.js';
 import { makeId } from '@shared/geometry.js';
 import { DEFAULT_BRACE_DEPTH } from '@shared/brace.js';
 import { presetPath, type PolygonPreset } from '@shared/polygonShape.js';
+import { pathGeometry, type SubPath } from '@shared/pathNodes.js';
 import { applyTableColumnWidths } from '@shared/paragraphs.js';
 import { newObjectColors } from '@shared/themes.js';
 import type { EditorStore } from './store.js';
@@ -103,6 +104,25 @@ export function insertPolygon(store: EditorStore, preset: PolygonPreset): ShapeE
   return created;
 }
 
+/**
+ * Insert what the pen drew, `run` given in canvas coordinates, and select it.
+ * A closed shape is filled like any new shape; an open one is a stroked line
+ * in the theme's ink, like a new line.
+ */
+export function insertPath(store: EditorStore, slideIndex: number, run: SubPath): ShapeEl {
+  const { deck } = store.get();
+  const { fill, stroke } = newObjectColors(deck);
+  const created: ShapeEl = {
+    type: 'shape', id: makeId('shape'), ...pathGeometry([run]),
+    rot: 0, z: nextZ(store), opacity: 1, class: [], style: {},
+    shape: 'path', fill: run.closed ? fill : null, stroke: run.closed ? null : stroke,
+    strokeWidth: run.closed ? 2 : 4, radius: 0, arrowStart: false, arrowEnd: false,
+  };
+  store.commit((d) => d.slides[slideIndex].elements.push(created), { label: 'Draw path' });
+  store.select([created.id]);
+  return created;
+}
+
 /** Insert a native line, arrow or curly brace and select it. */
 export function insertLine(
   store: EditorStore,
@@ -128,7 +148,7 @@ export function insertLine(
   return created;
 }
 
-type ShapeKind = 'rect' | 'ellipse' | PolygonPreset | 'line' | 'arrow' | 'curved-arrow' | 'brace';
+type ShapeKind = 'rect' | 'ellipse' | PolygonPreset | 'line' | 'arrow' | 'curved-arrow' | 'brace' | 'pen';
 
 function shapeIcon(paths: string): string {
   return (
@@ -157,10 +177,19 @@ const SHAPE_OPTIONS: Array<{ kind: ShapeKind; label: string; icon: string }> = [
     icon: shapeIcon('<path d="M2.5 13.5C3 7 7 3 13.5 2.7M8.6 2.5l5-.2.2 5"/>') },
   { kind: 'brace', label: 'Curly brace',
     icon: shapeIcon('<path d="M1.5 5a2 2 0 0 0 2 2h2.5a2 2 0 0 1 2 2 2 2 0 0 1 2-2h2.5a2 2 0 0 0 2-2"/>') },
+  { kind: 'pen', label: 'Draw with Pen',
+    icon: shapeIcon('<path d="M8 14.5 3.8 8.6 6 2.5h4l2.2 6.1z"/><path d="M8 14.5V9.6"/><circle cx="8" cy="8.6" r="1"/>') },
 ];
 
-/** Shape menu: a custom dropdown so each option carries an icon. */
-export function createShapeInsertPicker(store: EditorStore): HTMLElement {
+/**
+ * Shape menu: a custom dropdown so each option carries an icon. `drawPath`
+ * starts the pen on the canvas this menu inserts into; without it the menu
+ * offers only ready-made shapes.
+ */
+export function createShapeInsertPicker(
+  store: EditorStore,
+  options: { drawPath?: () => void } = {},
+): HTMLElement {
   const wrap = document.createElement('span');
   wrap.className = 'shape-menu-wrap';
 
@@ -201,6 +230,7 @@ export function createShapeInsertPicker(store: EditorStore): HTMLElement {
     menu.className = 'shape-menu';
     menu.setAttribute('role', 'menu');
     for (const { kind, label, icon } of SHAPE_OPTIONS) {
+      if (kind === 'pen' && !options.drawPath) continue;
       const item = document.createElement('button');
       item.type = 'button';
       item.className = 'shape-menu-item';
@@ -212,7 +242,8 @@ export function createShapeInsertPicker(store: EditorStore): HTMLElement {
         // shortcuts; the newly created object is the active context.
         item.blur();
         trigger.blur();
-        if (kind === 'curved-arrow') insertLine(store, 'arrow', true);
+        if (kind === 'pen') options.drawPath?.();
+        else if (kind === 'curved-arrow') insertLine(store, 'arrow', true);
         else if (kind === 'line' || kind === 'arrow' || kind === 'brace') insertLine(store, kind);
         else if (kind === 'rect' || kind === 'ellipse') insertShape(store, kind);
         else insertPolygon(store, kind);
