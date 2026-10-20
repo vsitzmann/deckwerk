@@ -3699,10 +3699,11 @@ export class EditorCanvas {
     const undo = (ev.metaKey || ev.ctrlKey) && !ev.shiftKey && ev.key.toLowerCase() === 'z';
     if (ev.key === 'Enter' || ev.key === 'Escape') {
       this.finishPen(false);
-    } else if (ev.key === 'Backspace' || ev.key === 'Delete' || undo) {
+    } else if ((ev.key === 'Backspace' || ev.key === 'Delete' || undo) && this.pen.nodes.length > 0) {
       this.pen.removeLast();
       this.redrawOverlay();
     } else {
+      // With nothing drawn yet, undo is the deck's again.
       return;
     }
     ev.preventDefault();

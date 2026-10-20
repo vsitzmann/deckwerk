@@ -178,6 +178,25 @@ describe('drawing with the pen', () => {
     expect(canvas.pathEditingElement()).toBeNull();
   });
 
+  it('takes back points with Cmd+Z, and undoes the deck once none are left', () => {
+    const { store, canvas, host, shape } = setup([pathShape()]);
+    store.select(['path-1']);
+    store.updateSelected((el) => { el.x = 500; }, { label: 'Move' });
+    canvas.startPen();
+    click(host, 100, 100);
+    click(host, 300, 300);
+    key('z', { metaKey: true });
+    expect(host.querySelectorAll('.path-anchor')).toHaveLength(1);
+    key('z', { metaKey: true });
+    expect(host.querySelectorAll('.path-anchor')).toHaveLength(0);
+    expect(shape().x).toBe(500);
+    // The shell's own undo, which this suite does not wire, gets the next one.
+    const passed = new KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true, cancelable: true });
+    document.body.dispatchEvent(passed);
+    expect(passed.defaultPrevented).toBe(false);
+    expect(canvas.isDrawingPath()).toBe(true);
+  });
+
   it('takes back points with Backspace, and draws nothing from a single point', () => {
     const { store, canvas, host } = setup();
     canvas.startPen();
