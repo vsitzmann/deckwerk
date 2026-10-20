@@ -34,8 +34,21 @@ import {
 import { ARRANGE_LABELS, arrangeSelection } from './arrange.js';
 import { COLOR_LIVE_END, COLOR_LIVE_START, colorField, colorForInput } from './colorPicker.js';
 import { setCircularMask } from '@shared/mediaMask.js';
-import { DEFAULT_WIPE, wipeLayers, type CompareMedia } from '@shared/compare.js';
-import { arrangeWipe, clearWipe, setWipe } from './compareEdits.js';
+import {
+  DEFAULT_WIPE,
+  syncLengthOf,
+  wipeLayers,
+  wipeOfPair,
+  type CompareMedia,
+  type SyncLength,
+} from '@shared/compare.js';
+import {
+  SYNC_LENGTH_CHOICES,
+  arrangeWipe,
+  clearWipe,
+  setSyncLength,
+  setWipe,
+} from './compareEdits.js';
 import {
   hasTextBox,
   setTextBoxBorder,
@@ -1698,13 +1711,22 @@ export class Inspector {
         const group = `sync-${media[0].id}`;
         this.store.updateSelected((element) => {
           if (element.type !== 'video') return;
-          if (on) element.syncGroup = group;
-          else delete element.syncGroup;
+          if (on) {
+            element.syncGroup = group;
+          } else {
+            delete element.syncGroup;
+            delete element.syncLength;
+          }
         });
       });
       sync.title = 'While presenting, these videos play, pause and loop together, '
         + 'each measured from its own in-point';
       playback.content.appendChild(sync);
+      // A wipe offers the same choice in its own section, below.
+      const elements = this.store.slide?.elements ?? [];
+      if (shared && groups[0] && !wipeOfPair(elements, media.map((element) => element.id))) {
+        playback.content.appendChild(this.syncLengthField(groups[0]));
+      }
       wrap.appendChild(playback.section);
     }
     if (media.length === 2) wrap.appendChild(this.wipeArrangeSection(media));
@@ -1786,11 +1808,8 @@ export class Inspector {
    * already are one, the wipe's own controls.
    */
   private wipeArrangeSection(media: CompareMedia[]): HTMLElement {
-    const layers = wipeLayers(this.store.slide?.elements ?? [], media[0]);
-    const ids = media.map((element) => element.id).sort().join(',');
-    if (layers?.under && [layers.top.id, layers.under.id].sort().join(',') === ids) {
-      return this.wipeSection(layers.top);
-    }
+    const layers = wipeOfPair(this.store.slide?.elements ?? [], media.map((element) => element.id));
+    if (layers) return this.wipeSection(layers.top);
     const section = optionSection('Compare', 'media-compare-options', 'before / after');
     const arrange = button('Arrange as wipe', () => {
       arrangeWipe(this.store, [media[0].id, media[1].id]);
@@ -1808,6 +1827,24 @@ export class Inspector {
     return layers ? this.wipeSection(layers.top) : null;
   }
 
+  /**
+   * How long sync group `group` runs when its clips differ in length:
+   * Shortest / Hold last / Black (shared/compare.ts `SyncLength`).
+   */
+  private syncLengthField(group: string): HTMLElement {
+    const members = this.store.slide?.elements.filter((element) =>
+      element.type === 'video' && element.syncGroup === group) ?? [];
+    const field = segmentedSelectField(
+      'Length',
+      [...SYNC_LENGTH_CHOICES],
+      syncLengthOf(members),
+      (value) => setSyncLength(this.store, group, value as SyncLength),
+    );
+    field.classList.add('sync-length-field');
+    field.title = 'When the clips differ in length';
+    return field;
+  }
+
   private wipeSection(top: CompareMedia): HTMLElement {
     const section = optionSection('Wipe', 'media-compare-options', 'before / after');
     section.content.appendChild(opacityField(
@@ -1823,6 +1860,11 @@ export class Inspector {
       },
       'Divider',
     ));
+    // Two clips: how long the pair runs when one is shorter.
+    const under = wipeLayers(this.store.slide?.elements ?? [], top)?.under;
+    if (top.type === 'video' && top.syncGroup && under?.type === 'video' && under.syncGroup === top.syncGroup) {
+      section.content.appendChild(this.syncLengthField(top.syncGroup));
+    }
     const off = button('Turn off wipe', () => clearWipe(this.store, top.id), 'panel-action');
     off.title = 'Show both layers whole again; they stay stacked in place';
     section.content.appendChild(off);
@@ -1874,9 +1916,15 @@ export class Inspector {
             ? `Plays in sync with ${partners} other video${partners === 1 ? '' : 's'}`
             : 'In a sync group with no other video on this slide';
           const unsync = button('Unsync', () => this.store.updateSelected((e) => {
-            if (e.type === 'video') delete e.syncGroup;
+            if (e.type !== 'video') return;
+            delete e.syncGroup;
+            delete e.syncLength;
           }), 'panel-action');
           playback.content.append(note, unsync);
+          // A layer of a wipe has the choice in the Wipe section instead.
+          if (partners > 0 && !wipeLayers(this.store.slide?.elements ?? [], el)?.under) {
+            playback.content.appendChild(this.syncLengthField(el.syncGroup));
+          }
         }
         wrap.appendChild(playback.section);
         const videoWipe = this.wipeControls(el);

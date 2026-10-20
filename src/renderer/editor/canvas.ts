@@ -93,6 +93,7 @@ type ContextMenuEntry =
   | 'separator';
 import { isWebBridgeAction } from '@shared/webBridge.js';
 import { reportSelectionViolations } from './selectionInvariants.js';
+import { COMPARE_CHIP_CLASS, compareChip } from './compareChip.js';
 import { KeptSelectionHighlight, TEXT_EDIT_PANEL_CHROME } from './keptSelection.js';
 import {
   HANDLES,
@@ -824,6 +825,8 @@ export class EditorCanvas {
   private stage: HTMLElement;
   private slideLayer: HTMLElement;
   private overlay: HTMLElement;
+  /** The comparison chip last drawn in the overlay (compareChip.ts). */
+  private compareChipNode: HTMLElement | null = null;
   private zoomInput: HTMLInputElement;
   private tableHeightSyncPending = false;
   /** Content-size passes run since the last frame; see scheduleTableHeightSync. */
@@ -2445,6 +2448,21 @@ export class EditorCanvas {
       frag.appendChild(box);
     }
 
+    // Two pictures selected: the way into a before/after wipe, or the length
+    // of the one they already are; out of the way while anything is dragged
+    // or edited. The same chip stays in the overlay, never detached, while it
+    // would draw the same: a pointer-up redraws the overlay, and a button
+    // taken out of the document between its press and release gets no click.
+    const chip = this.drag.kind === 'none' && !this.editingId && !this.maskingId
+      ? compareChip(this.store, elements, selection, deck.canvas, this.scale)
+      : null;
+    const drawn = this.compareChipNode;
+    const keptChip = chip && drawn?.parentNode === this.overlay && drawn.dataset.key === chip.dataset.key
+      ? drawn
+      : null;
+    this.compareChipNode = keptChip ?? chip;
+    if (chip && !keptChip) frag.appendChild(chip);
+
     for (const g of this.guides) {
       const line = document.createElement('div');
       line.className = `guide guide-${g.axis}`;
@@ -2508,7 +2526,12 @@ export class EditorCanvas {
       frag.appendChild(m);
     }
 
-    this.overlay.replaceChildren(frag);
+    if (keptChip) {
+      for (const child of [...this.overlay.childNodes]) if (child !== keptChip) child.remove();
+      this.overlay.insertBefore(frag, keptChip);
+    } else {
+      this.overlay.replaceChildren(frag);
+    }
 
     // In development, verify that everything the editor believes about
     // selection agrees with everything it just drew. The reporter settles
@@ -2623,7 +2646,7 @@ export class EditorCanvas {
     // are ordinary application controls. Capturing their pointer on the canvas
     // changes the pointer-up target and prevents Chromium from synthesising a
     // click, which made all three welcome actions appear inert.
-    if (target.closest('.welcome-screen, .zoom-controls, .notes-toggle, .notes-drawer, .canvas-ruler')) return;
+    if (target.closest(`.welcome-screen, .zoom-controls, .notes-toggle, .notes-drawer, .canvas-ruler, .${COMPARE_CHIP_CLASS}`)) return;
     const slide = this.store.slide;
     if (!slide) return;
     // A press that reaches the canvas was not on a live page (the frame keeps
@@ -3516,6 +3539,9 @@ export class EditorCanvas {
    * play a video, crop a picture (and double-click again to leave the crop).
    */
   private onDoubleClick(ev: PointerEvent | MouseEvent): void {
+    // Two quick presses on the comparison chip are two choices, not a way
+    // into whatever lies under it.
+    if ((ev.target as HTMLElement).closest(`.${COMPARE_CHIP_CLASS}`)) return;
     // Once editing is active, native browser double-click selection owns this
     // gesture. Calling beginTextEdit again would select the entire text box and
     // replace the word selection the browser just made. Under heavy renderer
