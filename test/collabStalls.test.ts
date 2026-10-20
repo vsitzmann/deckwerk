@@ -27,8 +27,14 @@ import { startCollabServerProcess, type CollabServerProcess } from './support/co
  * STALL_TEST_DECK=<deck folder> runs the same load against a copy of a real
  * deck (its assets too; the copy goes beside STALL_TEST_WORK, default the
  * system temp folder). The original is only read.
+ *
+ * "Notice" is 50 ms, the longest a task can hold the loop before a response
+ * to input stops feeling immediate (RAIL). The work the test drives costs
+ * under 10 ms on a desktop and 30–35 ms on a shared CI runner, so a tighter
+ * budget measured the runner; the stalls this guards against were 60 and
+ * 120 ms. STALL_BUDGET_MS tightens it for a run on a known machine.
  */
-const STALL_BUDGET_MS = Number(process.env.STALL_BUDGET_MS ?? 30);
+const STALL_BUDGET_MS = Number(process.env.STALL_BUDGET_MS ?? 50);
 const SECONDS = Number(process.env.STALL_TEST_SECONDS ?? 15);
 const DECK_ID = 'big';
 const REAL_DECK = process.env.STALL_TEST_DECK;
