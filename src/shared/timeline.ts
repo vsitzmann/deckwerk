@@ -55,7 +55,7 @@ export const DEFAULT_BLUR_DURATION = 1000;
  * any element in or out; `blur` fades it in out of a blur (or out into one);
  * `draw` draws a line or arrow in from its start.
  */
-export type BuildEffect = 'draw' | 'dissolve' | 'blur' | 'terms' | EmphasisType;
+export type BuildEffect = 'draw' | 'dissolve' | 'blur' | 'terms' | 'emphasis';
 
 /** The effect an entry animates with, or null for an instant change. */
 export function buildEffect(entry: TimelineEntry, slide: Slide): BuildEffect | null {
@@ -63,7 +63,8 @@ export function buildEffect(entry: TimelineEntry, slide: Slide): BuildEffect | n
   // A term fades in (or changes colour) and an emphasis swells or wobbles and
   // settles; both take time, so an "after previous" build waits them out like
   // any other.
-  if (type === 'terms' || isEmphasisType(type)) return type;
+  if (type === 'terms') return type;
+  if (isEmphasisType(type)) return 'emphasis';
   if ((value === 'dissolve' || value === 'blur') && (type === 'appear' || type === 'disappear')) {
     return value;
   }
@@ -74,7 +75,8 @@ export function buildEffect(entry: TimelineEntry, slide: Slide): BuildEffect | n
 /** Milliseconds an animated build takes. */
 export function effectDuration(entry: TimelineEntry, effect: BuildEffect): number {
   return entry.action.duration
-    ?? (effect === 'terms' ? DEFAULT_TERM_DURATION : isEmphasisType(effect) ? defaultEmphasisDuration(effect)
+    ?? (effect === 'terms' ? DEFAULT_TERM_DURATION
+      : effect === 'emphasis' ? defaultEmphasisDuration(entry.action.type as EmphasisType)
       : effect === 'draw' ? DEFAULT_DRAW_DURATION
       : effect === 'blur' ? DEFAULT_BLUR_DURATION : DEFAULT_DISSOLVE_DURATION);
 }

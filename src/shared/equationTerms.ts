@@ -95,9 +95,9 @@ export const DEFAULT_PULSE_SCALE = 1.6;
 /** How long a jiggle wobbles when its entry does not say. */
 export const DEFAULT_JIGGLE_DURATION = 700;
 /** How long a pop takes, swell and snap back, when its entry does not say. */
-export const DEFAULT_POP_DURATION = 450;
+export const DEFAULT_POP_ACTION_DURATION = 450;
 /** How far a pop swells its target at the peak: less than a pulse, and quicker. */
-export const DEFAULT_POP_SCALE = 1.3;
+export const DEFAULT_POP_ACTION_SCALE = 1.3;
 /** The highlight a `color` term build paints when its entry names none. */
 export const DEFAULT_TERM_COLOR = '#d9480f';
 
@@ -130,12 +130,12 @@ export function isEmphasisType(type: string): type is EmphasisType {
 
 /** How long an emphasis takes when its entry does not say. */
 export function defaultEmphasisDuration(type: EmphasisType): number {
-  return type === 'jiggle' ? DEFAULT_JIGGLE_DURATION : type === 'pop' ? DEFAULT_POP_DURATION : DEFAULT_PULSE_DURATION;
+  return type === 'jiggle' ? DEFAULT_JIGGLE_DURATION : type === 'pop' ? DEFAULT_POP_ACTION_DURATION : DEFAULT_PULSE_DURATION;
 }
 
 /** How far a pulse or a pop swells at the peak when its entry does not say; a jiggle does not. */
 export function defaultEmphasisScale(type: EmphasisType): number {
-  return type === 'pop' ? DEFAULT_POP_SCALE : type === 'pulse' ? DEFAULT_PULSE_SCALE : 1;
+  return type === 'pop' ? DEFAULT_POP_ACTION_SCALE : type === 'pulse' ? DEFAULT_PULSE_SCALE : 1;
 }
 
 /** The text element a term build targets, if it is one. */

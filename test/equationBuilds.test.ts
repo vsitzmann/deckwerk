@@ -158,8 +158,8 @@ describe('term builds on the timeline', () => {
     ]);
     expect(stepCount(slide)).toBe(2);
     const [unit] = expandTimeline(slide);
-    expect(buildEffect(unit, slide)).toBe('pulse');
-    expect(effectDuration(unit, 'pulse')).toBe(800);
+    expect(buildEffect(unit, slide)).toBe('emphasis');
+    expect(effectDuration(unit, 'emphasis')).toBe(800);
     const before = resolveState(slide, 0);
     const after = resolveState(slide, 1);
     expect([...after.visible]).toEqual([...before.visible]);
@@ -173,11 +173,11 @@ describe('term builds on the timeline', () => {
     ]);
     expect(stepCount(slide)).toBe(3);
     const [jiggle, pop] = expandTimeline(slide);
-    expect(buildEffect(jiggle, slide)).toBe('jiggle');
-    expect(effectDuration(jiggle, 'jiggle')).toBe(700);
-    expect(buildEffect(pop, slide)).toBe('pop');
-    expect(effectDuration(pop, 'pop')).toBe(450);
-    expect(effectDuration({ ...pop, action: { ...pop.action, duration: 200 } }, 'pop')).toBe(200);
+    expect(buildEffect(jiggle, slide)).toBe('emphasis');
+    expect(effectDuration(jiggle, 'emphasis')).toBe(700);
+    expect(buildEffect(pop, slide)).toBe('emphasis');
+    expect(effectDuration(pop, 'emphasis')).toBe(450);
+    expect(effectDuration({ ...pop, action: { ...pop.action, duration: 200 } }, 'emphasis')).toBe(200);
     // Jumping over either is a no-op: every step resolves to the opening state.
     const before = resolveState(slide, 0);
     for (const step of [1, 2]) {
