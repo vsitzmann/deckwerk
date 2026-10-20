@@ -74,6 +74,10 @@ function fixtureDeck(): Deck {
     slide('builds', [
       text('terms', String.raw`$$a \step{1}{+ b} \step{2}{+ c^2}$$`),
       text('box', 'Pulse me', { x: 700, y: 750, w: 520, h: 140, style: { 'font-size': '64px' } }),
+      // A short line at the top-left of a big, tilted box: only the words show.
+      text('note', 'Note', { x: 200, y: 40, w: 1400, h: 220, rot: 12, align: 'left', valign: 'top', style: { 'font-size': '48px' } }),
+      // The same, filled: now the box is what shows.
+      text('card', 'Card', { x: 1300, y: 640, w: 500, h: 300, align: 'left', valign: 'top', style: { 'font-size': '48px', background: '#e5e7eb' } }),
     ], [
       { id: 't', trigger: click, action: { type: 'terms', target: 'terms', value: 'appear' } },
       { id: 'p', trigger: click, action: { type: 'pulse', target: 'terms', value: null, term: '2', scale: 1.6, duration: 800 } },
@@ -81,6 +85,9 @@ function fixtureDeck(): Deck {
       { id: 'j', trigger: click, action: { type: 'jiggle', target: 'terms', value: null, term: '2', duration: 700 } },
       { id: 'k', trigger: click, action: { type: 'jiggle', target: 'box', value: null, duration: 700 } },
       { id: 'o', trigger: click, action: { type: 'pop', target: 'box', value: null, scale: 1.3, duration: 450 } },
+      { id: 'n', trigger: click, action: { type: 'jiggle', target: 'note', value: null, duration: 700 } },
+      { id: 'm', trigger: click, action: { type: 'pop', target: 'note', value: null, scale: 1.3, duration: 700 } },
+      { id: 'c', trigger: click, action: { type: 'jiggle', target: 'card', value: null, duration: 700 } },
     ]),
   ];
   return deck;
@@ -325,5 +332,57 @@ describe.skipIf(!electronBinary)('equation motion in the browser', () => {
     expect(pop.under / pop.before).toBeCloseTo(0.91, 2);
     expect(pop.after).toBe(pop.before);
     expect(pop.transform).toBe('none');
+
+    // --- A text box bigger than its text turns and swells about the middle
+    // of its words, not of its box, even when the box is itself tilted.
+    const middleOfWords = `(() => { const r = document.createRange();
+      r.selectNodeContents(document.querySelector('[data-element-id="note"] .text-content'));
+      const b = r.getBoundingClientRect(); return { x: b.left + b.width / 2, y: b.top + b.height / 2 }; })()`;
+    for (const kind of ['jiggle', 'pop']) {
+      const note = await page.evaluate<{ before: { x: number; y: number }; during: Array<{ x: number; y: number }>; boxMoved: number; after: { x: number; y: number }; turn: number }>(`(() => {
+        const node = document.querySelector('[data-element-id="note"]');
+        const boxCentre = () => { const b = node.getBoundingClientRect(); return { x: b.left + b.width / 2, y: b.top + b.height / 2 }; };
+        const before = ${middleOfWords};
+        const box = boxCentre();
+        window.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+        const animations = document.getAnimations();
+        const during = [];
+        let boxMoved = 0;
+        for (let t = 50; t < 700; t += 50) {
+          for (const a of animations) { a.pause(); a.currentTime = t; }
+          during.push(${middleOfWords});
+          const b = boxCentre();
+          boxMoved = Math.max(boxMoved, Math.hypot(b.x - box.x, b.y - box.y));
+        }
+        for (const a of animations) a.finish();
+        const m = new DOMMatrix(getComputedStyle(node).transform);
+        return { before, during, boxMoved, after: ${middleOfWords}, turn: Math.atan2(m.b, m.a) * 180 / Math.PI };
+      })()`);
+      for (const point of note.during) {
+        expect(Math.hypot(point.x - note.before.x, point.y - note.before.y), kind).toBeLessThan(0.5);
+      }
+      // The box swings around the words, which is how it looks centred.
+      expect(note.boxMoved, kind).toBeGreaterThan(5);
+      expect(note.after).toEqual(note.before);
+      expect(note.turn, kind).toBeCloseTo(12, 3);
+    }
+
+    // A filled text box shows its edges, so it turns about its box.
+    const card = await page.evaluate<number>(`(() => {
+      const node = document.querySelector('[data-element-id="card"]');
+      const centre = () => { const b = node.getBoundingClientRect(); return { x: b.left + b.width / 2, y: b.top + b.height / 2 }; };
+      const before = centre();
+      window.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      const animations = document.getAnimations();
+      let moved = 0;
+      for (let t = 50; t < 700; t += 50) {
+        for (const a of animations) { a.pause(); a.currentTime = t; }
+        const c = centre();
+        moved = Math.max(moved, Math.hypot(c.x - before.x, c.y - before.y));
+      }
+      for (const a of animations) a.finish();
+      return moved;
+    })()`);
+    expect(card).toBeLessThan(0.5);
   }, 240_000);
 });

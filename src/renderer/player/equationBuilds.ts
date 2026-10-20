@@ -87,7 +87,8 @@ export function prepareEquationEffect(
     // A jiggle never grows, and a swell to 1× is no swell at all.
     if (type !== 'jiggle' && scale === 1) return () => () => {};
     const lift = type === 'pulse' && entry.action.value === 'lift';
-    return () => emphasize(node, entry.action.term, frames, duration, lift);
+    const text = slide.elements.find((element) => element.id === target)?.type === 'text';
+    return () => emphasize(node, entry.action.term, frames, duration, { lift, text });
   }
 
   const labels = termBuildLabels(entry, slide);
@@ -162,27 +163,66 @@ const NO_SHADOW = 'drop-shadow(0px 0px 0px rgba(0, 0, 0, 0))';
 const LIFT_Z = 100000;
 
 /**
- * Briefly move an object, or one marked term of its equation, about its own
- * centre: swell it, turn it. Transforms only — nothing is laid out
- * differently at any point, so when it ends the slide is exactly as it was. A
- * whole-object pulse with `lift` also casts a drop shadow at its peak and
- * paints over its neighbours while it is up, as if picked up off the slide
- * and put back; objects lifted together keep their own stacking order.
+ * Where the eye puts an object's centre, as an offset from its box's centre
+ * in its own (unrotated) frame. A text box is often bigger than its text — a
+ * left-aligned title in a full-width box, one short line at the top of a tall
+ * box — and only the text shows, so it moves about the middle of its text. A
+ * text box that paints its box (a fill, a border, a shadow) shows its edges,
+ * and a shape or a picture fills its box, so those move about the box.
+ */
+function visualCentre(node: HTMLElement, text: boolean): { x: number; y: number } {
+  const none = { x: 0, y: 0 };
+  if (!text || paintsBox(node)) return none;
+  const content = node.querySelector<HTMLElement>('.text-content');
+  const unit = slideScale(node);
+  if (!content || !(unit > 0)) return none;
+  const range = node.ownerDocument.createRange();
+  range.selectNodeContents(content);
+  const [ink] = localRects(node, [range], unit);
+  if (!ink || !(ink.w > 0) || !(ink.h > 0)) return none;
+  return { x: px(ink.x + ink.w / 2 - node.offsetWidth / 2), y: px(ink.y + ink.h / 2 - node.offsetHeight / 2) };
+}
+
+/** Whether an object paints anything at its box's edges. */
+function paintsBox(node: HTMLElement): boolean {
+  const style = getComputedStyle(node);
+  const alpha = /rgba?\([^)]*,\s*([\d.]+)\)/.exec(style.backgroundColor)?.[1];
+  const filled = style.backgroundColor !== 'transparent' && style.backgroundColor !== '' && alpha !== '0';
+  const bordered = ['Top', 'Right', 'Bottom', 'Left'].some((side) =>
+    Number.parseFloat(style.getPropertyValue(`border-${side.toLowerCase()}-width`)) > 0
+    && style.getPropertyValue(`border-${side.toLowerCase()}-style`) !== 'none');
+  return filled || bordered || (style.backgroundImage !== '' && style.backgroundImage !== 'none')
+    || (style.boxShadow !== '' && style.boxShadow !== 'none');
+}
+
+/**
+ * Briefly move an object, or one marked term of its equation, about the
+ * centre of what shows: swell it, turn it. Transforms only — nothing is laid
+ * out differently at any point, so when it ends the slide is exactly as it
+ * was. A whole-object pulse with `lift` also casts a drop shadow at its peak
+ * and paints over its neighbours while it is up, as if picked up off the
+ * slide and put back; objects lifted together keep their own stacking order.
+ *
+ * The object's own transform (a rotation, about its box's centre) stays
+ * first and its origin stays the box's centre, so the motion happens in its
+ * frame and the fill-none end is its settled render; the motion itself is
+ * moved to the centre that shows by translating there and back around it.
  */
 function emphasize(
   node: HTMLElement,
   term: string | undefined,
   keyframes: EmphasisFrames,
   duration: number,
-  lift = false,
+  { lift = false, text = false }: { lift?: boolean; text?: boolean } = {},
 ): () => void {
   if (duration <= 0) return () => {};
   const base = node.style.transform && node.style.transform !== 'none' ? `${node.style.transform} ` : '';
+  const about = (o: { x: number; y: number }) => (local: string): string =>
+    `${base}translate(${o.x}px, ${o.y}px) ${local} translate(${-o.x}px, ${-o.y}px)`;
 
   if (term === undefined) {
-    // The object's own transform (a rotation) stays first, so the motion
-    // happens in its frame and the fill-none end is its settled render.
-    const frames: Keyframe[] = keyframes((local) => `${base}${local}`).map((frame) => ({ ...frame, transformOrigin: 'center' }));
+    const frames: Keyframe[] = keyframes(about(visualCentre(node, text)))
+      .map((frame) => ({ ...frame, transformOrigin: 'center' }));
     if (lift) {
       const z = (Number.parseInt(getComputedStyle(node).zIndex, 10) || 0) + LIFT_Z;
       frames.forEach((frame, index) => {
@@ -204,16 +244,13 @@ function emphasize(
   spans.forEach((span, index) => {
     const rect = rects[index];
     // The term's centre relative to the object's centre, in the object's own
-    // (unrotated) frame: translate there, scale or turn, translate back, all
-    // after the object's own transform.
-    const ox = px(rect.x + rect.w / 2 - width / 2);
-    const oy = px(rect.y + rect.h / 2 - height / 2);
+    // (unrotated) frame.
+    const centre = { x: px(rect.x + rect.w / 2 - width / 2), y: px(rect.y + rect.h / 2 - height / 2) };
     const clone = isolatedClone(node, [nodePath(node, span)]);
     // Last in the slide, so the moving term paints over its neighbours.
     node.parentElement?.appendChild(clone);
     const move = clone.animate(
-      keyframes((local) => `${base}translate(${ox}px, ${oy}px) ${local} translate(${-ox}px, ${-oy}px)`)
-        .map((frame) => ({ ...frame, transformOrigin: 'center' })),
+      keyframes(about(centre)).map((frame) => ({ ...frame, transformOrigin: 'center' })),
       { duration, fill: 'forwards' },
     );
     // The term itself steps aside while its copy moves over it.

@@ -79,11 +79,12 @@ export function isolatedClone(template: HTMLElement, paths: number[][]): HTMLEle
 }
 
 /**
- * Rectangles of `nodes` in `element`'s own frame (canvas pixels from its
- * border box's top-left), measured with any transform on the element set
- * aside: a rotated object would otherwise report a rotated bounding box.
+ * Rectangles of `nodes` (or of what a range spans) in `element`'s own frame
+ * (canvas pixels from its border box's top-left), measured with any
+ * transform on the element set aside: a rotated object would otherwise
+ * report a rotated bounding box.
  */
-export function localRects(element: HTMLElement, nodes: Node[], scale: number): LocalRect[] {
+export function localRects(element: HTMLElement, nodes: Array<Node | Range>, scale: number): LocalRect[] {
   const saved = element.style.transform;
   if (saved) element.style.transform = 'none';
   const box = element.getBoundingClientRect();
@@ -100,8 +101,8 @@ export function localRects(element: HTMLElement, nodes: Node[], scale: number): 
   return rects;
 }
 
-function rectOf(node: Node): DOMRect {
-  if (node instanceof Element) return node.getBoundingClientRect();
+function rectOf(node: Node | Range): DOMRect {
+  if (node instanceof Element || node instanceof Range) return node.getBoundingClientRect();
   const range = node.ownerDocument!.createRange();
   range.selectNodeContents(node);
   const rect = range.getBoundingClientRect();
