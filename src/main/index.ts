@@ -3,7 +3,7 @@ import { writeFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { userInfo } from 'node:os';
 import { basename, dirname, extname, join, resolve, sep } from 'node:path';
-import { BrowserWindow, app, clipboard, ipcMain, screen, shell } from 'electron';
+import { BrowserWindow, Menu, app, clipboard, ipcMain, screen, shell } from 'electron';
 import type { Display, IpcMainInvokeEvent, WebContents } from 'electron';
 import { parseDeck, type Deck } from '@shared/deck.js';
 import type { DeckHistoryDocument } from '@shared/deckHistory.js';
@@ -69,6 +69,7 @@ import { exportDeck } from './exportDeck.js';
 import { writeExportThumbnail } from './exportThumbnail.js';
 import { probeMedia, runTrim } from './ffmpeg.js';
 import { attachRendererHealth } from './windowHealth.js';
+import { macAppMenuTemplate } from './appMenu.js';
 import { POSTER_HOST, posterFor } from './posterCache.js';
 import { showOpenDialog, showSaveDialog } from './dialogs.js';
 import { importKeynote } from './keynoteImport.js';
@@ -594,6 +595,12 @@ app.whenReady().then(async () => {
   if (process.platform === 'darwin' && !app.isPackaged) {
     const developmentIcon = join(process.cwd(), 'resources', 'deckwerk-icon.png');
     if (existsSync(developmentIcon)) app.dock.setIcon(developmentIcon);
+  }
+
+  if (process.platform === 'darwin') {
+    Menu.setApplicationMenu(Menu.buildFromTemplate(macAppMenuTemplate(app.name, () => {
+      BrowserWindow.getFocusedWindow()?.webContents.send(IPC.settingsOpen);
+    })));
   }
 
   installAssetProtocol();

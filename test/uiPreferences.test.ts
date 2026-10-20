@@ -1,6 +1,7 @@
 import { JSDOM } from 'jsdom';
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { createDeckWerkButton } from '../src/renderer/editor/aboutDialog.js';
+import { installSettingsShortcut, settingsShortcut } from '../src/renderer/editor/settingsDialog.js';
 import { closePopover } from '../src/renderer/editor/ui.js';
 import {
   applyUiPreferences,
@@ -20,7 +21,14 @@ import {
 
 let dom: JSDOM;
 let zooms: number[] = [];
-const desktopApi = { setUiScale: (factor: number) => { zooms.push(factor); } };
+let menuSettings: (() => void) | null = null;
+const desktopApi = {
+  setUiScale: (factor: number) => { zooms.push(factor); },
+  onOpenSettings: (fn: () => void) => {
+    menuSettings = fn;
+    return () => { menuSettings = null; };
+  },
+};
 
 const mono = (): string => document.documentElement.style.getPropertyValue('--mono');
 const uiScaleVar = (): string => document.documentElement.style.getPropertyValue('--ui-scale');
@@ -51,6 +59,8 @@ describe('interface font and scale', () => {
       HTMLElement: dom.window.HTMLElement,
       getComputedStyle: dom.window.getComputedStyle.bind(dom.window),
     });
+    (window as unknown as { api: unknown }).api = desktopApi;
+    installSettingsShortcut();
   });
   beforeEach(() => {
     localStorage.clear();
@@ -155,5 +165,51 @@ describe('interface font and scale', () => {
     expect(mono()).toContain('system-ui');
     dialog.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
     expect(document.querySelector('[role="dialog"]')).toBeNull();
+  });
+
+  it('shows the Settings shortcut in the DeckWerk menu, for this platform', () => {
+    expect(settingsShortcut('MacIntel')).toEqual({ label: '⌘,', keys: 'Meta+,' });
+    expect(settingsShortcut('Linux x86_64')).toEqual({ label: 'Ctrl+,', keys: 'Control+,' });
+    const brand = createDeckWerkButton();
+    document.body.appendChild(brand);
+    brand.querySelector<HTMLButtonElement>('.brand-button')!.click();
+    const item = [...document.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')]
+      .find((candidate) => candidate.textContent === 'Settings…')!;
+    expect(item.dataset.shortcut).toBe(settingsShortcut().label);
+    expect(item.getAttribute('aria-keyshortcuts')).toBe(settingsShortcut().keys);
+  });
+
+  it('opens Settings on Cmd/Ctrl+, even from a text box that keeps its keys', () => {
+    const box = document.createElement('div');
+    box.contentEditable = 'true';
+    box.addEventListener('keydown', (event) => event.stopPropagation());
+    document.body.appendChild(box);
+    const press = (init: KeyboardEventInit): KeyboardEvent => {
+      const event = new window.KeyboardEvent('keydown', { key: ',', bubbles: true, cancelable: true, ...init });
+      box.dispatchEvent(event);
+      return event;
+    };
+
+    expect(press({ metaKey: true, shiftKey: true }).defaultPrevented).toBe(false);
+    expect(press({ key: '.', metaKey: true }).defaultPrevented).toBe(false);
+    expect(press({}).defaultPrevented).toBe(false);
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
+
+    // Taken from the default menu either way; a held key opens it once.
+    expect(press({ metaKey: true }).defaultPrevented).toBe(true);
+    expect(document.querySelectorAll('[role="dialog"]')).toHaveLength(1);
+    expect(press({ metaKey: true, repeat: true }).defaultPrevented).toBe(true);
+    expect(document.querySelectorAll('[role="dialog"]')).toHaveLength(1);
+    document.querySelector<HTMLElement>('[role="dialog"]')!
+      .dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+
+    press({ ctrlKey: true });
+    expect(document.querySelectorAll('[role="dialog"]')).toHaveLength(1);
+  });
+
+  it('opens Settings when the macOS app menu asks', () => {
+    expect(menuSettings).not.toBeNull();
+    menuSettings!();
+    expect(document.querySelector('[role="dialog"]')?.getAttribute('aria-labelledby')).toBe('deckwerk-settings-title');
   });
 });

@@ -24,6 +24,7 @@ import {
 import { AgentBridge, type HtmlSyncOutcome } from './agentBridge.js';
 import { AgentPanel } from './agentPanel.js';
 import { createDeckWerkButton } from './aboutDialog.js';
+import { installSettingsShortcut } from './settingsDialog.js';
 import { trackPreviewFrameRecovery } from '../player/previewFrameRecovery.js';
 import { CANVAS_NOTICE_EVENT, EditorCanvas } from './canvas.js';
 import { CssEditor } from './cssEditor.js';
@@ -66,6 +67,7 @@ import { installResponsiveToolbar } from './responsiveToolbar.js';
 
 applyUiTheme();
 applyUiPreferences();
+installSettingsShortcut();
 
 /**
  * Editor shell: wires the panels to one store, owns the toolbar, the keyboard

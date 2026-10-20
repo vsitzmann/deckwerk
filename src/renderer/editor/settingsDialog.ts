@@ -12,6 +12,34 @@ import { installedFontFamilies } from './fontPicker.js';
 
 const SETTINGS_DIALOG_ID = 'deckwerk-settings';
 
+/** The platform's Settings chord, as the DeckWerk menu shows it. */
+export function settingsShortcut(platform = navigator.platform ?? ''): { label: string; keys: string } {
+  return /Mac|iPhone|iPad/i.test(platform)
+    ? { label: '⌘,', keys: 'Meta+,' }
+    : { label: 'Ctrl+,', keys: 'Control+,' };
+}
+
+export function isSettingsShortcut(e: KeyboardEvent): boolean {
+  return (e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && e.key === ',';
+}
+
+/**
+ * Cmd/Ctrl+, opens Settings wherever focus is — in the capture phase, because
+ * a text box being edited keeps its keys to itself. Taking the key also keeps
+ * it from the macOS app menu's Settings… item (appMenu.ts), which would open
+ * the dialog a second time; choosing that item with the mouse arrives here
+ * over the preload instead.
+ */
+export function installSettingsShortcut(): void {
+  window.addEventListener('keydown', (event) => {
+    if (!isSettingsShortcut(event)) return;
+    event.preventDefault();
+    if (!event.repeat) showSettingsDialog();
+  }, true);
+  const api = window.api as { onOpenSettings?: (fn: () => void) => () => void } | undefined;
+  api?.onOpenSettings?.(showSettingsDialog);
+}
+
 /**
  * The editor chrome's font and scale, from the DeckWerk menu. Each choice
  * applies the moment it is made, so there is nothing to confirm: Done only

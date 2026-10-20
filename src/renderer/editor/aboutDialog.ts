@@ -1,6 +1,6 @@
 import { appearanceMenuSection } from '../uiTheme.js';
 import { createToolbarPicker } from './exportPicker.js';
-import { showSettingsDialog } from './settingsDialog.js';
+import { settingsShortcut, showSettingsDialog } from './settingsDialog.js';
 
 const ABOUT_DIALOG_ID = 'deckwerk-about';
 
@@ -18,7 +18,7 @@ export function createDeckWerkButton(): HTMLElement {
   button.title = 'DeckWerk';
   return createToolbarPicker('DeckWerk', [
     { label: 'About DeckWerk', action: showAboutDialog },
-    { label: 'Settings…', action: showSettingsDialog },
+    { label: 'Settings…', action: showSettingsDialog, shortcut: settingsShortcut() },
     appearanceMenuSection(),
   ], { trigger: button });
 }

@@ -15,12 +15,15 @@ import {
 import { isEditorTarget, launchDesktopApp, materializeDesktopApp } from './support/desktopApp.js';
 
 /**
- * Settings → Interface font and Interface scale in the desktop app.
+ * Settings → Interface font and Interface scale in the desktop app, opened
+ * with Cmd/Ctrl+, and from the DeckWerk menu.
  *
  * The font reaches the chrome and stops at the slide; the scale is a real
  * window zoom, so the slide still fits its canvas afterwards; both survive a
  * reload.
  */
+
+const MOD = process.platform === 'darwin' ? 4 : 2;
 
 let workDir = '';
 let appProcess: ChildProcess | null = null;
@@ -86,6 +89,17 @@ describe.skipIf(!electronBinary)('interface font and scale in the desktop app', 
     const before = await editor.evaluate<Look>(LOOK);
     expect(before.chromeFont).toContain('Monaspace Krypton');
     expect(before.slideFits).toBe(true);
+
+    // Cmd/Ctrl+, opens Settings even mid text edit, and types nothing.
+    await editor.doubleClick('#canvas [data-element-id="e1"] .text-content');
+    await eventually(async () => editor!.evaluate<boolean>(`Boolean(document.querySelector('#canvas .editing'))`),
+      'the text box did not enter editing');
+    await editor.chord(',', 'Comma', 188, MOD);
+    await eventually(async () => editor!.evaluate<boolean>(`Boolean(document.querySelector('.settings-dialog'))`),
+      'Cmd/Ctrl+, did not open Settings');
+    expect(await editor.evaluate<string>(`document.querySelector('#canvas [data-element-id="e1"]').textContent`))
+      .toBe('Set in the theme font');
+    await editor.clickByText('.settings-dialog button', 'Done');
 
     await editor.click('.brand-button', 'the DeckWerk menu');
     await editor.clickByText('[role="menuitem"]', 'Settings…');

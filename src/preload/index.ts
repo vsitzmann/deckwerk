@@ -207,6 +207,8 @@ const api = {
   onDeckState: (fn: (s: DeckSession) => void): (() => void) =>
     on(IPC.deckState, fn),
   onThemeCss: (fn: (css: string) => void): (() => void) => on(IPC.themeCss, fn),
+  /** DeckWerk → Settings… in the macOS app menu. */
+  onOpenSettings: (fn: () => void): (() => void) => on(IPC.settingsOpen, fn),
   onAgentRequest: (fn: (request: AgentRequest) => void): (() => void) =>
     on(IPC.agentRequest, fn),
   onAgentPanelState: (fn: (state: AgentPanelState) => void): (() => void) =>

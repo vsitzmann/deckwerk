@@ -17,6 +17,8 @@ export const IPC = {
   deckSyncSnapshot: 'deck:syncSnapshot',
   deckSaveAs: 'deck:saveAs',
   windowCapture: 'window:capture',
+  /** The macOS app menu's Settings… item, sent to the focused window. */
+  settingsOpen: 'settings:open',
   deckHistoryLoad: 'deckHistory:load',
   deckHistorySave: 'deckHistory:save',
   deckLoadTheme: 'deck:loadTheme',
