@@ -70,6 +70,14 @@ app.whenReady().then(async () => {
  * state instead, which is usually what "show me this slide" means.
  */
 const REVEAL_BUILDS = `(() => {
+  // The slide's last step, resolved by the Player itself: builds inside an
+  // object (paragraphs, an equation's terms, a term's colour) only exist in
+  // the build state, so making the objects visible alone left them hidden.
+  const player = window.__SLIDE_PLAYER__;
+  if (player && typeof player.goTo === 'function') {
+    const { slide } = player.getCursor();
+    player.goTo({ slide, step: Number.MAX_SAFE_INTEGER }, { morph: false });
+  }
   for (const node of document.querySelectorAll('.slide [data-element-id]')) {
     node.style.visibility = 'visible';
   }

@@ -11,6 +11,13 @@ import {
   isParagraphBuild,
 } from '@shared/timeline.js';
 import { durationField } from './durationField.js';
+import {
+  addEquationActionOptions,
+  applyEquationActionChoice,
+  equationActionValue,
+  equationBuildButtons,
+  equationBuildControls,
+} from './equationBuildPanel.js';
 import { countParagraphs, paragraphTexts } from '@shared/paragraphs.js';
 import { describeElement, renderElementLabel } from './elementLabel.js';
 import type { EditorStore } from './store.js';
@@ -118,6 +125,10 @@ export class TimelinePanel {
       addPara.addEventListener('click', () => this.addParagraphAnimation(paraTarget.id));
       elements.head.appendChild(addPara);
     }
+    // An equation with marked terms builds term by term; anything can pulse.
+    elements.head.append(...equationBuildButtons(selected, (entry, label) => this.store.commit((deck) => {
+      deck.slides[this.store.get().slideIndex].timeline.push(entry);
+    }, { label })));
 
     // The list mirrors the canvas selection: picking an object on the slide
     // lights up its row here, and picking a row selects it on the slide, so
@@ -282,8 +293,9 @@ export class TimelinePanel {
     if (targetEl?.type === 'shape') optionAfter('appear:draw', 'line draw', 'appear:blur');
     optionAfter('disappear:dissolve', 'dissolve out', 'disappear');
     optionAfter('disappear:blur', 'blur out', 'disappear:dissolve');
-    action.value = byParagraph ? 'appear:paragraph'
-      : effect ? `${entry.action.type}:${effect}` : entry.action.type;
+    addEquationActionOptions(action, entry, targetEl);
+    action.value = equationActionValue(entry) ?? (byParagraph ? 'appear:paragraph'
+      : effect ? `${entry.action.type}:${effect}` : entry.action.type);
     action.addEventListener('change', () =>
       this.mutate(entry.id, (e) => {
         const [type, variant] = action.value.split(':') as ['appear', string | undefined];
@@ -298,6 +310,7 @@ export class TimelinePanel {
           e.action.duration ??= variant === 'draw' ? DEFAULT_DRAW_DURATION
             : variant === 'blur' ? DEFAULT_BLUR_DURATION : DEFAULT_DISSOLVE_DURATION;
         } else delete e.action.duration;
+        applyEquationActionChoice(e, action.value, this.store.get().deck.themeStyle?.colors.accent);
       }),
     );
 
@@ -430,7 +443,10 @@ export class TimelinePanel {
       over.textContent = 'over';
       what.append(over, durationWrap);
     }
+    const equation = equationBuildControls(entry, slide, numbers, (fn) => this.mutate(entry.id, fn));
+    what.append(...equation.fields);
     row.append(head, when, what);
+    if (equation.list) row.appendChild(equation.list);
 
     // The paragraphs build in document order and cannot be reordered, so they
     // are a read-only sub-list: each row's number matches its canvas badge.
