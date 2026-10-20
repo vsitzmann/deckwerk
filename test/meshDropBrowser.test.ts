@@ -3,7 +3,7 @@ import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Document, NodeIO } from '@gltf-transform/core';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { saveDeck } from '../src/main/deckStore.js';
 import { startCollabServer, type RunningCollabServer } from '../src/server/collabServer.js';
 import { emptyDeck, type Deck } from '../src/shared/deck.js';
@@ -17,6 +17,7 @@ import {
   type RunningBrowser,
 } from './support/browserSession.js';
 import { collabClientDir } from './support/collabClient.js';
+import { ensureMeshViewer } from './support/meshViewer.js';
 
 /**
  * Dropping 3D models on a slide.
@@ -63,6 +64,8 @@ const CUBE_OBJ = `v -1 -1 -1\nv 1 -1 -1\nv 1 1 -1\nv -1 1 -1\nv -1 -1 1\nv 1 -1 
 f 1 2 3 4\nf 5 8 7 6\nf 1 5 6 2\nf 2 6 7 3\nf 3 7 8 4\nf 5 1 4 8\n`;
 
 describe.skipIf(!electronBinary)('dropping 3D models', () => {
+  beforeAll(ensureMeshViewer, 120_000);
+
   it('turns a dropped GLB and OBJ into one interactive 3D element', { timeout: 150_000 }, async () => {
     workDir = await mkdtemp(join(tmpdir(), 'meshes-'));
     const decksRoot = join(workDir, 'decks');

@@ -4,7 +4,8 @@ import { join } from 'node:path';
 import { Document, NodeIO } from '@gltf-transform/core';
 import { KHRDracoMeshCompression } from '@gltf-transform/extensions';
 import draco3d from 'draco3dgltf';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import { ensureMeshViewer } from './support/meshViewer.js';
 
 // The still is captured in Electron; that is the browser test's business.
 vi.mock('../src/cli/renderSlides.js', () => ({
@@ -17,6 +18,8 @@ const { meshBox } = await import('../src/main/meshPage.js');
  * A dropped model is rewritten so the page can show it with no decoders and
  * at a sensible size: Draco is decoded, heavy geometry simplified.
  */
+
+beforeAll(ensureMeshViewer, 120_000);
 
 let deckDir = '';
 afterEach(async () => {
