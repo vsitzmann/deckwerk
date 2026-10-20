@@ -4,6 +4,7 @@ import { emptyDeck, type ShapeEl, type SlideElement } from '../src/shared/deck.j
 import { pathOnCanvas } from '../src/shared/pathNodes.js';
 import { EditorCanvas, elementContainsPoint } from '../src/renderer/editor/canvas.js';
 import { EditorStore } from '../src/renderer/editor/store.js';
+import { createPenButton } from '../src/renderer/editor/elementCreation.js';
 import { installCanvasDomShims } from './support/canvasHarness.js';
 
 /**
@@ -102,6 +103,22 @@ function key(name: string, init: KeyboardEventInit = {}): void {
 
 describe('drawing with the pen', () => {
   beforeEach(() => document.body.replaceChildren());
+
+  it('takes the pen up and puts it down from the toolbar, pressed while it draws', () => {
+    const { store, canvas, host } = setup();
+    const button = createPenButton(canvas);
+    document.body.appendChild(button);
+    button.click();
+    expect(canvas.isDrawingPath()).toBe(true);
+    expect(button.getAttribute('aria-pressed')).toBe('true');
+    click(host, 100, 100);
+    click(host, 300, 100);
+    // Pressing it again finishes the line, as Return does.
+    button.click();
+    expect(canvas.isDrawingPath()).toBe(false);
+    expect(button.getAttribute('aria-pressed')).toBe('false');
+    expect((store.slide!.elements[0] as ShapeEl).path).toBe('M 0 0 L 200 0');
+  });
 
   it('clicks corners and finishes an open line with Return, as one undo step', () => {
     const { store, canvas, host } = setup();

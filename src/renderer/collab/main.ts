@@ -26,6 +26,7 @@ import { MediaPanel, installMediaDrop } from '../editor/mediaPanel.js';
 import { createHistoryButton, createMediaButton, popoverPanelHost } from '../editor/toolbarPanels.js';
 import { ObjectList } from '../editor/objectList.js';
 import {
+  createPenButton,
   createShapeInsertPicker,
   createTableInsertPicker,
   insertText,
@@ -991,6 +992,7 @@ function buildToolbar(): void {
     // Straight into the new box, its placeholder selected: typing replaces it.
     barIconButton('Text', TEXT_ICON, () => canvas.beginTextEdit(insertText(store).id)),
     createShapeInsertPicker(store, { drawPath: () => canvas.startPen() }),
+    createPenButton(canvas),
     createTableInsertPicker(store),
     createMediaButton(mediaHost),
   );

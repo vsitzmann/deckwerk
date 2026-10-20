@@ -1112,6 +1112,8 @@ export class EditorCanvas {
    * where it would open its points for editing.
    */
   private penFinishedAt = Number.NEGATIVE_INFINITY;
+  /** Notified when the pen is taken up or put down, so its button can show it. */
+  onPenToolChange?: (drawing: boolean) => void;
   /**
    * The path shape whose points are being edited (double-click a path, or
    * Edit points), and which of its points is selected: `sub` is the run,
@@ -3842,9 +3844,16 @@ export class EditorCanvas {
     this.pen = new PenDraft(slide.id);
     pathKeysOwner = this;
     this.host.classList.add('pen-tool');
+    this.onPenToolChange?.(true);
     this.store.clearSelection();
     this.redrawOverlay();
     this.notice('Click to add points, drag to curve. Click the first point to close the shape; Return to finish a line.');
+  }
+
+  /** The Pen button: take the pen up, or put it down, finishing a line. */
+  togglePen(): void {
+    if (this.pen) this.finishPen(false);
+    else this.startPen();
   }
 
   /** Whether the pen is drawing. */
@@ -3857,6 +3866,7 @@ export class EditorCanvas {
     if (!this.pen) return;
     this.pen = null;
     this.host.classList.remove('pen-tool');
+    this.onPenToolChange?.(false);
     this.redrawOverlay();
     // Take the pen's instructions out of the status bar.
     this.notice('');

@@ -32,7 +32,7 @@ import { HistoryPanel } from './historyPanel.js';
 import { ObjectList } from './objectList.js';
 import { MediaPanel, installMediaDrop } from './mediaPanel.js';
 import { authoredHtmlSync, fileName } from './htmlCompile.js';
-import { createShapeInsertPicker, createTableInsertPicker, insertText } from './elementCreation.js';
+import { createPenButton, createShapeInsertPicker, createTableInsertPicker, insertText } from './elementCreation.js';
 import { createToolbarPicker, createToolbarSplitButton } from './exportPicker.js';
 import { showPdfExportDialog } from './pdfExportDialog.js';
 import { showWebExportDialog } from './webExportDialog.js';
@@ -578,6 +578,7 @@ function buildToolbar(): void {
   mid.append(
     barIconButton('Text', TEXT_ICON, () => addText()),
     createShapeInsertPicker(store, { drawPath: () => canvas.startPen() }),
+    createPenButton(canvas),
     createTableInsertPicker(store),
     createMediaButton(mediaHost),
   );
