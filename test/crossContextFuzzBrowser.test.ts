@@ -26,7 +26,8 @@ import { sidebarSelectionProbes } from './support/selectionSession.js';
  * Cmd+B mid-word, undo/redo at random points, Backspace with an element
  * selection, Cmd+A in both contexts, Backspace on a multi-slide rail
  * selection (which must ask first; cancelled, or confirmed and undone), and
- * resizing a selected word from the sidebar's Font size field, and
+ * resizing a selected word from the sidebar's Font size field, picking
+ * objects by row in the object list (mid-edit included), and
  * panning and zooming the view with a plain mouse and the keyboard.
  *
  * After EVERY step five oracles run: the whole-editor invariant set from
@@ -152,7 +153,7 @@ type OpName =
   | 'type nonce' | 'bold mid-word' | 'escape' | 'click empty' | 'marquee'
   | 'rail hop' | 'undo' | 'redo' | 'undo round-trip' | 'delete selection'
   | 'cmd+a' | 'click with stray hover' | 'rail multi-delete' | 'stack key' | 'spelling fix'
-  | 'size from sidebar' | 'viewport gesture';
+  | 'size from sidebar' | 'viewport gesture' | 'object list pick';
 
 interface Violation { seed: number; step: number; op: OpName; oracle: string; detail: string }
 
@@ -383,6 +384,7 @@ function chooseOp(next: () => number, pre: CrossState): OpName {
     add('click', 3);
     add('shift-click', 2);
     add('click with stray hover', 1);
+    add('object list pick', 2);
     if (targets.some((id) => id !== IMAGE)) add('double-click text', 3);
   }
   if (pre.slideIndex === 0 && pre.elements.includes(IMAGE)
@@ -609,6 +611,36 @@ async function performOp(
       }
       const expected = (await session.allElementIds());
       return expected;
+    }
+    case 'object list pick': {
+      // Open the object list, pick a row with a real click (Shift adds or
+      // drops it, as on the canvas), then close the list again so the canvas
+      // keeps the size the other moves assume.
+      const id = pick(next, targets);
+      const shift = next() < 0.4;
+      await session.cdp.click('.object-list-toggle', 'object list toggle');
+      await wait(120);
+      const row = `.object-list-row[data-element-id="${id}"]`;
+      const selection = () => session.cdp.evaluate<string[]>('[...window.store.get().selection].sort()');
+      const before = await selection();
+      if (shift) await session.cdp.clickModified(row, SHIFT, `shift-click the ${id} row`);
+      else await session.cdp.click(row, `the ${id} row`);
+      await wait(120);
+      const after = await selection();
+      const expected = shift
+        ? (before.includes(id) ? before.filter((other) => other !== id) : [...before, id].sort())
+        : [id];
+      if (after.join() !== expected.join()) {
+        flag('routing', `${shift ? 'shift-' : ''}clicking the ${id} row selected [${after}], not [${expected}]`);
+      }
+      const highlighted = await session.cdp.evaluate<string[]>(
+        `[...document.querySelectorAll('.object-list-row.selected')].map((row) => row.dataset.elementId).sort()`);
+      if (highlighted.join() !== after.join()) {
+        flag('routing', `the object list highlights [${highlighted}] while the selection is [${after}]`);
+      }
+      await session.cdp.click('.object-list-toggle', 'object list toggle');
+      await wait(120);
+      return 'same';
     }
     case 'stack key': {
       // [ ] restack the selection, but inside a text edit they are text: the
