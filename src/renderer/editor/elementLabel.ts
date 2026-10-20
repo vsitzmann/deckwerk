@@ -106,6 +106,18 @@ export function elementSwatches(el: SlideElement): Array<{ color: string; kind: 
   return out;
 }
 
+/**
+ * What kind of object a list row stands for, for its glyph: tables and lists
+ * are told apart from plain text, shapes by their geometry.
+ */
+export function elementKind(el: SlideElement): string {
+  if (el.type === 'text') {
+    if (el.table || /<table\b/i.test(el.html)) return 'table';
+    return /<(ul|ol)\b/i.test(el.html) ? 'list' : 'text';
+  }
+  return el.type === 'shape' ? `shape-${el.shape}` : el.type;
+}
+
 export function describeElement(el: SlideElement): string {
   switch (el.type) {
     case 'text': {
