@@ -141,4 +141,54 @@ describe('the Player with a jiggle and a pop', () => {
     expect(animate).not.toHaveBeenCalled();
     player.destroy();
   });
+
+  it('eases a pulse in and out by default, holds it at the top, and lets damping sharpen or soften it', () => {
+    const base = emptyDeck('Damping');
+    base.slides[0].elements = [text('box', 'Look here')];
+    const step = (id: string, type: 'pulse' | 'jiggle', damping?: number) => ({
+      id, trigger: { on: 'click' as const, ref: null, delay: 0 },
+      action: { type, target: 'box', value: null, ...(damping !== undefined ? { damping } : {}) },
+    });
+    base.slides[0].timeline = [step('a', 'pulse'), step('b', 'pulse', 0), step('c', 'pulse', 1), step('d', 'jiggle', 0), step('e', 'jiggle', 1)];
+    const { player, host, animate } = mount(parseDeck(base));
+    player.goTo({ slide: 0, step: 0 });
+    const box = host.querySelector('[data-element-id="box"]')!;
+    const frames = () => animate.mock.calls[animate.mock.contexts.lastIndexOf(box)][0] as Keyframe[];
+    /** The handles of a cubic-bezier easing: [x1, y1, x2, y2]. */
+    const handles = (easing: unknown) => /cubic-bezier\(([^)]*)\)/.exec(String(easing))![1].split(',').map(Number);
+
+    player.next();
+    const pulse = frames();
+    expect(pulse.map((frame) => frame.offset)).toEqual([0, 0.35, 0.5, 1]);
+    expect(pulse.map((frame) => Number(/scale\(([\d.]+)\)/.exec(String(frame.transform))![1]))).toEqual([1, 1.6, 1.6, 1]);
+    // By default it leaves rest gently and lands gently: little speed at
+    // either end, rather than leaping out of the first frame.
+    const [, outY1] = handles(pulse[0].easing);
+    const [backX1, , , backY2] = handles(pulse[2].easing);
+    expect(outY1).toBeLessThan(0.3);
+    expect(backY2).toBeGreaterThan(0.75);
+    expect(backX1).toBeLessThan(0.6);
+
+    // Damping 0 is a sharp snap: it leaps out and lands hard.
+    player.next();
+    expect(handles(frames()[0].easing)[1]).toBe(0.9);
+    expect(handles(frames()[2].easing)[3]).toBe(0.1);
+    // Damping 1 is fully smooth, the same ease out of rest and back into it.
+    player.next();
+    expect(handles(frames()[0].easing)).toEqual([0.45, 0, 0.55, 1]);
+    expect(frames()[2].easing).toBe(frames()[0].easing);
+
+    // A jiggle's damping is how fast its swings die out.
+    const turns = () => frames().map((frame) => Math.abs(Number(/rotate\((-?[\d.]+)deg\)/.exec(String(frame.transform))![1])));
+    player.next();
+    const loose = turns();
+    player.next();
+    const damped = turns();
+    expect(loose[1]).toBe(5);
+    expect(damped[1]).toBe(5);
+    for (let i = 2; i < loose.length - 1; i++) expect(damped[i]).toBeLessThan(loose[i]);
+    expect(loose.at(-2)).toBeGreaterThan(2);
+    expect(damped.at(-2)).toBeLessThan(0.1);
+    player.destroy();
+  });
 });

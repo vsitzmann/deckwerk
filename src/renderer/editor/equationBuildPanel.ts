@@ -4,6 +4,7 @@ import {
   DEFAULT_PULSE_DURATION,
   DEFAULT_TERM_COLOR,
   DEFAULT_TERM_DURATION,
+  defaultEmphasisDamping,
   defaultEmphasisDuration,
   defaultEmphasisScale,
   isEmphasisType,
@@ -90,6 +91,7 @@ export function applyEquationActionChoice(entry: TimelineEntry, choice: string, 
   delete action.term;
   delete action.color;
   delete action.scale;
+  delete action.damping;
 }
 
 /**
@@ -146,30 +148,59 @@ export function equationBuildControls(
     fields.push(color);
   }
 
-  if (type === 'pulse' || type === 'pop') {
-    const fallback = defaultEmphasisScale(type);
-    const scale = document.createElement('input');
-    scale.type = 'number';
-    scale.className = 'delay-input build-scale';
-    scale.min = '1';
-    scale.max = '4';
-    scale.step = '0.1';
-    scale.value = String(entry.action.scale ?? fallback);
-    scale.title = `How big the ${type} gets, as a multiple of the original size`;
-    scale.setAttribute('aria-label', type === 'pop' ? 'Pop scale' : 'Pulse scale');
-    scale.addEventListener('change', () => {
-      const next = Math.min(4, Math.max(1, Number(scale.value) || fallback));
-      scale.value = String(next);
-      mutate((e) => { e.action.scale = next; });
+  /** A small number field, clamped to its range, with an optional unit after it. */
+  const numberField = (opts: {
+    className: string; value: number; min: number; max: number; step: number; fallback: number;
+    title: string; aria: string; unit?: string; set: (entry: TimelineEntry, value: number) => void;
+  }): HTMLElement => {
+    const input = document.createElement('input');
+    input.type = 'number';
+    input.className = `delay-input ${opts.className}`;
+    input.min = String(opts.min);
+    input.max = String(opts.max);
+    input.step = String(opts.step);
+    input.value = String(opts.value);
+    input.title = opts.title;
+    input.setAttribute('aria-label', opts.aria);
+    input.addEventListener('change', () => {
+      const typed = Number(input.value);
+      const next = Math.min(opts.max, Math.max(opts.min, input.value.trim() === '' || !Number.isFinite(typed) ? opts.fallback : typed));
+      input.value = String(next);
+      mutate((e) => opts.set(e, next));
     });
     const wrap = document.createElement('span');
     wrap.className = 'field-unit-wrap build-scale-wrap';
-    const unit = document.createElement('span');
-    unit.className = 'field-unit';
-    unit.textContent = '×';
-    unit.setAttribute('aria-hidden', 'true');
-    wrap.append(scale, unit);
-    fields.push(label('scale'), wrap);
+    wrap.appendChild(input);
+    if (opts.unit) {
+      const unit = document.createElement('span');
+      unit.className = 'field-unit';
+      unit.textContent = opts.unit;
+      unit.setAttribute('aria-hidden', 'true');
+      wrap.appendChild(unit);
+    }
+    return wrap;
+  };
+
+  if (type === 'pulse' || type === 'pop') {
+    const fallback = defaultEmphasisScale(type);
+    fields.push(label('scale'), numberField({
+      className: 'build-scale', value: entry.action.scale ?? fallback, min: 1, max: 4, step: 0.1, fallback,
+      title: `How big the ${type} gets, as a multiple of the original size`,
+      aria: type === 'pop' ? 'Pop scale' : 'Pulse scale', unit: '×',
+      set: (e, value) => { e.action.scale = value; },
+    }));
+  }
+
+  if (isEmphasisType(type)) {
+    const fallback = defaultEmphasisDamping(type);
+    fields.push(label('damping'), numberField({
+      className: 'build-damping', value: entry.action.damping ?? fallback, min: 0, max: 1, step: 0.1, fallback,
+      title: type === 'jiggle'
+        ? 'How fast the swings die out: 0 hardly at all, 1 quickly'
+        : 'How softly it moves: 0 is a sharp snap, 1 eases smoothly out of rest and back into it',
+      aria: 'Damping',
+      set: (e, value) => { e.action.damping = value; },
+    }));
   }
 
   // Every term in order fans out into a step per term: list them, numbered

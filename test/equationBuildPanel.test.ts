@@ -117,4 +117,41 @@ describe('equation builds in the Build panel', () => {
     expect(plain).toMatchObject({ type: 'appear', value: null });
     expect(plain.term ?? plain.scale ?? plain.duration).toBeUndefined();
   });
+
+  it('shows each emphasis its damping beside the size, 0 to 1, with its own default', () => {
+    const { store, host, button, change } = setUp();
+    store.select(['box']);
+    button('Add pulse')!.click();
+    const action = () => host.querySelector<HTMLSelectElement>('select.build-action')!;
+    const damping = () => host.querySelector<HTMLInputElement>('input.build-damping')!;
+    expect(damping().value).toBe('0.8');
+    expect(damping().classList.contains('delay-input')).toBe(true);
+    // Right after the size, in the same kind of field.
+    const fields = [...host.querySelectorAll('.build-card-what > *')];
+    expect(fields.indexOf(damping().parentElement!)).toBe(fields.indexOf(host.querySelector('input.build-scale')!.parentElement!) + 2);
+    expect(damping().parentElement!.className).toBe(host.querySelector('input.build-scale')!.parentElement!.className);
+
+    change(damping(), '0');
+    expect(store.slide!.timeline[0].action.damping).toBe(0);
+    expect(damping().value).toBe('0');
+    change(damping(), '3');
+    expect(store.slide!.timeline[0].action.damping).toBe(1);
+    // An emptied field goes back to the default.
+    change(damping(), '');
+    expect(store.slide!.timeline[0].action.damping).toBe(0.8);
+
+    // Switching between emphases keeps a damping the author set; leaving them drops it.
+    change(action(), 'pop');
+    expect(store.slide!.timeline[0].action.damping).toBe(0.8);
+    change(action(), 'appear');
+    expect(store.slide!.timeline[0].action.damping).toBeUndefined();
+    expect(host.querySelector('input.build-damping')).toBeNull();
+
+    // Unset, a jiggle (which has no size) shows 0.5 and a pop, fully smooth, 1.
+    change(action(), 'jiggle');
+    expect(host.querySelector('input.build-scale')).toBeNull();
+    expect(damping().value).toBe('0.5');
+    change(action(), 'pop');
+    expect(damping().value).toBe('1');
+  });
 });

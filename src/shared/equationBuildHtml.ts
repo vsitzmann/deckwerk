@@ -18,14 +18,16 @@ import { EMPHASIS_TYPES, isEmphasisType, isTermLabel, type EmphasisType } from '
  *   data-pulse-term="2"             the term to pulse (absent: the whole object)
  *   data-pulse-scale="1.6"          how big at the peak
  *   data-pulse-duration="800"       in ms
+ *   data-pulse-damping="0.8"        how softly, 0 (a sharp snap) to 1 (fully
+ *                                   smooth); on a jiggle, how fast it dies out
  *   data-pulse-lift="true"          also cast a drop shadow and rise over the
  *                                   neighbours while it is up (whole objects;
  *                                   a term pulse keeps it but does not lift)
  *
  *   data-jiggle="click"             wobble the object, or one term, side to side
- *   data-jiggle-term, data-jiggle-duration
+ *   data-jiggle-term, data-jiggle-duration, data-jiggle-damping
  *   data-pop="click"                swell smoothly and ease back down
- *   data-pop-term, data-pop-scale, data-pop-duration
+ *   data-pop-term, data-pop-scale, data-pop-duration, data-pop-damping
  *
  * A page states an object's first build of each kind; further ones (a second
  * pulse of another term, say) are made in the Build panel and survive a save
@@ -86,6 +88,7 @@ export function equationBuildsFromNode(
     const duration = finite(dataset[`${type}Duration`], 0);
     // A jiggle turns rather than grows, so it has no size to read.
     const scale = type === 'jiggle' ? undefined : finite(dataset[`${type}Scale`], 1, 4);
+    const damping = finite(dataset[`${type}Damping`], 0, 1);
     const term = dataset[`${type}Term`]?.trim();
     const lift = type === 'pulse' && dataset.pulseLift !== undefined
       && dataset.pulseLift.trim().toLowerCase() !== 'false';
@@ -99,6 +102,7 @@ export function equationBuildsFromNode(
         ...(term && isTermLabel(term) ? { term } : {}),
         ...(scale !== undefined ? { scale } : {}),
         ...(duration !== undefined ? { duration } : {}),
+        ...(damping !== undefined ? { damping } : {}),
       },
     });
   }
@@ -142,6 +146,7 @@ export function equationBuildAttributes(slide: Slide, elementId: string): string
     attr(`data-${type}-term`, entry.action.term);
     if (type !== 'jiggle') attr(`data-${type}-scale`, entry.action.scale);
     attr(`data-${type}-duration`, entry.action.duration);
+    attr(`data-${type}-damping`, entry.action.damping);
     if (type === 'pulse' && entry.action.value === 'lift') attr('data-pulse-lift', 'true');
   }
   return attrs;

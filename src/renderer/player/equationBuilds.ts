@@ -1,6 +1,7 @@
 import type { Slide, TimelineEntry } from '@shared/deck.js';
 import {
   TERM_CLASS_PREFIX,
+  defaultEmphasisDamping,
   defaultEmphasisScale,
   isEmphasisType,
   termBuildLabels,
@@ -83,7 +84,9 @@ export function prepareEquationEffect(
 
   if (isEmphasisType(type)) {
     const scale = entry.action.scale ?? defaultEmphasisScale(type);
-    const frames = type === 'jiggle' ? jiggleFrames : type === 'pop' ? popFrames(scale) : pulseFrames(scale);
+    const damping = entry.action.damping ?? defaultEmphasisDamping(type);
+    const frames = type === 'jiggle' ? jiggleFrames(damping)
+      : type === 'pop' ? popFrames(scale, damping) : pulseFrames(scale, damping);
     // A jiggle never grows, and a swell to 1× is no swell at all.
     if (type !== 'jiggle' && scale === 1) return () => () => {};
     const lift = type === 'pulse' && entry.action.value === 'lift';
@@ -117,44 +120,88 @@ export function prepareEquationEffect(
  */
 type EmphasisFrames = (around: (local: string) => string) => Keyframe[];
 
+/** Keyframe numbers are compared in tests; keep them short and stable. */
+function round(value: number): number {
+  return Math.round(value * 1000) / 1000;
+}
+
+/** `a` to `b`, `t` of the way. */
+function mix(a: number, b: number, t: number): number {
+  return round(a + (b - a) * t);
+}
+
 /**
- * A pulse: out to `scale` with an ease-out, so it leaps from the first frame
- * and is at full size by 40%, and back with an ease-in-out over the longer
- * rest, so it lingers big for a beat and settles rather than bouncing.
+ * The easings of a swell, by damping (0 to 1). Out of rest: at 0 a sharp
+ * ease-out that leaps away at once, at 1 a full ease-in-out that starts from
+ * stillness and slows into the top. Back to rest: at 0 an ease-in that gathers
+ * speed and lands hard, at 1 the same full ease-in-out that settles softly.
+ * Between, the curve's handles slide from one to the other, so a damping
+ * between is a softer start and a softer landing, never an overshoot.
  */
-function pulseFrames(scale: number): EmphasisFrames {
+function swellEasings(damping: number): { out: string; back: string } {
+  const d = Math.min(1, Math.max(0, damping));
+  return {
+    out: `cubic-bezier(${mix(0.1, 0.45, d)},${mix(0.9, 0, d)},${mix(0.3, 0.55, d)},1)`,
+    back: `cubic-bezier(${mix(0.7, 0.45, d)},0,${mix(0.9, 0.55, d)},${mix(0.1, 1, d)})`,
+  };
+}
+
+/**
+ * A pulse: out to `scale` in the first third, held there for a beat, and
+ * back over the longer rest. The hold and the quicker rise are what make it
+ * a pulse, a deliberate "look here", where a pop turns at the top at once.
+ */
+function pulseFrames(scale: number, damping: number): EmphasisFrames {
+  const { out, back } = swellEasings(damping);
   return (around) => [
-    { transform: around('scale(1)'), offset: 0, easing: 'cubic-bezier(.2,.7,.3,1)' },
-    { transform: around(`scale(${scale})`), offset: 0.4, easing: 'cubic-bezier(.45,0,.25,1)' },
+    { transform: around('scale(1)'), offset: 0, easing: out },
+    { transform: around(`scale(${scale})`), offset: 0.35, easing: 'linear' },
+    { transform: around(`scale(${scale})`), offset: 0.5, easing: back },
     { transform: around('scale(1)'), offset: 1 },
   ];
 }
 
 /**
- * A pop: a smooth bump, symmetric about its middle. It eases into growing,
- * eases to a stop at full size halfway, eases back down and settles softly
- * at its own size: a sine ease-in-out each way, never below its own size.
- * Where a pulse jumps out at once and lingers big, a pop starts and ends
- * gently and turns at the top without a pause.
+ * A pop: a bump, symmetric about its middle. At its default damping of 1 it
+ * eases into growing, eases to a stop at full size halfway, eases back down
+ * and settles softly at its own size, never below it.
  */
-function popFrames(scale: number): EmphasisFrames {
-  const sine = 'cubic-bezier(.37,0,.63,1)';
+function popFrames(scale: number, damping: number): EmphasisFrames {
+  const { out, back } = swellEasings(damping);
   return (around) => [
-    { transform: around('scale(1)'), offset: 0, easing: sine },
-    { transform: around(`scale(${scale})`), offset: 0.5, easing: sine },
+    { transform: around('scale(1)'), offset: 0, easing: out },
+    { transform: around(`scale(${scale})`), offset: 0.5, easing: back },
     { transform: around('scale(1)'), offset: 1 },
   ];
 }
 
-/** A jiggle's turns, in degrees: side to side, each swing smaller, ending square. */
-const JIGGLE_TURNS = [0, 5, -4.5, 3.5, -2.5, 1.5, -0.5, 0];
+/** How far a jiggle's first swing turns, in degrees. */
+const JIGGLE_TURN = 5;
+/** How many swings a jiggle makes before it comes to rest. */
+const JIGGLE_SWINGS = 6;
+
+/**
+ * A jiggle's turns, in degrees: side to side, each swing smaller, ending
+ * square. Damping sets how fast the swings die out: at 0 they hardly do and
+ * the wobble stops short, at 1 the first swing or two carry it all.
+ */
+function jiggleTurns(damping: number): number[] {
+  const d = Math.min(1, Math.max(0, damping));
+  const power = mix(0.3, 2.5, d);
+  const swings = Array.from({ length: JIGGLE_SWINGS }, (_, k) =>
+    round(JIGGLE_TURN * (1 - k / JIGGLE_SWINGS) ** power * (k % 2 === 0 ? 1 : -1)));
+  return [0, ...swings, 0];
+}
 
 /** A jiggle: a wobble about the centre that dies away, ending exactly square. */
-const jiggleFrames: EmphasisFrames = (around) => JIGGLE_TURNS.map((turn, index) => ({
-  transform: around(`rotate(${turn}deg)`),
-  offset: index / (JIGGLE_TURNS.length - 1),
-  easing: 'ease-in-out',
-}));
+function jiggleFrames(damping: number): EmphasisFrames {
+  const turns = jiggleTurns(damping);
+  return (around) => turns.map((turn, index) => ({
+    transform: around(`rotate(${turn}deg)`),
+    offset: index / (turns.length - 1),
+    easing: 'ease-in-out',
+  }));
+}
 
 /** The drop shadow a lifting pulse casts at its peak. */
 const LIFT_SHADOW = 'drop-shadow(0px 14px 18px rgba(0, 0, 0, 0.35))';
@@ -226,7 +273,8 @@ function emphasize(
     if (lift) {
       const z = (Number.parseInt(getComputedStyle(node).zIndex, 10) || 0) + LIFT_Z;
       frames.forEach((frame, index) => {
-        frame.filter = index === 1 ? LIFT_SHADOW : NO_SHADOW;
+        // Up for every frame but the first and the last, the hold included.
+        frame.filter = index === 0 || index === frames.length - 1 ? NO_SHADOW : LIFT_SHADOW;
         frame.zIndex = String(z);
       });
     }

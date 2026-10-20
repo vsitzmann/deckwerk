@@ -253,19 +253,28 @@ describe.skipIf(!electronBinary)('equation motion in the browser', () => {
     expect(pulse.ghosts).toBe(0);
     expect(pulse.after.terms).toEqual(atStart.terms);
 
-    // --- Pulse a whole object: same, for its box.
-    const box = await page.evaluate<{ before: DOMRect; peak: DOMRect; after: DOMRect; transform: string }>(`(() => {
+    // --- Pulse a whole object: same, for its box. It eases out of rest and
+    // back into it rather than leaping, and holds full size for a beat.
+    const box = await page.evaluate<{ before: DOMRect; peak: DOMRect; held: number; early: number; late: number; after: DOMRect; transform: string }>(`(() => {
       const node = document.querySelector('[data-element-id="box"]');
       const rect = () => { const r = node.getBoundingClientRect(); return { x: r.x, y: r.y, width: r.width, height: r.height }; };
       const before = rect();
       window.dispatchEvent(new MouseEvent('click', { bubbles: true }));
       const animations = document.getAnimations();
-      for (const a of animations) { a.pause(); a.currentTime = 320; }
-      const peak = rect();
+      const at = (t) => { for (const a of animations) { a.pause(); a.currentTime = t; } return rect(); };
+      const early = at(40).width / before.width;
+      const late = at(760).width / before.width;
+      const held = at(390).width / before.width;
+      const peak = at(320);
       for (const a of animations) a.finish();
-      return { before, peak, after: rect(), transform: getComputedStyle(node).transform };
+      return { before, peak, held, early, late, after: rect(), transform: getComputedStyle(node).transform };
     })()`);
     expect(box.peak.width / box.before.width).toBeCloseTo(1.6, 2);
+    expect(box.held).toBeCloseTo(1.6, 2);
+    // A twentieth of the way in or out it is within a sixth of its swell of
+    // rest (a pulse that leapt out was at two fifths of it by then).
+    expect(box.early - 1).toBeLessThan(0.1);
+    expect(box.late - 1).toBeLessThan(0.1);
     expect(box.peak.x + box.peak.width / 2).toBeCloseTo(box.before.x + box.before.width / 2, 1);
     expect(box.after).toEqual(box.before);
     expect(box.transform).toBe('none');

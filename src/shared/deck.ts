@@ -447,6 +447,13 @@ export const ActionSchema = z.object({
   color: z.string().optional(),
   /** How far a `pulse` (default 1.6) or a `pop` (default 1.3) enlarges its target at the peak. */
   scale: z.number().min(1).max(4).optional(),
+  /**
+   * How softly an emphasis moves, 0 to 1. On `pulse` and `pop`, 0 is a sharp
+   * snap out of rest and back into it, and 1 a fully smooth ease at both
+   * ends (defaults 0.8 and 1); on `jiggle`, how fast the swings die out, 0
+   * hardly at all and 1 quickly (default 0.5).
+   */
+  damping: z.number().min(0).max(1).optional(),
 });
 
 export const TimelineEntrySchema = z.object({

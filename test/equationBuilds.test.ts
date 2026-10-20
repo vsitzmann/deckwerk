@@ -304,18 +304,19 @@ describe('equation builds in authoring HTML', () => {
 
   it('round-trips a jiggle and a pop beside a pulse, each stated on the page', () => {
     const emphases: TimelineEntry[] = [
-      { id: 'pulse', trigger: click, action: { type: 'pulse', target: 'eq', value: null, scale: 1.8 } },
+      { id: 'pulse', trigger: click, action: { type: 'pulse', target: 'eq', value: null, scale: 1.8, damping: 0.3 } },
       {
         id: 'jiggle', trigger: { on: 'afterPrev', ref: null, delay: 200 },
-        action: { type: 'jiggle', target: 'eq', value: null, term: '1', duration: 900 },
+        action: { type: 'jiggle', target: 'eq', value: null, term: '1', duration: 900, damping: 1 },
       },
-      { id: 'pop', trigger: click, action: { type: 'pop', target: 'eq', value: null, term: '2', scale: 1.5, duration: 300 } },
+      { id: 'pop', trigger: click, action: { type: 'pop', target: 'eq', value: null, term: '2', scale: 1.5, duration: 300, damping: 0 } },
     ];
     const slide = slideWith([equation()], emphases);
     const html = slideToHtml(slide, { w: 1920, h: 1080 });
     for (const attribute of [
       'data-jiggle="afterPrev+200"', 'data-jiggle-term="1"', 'data-jiggle-duration="900"',
       'data-pop="click"', 'data-pop-term="2"', 'data-pop-scale="1.5"', 'data-pop-duration="300"',
+      'data-pulse-damping="0.3"', 'data-jiggle-damping="1"', 'data-pop-damping="0"',
     ]) expect(html).toContain(attribute);
     const back = slideFromMeasured(
       { id: slide.id, name: '', notes: '', background: slide.background, nodes: measured(slide) } as never,
@@ -328,13 +329,25 @@ describe('equation builds in authoring HTML', () => {
       .toEqual([['pulse', 'pulse'], ['jiggle', 'jiggle'], ['pop', 'pop']]);
   });
 
+  it('reads damping as written by hand, 0 to 1', () => {
+    const damping = (pulseDamping: string) =>
+      equationBuildsFromNode({ dataset: { pulse: 'click', pulseDamping } }, 'box', 0)[0].action.damping;
+    expect(damping('0')).toBe(0);
+    expect(damping('0.45')).toBe(0.45);
+    expect(damping('1')).toBe(1);
+    expect(damping('-0.1')).toBeUndefined();
+    expect(damping('')).toBeUndefined();
+  });
+
   it('reads a jiggle and a pop written by hand, defaults and all', () => {
     expect(equationBuildsFromNode({ dataset: { jiggle: 'click', pop: 'withPrev', popTerm: '2' } }, 'eq', 0)).toEqual([
       { id: 'eq-jiggle-1', trigger: click, action: { type: 'jiggle', target: 'eq', value: null } },
       { id: 'eq-pop-2', trigger: { on: 'withPrev', ref: null, delay: 0 }, action: { type: 'pop', target: 'eq', value: null, term: '2' } },
     ]);
     // A jiggle has no size and nothing lifts but a pulse; nonsense is dropped.
-    expect(equationBuildsFromNode({ dataset: { jiggle: 'click', jiggleScale: '2', pop: 'click', popScale: '9', pulseLift: 'true' } }, 'box', 0))
+    expect(equationBuildsFromNode({ dataset: {
+      jiggle: 'click', jiggleScale: '2', jiggleDamping: '1.5', pop: 'click', popScale: '9', popDamping: 'soft', pulseLift: 'true',
+    } }, 'box', 0))
       .toEqual([
         { id: 'box-jiggle-1', trigger: click, action: { type: 'jiggle', target: 'box', value: null } },
         { id: 'box-pop-2', trigger: click, action: { type: 'pop', target: 'box', value: null } },

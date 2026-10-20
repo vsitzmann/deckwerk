@@ -98,6 +98,17 @@ export const DEFAULT_JIGGLE_DURATION = 700;
 export const DEFAULT_POP_ACTION_DURATION = 700;
 /** How far a pop swells its target at the peak: less than a pulse. */
 export const DEFAULT_POP_ACTION_SCALE = 1.3;
+/**
+ * How softly an emphasis moves when its entry does not say, from 0 (a sharp
+ * snap: it leaps away from rest and slams back into it) to 1 (fully smooth:
+ * it eases out of rest, into the turn and back to rest, like a critically
+ * damped spring). A pulse eases in and out but sets off a touch more briskly
+ * than a pop, which is fully smooth; a jiggle's swings die out at a middling
+ * rate.
+ */
+export const DEFAULT_PULSE_DAMPING = 0.8;
+export const DEFAULT_POP_ACTION_DAMPING = 1;
+export const DEFAULT_JIGGLE_DAMPING = 0.5;
 /** The highlight a `color` term build paints when its entry names none. */
 export const DEFAULT_TERM_COLOR = '#d9480f';
 
@@ -131,6 +142,11 @@ export function isEmphasisType(type: string): type is EmphasisType {
 /** How long an emphasis takes when its entry does not say. */
 export function defaultEmphasisDuration(type: EmphasisType): number {
   return type === 'jiggle' ? DEFAULT_JIGGLE_DURATION : type === 'pop' ? DEFAULT_POP_ACTION_DURATION : DEFAULT_PULSE_DURATION;
+}
+
+/** How softly an emphasis moves when its entry does not say (see DEFAULT_PULSE_DAMPING). */
+export function defaultEmphasisDamping(type: EmphasisType): number {
+  return type === 'jiggle' ? DEFAULT_JIGGLE_DAMPING : type === 'pop' ? DEFAULT_POP_ACTION_DAMPING : DEFAULT_PULSE_DAMPING;
 }
 
 /** How far a pulse or a pop swells at the peak when its entry does not say; a jiggle does not. */
