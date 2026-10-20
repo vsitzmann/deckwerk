@@ -77,12 +77,12 @@ describe.skipIf(!electronBinary)('light mode', () => {
     expect(await editor.evaluate<string>('getComputedStyle(document.querySelector(".canvas-host")).backgroundColor'))
       .toBe('oklch(0.92 0.004 286.32)');
     const text = 'oklch(0.21 0.006 285.885)';
-    const accent = 'oklch(0.488 0.243 264.376)';
+    const accentText = 'oklch(0.5324 0.191 254.26)';
     const colour = (selector: string) =>
       editor!.evaluate<string>(`getComputedStyle(document.querySelector(${JSON.stringify(selector)})).color`);
     expect(await colour('body')).toBe(text);
     expect(await colour('#inspector .insp-title')).toBe(text);
-    expect(await colour('#side-tabs button.active')).toBe(accent);
+    expect(await colour('#side-tabs button.active')).toBe(accentText);
 
     await editor.evaluate('location.reload()');
     await eventually(async () => editor!.evaluate<string | undefined>('document.documentElement.dataset.uiTheme'),

@@ -337,7 +337,7 @@ button.bar-person:focus-visible { outline: 2px solid var(--accent); outline-offs
 }
 .chat-message.agent .chat-dot { border-radius: 2px; }
 .chat-text { overflow-wrap: anywhere; }
-.chat-mention { color: var(--accent); font-weight: 600; }
+.chat-mention { color: var(--accent-text, var(--accent)); font-weight: 600; }
 .chat-mention.is-me {
   padding: 0 2px;
   border-radius: 3px;
@@ -373,7 +373,7 @@ button.bar-person:focus-visible { outline: 2px solid var(--accent); outline-offs
   border: 0;
   border-radius: 6px;
   background: var(--accent);
-  color: #fff;
+  color: var(--on-accent, #fff);
   padding: 6px 10px;
 }
 /* .comment-compose paints every button as its primary Send; the slide
@@ -400,7 +400,7 @@ button.bar-person:focus-visible { outline: 2px solid var(--accent); outline-offs
   overflow-y: auto;
 }
 .chat-completions[hidden] { display: none; }
-.chat-completions .shape-menu-item.is-active { background: var(--accent); color: #fff; }
+.chat-completions .shape-menu-item.is-active { background: var(--accent); color: var(--on-accent, #fff); }
 .chat-bell {
   display: inline-flex;
   align-items: center;
@@ -408,7 +408,7 @@ button.bar-person:focus-visible { outline: 2px solid var(--accent); outline-offs
   padding: 4px 6px;
   color: var(--muted);
 }
-.chat-bell[aria-pressed="true"] { color: var(--accent); border-color: var(--accent); }
+.chat-bell[aria-pressed="true"] { color: var(--accent-text, var(--accent)); border-color: var(--accent); }
 #side-tabs button .chat-tab-badge {
   display: inline-block;
   min-width: 16px;
@@ -425,5 +425,5 @@ button.bar-person:focus-visible { outline: 2px solid var(--accent); outline-offs
 #side-tabs button .chat-tab-badge.is-mention {
   background: var(--accent);
   border-color: var(--accent);
-  color: #fff;
+  color: var(--on-accent, #fff);
 }
