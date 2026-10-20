@@ -84,7 +84,7 @@ describe.skipIf(!electronBinary)('responsive desktop toolbar', () => {
     expect(medium.moreVisible).toBe(false);
     expect(medium.leftRight).toBeLessThanOrEqual(medium.centerLeft);
     expect(medium.centerRight).toBeLessThanOrEqual(medium.rightLeft);
-    expect(medium.insertLabels).toEqual(expect.arrayContaining(['Text', 'Shape', 'Table']));
+    expect(medium.insertLabels).toEqual(expect.arrayContaining(['Text', 'Shape', 'Pen', 'Table']));
     expect(medium.presentVisible).toBe(true);
 
     const narrow = await toolbarAt(500, (layout) => layout.classes.includes('toolbar-compact-file')
@@ -93,7 +93,7 @@ describe.skipIf(!electronBinary)('responsive desktop toolbar', () => {
     expect(narrow.moreVisible).toBe(true);
     expect(narrow.leftRight).toBeLessThanOrEqual(narrow.centerLeft);
     expect(narrow.centerRight).toBeLessThanOrEqual(narrow.rightLeft);
-    expect(narrow.insertLabels).toEqual(expect.arrayContaining(['Text', 'Shape', 'Table']));
+    expect(narrow.insertLabels).toEqual(expect.arrayContaining(['Text', 'Shape', 'Pen', 'Table']));
     expect(narrow.presentVisible).toBe(true);
     expect(narrow.fileVisible).toBe(true);
   });

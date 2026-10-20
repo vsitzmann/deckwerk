@@ -148,6 +148,9 @@ export function insertLine(
   return created;
 }
 
+/** A pen nib, for the toolbar's Pen button and the Shape menu's entry. */
+const PEN_NIB = '<path d="M8 14.5 3.8 8.6 6 2.5h4l2.2 6.1z"/><path d="M8 14.5V9.6"/><circle cx="8" cy="8.6" r="1"/>';
+
 type ShapeKind = 'rect' | 'ellipse' | PolygonPreset | 'line' | 'arrow' | 'curved-arrow' | 'brace' | 'pen';
 
 function shapeIcon(paths: string): string {
@@ -177,8 +180,7 @@ const SHAPE_OPTIONS: Array<{ kind: ShapeKind; label: string; icon: string }> = [
     icon: shapeIcon('<path d="M2.5 13.5C3 7 7 3 13.5 2.7M8.6 2.5l5-.2.2 5"/>') },
   { kind: 'brace', label: 'Curly brace',
     icon: shapeIcon('<path d="M1.5 5a2 2 0 0 0 2 2h2.5a2 2 0 0 1 2 2 2 2 0 0 1 2-2h2.5a2 2 0 0 0 2-2"/>') },
-  { kind: 'pen', label: 'Draw with Pen',
-    icon: shapeIcon('<path d="M8 14.5 3.8 8.6 6 2.5h4l2.2 6.1z"/><path d="M8 14.5V9.6"/><circle cx="8" cy="8.6" r="1"/>') },
+  { kind: 'pen', label: 'Draw with Pen', icon: shapeIcon(PEN_NIB) },
 ];
 
 /**
@@ -259,6 +261,36 @@ export function createShapeInsertPicker(
   trigger.addEventListener('click', () => (menu ? close() : open()));
   wrap.appendChild(trigger);
   return wrap;
+}
+
+/** What the Pen button needs of the canvas it draws on. */
+export interface PenCanvas {
+  togglePen(): void;
+  onPenToolChange?: (drawing: boolean) => void;
+}
+
+/**
+ * The toolbar's Pen: starts drawing on `canvas`, and stays pressed while the
+ * pen is out; pressing it again puts the pen down (finishing a line, as
+ * Return does).
+ */
+export function createPenButton(canvas: PenCanvas): HTMLButtonElement {
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'bar-icon-button pen-tool-button';
+  button.setAttribute('aria-pressed', 'false');
+  button.title = 'Draw with Pen: click for corners, drag for curves';
+  button.innerHTML =
+    '<svg class="bar-icon" viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" fill="none" ' +
+    `stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">${PEN_NIB}</svg>` +
+    '<span>Pen</span>';
+  button.addEventListener('click', () => {
+    // A focused button keeps the keys the pen answers (Return, Escape).
+    button.blur();
+    canvas.togglePen();
+  });
+  canvas.onPenToolChange = (drawing) => button.setAttribute('aria-pressed', String(drawing));
+  return button;
 }
 
 const TABLE_PICKER_ROWS = 8;
