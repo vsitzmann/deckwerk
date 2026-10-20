@@ -14,6 +14,8 @@
   --yellow: #a86f12;
   --danger: #c93a54;
   --shadow: 0 1px 2px rgb(0 0 0 / 12%);
+  --rail-thumb-hairline: rgb(0 0 0 / 16%);
+  --rail-thumb-lift: 0 1px 3px rgb(0 0 0 / 16%);
 }
 
 /* The few chrome colours that are written out rather than taken from a token. */
