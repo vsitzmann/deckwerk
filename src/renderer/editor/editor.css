@@ -4568,6 +4568,33 @@ button.ghost:hover:not(:disabled) { color: var(--text); background: transparent;
 .build-elements-section > .panel-action { margin: 0 0 4px; }
 .build-add-paragraph { white-space: nowrap; }
 
+/* Preview and Play slide head the panel as two standard buttons; the one
+   playing turns into an accented Stop. */
+.build-preview-controls {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+  margin: 0 0 12px;
+}
+.build-preview-controls > button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-width: 0;
+  height: 30px;
+  white-space: nowrap;
+}
+/* Stop keeps its accent outline under the pointer, where it was just clicked. */
+.build-preview-controls > button.primary:hover:not(:disabled) { border-color: var(--accent); }
+.build-preview-icon { flex: none; font-size: 12px; line-height: 1; letter-spacing: -0.12em; }
+.build-preview-label { overflow: hidden; text-overflow: ellipsis; }
+/* The preview plays over the slide from outside the canvas host (see
+   EditorCanvas.beginPlayback); the slide and its handles wait underneath. */
+.build-preview-shield { position: fixed; z-index: 30; overflow: hidden; }
+.build-preview-frame { position: absolute; }
+.canvas-host.build-previewing > .stage > :is(.slide-layer, .overlay-layer) { opacity: 0; }
+
 .step-label { margin-bottom: 4px; }
 .timeline-row { gap: 6px; padding: 6px; }
 .build-card-head { gap: 6px; }

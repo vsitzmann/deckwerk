@@ -10,6 +10,7 @@ import {
   groupIntoSteps,
   isParagraphBuild,
 } from '@shared/timeline.js';
+import type { BuildPreview } from './buildPreview.js';
 import { durationField } from './durationField.js';
 import { countParagraphs, paragraphTexts } from '@shared/paragraphs.js';
 import { describeElement, renderElementLabel } from './elementLabel.js';
@@ -50,12 +51,18 @@ const TRIGGER_CHOICES: Array<{ value: TimelineEntry['trigger']['on']; label: str
 export class TimelinePanel {
   private host: HTMLElement;
   private store: EditorStore;
+  private preview: BuildPreview | null;
+  private previewButtons: { selection: HTMLButtonElement; slide: HTMLButtonElement } | null = null;
+  /** Which of the two buttons started the preview playing now: that one reads Stop. */
+  private previewStartedBy: 'selection' | 'slide' | null = null;
   private draggingEntryId: string | null = null;
   private stale = false;
 
-  constructor(host: HTMLElement, store: EditorStore) {
+  constructor(host: HTMLElement, store: EditorStore, preview: BuildPreview | null = null) {
     this.host = host;
     this.store = store;
+    this.preview = preview;
+    preview?.onChange(() => this.syncPreviewButtons());
     store.subscribe(() => {
       if (this.host.hidden) {
         this.stale = true;
@@ -73,6 +80,7 @@ export class TimelinePanel {
     this.stale = false;
     const slide = this.store.slide;
     this.host.replaceChildren();
+    this.previewButtons = null;
     if (!slide) return;
 
     const header = document.createElement('div');
@@ -82,6 +90,7 @@ export class TimelinePanel {
     title.textContent = 'Build';
     header.appendChild(title);
     this.host.appendChild(header);
+    if (this.preview) this.host.appendChild(this.previewControls(slide.timeline.length > 0));
 
     const selection = this.store.get().selection;
 
@@ -202,6 +211,74 @@ export class TimelinePanel {
       if (stepIndex > 0 && block.childElementCount === 0) return;
       stepsSection.appendChild(block);
     });
+  }
+
+  /**
+   * Preview, as Keynote's Animate inspector has it: play the selected
+   * element's build on the slide (or, with Shift, or nothing animated
+   * selected, the whole slide). Play slide runs every click in turn. A
+   * playing preview's button turns into its Stop. They head the panel, so
+   * the row stays put as builds come and go; with none, they are disabled.
+   */
+  private previewControls(enabled: boolean): HTMLElement {
+    const controls = document.createElement('div');
+    controls.className = 'build-preview-controls';
+    const selection = document.createElement('button');
+    selection.type = 'button';
+    selection.className = 'build-preview';
+    selection.disabled = !enabled;
+    selection.addEventListener('click', (event) => {
+      if (!this.preview) return;
+      if (this.previewStartedBy === 'selection') return this.preview.stop();
+      if (event.shiftKey) this.preview.previewSlide();
+      else this.preview.previewSelection();
+      this.previewStartedBy = 'selection';
+      this.syncPreviewButtons();
+    });
+    const slide = document.createElement('button');
+    slide.type = 'button';
+    slide.className = 'build-preview-slide';
+    slide.disabled = !enabled;
+    slide.addEventListener('click', () => {
+      if (!this.preview) return;
+      if (this.previewStartedBy === 'slide') return this.preview.stop();
+      this.preview.previewSlide();
+      this.previewStartedBy = 'slide';
+      this.syncPreviewButtons();
+    });
+    controls.append(selection, slide);
+    this.previewButtons = { selection, slide };
+    this.syncPreviewButtons();
+    return controls;
+  }
+
+  private syncPreviewButtons(): void {
+    if (!this.preview) return;
+    if (!this.preview.playing) this.previewStartedBy = null;
+    if (!this.previewButtons) return;
+    const { selection, slide } = this.previewButtons;
+    const show = (
+      button: HTMLButtonElement, active: boolean, glyph: string, label: string, title: string,
+    ): void => {
+      const icon = document.createElement('span');
+      icon.className = 'build-preview-icon';
+      icon.setAttribute('aria-hidden', 'true');
+      icon.textContent = active ? '■' : glyph;
+      const text = document.createElement('span');
+      text.className = 'build-preview-label';
+      text.textContent = active ? 'Stop' : label;
+      button.replaceChildren(icon, text);
+      button.title = button.disabled ? 'Add an animation to preview it'
+        : active ? 'Stop the preview (Esc)' : title;
+      // The one playing takes the accent, so Stop is the first thing seen.
+      button.classList.toggle('primary', active);
+      button.setAttribute('aria-pressed', String(active));
+    };
+    show(selection, this.previewStartedBy === 'selection', '▶', 'Preview', this.preview.selectedSteps()
+      ? 'Play the selected build on the slide (Shift-click: the whole slide)'
+      : 'Play this slide\'s builds (select an animated element to preview only its build)');
+    show(slide, this.previewStartedBy === 'slide', '▶▶', 'Play slide',
+      'Play every build on this slide from the start, advancing through each click');
   }
 
   private entryRow(entry: TimelineEntry, slide: Slide, numbers: number[]): HTMLElement {
