@@ -240,6 +240,9 @@ export class Inspector {
   private continuousEdit = false;
   /** The slide and selection the panel was last built for; see `render`. */
   private lastRenderShown = '';
+  /** A field typed into since it last committed, and a rebuild held for it. */
+  private typingIn: HTMLInputElement | HTMLTextAreaElement | null = null;
+  private renderAfterTyping = false;
   private morphHost = document.createElement('section');
   private morphPanel: MorphPanel;
   /** Enter the dedicated editor for the three fixed layout masters. */
@@ -265,6 +268,31 @@ export class Inspector {
       this.store.endTransaction();
       this.continuousEdit = false;
       this.render();
+    });
+    // A field typed into holds a value nobody has committed. Rebuilding the
+    // panel removes it while it has focus; Chromium blurs it on the way out,
+    // and the blur commits what it holds: a collaborator's edit landing
+    // between the 2 and the 0 of "20" set the font size to 2 (6, clamped),
+    // and the 0 typed into the rebuilt field made it 60. A rebuild waits for
+    // the field to commit or lose focus. Capture phase, so the field's own
+    // commit, which runs next, rebuilds the panel at once as before.
+    this.host.addEventListener('input', (event) => {
+      const target = event.target;
+      if (target instanceof HTMLTextAreaElement
+        || (target instanceof HTMLInputElement && TYPED_INPUT_TYPES.has(target.type))) {
+        this.typingIn = target;
+      }
+    });
+    this.host.addEventListener('change', (event) => {
+      if (event.target === this.typingIn) this.typingIn = null;
+    }, true);
+    this.host.addEventListener('change', () => this.renderHeldForTyping());
+    this.host.addEventListener('focusout', (event) => {
+      if (event.target !== this.typingIn) return;
+      this.typingIn = null;
+      // After focus has landed, so the rebuild hands it back to the control
+      // that took it.
+      setTimeout(() => this.renderHeldForTyping(), 0);
     });
     this.morphHost.className = 'morph-section';
     this.morphPanel = new MorphPanel(this.morphHost, store, false);
@@ -333,6 +361,11 @@ export class Inspector {
   }
 
   render(): void {
+    if (this.typingIn?.isConnected && document.activeElement === this.typingIn) {
+      this.renderAfterTyping = true;
+      return;
+    }
+    this.renderAfterTyping = false;
     // Rebuilding the panel destroys whatever control holds the keyboard. When
     // that control is a form field, Chromium hands focus to the element that
     // owns the document selection — during a text edit, the contenteditable —
@@ -359,6 +392,11 @@ export class Inspector {
     }
     for (const [node, top] of scrolled) node.scrollTop = top;
     this.restoreFocusedControl(focused);
+  }
+
+  /** The rebuild `render` held while a field was being typed into, if any. */
+  private renderHeldForTyping(): void {
+    if (this.renderAfterTyping && !this.typingIn) this.render();
   }
 
   /**
@@ -3079,6 +3117,8 @@ function geometryRow(label: string, ...cells: HTMLElement[]): HTMLElement {
 function rotationToDial(degrees: number): number {
   return normalizeDegrees(-degrees);
 }
+/** Input types an author types a value into, committed on change. */
+const TYPED_INPUT_TYPES = new Set(['text', 'number', 'search', 'url', 'email', 'tel']);
 
 export function numberField(
   label: string,
