@@ -427,6 +427,11 @@ export async function startListEditingSession(deckId: string, name: string, opti
     browser.log,
   );
   let cdp: Cdp | null = await Cdp.connect(target.webSocketDebuggerUrl!);
+  // CI shows every suite's window on one bare Xvfb, where the window mapped
+  // last takes the keyboard. Losing it blurs the field being typed into, and
+  // a blur commits the field: half of a typed "20" became the size. These
+  // pages stand for the window an author is typing in, so they keep focus.
+  await cdp.call('Emulation.setFocusEmulationEnabled', { enabled: true });
   await eventually(async () => cdp!.evaluate<boolean>(
     `Boolean(document.querySelector('${CONTENT}'))`), 'the list fixture never loaded');
   await cdp.click('#side-tabs button[data-panel="inspector"]', 'Props tab');
