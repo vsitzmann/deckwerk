@@ -96,4 +96,25 @@ describe('Build panel interactions', () => {
     const labels = [...host.querySelectorAll('.step-label')].map((l) => l.textContent);
     expect(labels.some((t) => /^Click \d/.test(t ?? ''))).toBe(false);
   });
+
+  it('writes an element\'s steps in the list as the canvas badge does', () => {
+    const deck = emptyDeck('Build');
+    deck.slides[0].elements.push(
+      { id: 'a', type: 'text', x: 0, y: 0, w: 100, h: 50, rot: 0, z: 1,
+        opacity: 1, class: [], style: {}, html: 'Alpha', align: 'left', valign: 'top' },
+      { id: 'b', type: 'text', x: 0, y: 60, w: 100, h: 50, rot: 0, z: 2,
+        opacity: 1, class: [], style: {}, html: 'Beta', align: 'left', valign: 'top' },
+    );
+    const step = (id: string, type: 'appear' | 'disappear', target: string) => (
+      { id, trigger: { on: 'click' as const, ref: null, delay: 0 }, action: { type, target, value: null } });
+    deck.slides[0].timeline.push(step('t-1', 'appear', 'a'), step('t-2', 'appear', 'b'), step('t-3', 'disappear', 'a'));
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    new TimelinePanel(host, new EditorStore(deck, '/tmp/build'));
+
+    const steps = (id: string) =>
+      host.querySelector<HTMLElement>(`.build-element-row[data-element-id="${id}"]`)!.dataset.steps;
+    expect(steps('a')).toBe('1,3');
+    expect(steps('b')).toBe('2');
+  });
 });
