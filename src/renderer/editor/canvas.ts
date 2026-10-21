@@ -3,7 +3,8 @@ import type { Deck, Slide, SlideElement, TextEl } from '@shared/deck.js';
 import { NEW_MEDIA_FIT } from '@shared/deck.js';
 import { lineSpacingValue } from '@shared/lineHeight.js';
 import { canHoldText, shapeToTextBox } from '@shared/shapeText.js';
-import { moveCorner, polygonPoints } from '@shared/polygonShape.js';
+import { flipped, moveCorner, polygonPoints } from '@shared/polygonShape.js';
+import { flipsOf } from '@shared/flip.js';
 import { braceDepthToward, bracePolyline, braceTip } from '@shared/brace.js';
 import { type Rect, fitScale, makeId } from '@shared/geometry.js';
 
@@ -2201,8 +2202,10 @@ export class EditorCanvas {
       if (el && (el.type === 'image' || el.type === 'video') && el.sourceBox) {
         const ghost = document.createElement('div');
         ghost.className = 'mask-ghost';
-        ghost.style.left = `${el.x + el.sourceBox.x}px`;
-        ghost.style.top = `${el.y + el.sourceBox.y}px`;
+        // A flipped picture is drawn mirrored about the window's centre.
+        const { flipX, flipY } = flipsOf(el);
+        ghost.style.left = `${el.x + (flipX ? el.w - el.sourceBox.x - el.sourceBox.w : el.sourceBox.x)}px`;
+        ghost.style.top = `${el.y + (flipY ? el.h - el.sourceBox.y - el.sourceBox.h : el.sourceBox.y)}px`;
         ghost.style.width = `${el.sourceBox.w}px`;
         ghost.style.height = `${el.sourceBox.h}px`;
         frag.appendChild(ghost);
@@ -2319,7 +2322,8 @@ export class EditorCanvas {
       }
       if (selection.size === 1) {
         // A straight-sided shape offers its corners. The box is rotated with
-        // the element, so corners are placed in its own unrotated frame.
+        // the element but never flipped (its handles are symmetric), so
+        // corners are placed in its own unrotated frame, mirrored by its flips.
         const corners = el.type === 'shape' ? polygonPoints(el) : null;
         if (corners && el.type === 'shape') {
           const size = el.pathSize ?? { w: el.w, h: el.h };
@@ -2329,8 +2333,9 @@ export class EditorCanvas {
             h.dataset.corner = String(index);
             h.dataset.elementId = el.id;
             h.title = 'Drag to move this corner';
-            h.style.left = `${(corner.x / size.w) * el.w}px`;
-            h.style.top = `${(corner.y / size.h) * el.h}px`;
+            const at = flipped(el, { x: (corner.x / size.w) * el.w, y: (corner.y / size.h) * el.h });
+            h.style.left = `${at.x}px`;
+            h.style.top = `${at.y}px`;
             h.style.margin = '0';
             box.appendChild(h);
           });
@@ -2344,7 +2349,8 @@ export class EditorCanvas {
             divider.className = 'table-column-resize-handle';
             divider.dataset.tableColumn = String(column);
             divider.dataset.elementId = el.id;
-            divider.style.left = `${offset / total * 100}%`;
+            const at = offset / total * 100;
+            divider.style.left = `${flipsOf(el).flipX ? 100 - at : at}%`;
             box.appendChild(divider);
           });
         }
@@ -2909,6 +2915,10 @@ export class EditorCanvas {
           dx = rx;
           dy = ry;
         }
+        // And a flipped one's picture is drawn mirrored, so it moves the other way.
+        const flips = flipsOf(target);
+        if (flips.flipX) dx = -dx;
+        if (flips.flipY) dy = -dy;
         // Shift constrains to the dominant axis, as everywhere else.
         if (ev.shiftKey) {
           if (Math.abs(dx) > Math.abs(dy)) dy = 0;
@@ -2936,9 +2946,11 @@ export class EditorCanvas {
         const radians = element.rot * Math.PI / 180;
         const canvasDx = point.x - drag.startCanvas.x;
         const canvasDy = point.y - drag.startCanvas.y;
-        const dx = radians
+        const along = radians
           ? canvasDx * Math.cos(radians) + canvasDy * Math.sin(radians)
           : canvasDx;
+        // A flipped table's columns run right to left.
+        const dx = flipsOf(element).flipX ? -along : along;
         const totalWeight = drag.originWidths.reduce((sum, width) => sum + width, 0);
         const pixels = drag.originWidths.map((width) => width / totalWeight * element.w);
         const left = drag.column;
@@ -6925,8 +6937,11 @@ export class EditorCanvas {
       );
       if (!el || (el.type !== 'image' && el.type !== 'video')) return;
 
-      const dx = rect.x - origin.x;
-      const dy = rect.y - origin.y;
+      // A flipped picture is drawn mirrored about the window's centre, so it
+      // is held still by the opposite edge.
+      const flips = flipsOf(el);
+      const dx = flips.flipX ? rect.x + rect.w - origin.x - origin.w : rect.x - origin.x;
+      const dy = flips.flipY ? rect.y + rect.h - origin.y - origin.h : rect.y - origin.y;
       el.x = Math.round(rect.x);
       el.y = Math.round(rect.y);
       el.w = Math.max(8, Math.round(rect.w));
@@ -6934,8 +6949,8 @@ export class EditorCanvas {
       el.sourceBox = {
         w: base.w,
         h: base.h,
-        x: Math.round(base.x - dx),
-        y: Math.round(base.y - dy),
+        x: Math.round(flips.flipX ? base.x + dx : base.x - dx),
+        y: Math.round(flips.flipY ? base.y + dy : base.y - dy),
       };
     });
   }
@@ -7405,6 +7420,10 @@ export function rectContainsPoint(
     x = cx + dx * Math.cos(rad) - dy * Math.sin(rad);
     y = cy + dx * Math.sin(rad) + dy * Math.cos(rad);
   }
+  // A flipped element's rect is drawn mirrored about the element's centre.
+  const { flipX, flipY } = flipsOf(el);
+  if (flipX) x = 2 * el.x + el.w - x;
+  if (flipY) y = 2 * el.y + el.h - y;
   return x >= rect.x && x <= rect.x + rect.w && y >= rect.y && y <= rect.y + rect.h;
 }
 

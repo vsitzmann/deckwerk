@@ -472,7 +472,9 @@ my-talk/
   the undo history under your own label.
 - Geometry is absolute pixels on the deck's `canvas` (usually 1920×1080),
   origin top-left, width before height. `rot` is clockwise degrees about the
-  element's centre; `z` is paint order.
+  element's centre; `flipX` / `flipY` mirror an element in its own frame
+  before `rot` turns it (on a page: `transform: rotate(…) scaleX(-1)`); `z` is
+  paint order.
 - Do not edit inside the `/* >>> slide-editor theme (generated) */ … */`
   block in `theme.css` — installing a theme replaces it wholesale. Everything
   outside it is yours. Agent transactions do not touch the theme at all.
@@ -744,7 +746,8 @@ slide-agent inspect ~/talks/millivid --selected
 
 Each element carries:
 
-- `authored` — the geometry in `deck.json` (`x, y, w, h, rot, z, opacity`).
+- `authored` — the geometry in `deck.json` (`x, y, w, h, rot, z, opacity`,
+  and `flipX` / `flipY` when set).
 - `rendered` — the measured box, relative to the slide's top-left. `null` when
   no editor was running to measure it.
 - `computedStyle` — resolved typography and colour, merged across the element
@@ -979,7 +982,7 @@ guards. These rules keep the seams closed:
   Saves go through `DeckSerializer` (re-serialises only what an edit
   replaced), whole-deck messages through `DeckWire`, versions through the
   sliced, thread-pool writer. `test/collabStalls.test.ts` drives people and
-  agents against a 20 MB deck and fails on any block over 30 ms;
+  agents against a 20 MB deck and fails on any block over 50 ms;
   `STALL_TEST_DECK=<folder>` runs it against a copy of a real deck.
 
 **OS-event input smoke tier** (`npm run test:osinput`,

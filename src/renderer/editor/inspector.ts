@@ -1,5 +1,6 @@
 import type { Deck, MediaEffect, Slide, SlideElement } from '@shared/deck.js';
 import { braceDepthOf } from '@shared/brace.js';
+import { flipElement, normalizeDegrees, type FlipAxis } from '@shared/flip.js';
 import {
   paragraphsToList,
   paragraphsToOrderedList,
@@ -60,7 +61,7 @@ import {
 import { mediaNaturalSize } from './mediaNatural.js';
 import { releaseDecodedVideo } from '../player/decodedVideoPool.js';
 import { LINE_SPACING_MAX, LINE_SPACING_MIN, lineSpacingValue } from '@shared/lineHeight.js';
-import { angleDial } from './angleDial.js';
+import { angleDial, setDialAngle } from './angleDial.js';
 import {
   cssMediaBorder,
   cssMediaRadius,
@@ -226,8 +227,10 @@ export class Inspector {
    * loading until they were collected; see `trimSection`.
    */
   private trimPreview: { elementId: string; url: string; video: HTMLVideoElement } | null = null;
-  /** The X/Y/W/H/ROT readouts, refreshed in place during a canvas gesture. */
+  /** The X/Y/W/H/angle readouts, refreshed in place during a canvas gesture. */
   private geometryInputs = new Map<'x' | 'y' | 'w' | 'h' | 'rot', HTMLInputElement>();
+  /** The rotation dial beside the angle readout, refreshed with it. */
+  private rotationDial: HTMLElement | null = null;
   /** What the panel showed last, to skip re-renders that would change nothing. */
   private lastDeck: Deck | null = null;
   private lastSelection = '';
@@ -237,6 +240,9 @@ export class Inspector {
   private continuousEdit = false;
   /** The slide and selection the panel was last built for; see `render`. */
   private lastRenderShown = '';
+  /** A field typed into since it last committed, and a rebuild held for it. */
+  private typingIn: HTMLInputElement | HTMLTextAreaElement | null = null;
+  private renderAfterTyping = false;
   private morphHost = document.createElement('section');
   private morphPanel: MorphPanel;
   /** Enter the dedicated editor for the three fixed layout masters. */
@@ -262,6 +268,31 @@ export class Inspector {
       this.store.endTransaction();
       this.continuousEdit = false;
       this.render();
+    });
+    // A field typed into holds a value nobody has committed. Rebuilding the
+    // panel removes it while it has focus; Chromium blurs it on the way out,
+    // and the blur commits what it holds: a collaborator's edit landing
+    // between the 2 and the 0 of "20" set the font size to 2 (6, clamped),
+    // and the 0 typed into the rebuilt field made it 60. A rebuild waits for
+    // the field to commit or lose focus. Capture phase, so the field's own
+    // commit, which runs next, rebuilds the panel at once as before.
+    this.host.addEventListener('input', (event) => {
+      const target = event.target;
+      if (target instanceof HTMLTextAreaElement
+        || (target instanceof HTMLInputElement && TYPED_INPUT_TYPES.has(target.type))) {
+        this.typingIn = target;
+      }
+    });
+    this.host.addEventListener('change', (event) => {
+      if (event.target === this.typingIn) this.typingIn = null;
+    }, true);
+    this.host.addEventListener('change', () => this.renderHeldForTyping());
+    this.host.addEventListener('focusout', (event) => {
+      if (event.target !== this.typingIn) return;
+      this.typingIn = null;
+      // After focus has landed, so the rebuild hands it back to the control
+      // that took it.
+      setTimeout(() => this.renderHeldForTyping(), 0);
     });
     this.morphHost.className = 'morph-section';
     this.morphPanel = new MorphPanel(this.morphHost, store, false);
@@ -330,6 +361,11 @@ export class Inspector {
   }
 
   render(): void {
+    if (this.typingIn?.isConnected && document.activeElement === this.typingIn) {
+      this.renderAfterTyping = true;
+      return;
+    }
+    this.renderAfterTyping = false;
     // Rebuilding the panel destroys whatever control holds the keyboard. When
     // that control is a form field, Chromium hands focus to the element that
     // owns the document selection — during a text edit, the contenteditable —
@@ -356,6 +392,11 @@ export class Inspector {
     }
     for (const [node, top] of scrolled) node.scrollTop = top;
     this.restoreFocusedControl(focused);
+  }
+
+  /** The rebuild `render` held while a field was being typed into, if any. */
+  private renderHeldForTyping(): void {
+    if (this.renderAfterTyping && !this.typingIn) this.render();
   }
 
   /**
@@ -441,11 +482,16 @@ export class Inspector {
       if (input.value !== text) input.value = text;
       input.placeholder = value === null ? '—' : '';
     }
+    if (this.rotationDial?.isConnected) {
+      const rot = commonValue(selected.map((element) => element.rot));
+      setDialAngle(this.rotationDial, rot === null ? null : rotationToDial(rot));
+    }
   }
 
   private renderPanel(): void {
     const { deck, selection, slideIndex, slideSelection } = this.store.get();
     this.geometryInputs.clear();
+    this.rotationDial = null;
     this.lastDeck = deck;
     this.lastSelection = [...selection].sort().join(',');
     this.lastSlide = slideIndex;
@@ -866,55 +912,93 @@ export class Inspector {
     return wrap;
   }
 
-  /** x/y/w/h, plus opacity and rotation. Applies to the whole selection. */
+  /**
+   * Position, size and rotation on rows of their own, as Keynote's Arrange
+   * pane lays them out, then opacity and paint order. The same for every
+   * kind of object, and applied to the whole selection: a field shows the
+   * value the selection shares, or is blank when it is mixed.
+   */
   private geometrySection(selected: SlideElement[]): HTMLElement {
     const geometry = optionSection('Geometry', 'geometry-options');
     geometry.section.classList.add('geometry-section');
     const wrap = geometry.content;
     const first = selected[0];
     const multi = selected.length > 1;
+    const shared = (key: 'x' | 'y' | 'w' | 'h' | 'rot' | 'z'): number | null =>
+      multi ? commonValue(selected.map((element) => element[key])) : first[key];
 
-    const row = document.createElement('div');
-    row.className = 'field-grid';
-    for (const key of ['x', 'y', 'w', 'h'] as const) {
-      const field = numberField(
-        key.toUpperCase(),
-        multi ? commonValue(selected.map((element) => element[key])) : first[key],
-        (v) => {
-          this.store.updateSelected((el) => {
-            if (key === 'w' || key === 'h') el[key] = Math.max(8, v);
-            else {
-              const delta = v - el[key];
-              el[key] = v;
-              if (el.type === 'shape' && el.control) el.control[key] += delta;
-            }
-          });
-        },
-      );
+    const boxField = (key: 'x' | 'y' | 'w' | 'h'): HTMLElement => {
+      const field = numberField(key.toUpperCase(), shared(key), (v) => {
+        this.store.updateSelected((el) => {
+          if (key === 'w' || key === 'h') el[key] = Math.max(8, v);
+          else {
+            const delta = v - el[key];
+            el[key] = v;
+            if (el.type === 'shape' && el.control) el.control[key] += delta;
+          }
+        });
+      });
       const input = field.querySelector('input');
       if (input) this.geometryInputs.set(key, input);
-      row.appendChild(field);
+      return field;
+    };
+    wrap.appendChild(geometryRow('Position', boxField('x'), boxField('y')));
+    wrap.appendChild(geometryRow('Size', boxField('w'), boxField('h')));
+
+    // The knob and the number are two faces of one rotation: turning the knob
+    // previews on the canvas as it goes and is one undo step when let go.
+    const rotation = shared('rot');
+    const rotate = (degrees: number): void =>
+      this.store.updateSelected((el) => { el.rot = degrees; }, { label: 'Rotate' });
+    const angleField = numberField('Angle', rotation, rotate, { unit: '°' });
+    const angleInput = angleField.querySelector('input');
+    if (angleInput) this.geometryInputs.set('rot', angleInput);
+    const dial = angleDial(rotation === null ? null : rotationToDial(rotation), {
+      onBegin: () => {
+        this.continuousEdit = true;
+        this.store.beginTransaction('Rotate');
+      },
+      onInput: (degrees) => {
+        const turned = rotationToDial(degrees);
+        if (angleInput) angleInput.value = String(turned);
+        rotate(turned);
+      },
+      onEnd: () => {
+        this.store.endTransaction();
+        this.continuousEdit = false;
+        this.render();
+      },
+    }, 'Rotation');
+    this.rotationDial = dial;
+    const turn = document.createElement('div');
+    turn.className = 'geometry-rotate';
+    turn.append(dial, angleField);
+
+    const flip = document.createElement('div');
+    flip.className = 'field field-flip';
+    const flipLabel = document.createElement('span');
+    flipLabel.textContent = 'Flip';
+    const flips = document.createElement('div');
+    flips.className = 'align-strip flip-strip';
+    for (const [axis, title] of [
+      ['horizontal', 'Flip horizontally'],
+      ['vertical', 'Flip vertically'],
+    ] as Array<[FlipAxis, string]>) {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'align-strip-button';
+      b.title = title;
+      b.setAttribute('aria-label', title);
+      b.dataset.flip = axis;
+      b.appendChild(inlineGlyph(FLIP_GLYPHS[axis]));
+      b.addEventListener('click', () =>
+        this.store.updateSelected((el) => flipElement(el, axis), { label: title }));
+      flips.appendChild(b);
     }
-    wrap.appendChild(row);
+    flip.append(flipLabel, flips);
+    wrap.appendChild(geometryRow('Rotate', turn, flip));
 
-    const row2 = document.createElement('div');
-    row2.className = 'field-grid field-grid-2';
-    const rotation = numberField('ROT', multi ? commonValue(selected.map((element) => element.rot)) : first.rot, (v) =>
-      this.store.updateSelected((el) => (el.rot = v)), { unit: '°' },
-    );
-    const rotationInput = rotation.querySelector('input');
-    if (rotationInput) this.geometryInputs.set('rot', rotationInput);
-    row2.appendChild(rotation);
-    row2.appendChild(
-      numberField('Z', multi ? commonValue(selected.map((element) => element.z)) : first.z, (v) =>
-        this.store.updateSelected((el) => (el.z = Math.round(v))),
-      ),
-    );
-    wrap.appendChild(row2);
-
-    const bottom = document.createElement('div');
-    bottom.className = 'geometry-bottom-row';
-    bottom.appendChild(opacityField(
+    const opacity = opacityField(
       multi ? commonValue(selected.map((element) => element.opacity)) : first.opacity,
       () => {
         this.continuousEdit = true;
@@ -927,7 +1011,13 @@ export class Inspector {
         this.store.endTransaction();
         this.continuousEdit = false;
       },
-    ));
+    );
+    opacity.classList.add('geometry-opacity');
+    wrap.appendChild(geometryRow('Opacity', opacity));
+
+    const depth = numberField('Z', shared('z'), (v) =>
+      this.store.updateSelected((el) => (el.z = Math.round(v))),
+    );
 
     const arrange = document.createElement('div');
     arrange.className = 'field field-arrange';
@@ -951,8 +1041,7 @@ export class Inspector {
       order.appendChild(b);
     }
     arrange.append(arrangeLabel, order);
-    bottom.appendChild(arrange);
-    wrap.appendChild(bottom);
+    wrap.appendChild(geometryRow('Layer', depth, arrange));
 
     // A title or body box that has drifted off its layout slot has no way
     // back but trial and error; give it one. Shown only for the slot's own box
@@ -3008,6 +3097,29 @@ function scrolledAncestors(node: HTMLElement): Array<[HTMLElement, number]> {
   return found;
 }
 
+/** One labelled row of the Geometry section: its name, then two cells. */
+function geometryRow(label: string, ...cells: HTMLElement[]): HTMLElement {
+  const row = document.createElement('div');
+  row.className = 'geometry-row';
+  row.dataset.row = label.toLowerCase();
+  const name = document.createElement('span');
+  name.className = 'geometry-row-label';
+  name.textContent = label;
+  row.append(name, ...cells);
+  return row;
+}
+
+/**
+ * Element rotation (clockwise degrees) as the angle dial reads it (counter-
+ * clockwise from the right), and back: the dial's hand points where the
+ * object's own right-hand side points on the slide. The map is its own inverse.
+ */
+function rotationToDial(degrees: number): number {
+  return normalizeDegrees(-degrees);
+}
+/** Input types an author types a value into, committed on change. */
+const TYPED_INPUT_TYPES = new Set(['text', 'number', 'search', 'url', 'email', 'tel']);
+
 export function numberField(
   label: string,
   value: number | null,
@@ -3413,6 +3525,12 @@ function inlineGlyph(markup: string): SVGElement {
   svg.innerHTML = markup;
   return svg;
 }
+
+/** The object (filled) and where a flip puts it (outlined), either side of the dashed axis. */
+const FLIP_GLYPHS: Record<FlipAxis, string> = {
+  horizontal: '<path d="M7 1v12" stroke-dasharray="1.5 1.5"/><path class="fill" d="M1 7l4.5-4.5v9z"/><path d="M13 7L8.5 2.5v9z"/>',
+  vertical: '<path d="M1 7h12" stroke-dasharray="1.5 1.5"/><path class="fill" d="M7 1L2.5 5.5h9z"/><path d="M7 13l-4.5-4.5h9z"/>',
+};
 
 /** Stacking order: the filled square is the selection, the outline the rest. */
 const ARRANGE_GLYPHS = {

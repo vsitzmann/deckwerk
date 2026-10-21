@@ -1,3 +1,14 @@
+/** Each dial's way of being turned from outside, see `setDialAngle`. */
+const turners = new WeakMap<HTMLElement, (degrees: number | null) => void>();
+
+/**
+ * Point a dial made by `angleDial` at `degrees` (null: mixed) without
+ * reporting it, as a readout follows a value changed elsewhere.
+ */
+export function setDialAngle(dial: HTMLElement, degrees: number | null): void {
+  turners.get(dial)?.(degrees);
+}
+
 /**
  * A round dial for a direction, like Keynote's shadow angle knob.
  *
@@ -39,6 +50,10 @@ export function angleDial(
     dial.setAttribute('aria-valuetext', `${current}°`);
   };
   show(current);
+  turners.set(dial, (degrees) => {
+    dial.classList.toggle('is-mixed', degrees === null);
+    if (degrees !== null) show(degrees);
+  });
 
   const pointAt = (event: PointerEvent): number => {
     const box = dial.getBoundingClientRect();

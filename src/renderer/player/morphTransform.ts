@@ -1,4 +1,5 @@
 import type { SlideElement } from '@shared/deck.js';
+import { elementTransform, flipsOf } from '@shared/flip.js';
 
 /**
  * Where a Morph pair starts, and where it ends.
@@ -85,20 +86,21 @@ export function morphTransforms(
     ? textAnchors(from as TextElement, to as TextElement, text)
     : { source: centerOf(from), target: centerOf(to) };
   const shift = foldAnchor(
-    anchors, centerOf(from), centerOf(to), scaleX, scaleY, sourceRotation(from),
+    anchors, centerOf(from), centerOf(to), scaleX, scaleY, sourceRotation(from), sourceFlips(from),
   );
-  // A source-side authored transform stands in for the rotation the renderer
-  // would have skipped (`style.transform` overrides `rot` in the render), and
-  // sits between the translate and the scale so it acts in the source's own
-  // frame — exactly where the source slide applied it.
-  const sourceTransform = from.style.transform ?? (from.rot ? `rotate(${from.rot}deg)` : '');
+  // A source-side authored transform stands in for the rotation and flips the
+  // renderer would have skipped (`style.transform` overrides `rot` in the
+  // render), and sits between the translate and the scale so it acts in the
+  // source's own frame — exactly where the source slide applied it. A flip
+  // that changes across the pair animates as the scale passing through zero.
+  const sourceTransform = from.style.transform ?? elementTransform(from);
   return {
     start: [
       `translate(${px(shift.x)}px, ${px(shift.y)}px)`,
       sourceTransform,
       `scale(${px(scaleX)}, ${px(scaleY)})`,
     ].filter(Boolean).join(' '),
-    final: to.style.transform ?? (to.rot ? `rotate(${to.rot}deg)` : 'none'),
+    final: to.style.transform ?? (elementTransform(to) || 'none'),
     origin: 'center',
   };
 }
@@ -151,6 +153,9 @@ function textAnchors(
  * (I - R)[S(A_t - C_t) - (A_s - C_s)], so a rotated text pair whose ink sits
  * differently inside its box than the target's does started from the wrong
  * place and flew into position.
+ *
+ * A flipped source is drawn `R F` rather than `R`, F mirroring its own frame,
+ * so the bracket is mirrored by F before it is rotated.
  */
 function foldAnchor(
   anchors: { source: Point; target: Point },
@@ -159,10 +164,11 @@ function foldAnchor(
   scaleX: number,
   scaleY: number,
   radians = 0,
+  flips: Point = { x: 1, y: 1 },
 ): Point {
   const offset = {
-    x: (anchors.source.x - sourceCenter.x) - scaleX * (anchors.target.x - targetCenter.x),
-    y: (anchors.source.y - sourceCenter.y) - scaleY * (anchors.target.y - targetCenter.y),
+    x: flips.x * ((anchors.source.x - sourceCenter.x) - scaleX * (anchors.target.x - targetCenter.x)),
+    y: flips.y * ((anchors.source.y - sourceCenter.y) - scaleY * (anchors.target.y - targetCenter.y)),
   };
   const cos = Math.cos(radians);
   const sin = Math.sin(radians);
@@ -188,6 +194,17 @@ function sourceRotation(el: SlideElement): number {
     return match ? (Number.parseFloat(match[1]) * Math.PI) / 180 : 0;
   }
   return el.rot ? (el.rot * Math.PI) / 180 : 0;
+}
+
+/**
+ * The source side's flips as signs (-1 mirrors that axis), which act in its
+ * own frame before its rotation. An authored transform owns them, as it owns
+ * the rotation: none are read back from it.
+ */
+function sourceFlips(el: SlideElement): Point {
+  if (el.style.transform !== undefined) return { x: 1, y: 1 };
+  const { flipX, flipY } = flipsOf(el);
+  return { x: flipX ? -1 : 1, y: flipY ? -1 : 1 };
 }
 
 function anchorOf(rect: Rect, ax: number, ay: number): Point {
