@@ -372,6 +372,67 @@ body.panel-resizing iframe { pointer-events: none; }
   box-shadow: inset 0 0 0 1px var(--accent);
 }
 
+.zoom-controls .rulers-toggle {
+  display: grid;
+  place-items: center;
+}
+
+.zoom-controls .rulers-toggle.active {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+/* Rulers (rulers.ts): along the top and left of the canvas, in slide units.
+   The canvas keeps the slide clear of them (setRulerInset), so they never
+   cover it at the fitted zoom. Everything is drawn from the chrome tokens, so
+   both UI themes follow without rules of their own. */
+.canvas-ruler {
+  position: absolute;
+  z-index: 18;
+  display: block;
+  overflow: hidden;
+  background: var(--panel-2);
+  user-select: none;
+}
+
+.canvas-ruler[hidden],
+.canvas-ruler [hidden] { display: none; }
+
+.canvas-ruler-top {
+  top: 0;
+  left: 20px;
+  border-bottom: 1px solid var(--line);
+}
+
+.canvas-ruler-left {
+  top: 20px;
+  left: 0;
+  border-right: 1px solid var(--line);
+}
+
+.canvas-ruler-corner {
+  top: 0;
+  left: 0;
+  width: 20px;
+  height: 20px;
+  border-right: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+}
+
+/* The span the slide covers is lighter than the pasteboard on either side. */
+.canvas-ruler-slide { fill: var(--panel); }
+.canvas-ruler-selection { fill: color-mix(in srgb, var(--accent) 30%, transparent); }
+.canvas-ruler-ticks { fill: none; stroke: var(--muted); stroke-width: 1; }
+.canvas-ruler-pointer { stroke: var(--text); stroke-width: 1; }
+
+.canvas-ruler-label {
+  fill: var(--muted);
+  font: 9px/1 var(--mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.canvas-host.design-preview-active > .canvas-ruler { display: none; }
+
 /* Speaker notes: a floating toggle in the canvas corner, styled like the zoom
    pill, and a drawer along the bottom of the canvas that it opens. The drawer
    height lives on the canvas host as --notes-drawer-height (see panelResize),

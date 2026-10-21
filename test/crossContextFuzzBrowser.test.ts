@@ -27,7 +27,8 @@ import { sidebarSelectionProbes } from './support/selectionSession.js';
  * selection, Cmd+A in both contexts, Backspace on a multi-slide rail
  * selection (which must ask first; cancelled, or confirmed and undone), and
  * resizing a selected word from the sidebar's Font size field, and
- * panning and zooming the view with a plain mouse and the keyboard.
+ * panning and zooming the view with a plain mouse and the keyboard (each
+ * time also showing or hiding the rulers).
  *
  * After EVERY step five oracles run: the whole-editor invariant set from
  * selectionSession, keystroke routing via per-step nonce strings, an element
@@ -824,10 +825,19 @@ async function viewportGesture(
       break;
     }
   }
+  // Every gesture also flips the rulers from the zoom pill, mid-edit or
+  // not: that moves the slide over by their width, so the steps after it aim
+  // at a slide placed somewhere else. It draws nothing from the walk's
+  // random stream, so each seed keeps the path it had before the rulers.
+  const rulersShown = () => cdp.evaluate<boolean>(
+    `!document.querySelector('#canvas .canvas-ruler-top').hasAttribute('hidden')`);
+  const rulersWere = await rulersShown();
+  await cdp.click('#canvas .zoom-controls .rulers-toggle', 'the rulers toggle');
+  if (await rulersShown() === rulersWere) flag('routing', 'the rulers toggle did not show or hide the rulers');
   await wait(120);
   const after = await snapshot();
   if (after !== before) {
-    flag('census', `${gesture} changed the deck or the editing state; diff: ${firstDiff(before, after)}`);
+    flag('census', `${gesture} and the rulers toggle changed the deck or the editing state; diff: ${firstDiff(before, after)}`);
   }
   await session.chord('0', 'Digit0', 48, MOD);
   const view = await cdp.evaluate<{ zoom: string; ratio: number }>(`({
