@@ -38,13 +38,37 @@ export const DEFAULT_DRAW_DURATION = 600;
 export const DEFAULT_DISSOLVE_DURATION = 1000;
 /** How long a blur takes when its entry does not say. */
 export const DEFAULT_BLUR_DURATION = 1000;
+/** How long a pop takes when its entry does not say. */
+export const DEFAULT_POP_DURATION = 500;
+/** How long text takes to type in by keyboard when its entry does not say. */
+export const DEFAULT_KEYBOARD_DURATION = 1500;
+/** The size a pop grows from, and the size it overshoots to, when its entry does not say. */
+export const DEFAULT_POP_FROM = 0.6;
+export const DEFAULT_POP_PEAK = 1.06;
+
+/** The sizes a pop moves through: from `from`, up to `peak`, settling at 1. */
+export function popScales(entry: TimelineEntry): { from: number; peak: number } {
+  return {
+    from: entry.action.popFrom ?? DEFAULT_POP_FROM,
+    peak: entry.action.popPeak ?? DEFAULT_POP_PEAK,
+  };
+}
 
 /**
  * The animated forms an `appear` or a `disappear` can take. `dissolve` fades
  * any element in or out; `blur` fades it in out of a blur (or out into one);
- * `draw` draws a line or arrow in from its start.
+ * `draw` draws a line or arrow in from its start. The rest are appear only:
+ * `pop` grows the element in from smaller, overshoots a little and settles;
+ * `keyboard` types text in a character at a time behind a moving caret (on
+ * anything but text it is an ordinary appear).
  */
-export type BuildEffect = 'draw' | 'dissolve' | 'blur';
+export const BUILD_EFFECTS = ['draw', 'dissolve', 'blur', 'pop', 'keyboard'] as const;
+export type BuildEffect = typeof BUILD_EFFECTS[number];
+
+/** Whether a build's value names one of the animated effects. */
+export function isBuildEffectName(value: unknown): value is BuildEffect {
+  return (BUILD_EFFECTS as readonly unknown[]).includes(value);
+}
 
 /** The effect an entry animates with, or null for an instant change. */
 export function buildEffect(entry: TimelineEntry, slide: Slide): BuildEffect | null {
@@ -52,15 +76,29 @@ export function buildEffect(entry: TimelineEntry, slide: Slide): BuildEffect | n
   if ((value === 'dissolve' || value === 'blur') && (type === 'appear' || type === 'disappear')) {
     return value;
   }
-  if (isDrawBuild(entry, slide)) return 'draw';
+  if (value === 'draw') return isDrawBuild(entry, slide) ? 'draw' : null;
+  // Only text has characters to type; anything else just appears.
+  if (value === 'keyboard') {
+    return type === 'appear' && findElement(slide, entry.action.target)?.type === 'text' ? 'keyboard' : null;
+  }
+  if (isBuildEffectName(value) && type === 'appear') return value;
   return null;
+}
+
+/** Milliseconds an effect takes when its entry does not say. */
+export function defaultEffectDuration(effect: BuildEffect): number {
+  switch (effect) {
+    case 'draw': return DEFAULT_DRAW_DURATION;
+    case 'blur': return DEFAULT_BLUR_DURATION;
+    case 'pop': return DEFAULT_POP_DURATION;
+    case 'keyboard': return DEFAULT_KEYBOARD_DURATION;
+    default: return DEFAULT_DISSOLVE_DURATION;
+  }
 }
 
 /** Milliseconds an animated build takes. */
 export function effectDuration(entry: TimelineEntry, effect: BuildEffect): number {
-  return entry.action.duration
-    ?? (effect === 'draw' ? DEFAULT_DRAW_DURATION
-      : effect === 'blur' ? DEFAULT_BLUR_DURATION : DEFAULT_DISSOLVE_DURATION);
+  return entry.action.duration ?? defaultEffectDuration(effect);
 }
 
 /**
