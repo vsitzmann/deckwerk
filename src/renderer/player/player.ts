@@ -13,6 +13,8 @@ import {
   stepCount,
 } from '@shared/timeline.js';
 import { arrowHeadSize, shapeSvg } from '@shared/shapeSvg.js';
+import { parsePath, serializePath } from '@shared/pathNodes.js';
+import { strokeStyleOf } from '@shared/strokeStyles.js';
 import {
   applyStageScale,
   fitAutoTextElement,
@@ -1092,9 +1094,11 @@ export class Player {
     const filterChanged = style(from, 'filter') !== style(to, 'filter');
 
     // A gradient cannot be tweened as one paint value, so a gradient fill that
-    // changes at all crossfades like any other restyle below.
+    // changes at all crossfades like any other restyle below; so does a
+    // styled stroke, drawn apart from its fill.
     const gradientChanged = from.type === 'shape' && to.type === 'shape'
-      && Boolean(from.fillGradient || to.fillGradient);
+      && (Boolean(from.fillGradient || to.fillGradient)
+        || strokeStyleOf(from) !== 'pen' || strokeStyleOf(to) !== 'pen');
     if (from.type === 'shape' && to.type === 'shape' && !gradientChanged) {
       const paint = (shape: typeof from): Keyframe => ({
         // A shape with no fill blends from (or to) the same colour, clear.
@@ -1484,72 +1488,22 @@ export class Player {
     // A line or arrow is redrawn each frame as the piece of itself drawn so
     // far (shapeSvg's drawProgress), heads and all, so a head rides the tip
     // and the last frame is the static drawing exactly. An outline (a box, an
-    // ellipse, a drawn path) is traced with a dash as long as the outline,
-    // slid into place; its fill comes in once the outline is nearly closed,
-    // the way a drawn shape is coloured in.
+    // ellipse, a drawn path) is traced first, and coloured in after.
     const open = el.shape === 'line' || el.shape === 'arrow';
-    const template = document.createElement('template');
-    const drawOpen = (progress: number): void => {
-      template.innerHTML = shapeSvg(el, { drawProgress: progress });
-      const fresh = template.content.firstElementChild;
-      if (fresh) svg.replaceChildren(...fresh.childNodes);
-    };
-    const length = open ? 0 : (stroke as SVGGeometryElement).getTotalLength?.() ?? 0;
-    if (!open && !(length > 0)) return;
-    const filled = !open && el.fill !== null;
-    // A traced path's end marker sits at the path's last point, so it would be
-    // there from the first frame. While it draws, the marker is lifted off and
-    // a copy of the head rides the tip instead, turned along the path.
-    const geometry = stroke as SVGGeometryElement;
-    const markerEnd = !open ? stroke.getAttribute('marker-end') : null;
-    let head: SVGPathElement | null = null;
-    if (markerEnd) {
-      stroke.removeAttribute('marker-end');
-      head = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-      // The marker's own triangle (shapeSvg's arrowMarker: a 6x6 box, its
-      // point at 5,3, drawn arrowHeadSize wide in the path's units).
-      head.setAttribute('d', 'M0,0 L6,3 L0,6 Z');
-      head.setAttribute('fill', stroke.getAttribute('stroke') ?? 'currentColor');
-      stroke.after(head);
-    }
-    const placeHead = (progress: number): void => {
-      if (!head) return;
-      const at = length * progress;
-      const tip = geometry.getPointAtLength(at);
-      // The direction comes from just behind the tip, or just ahead of it at the start.
-      const other = geometry.getPointAtLength(at > 0.5 ? at - 0.5 : Math.min(length, at + 0.5));
-      const forward = at > 0.5;
-      const angle = (Math.atan2(
-        forward ? tip.y - other.y : other.y - tip.y,
-        forward ? tip.x - other.x : other.x - tip.x,
-      ) * 180) / Math.PI;
-      // The same placement the marker has: its size, anchored at its refX/refY.
-      head.setAttribute('transform', `translate(${tip.x} ${tip.y}) rotate(${angle})`
-        + ` scale(${arrowHeadSize(el) / 6}) translate(-5 -3)`);
-      head.style.opacity = progress > 0 ? '1' : '0';
-    };
-    const show = (progress: number): void => {
-      if (open) {
-        drawOpen(progress);
-        return;
-      }
-      if (progress >= 1) {
-        stroke.style.removeProperty('stroke-dasharray');
-        stroke.style.removeProperty('stroke-dashoffset');
-        stroke.style.removeProperty('fill-opacity');
-        if (head) {
-          head.remove();
-          head = null;
-          stroke.setAttribute('marker-end', markerEnd!);
-        }
-        return;
-      }
-      stroke.style.strokeDasharray = `${length} ${length}`;
-      stroke.style.strokeDashoffset = String(length * (1 - progress));
-      if (filled) stroke.style.fillOpacity = String(Math.max(0, (progress - 0.6) / 0.4));
-      placeHead(progress);
-    };
     const ease = (t: number): number => (t < 0.5 ? 2 * t * t : 1 - ((-2 * t + 2) ** 2) / 2);
+    let show: (t: number) => void;
+    if (open) {
+      const template = document.createElement('template');
+      show = (t) => {
+        template.innerHTML = shapeSvg(el, { drawProgress: t >= 1 ? 1 : ease(t) });
+        const fresh = template.content.firstElementChild;
+        if (fresh) svg.replaceChildren(...fresh.childNodes);
+      };
+    } else {
+      const traced = traceOutline(el, svg, ease);
+      if (!traced) return;
+      show = traced;
+    }
 
     let done = false;
     let frame = 0;
@@ -1568,7 +1522,7 @@ export class Player {
       const t = Math.min(1, Math.max(0, (now - started) / duration));
       if (t >= 1) finish();
       else {
-        show(ease(t));
+        show(t);
         frame = requestAnimationFrame(tick);
       }
     };
@@ -1824,4 +1778,177 @@ function freezeClonedVideos(source: HTMLElement, clone: HTMLElement): void {
       // place is no worse than before.
     }
   }
+}
+
+/** Of an outline's time, the part its tracing takes; a fill fades in over the rest. */
+const OUTLINE_TRACE_SHARE = 0.7;
+
+/**
+ * Line Draw on an outline — a box, an ellipse, a drawn path, open or closed.
+ * Returns what to show at each moment of the build (`t`, 0..1; 1 puts the
+ * static drawing back exactly), or null when there is nothing to draw.
+ *
+ * The outline is traced by copies of the shape's stroke laid over it, one
+ * per run of the path, each one after the other: a dash starts afresh at
+ * every subpath, so one dashed outline drew all of a shape's runs at once.
+ * Only when the outline is complete does the fill fade in. A shape with no
+ * stroke is traced in a hairline of its fill colour, which fades out as the
+ * fill comes in. A brush stroke is an outline filled in, which no dash can
+ * draw; it is uncovered instead by a mask of dashed runs along the path it
+ * follows. A traced path's end marker would sit at the far end from the
+ * first frame, so while it draws a copy of the head rides the tip.
+ */
+function traceOutline(
+  el: Extract<SlideElement, { type: 'shape' }>,
+  svg: SVGSVGElement,
+  ease: (t: number) => number,
+): ((t: number) => void) | null {
+  const SVG = 'http://www.w3.org/2000/svg';
+  const paint = (node: SVGElement | null, name: string): string | null => {
+    const value = node?.getAttribute(name);
+    return value && value !== 'none' ? value : null;
+  };
+  // A styled stroke is drawn apart from its fill (strokeStyles.ts); a plain
+  // one is the shape's single element, fill and stroke both.
+  const first = svg.querySelector<SVGGeometryElement>(':scope > :is(path, rect, ellipse)');
+  const styled = svg.querySelector<SVGGeometryElement>(':scope > .shape-stroke');
+  const node = styled ?? first;
+  if (!node) return null;
+  const fillNode = styled ? svg.querySelector<SVGGeometryElement>(':scope > .shape-fill') : first;
+  const brush = Boolean(styled?.classList.contains('brush-stroke'));
+  const strokePaint = brush ? paint(node, 'fill') : paint(node, 'stroke');
+  const fillPaint = paint(fillNode, 'fill');
+  const stroked = strokePaint !== null && el.strokeWidth > 0;
+  if (!stroked && !fillPaint) return null;
+  const size = el.shape === 'path' && el.pathSize ? el.pathSize : { w: el.w, h: el.h };
+  const runs = el.shape === 'path'
+    ? (parsePath(el.path ?? '') ?? []).map((run) => serializePath([run]))
+    : [null];
+
+  let mask: SVGMaskElement | null = null;
+  const traces = runs.map((d) => {
+    let trace: SVGGeometryElement;
+    if (brush) {
+      // A band wider than the brush at its fullest, along the path.
+      trace = document.createElementNS(SVG, 'path') as SVGGeometryElement;
+      trace.setAttribute('fill', 'none');
+      trace.setAttribute('stroke', '#fff');
+      trace.setAttribute('stroke-width', String(el.strokeWidth * 2 + 4));
+      trace.setAttribute('stroke-linejoin', 'round');
+    } else {
+      trace = node.cloneNode(false) as SVGGeometryElement;
+      trace.removeAttribute('marker-start');
+      trace.removeAttribute('marker-end');
+      trace.setAttribute('fill', 'none');
+    }
+    if (d !== null) trace.setAttribute('d', d);
+    trace.setAttribute('class', 'draw-trace');
+    if (!stroked) {
+      // Two canvas pixels, whatever the units the path is drawn in.
+      const scale = Math.sqrt((el.w / size.w) * (el.h / size.h)) || 1;
+      trace.setAttribute('stroke', fillPaint!);
+      trace.setAttribute('stroke-width', String(2 / scale));
+    }
+    return trace;
+  });
+  if (brush) {
+    mask = document.createElementNS(SVG, 'mask') as SVGMaskElement;
+    mask.id = `draw-${el.id}`.replace(/[^a-zA-Z0-9_-]/g, '-');
+    const margin = el.strokeWidth * 2 + 8;
+    mask.setAttribute('maskUnits', 'userSpaceOnUse');
+    mask.setAttribute('x', String(-margin));
+    mask.setAttribute('y', String(-margin));
+    mask.setAttribute('width', String(size.w + margin * 2));
+    mask.setAttribute('height', String(size.h + margin * 2));
+    mask.append(...traces);
+    svg.appendChild(mask);
+    node.setAttribute('mask', `url(#${mask.id})`);
+  } else {
+    node.after(...traces);
+  }
+  const lengths = traces.map((trace) => trace.getTotalLength?.() ?? 0);
+  const total = lengths.reduce((sum, length) => sum + length, 0);
+  if (!(total > 0)) {
+    for (const trace of traces) trace.remove();
+    mask?.remove();
+    node.removeAttribute('mask');
+    return null;
+  }
+  const share = fillPaint ? OUTLINE_TRACE_SHARE : 1;
+
+  const markerEnd = node.getAttribute('marker-end');
+  let head: SVGPathElement | null = null;
+  if (markerEnd) {
+    node.removeAttribute('marker-end');
+    head = document.createElementNS(SVG, 'path') as SVGPathElement;
+    // The marker's own triangle (shapeSvg's arrowMarker: a 6x6 box, its
+    // point at 5,3, drawn arrowHeadSize wide in the path's units).
+    head.setAttribute('d', 'M0,0 L6,3 L0,6 Z');
+    head.setAttribute('fill', strokePaint ?? 'currentColor');
+    traces[traces.length - 1].after(head);
+  }
+  const nodeLength = node.getTotalLength?.() ?? total;
+  const placeHead = (progress: number): void => {
+    if (!head) return;
+    const at = nodeLength * progress;
+    const tip = node.getPointAtLength(at);
+    // The direction comes from just behind the tip, or just ahead of it at the start.
+    const other = node.getPointAtLength(at > 0.5 ? at - 0.5 : Math.min(nodeLength, at + 0.5));
+    const forward = at > 0.5;
+    const angle = (Math.atan2(
+      forward ? tip.y - other.y : other.y - tip.y,
+      forward ? tip.x - other.x : other.x - tip.x,
+    ) * 180) / Math.PI;
+    // The same placement the marker has: its size, anchored at its refX/refY.
+    head.setAttribute('transform', `translate(${tip.x} ${tip.y}) rotate(${angle})`
+      + ` scale(${arrowHeadSize(el) / 6}) translate(-5 -3)`);
+    head.style.opacity = progress > 0 ? '1' : '0';
+  };
+
+  // While the copies trace, the shape keeps only its fill, held back; a
+  // brush keeps its stroke, uncovered by the mask.
+  if (!brush) {
+    if (styled) node.style.visibility = 'hidden';
+    else node.style.stroke = 'none';
+  }
+  if (fillNode) fillNode.style.fillOpacity = '0';
+  return (t) => {
+    if (t >= 1) {
+      for (const trace of traces) trace.remove();
+      mask?.remove();
+      node.removeAttribute('mask');
+      node.style.removeProperty('stroke');
+      node.style.removeProperty('visibility');
+      fillNode?.style.removeProperty('fill-opacity');
+      if (head) {
+        head.remove();
+        head = null;
+        node.setAttribute('marker-end', markerEnd!);
+      }
+      return;
+    }
+    const progress = ease(Math.min(1, t / share));
+    const drawn = progress * total;
+    let before = 0;
+    traces.forEach((trace, index) => {
+      const length = lengths[index];
+      const visible = Math.min(length, Math.max(0, drawn - before));
+      before += length;
+      if (visible >= length) {
+        // Whole, it is the run itself: a closed run joins at its start
+        // again, where the ends of a dash would meet in two square caps.
+        trace.style.removeProperty('stroke-dasharray');
+        trace.style.removeProperty('stroke-dashoffset');
+      } else {
+        trace.style.strokeDasharray = `${length} ${length}`;
+        trace.style.strokeDashoffset = String(length - visible);
+      }
+      // An empty dash still paints its round caps as a dot.
+      trace.style.visibility = visible > 0 ? '' : 'hidden';
+    });
+    const fill = fillPaint ? Math.min(1, Math.max(0, (t - share) / (1 - share))) : 0;
+    if (fillNode) fillNode.style.fillOpacity = String(fill);
+    if (!stroked) for (const trace of traces) trace.style.strokeOpacity = String(1 - fill);
+    placeHead(progress);
+  };
 }

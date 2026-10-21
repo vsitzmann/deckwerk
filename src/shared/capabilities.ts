@@ -272,11 +272,13 @@ export function capabilities(): Capability[] {
     },
     {
       id: 'shapes',
-      what: 'Rectangles, ellipses, lines and arrows, including curved ones.',
+      what: 'Rectangles, ellipses, lines and arrows, including curved ones, and free-form paths.',
       when: 'Callouts, connectors, emphasis boxes.',
       notes: [
         'An arrow’s `control` is an absolute canvas-space point making it a quadratic curve.',
         'shape: "path" carries real SVG path data, scaled from pathSize to the element box — this is how imported vector art keeps its geometry.',
+        'A free-form path (what the editor\'s pen draws): set pathSize equal to the box (w, h) and write the path in those pixels, e.g. path: "M 0 150 C 0 -50 300 -50 300 150 Z", pathSize: { w: 300, h: 150 }. Close it with Z and give it a fill for a filled shape; leave it open with fill: null and a stroke for a drawn line. With pathSize equal to the box, strokeWidth is in pixels and a resize redraws the path rather than stretching its stroke. Any SVG path command reads; the editor writes back M, L, C and Z when an author drags its points (double-click a path, or Edit points). In HTML: data-shape="path" data-path="…" data-path-size="300,150".',
+        'A path\'s strokeStyle draws its stroke as "pen" (the default when absent: a clean even line), "brush" (swells in the middle and tapers to a point at each end; a closed one breathes around its loop), "pencil" (thin, grainy, a little translucent) or "marker" (a flat, see-through highlighter: give it a wide strokeWidth, say 24). Only paths take it, and only a visible stroke shows it. In HTML: data-stroke-style="brush". Line Draw traces every style.',
         'arrowStart/arrowEnd put heads on a line or arrow at either end, or both. arrowSize sets the head length in pixels (unset: six stroke widths; never less than the line width, which ends the line in a point), so a thick line can keep a modest head. In HTML: data-arrow-size.',
         'A curly brace is shape: "brace", laid out like a line (endpoints at the box\'s left and right centre, rotated by rot). braceDepth is the signed distance from the chord to the point along the element\'s own +y (down when unrotated); half of it is the radius of every curl. In HTML: data-shape="brace" data-brace-depth="40".',
         'A drop shadow is CSS on the element: style: { filter: "drop-shadow(0px 8px 24px rgba(0, 0, 0, 0.3))" }. It follows the shape’s own paint (a line or an outline casts the shadow of its strokes), and Props → Shadow edits the same value.',
@@ -326,7 +328,7 @@ export function capabilities(): Capability[] {
         'Objects with no build are visible from the start.',
         "An appear with value: 'byParagraph' on a text element reveals it one paragraph (or list item) at a time, in document order — one click each, or a cascade when triggered afterPrev/withPrev.",
         'withPrev fires together with the step before it; afterPrev fires on its own after that step, with an optional delay in ms.',
-        'An appear or disappear with value: \'dissolve\' fades the element in or out; an appear with value: \'draw\' on a shape is Line Draw: a line or arrow grows from its start with its head leading, and a box, ellipse or path is traced along its outline with its fill following. action.duration is the time in ms (defaults 1000 and 600), and an afterPrev build waits for an animated one before it to finish. In authoring HTML: data-build="click" data-build-effect="dissolve" data-build-duration="800". Animations play when a step is reached by advancing (including builds that run on arriving at a slide); jumping to a step shows its finished state.',
+        'An appear or disappear with value: \'dissolve\' fades the element in or out; an appear with value: \'draw\' on a shape is Line Draw: a line or arrow grows from its start with its head leading, and a box, ellipse or path is traced along its outline (a path one run after another; a shape with no stroke in a hairline of its fill colour) and its fill fades in once the outline is complete. action.duration is the time in ms (defaults 1000 and 600), and an afterPrev build waits for an animated one before it to finish. In authoring HTML: data-build="click" data-build-effect="dissolve" data-build-duration="800". Animations play when a step is reached by advancing (including builds that run on arriving at a slide); jumping to a step shows its finished state.',
         "The other actions are disappear, play/pause (media), seek (value: seconds) and addClass/removeClass (value: the class name) — the last two are the hook for anything theme.css can animate.",
       ],
       elements: [

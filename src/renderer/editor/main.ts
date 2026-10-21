@@ -29,7 +29,7 @@ import { CssEditor } from './cssEditor.js';
 import { Inspector } from './inspector.js';
 import { HistoryPanel } from './historyPanel.js';
 import { authoredHtmlSync, fileName } from './htmlCompile.js';
-import { createShapeInsertPicker, createTableInsertPicker, insertText } from './elementCreation.js';
+import { createPenButton, createShapeInsertPicker, createTableInsertPicker, insertText } from './elementCreation.js';
 import { createToolbarPicker, createToolbarSplitButton } from './exportPicker.js';
 import { showPdfExportDialog } from './pdfExportDialog.js';
 import { showWebExportDialog } from './webExportDialog.js';
@@ -532,7 +532,8 @@ function buildToolbar(): void {
   mid.className = 'bar-group deck-only bar-center';
   mid.append(
     barIconButton('Text', TEXT_ICON, () => addText()),
-    createShapeInsertPicker(store),
+    createShapeInsertPicker(store, { drawPath: () => canvas.startPen() }),
+    createPenButton(canvas),
     createTableInsertPicker(store),
   );
 

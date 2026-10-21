@@ -1,5 +1,7 @@
-import type { Deck, MediaEffect, Slide, SlideElement } from '@shared/deck.js';
+import { STROKE_STYLES, type Deck, type MediaEffect, type Slide, type SlideElement, type StrokeStyle } from '@shared/deck.js';
 import { braceDepthOf } from '@shared/brace.js';
+import { drawnAtPixelScale, redrawPathAtSize } from '@shared/pathNodes.js';
+import { STROKE_STYLE_GLYPHS, STROKE_STYLE_LABELS, strokeStyleOf } from '@shared/strokeStyles.js';
 import {
   paragraphsToList,
   paragraphsToOrderedList,
@@ -213,6 +215,10 @@ export class Inspector {
   onToggleMask?: (elementId: string) => void;
   /** Which element is currently in mask mode, so the button can reflect it. */
   maskingElement?: () => string | null;
+  /** Start or stop editing a path's points on the canvas. */
+  onTogglePathEdit?: (elementId: string) => void;
+  /** Which path's points are being edited, so the button can reflect it. */
+  pathEditingElement?: () => string | null;
   /** Show the frame at a given time on the canvas while a trim handle moves. */
   onSeekPreview?: (elementId: string, time: number) => void;
   /** Clip length from the canvas video element, when ffprobe cannot say. */
@@ -237,6 +243,9 @@ export class Inspector {
   private continuousEdit = false;
   /** The slide and selection the panel was last built for; see `render`. */
   private lastRenderShown = '';
+  /** A field typed into since it last committed, and a rebuild held for it. */
+  private typingIn: HTMLInputElement | HTMLTextAreaElement | null = null;
+  private renderAfterTyping = false;
   private morphHost = document.createElement('section');
   private morphPanel: MorphPanel;
   /** Enter the dedicated editor for the three fixed layout masters. */
@@ -262,6 +271,31 @@ export class Inspector {
       this.store.endTransaction();
       this.continuousEdit = false;
       this.render();
+    });
+    // A field typed into holds a value nobody has committed. Rebuilding the
+    // panel removes it while it has focus; Chromium blurs it on the way out,
+    // and the blur commits what it holds: a collaborator's edit landing
+    // between the 2 and the 0 of "20" set the font size to 2 (6, clamped),
+    // and the 0 typed into the rebuilt field made it 60. A rebuild waits for
+    // the field to commit or lose focus. Capture phase, so the field's own
+    // commit, which runs next, rebuilds the panel at once as before.
+    this.host.addEventListener('input', (event) => {
+      const target = event.target;
+      if (target instanceof HTMLTextAreaElement
+        || (target instanceof HTMLInputElement && TYPED_INPUT_TYPES.has(target.type))) {
+        this.typingIn = target;
+      }
+    });
+    this.host.addEventListener('change', (event) => {
+      if (event.target === this.typingIn) this.typingIn = null;
+    }, true);
+    this.host.addEventListener('change', () => this.renderHeldForTyping());
+    this.host.addEventListener('focusout', (event) => {
+      if (event.target !== this.typingIn) return;
+      this.typingIn = null;
+      // After focus has landed, so the rebuild hands it back to the control
+      // that took it.
+      setTimeout(() => this.renderHeldForTyping(), 0);
     });
     this.morphHost.className = 'morph-section';
     this.morphPanel = new MorphPanel(this.morphHost, store, false);
@@ -330,6 +364,11 @@ export class Inspector {
   }
 
   render(): void {
+    if (this.typingIn?.isConnected && document.activeElement === this.typingIn) {
+      this.renderAfterTyping = true;
+      return;
+    }
+    this.renderAfterTyping = false;
     // Rebuilding the panel destroys whatever control holds the keyboard. When
     // that control is a form field, Chromium hands focus to the element that
     // owns the document selection — during a text edit, the contenteditable —
@@ -356,6 +395,11 @@ export class Inspector {
     }
     for (const [node, top] of scrolled) node.scrollTop = top;
     this.restoreFocusedControl(focused);
+  }
+
+  /** The rebuild `render` held while a field was being typed into, if any. */
+  private renderHeldForTyping(): void {
+    if (this.renderAfterTyping && !this.typingIn) this.render();
   }
 
   /**
@@ -882,8 +926,13 @@ export class Inspector {
         multi ? commonValue(selected.map((element) => element[key])) : first[key],
         (v) => {
           this.store.updateSelected((el) => {
-            if (key === 'w' || key === 'h') el[key] = Math.max(8, v);
-            else {
+            if (key === 'w' || key === 'h') {
+              const redraw = el.type === 'shape' && drawnAtPixelScale(el)
+                ? { path: el.path!, w: el.w, h: el.h }
+                : null;
+              el[key] = Math.max(8, v);
+              if (redraw && el.type === 'shape') redrawPathAtSize(el, redraw.path, redraw);
+            } else {
               const delta = v - el[key];
               el[key] = v;
               if (el.type === 'shape' && el.control) el.control[key] += delta;
@@ -2409,10 +2458,10 @@ export class Inspector {
           { value: 'arrow', title: 'Arrow', icon: SHAPE_KIND_GLYPHS.arrow },
           { value: 'brace', title: 'Curly brace', icon: SHAPE_KIND_GLYPHS.brace },
         ];
-        // Imported vector art keeps its geometry as a path; it can be shown
+        // A path (drawn with the pen, or imported vector art) can be shown
         // but not chosen, since there is no path to switch another kind to.
         if (el.shape === 'path') {
-          kinds.push({ value: 'path', title: 'Path (drag its corners on the slide)', icon: SHAPE_KIND_GLYPHS.path });
+          kinds.push({ value: 'path', title: 'Path (double-click it to edit its points)', icon: SHAPE_KIND_GLYPHS.path });
         }
         style.content.appendChild(
           segmentedSelectField('Kind', kinds, el.shape, (v) =>
@@ -2421,6 +2470,23 @@ export class Inspector {
             }),
           ),
         );
+        // How a path's stroke is drawn: pen, brush, pencil, marker.
+        if (el.shape === 'path') {
+          style.content.appendChild(
+            segmentedSelectField(
+              'Stroke style',
+              STROKE_STYLES.map((value) => ({
+                value, title: STROKE_STYLE_LABELS[value], icon: STROKE_STYLE_GLYPHS[value],
+              })),
+              strokeStyleOf(el),
+              (v) => this.store.updateSelected((e) => {
+                if (e.type !== 'shape') return;
+                if (v === 'pen') delete e.strokeStyle;
+                else e.strokeStyle = v as StrokeStyle;
+              }, { label: 'Change stroke style' }),
+            ),
+          );
+        }
         const brace = el.shape === 'brace';
         const stroked = el.shape === 'line' || el.shape === 'arrow' || brace;
         const paint = document.createElement('div');
@@ -2465,6 +2531,14 @@ export class Inspector {
             ),
           );
           style.content.appendChild(nums);
+          if (el.shape === 'path' && this.onTogglePathEdit) {
+            const editing = this.pathEditingElement?.() === el.id;
+            style.content.appendChild(button(
+              editing ? 'Done editing points' : 'Edit points',
+              () => this.onTogglePathEdit?.(el.id),
+              'panel-action path-edit-toggle',
+            ));
+          }
         } else if (brace) {
           const row = document.createElement('div');
           row.className = 'compact-field-row';
@@ -3007,6 +3081,9 @@ function scrolledAncestors(node: HTMLElement): Array<[HTMLElement, number]> {
   }
   return found;
 }
+
+/** Input types an author types a value into, committed on change. */
+const TYPED_INPUT_TYPES = new Set(['text', 'number', 'search', 'url', 'email', 'tel']);
 
 export function numberField(
   label: string,

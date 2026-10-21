@@ -20,6 +20,7 @@ import {
 import { showPdfExportDialog } from '../editor/pdfExportDialog.js';
 import { HistoryPanel } from '../editor/historyPanel.js';
 import {
+  createPenButton,
   createShapeInsertPicker,
   createTableInsertPicker,
   insertText,
@@ -946,7 +947,8 @@ function buildToolbar(): void {
   mid.append(
     // Straight into the new box, its placeholder selected: typing replaces it.
     barIconButton('Text', TEXT_ICON, () => canvas.beginTextEdit(insertText(store).id)),
-    createShapeInsertPicker(store),
+    createShapeInsertPicker(store, { drawPath: () => canvas.startPen() }),
+    createPenButton(canvas),
     createTableInsertPicker(store),
   );
 

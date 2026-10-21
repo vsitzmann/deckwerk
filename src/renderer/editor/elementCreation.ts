@@ -1,7 +1,11 @@
-import type { ShapeEl, TextEl } from '@shared/deck.js';
+import { STROKE_STYLES, type ShapeEl, type StrokeStyle, type TextEl } from '@shared/deck.js';
 import { makeId } from '@shared/geometry.js';
 import { DEFAULT_BRACE_DEPTH } from '@shared/brace.js';
 import { presetPath, type PolygonPreset } from '@shared/polygonShape.js';
+import { pathGeometry, type SubPath } from '@shared/pathNodes.js';
+import {
+  STROKE_STYLE_GLYPHS, STROKE_STYLE_LABELS, STROKE_STYLE_WIDTHS,
+} from '@shared/strokeStyles.js';
 import { applyTableColumnWidths } from '@shared/paragraphs.js';
 import { newObjectColors } from '@shared/themes.js';
 import type { EditorStore } from './store.js';
@@ -103,6 +107,30 @@ export function insertPolygon(store: EditorStore, preset: PolygonPreset): ShapeE
   return created;
 }
 
+/**
+ * Insert what the pen drew, `run` given in canvas coordinates, and select it.
+ * A closed shape is filled like any new shape; an open one is a stroked line
+ * in the theme's ink, like a new line. Drawn with a brush, a pencil or a
+ * marker, the stroke is the point, so a closed shape keeps one too; a
+ * marker's is the theme's accent, see-through, rather than its ink.
+ */
+export function insertPath(store: EditorStore, slideIndex: number, run: SubPath, style: StrokeStyle = 'pen'): ShapeEl {
+  const { deck } = store.get();
+  const { fill, stroke } = newObjectColors(deck);
+  const ink = style === 'marker' ? fill : stroke;
+  const outlined = !run.closed || style !== 'pen';
+  const created: ShapeEl = {
+    type: 'shape', id: makeId('shape'), ...pathGeometry([run]),
+    rot: 0, z: nextZ(store), opacity: 1, class: [], style: {},
+    shape: 'path', fill: run.closed ? fill : null, stroke: outlined ? ink : null,
+    strokeWidth: outlined ? STROKE_STYLE_WIDTHS[style] : 2, radius: 0, arrowStart: false, arrowEnd: false,
+    ...(style !== 'pen' ? { strokeStyle: style } : {}),
+  };
+  store.commit((d) => d.slides[slideIndex].elements.push(created), { label: 'Draw path' });
+  store.select([created.id]);
+  return created;
+}
+
 /** Insert a native line, arrow or curly brace and select it. */
 export function insertLine(
   store: EditorStore,
@@ -128,7 +156,10 @@ export function insertLine(
   return created;
 }
 
-type ShapeKind = 'rect' | 'ellipse' | PolygonPreset | 'line' | 'arrow' | 'curved-arrow' | 'brace';
+/** A pen nib, for the toolbar's Pen button and the Shape menu's entry. */
+const PEN_NIB = '<path d="M8 14.5 3.8 8.6 6 2.5h4l2.2 6.1z"/><path d="M8 14.5V9.6"/><circle cx="8" cy="8.6" r="1"/>';
+
+type ShapeKind = 'rect' | 'ellipse' | PolygonPreset | 'line' | 'arrow' | 'curved-arrow' | 'brace' | 'pen';
 
 function shapeIcon(paths: string): string {
   return (
@@ -157,16 +188,25 @@ const SHAPE_OPTIONS: Array<{ kind: ShapeKind; label: string; icon: string }> = [
     icon: shapeIcon('<path d="M2.5 13.5C3 7 7 3 13.5 2.7M8.6 2.5l5-.2.2 5"/>') },
   { kind: 'brace', label: 'Curly brace',
     icon: shapeIcon('<path d="M1.5 5a2 2 0 0 0 2 2h2.5a2 2 0 0 1 2 2 2 2 0 0 1 2-2h2.5a2 2 0 0 0 2-2"/>') },
+  { kind: 'pen', label: 'Draw with Pen', icon: shapeIcon(PEN_NIB) },
 ];
 
-/** Shape menu: a custom dropdown so each option carries an icon. */
-export function createShapeInsertPicker(store: EditorStore): HTMLElement {
+/**
+ * Shape menu: a custom dropdown so each option carries an icon. `drawPath`
+ * starts the pen on the canvas this menu inserts into; without it the menu
+ * offers only ready-made shapes.
+ */
+export function createShapeInsertPicker(
+  store: EditorStore,
+  options: { drawPath?: () => void } = {},
+): HTMLElement {
   const wrap = document.createElement('span');
   wrap.className = 'shape-menu-wrap';
 
   const trigger = document.createElement('button');
   trigger.type = 'button';
   trigger.className = 'shape-menu-trigger';
+  trigger.title = 'Shape';
   trigger.setAttribute('aria-haspopup', 'menu');
   trigger.setAttribute('aria-expanded', 'false');
   trigger.innerHTML =
@@ -201,6 +241,7 @@ export function createShapeInsertPicker(store: EditorStore): HTMLElement {
     menu.className = 'shape-menu';
     menu.setAttribute('role', 'menu');
     for (const { kind, label, icon } of SHAPE_OPTIONS) {
+      if (kind === 'pen' && !options.drawPath) continue;
       const item = document.createElement('button');
       item.type = 'button';
       item.className = 'shape-menu-item';
@@ -212,7 +253,8 @@ export function createShapeInsertPicker(store: EditorStore): HTMLElement {
         // shortcuts; the newly created object is the active context.
         item.blur();
         trigger.blur();
-        if (kind === 'curved-arrow') insertLine(store, 'arrow', true);
+        if (kind === 'pen') options.drawPath?.();
+        else if (kind === 'curved-arrow') insertLine(store, 'arrow', true);
         else if (kind === 'line' || kind === 'arrow' || kind === 'brace') insertLine(store, kind);
         else if (kind === 'rect' || kind === 'ellipse') insertShape(store, kind);
         else insertPolygon(store, kind);
@@ -230,6 +272,104 @@ export function createShapeInsertPicker(store: EditorStore): HTMLElement {
   return wrap;
 }
 
+/** What the Pen button needs of the canvas it draws on. */
+export interface PenCanvas {
+  togglePen(): void;
+  startPen(): void;
+  isDrawingPath(): boolean;
+  penStyle: StrokeStyle;
+  onPenToolChange?: (drawing: boolean) => void;
+}
+
+/**
+ * The toolbar's Pen: starts drawing on `canvas`, and stays pressed while the
+ * pen is out; pressing it again puts the pen down (finishing a line, as
+ * Return does). Its menu segment chooses how the pen draws — pen, brush,
+ * pencil or marker — and takes the pen up in that style.
+ */
+export function createPenButton(canvas: PenCanvas): HTMLElement {
+  const wrap = document.createElement('span');
+  wrap.className = 'shape-menu-wrap pen-tool-control';
+
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'bar-icon-button pen-tool-button';
+  button.setAttribute('aria-pressed', 'false');
+  button.innerHTML =
+    '<svg class="bar-icon" viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" fill="none" ' +
+    `stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">${PEN_NIB}</svg>` +
+    '<span>Pen</span>';
+  const describe = (): void => {
+    button.title = `Draw with Pen (${STROKE_STYLE_LABELS[canvas.penStyle]}): click for corners, drag for curves`;
+  };
+  describe();
+  button.addEventListener('click', () => {
+    // A focused button keeps the keys the pen answers (Return, Escape).
+    button.blur();
+    canvas.togglePen();
+  });
+
+  const trigger = document.createElement('button');
+  trigger.type = 'button';
+  trigger.className = 'pen-tool-menu';
+  trigger.setAttribute('aria-label', 'Pen style');
+  trigger.setAttribute('aria-haspopup', 'menu');
+  trigger.setAttribute('aria-expanded', 'false');
+  trigger.innerHTML = '<svg class="shape-menu-chevron" viewBox="0 0 10 10" width="9" height="9" aria-hidden="true">' +
+    '<path d="M2 3.5l3 3 3-3" fill="none" stroke="currentColor" stroke-width="1.5" ' +
+    'stroke-linecap="round" stroke-linejoin="round"/></svg>';
+
+  let menu: HTMLDivElement | null = null;
+  const close = (): void => {
+    menu?.remove();
+    menu = null;
+    trigger.setAttribute('aria-expanded', 'false');
+    document.removeEventListener('pointerdown', outside, true);
+    document.removeEventListener('keydown', keys, true);
+  };
+  const outside = (event: PointerEvent): void => {
+    if (!wrap.contains(event.target as Node)) close();
+  };
+  const keys = (event: KeyboardEvent): void => {
+    if (event.key === 'Escape') close();
+  };
+  const open = (): void => {
+    menu = document.createElement('div');
+    menu.className = 'shape-menu pen-style-menu';
+    menu.setAttribute('role', 'menu');
+    for (const style of STROKE_STYLES) {
+      const item = document.createElement('button');
+      item.type = 'button';
+      item.className = 'shape-menu-item';
+      item.dataset.penStyle = style;
+      item.setAttribute('role', 'menuitemradio');
+      item.setAttribute('aria-checked', String(canvas.penStyle === style));
+      item.innerHTML = `<svg class="pen-style-glyph" viewBox="0 0 14 14" width="14" height="14" aria-hidden="true">${STROKE_STYLE_GLYPHS[style]}</svg>`
+        + `<span>${STROKE_STYLE_LABELS[style]}</span>`;
+      item.addEventListener('click', () => {
+        close();
+        item.blur();
+        trigger.blur();
+        canvas.penStyle = style;
+        describe();
+        // Choosing how to draw is choosing to draw; mid-drawing, it is how
+        // this drawing comes out.
+        if (!canvas.isDrawingPath()) canvas.startPen();
+      });
+      menu.appendChild(item);
+    }
+    wrap.appendChild(menu);
+    trigger.setAttribute('aria-expanded', 'true');
+    document.addEventListener('pointerdown', outside, true);
+    document.addEventListener('keydown', keys, true);
+  };
+  trigger.addEventListener('click', () => (menu ? close() : open()));
+
+  canvas.onPenToolChange = (drawing) => button.setAttribute('aria-pressed', String(drawing));
+  wrap.append(button, trigger);
+  return wrap;
+}
+
 const TABLE_PICKER_ROWS = 8;
 const TABLE_PICKER_COLUMNS = 10;
 
@@ -241,6 +381,7 @@ export function createTableInsertPicker(store: EditorStore): HTMLElement {
   const trigger = document.createElement('button');
   trigger.type = 'button';
   trigger.className = 'shape-menu-trigger table-picker-trigger';
+  trigger.title = 'Table';
   trigger.setAttribute('aria-haspopup', 'grid');
   trigger.setAttribute('aria-expanded', 'false');
   trigger.innerHTML =

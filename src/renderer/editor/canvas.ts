@@ -1,9 +1,26 @@
 import { openContextMenu } from './contextMenuPlacement.js';
-import type { Deck, Slide, SlideElement, TextEl } from '@shared/deck.js';
+import type { Deck, ShapeEl, Slide, SlideElement, StrokeStyle, TextEl } from '@shared/deck.js';
 import { NEW_MEDIA_FIT } from '@shared/deck.js';
 import { lineSpacingValue } from '@shared/lineHeight.js';
 import { canHoldText, shapeToTextBox } from '@shared/shapeText.js';
 import { moveCorner, polygonPoints } from '@shared/polygonShape.js';
+import {
+  constrainAngle,
+  drawnAtPixelScale,
+  insertNode,
+  moveHandle,
+  moveNode,
+  nearestOnPath,
+  pathOnCanvas,
+  redrawPathAtSize,
+  removeNode,
+  serializePath,
+  setPathOnCanvas,
+  toggleSmooth,
+  type SubPath,
+} from '@shared/pathNodes.js';
+import { PEN_POINT_SCREEN_PX, PenDraft, pathOverlay, penOverlay, type OverlayKnob } from './pathTools.js';
+import { insertPath } from './elementCreation.js';
 import { braceDepthToward, bracePolyline, braceTip } from '@shared/brace.js';
 import { type Rect, fitScale, makeId } from '@shared/geometry.js';
 
@@ -764,6 +781,8 @@ type ResizeOrigin = Rect & {
    * proportions, and is put back if Shift is let go mid-drag. */
   fit?: 'cover' | 'contain' | 'fill';
   control?: { x: number; y: number } | null;
+  /** A path drawn one unit to the pixel, which a resize redraws at the new size. */
+  path?: string;
 };
 
 type DragMode =
@@ -809,7 +828,25 @@ type DragMode =
     }
   | { kind: 'curve-control'; elementId: string }
   | { kind: 'brace-tip'; elementId: string }
-  | { kind: 'polygon-corner'; elementId: string; index: number };
+  | { kind: 'polygon-corner'; elementId: string; index: number }
+  | {
+      /** A point of the path being edited, or one of its handles (`which`). */
+      kind: 'path-point';
+      elementId: string;
+      sub: number;
+      index: number;
+      which: 'anchor' | 'in' | 'out';
+      startCanvas: XY;
+      /** The shape as it was when the drag began; every move starts from it. */
+      origin: ShapeEl;
+    };
+
+/**
+ * The canvas whose pen or point editing began last. The keys those modes
+ * answer are read from the window, and the Design workspace puts a second
+ * canvas on screen over the first; only this one answers them.
+ */
+let pathKeysOwner: EditorCanvas | null = null;
 
 /** Fired on the canvas host with a message (`detail`) for the shell's status bar. */
 export const CANVAS_NOTICE_EVENT = 'deckwerk-canvas-notice';
@@ -1032,6 +1069,31 @@ export class EditorCanvas {
   private buildBadgesVisible = false;
   /** The crop as it was when the current mask drag began. */
   private maskOrigin: { x: number; y: number; w: number; h: number } | null = null;
+  /**
+   * The pen's drawing in progress (Shape → Draw with Pen). While there is one,
+   * every press on the canvas places a point; the deck changes only when the
+   * drawing is finished, as one new path shape.
+   */
+  private pen: PenDraft | null = null;
+  /**
+   * When the pen last finished an open line with a double-click. That
+   * gesture's own `dblclick` arrives afterwards and lands on the new path,
+   * where it would open its points for editing.
+   */
+  private penFinishedAt = Number.NEGATIVE_INFINITY;
+  /** How the pen draws its next path; the Pen button's menu chooses it. */
+  penStyle: StrokeStyle = 'pen';
+  /** Notified when the pen is taken up or put down, so its button can show it. */
+  onPenToolChange?: (drawing: boolean) => void;
+  /**
+   * The path shape whose points are being edited (double-click a path, or
+   * Edit points), and which of its points is selected: `sub` is the run,
+   * `index` the point in it. Like mask mode, this is the canvas's own state;
+   * the deck changes only as points are dragged, added and deleted.
+   */
+  private pathEdit: { elementId: string; point: { sub: number; index: number } | null } | null = null;
+  /** Notified when point editing starts or ends, so the inspector can relabel. */
+  onPathEditChange?: (elementId: string | null) => void;
 
   /** Notified when mask mode turns on or off, so the inspector can relabel. */
   onMaskModeChange?: (elementId: string | null) => void;
@@ -1126,6 +1188,21 @@ export class EditorCanvas {
     this.keptSelection.schedule();
     const { deck, slideIndex, selection } = this.store.get();
     const slide = deck.slides[slideIndex];
+    // A drawing belongs to the slide it was begun on, and selecting anything
+    // (a click in the rail, a new text box) puts the pen down.
+    if (this.pen && (this.pen.slideId !== slide?.id || selection.size > 0)) this.endPen();
+    // Point editing ends when its path stops being the one selected object:
+    // another selection, a slide change, an undo that took the path away.
+    if (this.pathEdit) {
+      const edited = slide?.elements.find((el) => el.id === this.pathEdit!.elementId);
+      const paths = edited?.type === 'shape' ? pathOnCanvas(edited) : null;
+      if (!paths || selection.size !== 1 || !selection.has(edited!.id)) {
+        this.pathEdit = null;
+        this.onPathEditChange?.(null);
+      } else if (this.pathEdit.point && !paths[this.pathEdit.point.sub]?.nodes[this.pathEdit.point.index]) {
+        this.pathEdit.point = null;
+      }
+    }
     if (!slide) {
       this.slideLayer.replaceChildren();
       this.overlay.replaceChildren();
@@ -2229,6 +2306,14 @@ export class EditorCanvas {
       // Counter-scale so outlines and handles stay one visual size at any zoom.
       box.style.setProperty('--inv', String(1 / this.scale));
 
+      // A path whose points are being edited shows those instead of its box
+      // (drawn below, over everything else).
+      if (this.pathEdit?.elementId === el.id) {
+        box.classList.add('path-editing');
+        frag.appendChild(box);
+        continue;
+      }
+
       // Lines, arrows and braces get endpoint handles instead of a resize
       // box: what you want to move is where the arrow starts and ends, not
       // its bounding rectangle.
@@ -2405,6 +2490,13 @@ export class EditorCanvas {
       }
     }
 
+    if (this.pen) frag.appendChild(penOverlay(this.pen, this.scale, deck.canvas));
+    if (this.pathEdit) {
+      const edited = elements.find((el) => el.id === this.pathEdit!.elementId);
+      const paths = edited?.type === 'shape' ? pathOnCanvas(edited) : null;
+      if (edited && paths) frag.appendChild(this.pathEditOverlay(edited.id, paths, deck));
+    }
+
     if (this.marquee) {
       const m = document.createElement('div');
       m.className = 'marquee';
@@ -2429,6 +2521,7 @@ export class EditorCanvas {
         slideSelection: state.slideSelection,
         editingId: this.editingId,
         maskingId: this.maskingId,
+        pathEditId: this.pathEdit?.elementId ?? null,
         tableSelection: this.tableSelection,
         slideLayer: this.slideLayer,
         overlay: this.overlay,
@@ -2476,6 +2569,10 @@ export class EditorCanvas {
     document.fonts?.addEventListener?.('loadingdone', () => this.scheduleTableHeightSync());
     this.host.addEventListener('contextmenu', (ev) => this.onContextMenu(ev));
 
+    // Ahead of the shell's own shortcuts: while the pen is drawing, Return,
+    // Escape, Backspace and undo belong to the drawing; while a path's points
+    // are being edited, Delete removes a point and Escape or Return is done.
+    window.addEventListener('keydown', (ev) => this.onPathKey(ev), true);
     // Modifier state changes do not cause pointermove, so mirror the gesture
     // modifier onto the canvas host to let CSS swap the handle cursor while it
     // is hovered.
@@ -2566,6 +2663,11 @@ export class EditorCanvas {
     this.onPointerSample?.(point);
     this.host.setPointerCapture(ev.pointerId);
 
+    if (this.pen) {
+      this.penPointerDown(ev, point, secondClick);
+      return;
+    }
+
     // A click away from the active crop window is the implicit "Done" action.
     // Keep the click alive after leaving mask mode so it can still select the
     // object underneath (or begin a marquee on empty canvas). Mask handles are
@@ -2584,6 +2686,8 @@ export class EditorCanvas {
         this.toggleMaskMode(null);
       }
     }
+
+    if (this.pathEdit && this.pathEditPointerDown(target, point, secondClick)) return;
 
     // Like Keynote, the gesture modifier (Command on macOS, Control elsewhere)
     // turns any ordinary object handle into a rotation handle. Curve controls
@@ -2711,6 +2815,9 @@ export class EditorCanvas {
             ...((selected.type === 'shape' && selected.control)
               ? { control: { ...selected.control } }
               : {}),
+            ...((selected.type === 'shape' && drawnAtPixelScale(selected))
+              ? { path: selected.path! }
+              : {}),
           });
         }
         this.drag = {
@@ -2789,6 +2896,13 @@ export class EditorCanvas {
     // Presence: report the pointer in slide space whether hovering or
     // dragging, so collaborators see the cursor move, not only the edits.
     this.onPointerSample?.(this.toCanvas(ev));
+    if (this.pen) {
+      // Hovering moves the preview; with the button down, the press pulls
+      // out the new point's handles.
+      this.pen.move(wholePixel(this.toCanvas(ev)), ev.shiftKey, DRAG_THRESHOLD_PX / this.scale);
+      this.redrawOverlay();
+      return;
+    }
     if (this.drag.kind === 'none') return;
     // Only a held button drags. See `isHoverMove`.
     if (isHoverMove(ev)) return;
@@ -3116,6 +3230,12 @@ export class EditorCanvas {
             const control = resizePointByScale(origin.control, origin, resized, scaleX, scaleY);
             el.control = { x: Math.round(control.x), y: Math.round(control.y) };
           }
+          // A drawn path is redrawn at the new size rather than stretched by
+          // its viewBox, which would stretch its stroke too: a line drawn
+          // with the pen keeps its width however its box is pulled.
+          if (el.type === 'shape' && origin.path) {
+            redrawPathAtSize(el, origin.path, origin);
+          }
         });
         for (const id of drag.origins.keys()) this.syncTableHeight(id);
         break;
@@ -3228,6 +3348,16 @@ export class EditorCanvas {
         break;
       }
 
+      case 'path-point': {
+        const drag = this.drag;
+        this.store.updateSelected((target) => {
+          if (target.id === drag.elementId && target.type === 'shape') {
+            this.dragPathPoint(target, drag, point, ev);
+          }
+        });
+        break;
+      }
+
       case 'marquee': {
         const s = this.drag.startCanvas;
         this.marquee = {
@@ -3255,6 +3385,12 @@ export class EditorCanvas {
         '.welcome-screen, .zoom-controls, .notes-toggle, .notes-drawer',
       )
     ) {
+      return;
+    }
+    if (this.pen) {
+      this.host.releasePointerCapture?.(ev.pointerId);
+      if (this.pen.up()) this.finishPen(true);
+      else this.redrawOverlay();
       return;
     }
     const textEdit = !this.dragStarted ? this.pendingTextEdit : null;
@@ -3423,6 +3559,8 @@ export class EditorCanvas {
    * play a video, crop a picture (and double-click again to leave the crop).
    */
   private onDoubleClick(ev: PointerEvent | MouseEvent): void {
+    // The pen reads its own double-click, from the presses (penPointerDown).
+    if (this.pen || ev.timeStamp - this.penFinishedAt <= DOUBLE_CLICK_MS) return;
     // Once editing is active, native browser double-click selection owns this
     // gesture. Calling beginTextEdit again would select the entire text box and
     // replace the word selection the browser just made. Under heavy renderer
@@ -3470,7 +3608,9 @@ export class EditorCanvas {
     const hit = this.hitTest(this.toCanvas(ev as PointerEvent));
     if (!hit) return;
 
-    if (hit.type === 'text' || hit.type === 'html') {
+    if (hit.type === 'shape' && hit.shape === 'path') {
+      if (this.pathEdit?.elementId !== hit.id && pathOnCanvas(hit)) this.beginPathEdit(hit.id);
+    } else if (hit.type === 'text' || hit.type === 'html') {
       this.beginTextEdit(hit.id);
     } else if (hit.type === 'shape' && canHoldText(hit)) {
       // Typing into a rectangle or an ellipse makes it a text box with the
@@ -3491,6 +3631,319 @@ export class EditorCanvas {
       if (ev.timeStamp - this.mediaToggledAt <= DOUBLE_CLICK_MS) return;
       this.toggleMedia(hit.id);
     }
+  }
+
+  /** Start drawing a path with the pen (Shape → Draw with Pen). */
+  startPen(): void {
+    const slide = this.store.slide;
+    if (!slide) return;
+    if (this.editingId) this.endTextEditing(true);
+    if (this.maskingId) this.toggleMaskMode(null);
+    this.endWebLive();
+    this.pen = new PenDraft(slide.id);
+    pathKeysOwner = this;
+    this.host.classList.add('pen-tool');
+    this.onPenToolChange?.(true);
+    this.store.clearSelection();
+    this.redrawOverlay();
+    this.notice('Click to add points, drag to curve. Click the first point to close the shape; Return to finish a line.');
+  }
+
+  /** The Pen button: take the pen up, or put it down, finishing a line. */
+  togglePen(): void {
+    if (this.pen) this.finishPen(false);
+    else this.startPen();
+  }
+
+  /** Whether the pen is drawing. */
+  isDrawingPath(): boolean {
+    return this.pen !== null;
+  }
+
+  /** Put the pen down without adding anything. */
+  private endPen(): void {
+    if (!this.pen) return;
+    this.pen = null;
+    this.host.classList.remove('pen-tool');
+    this.onPenToolChange?.(false);
+    this.redrawOverlay();
+    // Take the pen's instructions out of the status bar.
+    this.notice('');
+  }
+
+  /**
+   * Finish the drawing: closed, a filled shape; open, a line. Fewer than two
+   * points draw nothing, and the pen is simply put down.
+   */
+  private finishPen(closed: boolean): void {
+    const pen = this.pen;
+    if (!pen) return;
+    this.endPen();
+    const run = pen.result(closed);
+    const index = this.store.get().deck.slides.findIndex((slide) => slide.id === pen.slideId);
+    if (!run || index < 0) return;
+    insertPath(this.store, index, run, this.penStyle);
+  }
+
+  private penPointerDown(ev: PointerEvent, point: XY, secondClick: boolean): void {
+    const pen = this.pen!;
+    const tolerance = PEN_POINT_SCREEN_PX / this.scale;
+    // The second press of a double-click on the point the first one placed
+    // finishes the line there.
+    if (secondClick && pen.onLast(point, tolerance)) {
+      if (pen.nodes.length < 2) return;
+      this.penFinishedAt = ev.timeStamp;
+      this.finishPen(false);
+      return;
+    }
+    pen.down(wholePixel(point), ev.shiftKey, tolerance);
+    this.redrawOverlay();
+  }
+
+  private onPathKey(ev: KeyboardEvent): void {
+    if ((!this.pen && !this.pathEdit) || pathKeysOwner !== this) return;
+    const t = ev.target instanceof HTMLElement ? ev.target : null;
+    if (t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName))) return;
+    if (!this.pen) {
+      this.onPathEditKey(ev);
+      return;
+    }
+    const undo = (ev.metaKey || ev.ctrlKey) && !ev.shiftKey && ev.key.toLowerCase() === 'z';
+    if (ev.key === 'Enter' || ev.key === 'Escape') {
+      this.finishPen(false);
+    } else if ((ev.key === 'Backspace' || ev.key === 'Delete' || undo) && this.pen.nodes.length > 0) {
+      this.pen.removeLast();
+      this.redrawOverlay();
+    } else {
+      // With nothing drawn yet, undo is the deck's again.
+      return;
+    }
+    ev.preventDefault();
+    ev.stopImmediatePropagation();
+  }
+
+  /** The path whose points are being edited, if any. */
+  pathEditingElement(): string | null {
+    return this.pathEdit?.elementId ?? null;
+  }
+
+  /** Start or stop editing a path's points (Edit points; null stops). */
+  togglePathEdit(elementId: string | null): void {
+    if (elementId === null || this.pathEdit?.elementId === elementId) this.endPathEdit();
+    else this.beginPathEdit(elementId);
+  }
+
+  private beginPathEdit(elementId: string): void {
+    const el = this.store.slide?.elements.find((candidate) => candidate.id === elementId);
+    if (el?.type !== 'shape' || !pathOnCanvas(el)) return;
+    if (this.editingId) this.endTextEditing(true);
+    if (this.maskingId) this.toggleMaskMode(null);
+    this.endPen();
+    this.pathEdit = { elementId, point: null };
+    pathKeysOwner = this;
+    const selected = this.store.get().selection;
+    if (selected.size !== 1 || !selected.has(elementId)) this.store.select([elementId]);
+    this.onPathEditChange?.(elementId);
+    this.redrawOverlay();
+    this.notice('Drag points and handles; click the outline to add a point. Option-drag a handle to break it, Delete removes a point, Escape when done.');
+  }
+
+  private endPathEdit(): void {
+    if (!this.pathEdit) return;
+    this.pathEdit = null;
+    this.onPathEditChange?.(null);
+    this.redrawOverlay();
+    this.notice('');
+  }
+
+  /**
+   * The edited path's points over the slide: every anchor, and the handles
+   * that shape the curves on either side of the selected one.
+   */
+  private pathEditOverlay(elementId: string, paths: SubPath[], deck: Deck): DocumentFragment {
+    const selected = this.pathEdit?.point ?? null;
+    const knobs: OverlayKnob[] = [];
+    if (selected) {
+      const run = paths[selected.sub];
+      const count = run.nodes.length;
+      const neighbours = [
+        { index: selected.index, sides: ['in', 'out'] as const },
+        ...(selected.index > 0 || run.closed
+          ? [{ index: (selected.index - 1 + count) % count, sides: ['out'] as const }] : []),
+        ...(selected.index < count - 1 || run.closed
+          ? [{ index: (selected.index + 1) % count, sides: ['in'] as const }] : []),
+      ];
+      for (const { index, sides } of neighbours) {
+        const node = run.nodes[index];
+        for (const side of sides) {
+          const at = node[side];
+          if (at) knobs.push({ at, from: node, key: `${selected.sub}:${index}:${side}` });
+        }
+      }
+    }
+    return pathOverlay({
+      outline: serializePath(paths),
+      anchors: paths.flatMap((run, sub) => run.nodes.map((node, index) => ({
+        at: node,
+        key: `${sub}:${index}`,
+        selected: selected?.sub === sub && selected.index === index,
+      }))),
+      knobs,
+      elementId,
+      scale: this.scale,
+      canvas: deck.canvas,
+    });
+  }
+
+  /**
+   * A press while a path's points are being edited. On a point or a handle it
+   * starts dragging that; on the outline it adds a point there and drags the
+   * new point. Elsewhere on the path it only clears the point selection, and
+   * anywhere else it ends point editing; either way the press then goes on as
+   * an ordinary one (returns false).
+   */
+  private pathEditPointerDown(target: HTMLElement, point: XY, secondClick: boolean): boolean {
+    const edit = this.pathEdit!;
+    const el = this.store.slide?.elements.find((candidate) => candidate.id === edit.elementId);
+    const paths = el?.type === 'shape' ? pathOnCanvas(el) : null;
+    if (el?.type !== 'shape' || !paths) {
+      this.endPathEdit();
+      return false;
+    }
+    const begin = (label: string, sub: number, index: number, which: 'anchor' | 'in' | 'out', origin: ShapeEl) => {
+      edit.point = { sub, index };
+      this.drag = { kind: 'path-point', elementId: el.id, sub, index, which, startCanvas: point, origin };
+      this.store.beginTransaction(label);
+      this.redrawOverlay();
+    };
+    const handleKey = target.dataset?.pathHandle;
+    if (handleKey && target.dataset.elementId === el.id) {
+      const [sub, index, which] = handleKey.split(':');
+      // A neighbour's handle may be the one grabbed; the selected point, whose
+      // handles are on show, stays the selected one.
+      const selected = edit.point;
+      begin('Move handle', Number(sub), Number(index), which as 'in' | 'out', el);
+      edit.point = selected;
+      return true;
+    }
+    const pointKey = target.dataset?.pathNode;
+    if (pointKey && target.dataset.elementId === el.id) {
+      // A double-click on a point turns a corner smooth or a smooth point
+      // sharp. Read from the presses: the overlay is redrawn under the
+      // pointer by the first one, so no dblclick names the point.
+      if (secondClick) {
+        this.togglePathPointSmooth(pointKey);
+        return true;
+      }
+      const [sub, index] = pointKey.split(':').map(Number);
+      begin('Move point', sub, index, 'anchor', el);
+      return true;
+    }
+    const hit = nearestOnPath(paths, point);
+    if (hit && hit.distance <= LINE_HIT_SCREEN_PX / this.scale) {
+      // One undo step: the new point and wherever this press drags it.
+      this.store.beginTransaction('Add point');
+      let added = -1;
+      this.store.updateSelected((shape) => {
+        if (shape.id !== el.id || shape.type !== 'shape') return;
+        const next = pathOnCanvas(shape)!;
+        added = insertNode(next, hit.sub, hit.segment, hit.t);
+        setPathOnCanvas(shape, next);
+      });
+      const inserted = this.store.slide?.elements.find((candidate) => candidate.id === el.id);
+      if (inserted?.type === 'shape' && added >= 0) begin('Add point', hit.sub, added, 'anchor', inserted);
+      return true;
+    }
+    edit.point = null;
+    if (this.hitTest(point)?.id !== el.id) this.endPathEdit();
+    else this.redrawOverlay();
+    return false;
+  }
+
+  /**
+   * One frame of a point or handle drag, always from the shape as the drag
+   * found it. Shift keeps a point on a 45° line from where it started, or a
+   * handle at a 45° angle; Option/Alt moves a handle alone.
+   */
+  private dragPathPoint(
+    target: ShapeEl,
+    drag: Extract<DragMode, { kind: 'path-point' }>,
+    point: XY,
+    ev: PointerEvent,
+  ): void {
+    const { origin } = drag;
+    Object.assign(target, {
+      x: origin.x, y: origin.y, w: origin.w, h: origin.h, path: origin.path, pathSize: origin.pathSize,
+    });
+    const paths = pathOnCanvas(target);
+    const node = paths?.[drag.sub]?.nodes[drag.index];
+    if (!paths || !node) return;
+    const dx = point.x - drag.startCanvas.x;
+    const dy = point.y - drag.startCanvas.y;
+    if (drag.which === 'anchor') {
+      const moved = wholePixel({ x: node.x + dx, y: node.y + dy });
+      moveNode(node, ev.shiftKey ? constrainAngle(node, moved) : moved);
+    } else {
+      const handle = node[drag.which];
+      if (!handle) return;
+      const moved = wholePixel({ x: handle.x + dx, y: handle.y + dy });
+      moveHandle(node, drag.which, ev.shiftKey ? constrainAngle(node, moved) : moved, ev.altKey);
+    }
+    setPathOnCanvas(target, paths);
+  }
+
+  /** A double-click on a point: a corner becomes smooth, a smooth point a corner. */
+  private togglePathPointSmooth(key: string): void {
+    const edit = this.pathEdit;
+    if (!edit) return;
+    const [sub, index] = key.split(':').map(Number);
+    edit.point = { sub, index };
+    this.store.updateSelected((shape) => {
+      if (shape.id !== edit.elementId || shape.type !== 'shape') return;
+      const paths = pathOnCanvas(shape);
+      if (!paths?.[sub]?.nodes[index]) return;
+      toggleSmooth(paths[sub], index);
+      setPathOnCanvas(shape, paths);
+    }, { label: 'Smooth or sharpen point' });
+    this.redrawOverlay();
+  }
+
+  private onPathEditKey(ev: KeyboardEvent): void {
+    const edit = this.pathEdit!;
+    if (ev.key === 'Escape' || ev.key === 'Enter') {
+      this.endPathEdit();
+    } else if (ev.key === 'Backspace' || ev.key === 'Delete') {
+      const point = edit.point;
+      if (point) this.deletePathPoint(edit.elementId, point);
+    } else {
+      return;
+    }
+    ev.preventDefault();
+    ev.stopImmediatePropagation();
+  }
+
+  /** Remove a point; removing the last one that leaves a line removes the shape. */
+  private deletePathPoint(elementId: string, point: { sub: number; index: number }): void {
+    const el = this.store.slide?.elements.find((candidate) => candidate.id === elementId);
+    const paths = el?.type === 'shape' ? pathOnCanvas(el) : null;
+    if (!paths) return;
+    const remaining = removeNode(paths, point.sub, point.index);
+    this.pathEdit!.point = null;
+    if (remaining.length === 0) {
+      this.store.deleteSelection();
+      return;
+    }
+    this.store.updateSelected((shape) => {
+      if (shape.id === elementId && shape.type === 'shape') setPathOnCanvas(shape, remaining);
+    }, { label: 'Delete point' });
+    this.redrawOverlay();
+  }
+
+  /** Redraw just the chrome over the slide, for state the deck does not hold. */
+  private redrawOverlay(): void {
+    const { deck, slideIndex, selection } = this.store.get();
+    const slide = deck.slides[slideIndex];
+    if (slide) this.drawOverlay(deck, slide.elements, selection);
   }
 
   /** Whether this web element's page is currently running on the canvas. */
@@ -7323,12 +7776,14 @@ function sameStructure(a: Slide, b: Slide, ignoreHtml = false): boolean {
       JSON.stringify(x.effects ?? []) !== JSON.stringify(y.effects ?? [])
     ) return false;
     // Shape paint and kind live on SVG children; wrapper-only updates cannot
-    // apply them. Rebuild when they change (including rect -> ellipse).
+    // apply them. Rebuild when they change (including rect -> ellipse). The
+    // path itself is geometry: the patch redraws the SVG (`syncShapeBody`),
+    // so dragging a point does not rebuild the slide on every frame.
     if (x.type === 'shape' && y.type === 'shape') {
       if (
         x.shape !== y.shape || x.fill !== y.fill || x.stroke !== y.stroke ||
         x.strokeWidth !== y.strokeWidth || x.radius !== y.radius ||
-        x.path !== y.path || x.arrowStart !== y.arrowStart || x.arrowEnd !== y.arrowEnd ||
+        x.arrowStart !== y.arrowStart || x.arrowEnd !== y.arrowEnd || x.strokeStyle !== y.strokeStyle ||
         Boolean(x.control) !== Boolean(y.control)
       ) return false;
     }
@@ -7341,6 +7796,11 @@ function sameStructure(a: Slide, b: Slide, ignoreHtml = false): boolean {
     if (ac !== bc) return false;
   }
   return true;
+}
+
+/** A point on the canvas's own pixel grid, where the pen and point drags put points. */
+function wholePixel(point: XY): XY {
+  return { x: Math.round(point.x), y: Math.round(point.y) };
 }
 
 /** Axis-aligned bounds of an element as rendered (rotation about its centre). */
@@ -7445,6 +7905,17 @@ export function elementContainsPoint(
     const nearestY = start.y + t * vy;
     return Math.hypot(point.x - nearestX, point.y - nearestY) <=
       Math.max(tolerance, el.strokeWidth / 2);
+  }
+  // An unfilled path — a line drawn with the pen, outline art — is hit along
+  // its stroke, as a line is; its box is mostly empty slide.
+  if (el.type === 'shape' && el.shape === 'path' && !visiblePaint(el.fill)) {
+    const paths = pathOnCanvas(el);
+    if (paths) {
+      const size = el.pathSize ?? { w: el.w, h: el.h };
+      const width = el.strokeWidth * Math.sqrt((el.w / size.w) * (el.h / size.h));
+      const hit = nearestOnPath(paths, point);
+      return hit !== null && hit.distance <= Math.max(tolerance, width / 2);
+    }
   }
   // Rotated elements render about their centre; undo the rotation on the
   // point so the axis-aligned bounds check matches what's on screen.
