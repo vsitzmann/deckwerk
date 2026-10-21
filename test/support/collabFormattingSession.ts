@@ -12,10 +12,11 @@ import {
   findTarget,
   launchBrowser,
   stopBrowser,
-  wait,
+  textEditingState,
   type RunningBrowser,
 } from './browserSession.js';
 import { collabClientDir } from './collabClient.js';
+import { recordRecovery } from './exhaustiveTextFormatting.js';
 
 /**
  * Shared fixture and helpers for the production-browser formatting/undo
@@ -222,6 +223,12 @@ export class FormattingSession {
         browser.log,
       );
       editor = await Cdp.connect(target.webSocketDebuggerUrl!);
+      // CI shows every suite's window on one bare Xvfb, where the window
+      // mapped last takes the keyboard. Losing it blurs the field being typed
+      // into, the blur commits it, and the rebuilt panel drops the field a
+      // test is still typing into. This page stands for the window an author
+      // is working in, so it keeps focus.
+      await editor.call('Emulation.setFocusEmulationEnabled', { enabled: true });
       await eventually(async () => editor!.evaluate<boolean>(`(
         document.getElementById('status')?.textContent?.includes(${JSON.stringify(`connected as ${userName}`)}) === true
         && Boolean(document.querySelector('${ON_CANVAS(TABLE_ID)} table'))
@@ -320,25 +327,57 @@ export class FormattingSession {
     ), `${id} text was not selected`);
   }
 
+  /**
+   * Select the box's first word with a real pointer drag, in edit mode.
+   *
+   * On CI this window is a real X11 window on a bare Xvfb that the other
+   * Electron suites of the tier share, so the window can lose focus and the
+   * pointer state can change under a gesture; a drag that lost its moves
+   * leaves a bare caret. This used to fire the drag once and then wait 40 s
+   * for a selection that could no longer appear ("first word was not
+   * selected: false"). Now each step waits for what the next one needs —
+   * the window in front, the box editing, the caret placed in it — and a
+   * drag that left only a caret in a box still being edited is made again,
+   * once, and recorded. A box that left editing is a failure, with the
+   * canvas state.
+   */
   async beginSelectFirstWord(id: string, descendant = ''): Promise<void> {
+    const content = `${ON_CANVAS(id)} .text-content`;
+    const target = `${content}${descendant ? ` ${descendant}` : ''}`;
+    await this.editor.call('Page.bringToFront');
+    await this.editor.evaluate('window.focus()');
     const editing = await this.editor.evaluate<boolean>(
-      `document.querySelector('${ON_CANVAS(id)} .text-content')?.isContentEditable === true`,
+      `document.querySelector('${content}')?.isContentEditable === true`,
     );
-    if (!editing) {
-      await this.editor.doubleClickText(`${ON_CANVAS(id)} .text-content`, `${id} first word`);
-    }
+    if (!editing) await this.editor.doubleClickText(content, `${id} first word`);
     await eventually(async () => this.editor.evaluate<boolean>(
-      `document.querySelector('${ON_CANVAS(id)} .text-content')?.isContentEditable === true`,
+      `document.querySelector('${content}')?.isContentEditable === true`,
     ), `${id} did not enter text editing`);
-    const target = `${ON_CANVAS(id)} .text-content${descendant ? ` ${descendant}` : ''}`;
-    if (editing) await this.editor.click(target, `${id} reset caret`);
-    await this.editor.dragSelectFirstWord(target, `${id} selected word`);
-    await eventually(async () => this.editor.evaluate<boolean>(`(() => {
-      const content = document.querySelector('${ON_CANVAS(id)} .text-content');
-      return content?.isContentEditable === true
-        && window.getSelection()?.isCollapsed === false
-        && (window.getSelection()?.toString().trim().length ?? 0) > 0;
-    })()`), `${id} first word was not selected`);
+    const state = () => this.editor.evaluate<{ editing: boolean; caret: boolean; word: boolean }>(`(() => {
+      const content = document.querySelector('${content}');
+      const selection = window.getSelection();
+      const inside = Boolean(selection?.rangeCount && content?.contains(selection.anchorNode));
+      return {
+        editing: content?.isContentEditable === true,
+        caret: inside && selection.isCollapsed && document.activeElement === content,
+        word: inside && !selection.isCollapsed && selection.toString().trim().length > 0,
+      };
+    })()`);
+    for (let attempt = 0; ; attempt += 1) {
+      if (editing || attempt > 0) {
+        await this.editor.click(target, `${id} reset caret`);
+        await eventually(state, `${id} reset click did not place a caret`, (now) => now.caret);
+      }
+      await this.editor.dragSelectFirstWord(target, `${id} selected word`);
+      const after = await eventually(state, '', (now) => now.word, 5_000).catch(() => state());
+      if (after.word) return;
+      if (after.editing && after.caret && attempt === 0) {
+        recordRecovery(`${id}: the drag over the first word left a caret; dragged again`);
+        continue;
+      }
+      throw new Error(`${id} first word was not selected: ${JSON.stringify(after)}\n`
+        + `canvas state: ${await textEditingState(this.editor, content)}`);
+    }
   }
 
   async undoEditing(id: string, preserveTextSelection = true): Promise<void> {
@@ -442,13 +481,19 @@ export class FormattingSession {
     await this.typeHere(id, typed, label);
   }
 
-  /** Typing adds its own history entries, so undo until the fixture returns. */
+  /**
+   * Typing adds its own history entries, so undo until the fixture returns.
+   * Whether another undo is needed is judged once the server has confirmed
+   * every edit this editor sent, the last undo included: a fixed pause let a
+   * slow runner press one more undo than the history held.
+   */
   async restore(id: string): Promise<void> {
+    const original = JSON.stringify(this.original.get(id)!);
     for (let attempt = 0; attempt < 12; attempt += 1) {
-      const element = await this.liveElement(id);
-      if (JSON.stringify(element) === JSON.stringify(this.original.get(id)!)) return;
+      await eventually(async () => this.editor.evaluate<boolean>('window.bridge.pending.length === 0'),
+        `${id}: the server did not confirm this editor's edits`);
+      if (JSON.stringify(await this.liveElement(id)) === original) return;
       await this.editor.chord('z', 'KeyZ', 90, MOD);
-      await wait(150);
     }
     await this.expectRestored(id, this.original.get(id)!);
   }

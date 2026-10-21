@@ -1,30 +1,60 @@
 /* Light editor chrome: the same layout with the colours turned over. Only
-   active when <html data-ui-theme="light">; the slides keep their own theme. */
+   active when <html data-ui-theme="light">; the slides keep their own theme.
+
+   Like Keynote, the chrome is near-black on light grey with a single accent,
+   #0588ff. The roles are the dark theme's (appChrome.css) on lighter steps
+   of the same palette: the accent itself for fills, outlines and focus rings,
+   with semibold white labels on its fills (white on #0588ff is 3.5:1); one
+   step darker for accent-coloured text, which clears WCAG AA on the panels;
+   700 for red, green and amber text and outlines; 500 for fills under dark
+   text; 100 for hover grounds; 50 for selected grounds. */
 :root[data-ui-theme="light"] {
   color-scheme: light;
-  --bg: #eceef2;
-  --panel: #f8f9fb;
-  --panel-2: #e9ecf1;
-  --line: #d3d7df;
-  --text: #1f2330;
-  --muted: #6b7283;
-  --accent: #3b63d8;
-  --accent-soft: rgb(59 99 216 / 12%);
-  --green: #3f8a2e;
-  --yellow: #a86f12;
-  --danger: #c93a54;
+  --bg: var(--zinc-100);
+  --panel: var(--zinc-50);
+  --panel-2: var(--zinc-100);
+  --canvas-ground: var(--zinc-200);
+  --line: var(--zinc-300);
+  --text: var(--zinc-900);
+  --muted: var(--zinc-600);
+  --accent: var(--azure-500);
+  --accent-text: var(--azure-600);
+  --accent-soft: var(--azure-50);
+  --accent-hover: var(--azure-100);
+  --on-accent: white;
+  --danger: var(--red-700);
+  --on-danger: white;
+  --danger-soft: var(--red-50);
+  --danger-hover: var(--red-800);
+  --green: var(--green-700);
+  --yellow: var(--amber-700);
+  --build-orange: var(--amber-500);
+  --comment: var(--amber-500);
+  --scrim: color-mix(in oklch, var(--zinc-900) 28%, transparent);
   --shadow: 0 1px 2px rgb(0 0 0 / 12%);
 }
 
 /* The few chrome colours that are written out rather than taken from a token. */
-:root[data-ui-theme="light"] .canvas-host { background: #dfe2e8; }
 :root[data-ui-theme="light"] .canvas-host .stage {
   box-shadow: 0 0 0 1px var(--line), 0 14px 40px rgb(0 0 0 / 16%);
 }
-:root[data-ui-theme="light"] button.primary:hover:not(:disabled) { background: rgb(59 99 216 / 18%); }
-:root[data-ui-theme="light"] .rail-item.selected { background: rgb(59 99 216 / 7%); border-color: rgb(59 99 216 / 55%); }
-:root[data-ui-theme="light"] .rail-item.selected .rail-thumb { --rail-thumb-stroke: rgb(59 99 216 / 65%); }
 /* Modal backdrop: a soft scrim rather than the dark theme's near-black. */
-:root[data-ui-theme="light"] .workflow-overlay { background: rgb(31 35 48 / 28%); }
+:root[data-ui-theme="light"] .workflow-overlay,
+:root[data-ui-theme="light"] .app-dialog-backdrop,
+:root[data-ui-theme="light"] .morph-modal-backdrop,
+:root[data-ui-theme="light"] .agent-history-dialog::backdrop { background: var(--scrim); }
 /* Trim window: the ffmpeg command readout. The viewers stay dark, like the canvas. */
 :root[data-ui-theme="light"] #command { background: var(--panel-2); }
+
+/* End collaboration: the dark theme paints this popover dark whatever the tokens say. */
+:root[data-ui-theme="light"] #end-collaboration-popover {
+  background: var(--danger-soft);
+  box-shadow: 0 14px 38px rgb(0 0 0 / 16%);
+}
+:root[data-ui-theme="light"] #end-collaboration-popover::before { background: var(--danger-soft); }
+:root[data-ui-theme="light"] .end-collaboration-actions button { border-color: var(--line); }
+:root[data-ui-theme="light"] .end-collaboration-actions .end-collaboration-confirm { border-color: var(--danger); }
+:root[data-ui-theme="light"] .end-collaboration-actions .end-collaboration-confirm:hover:not(:disabled) {
+  border-color: var(--danger-hover);
+  background: var(--danger-hover);
+}

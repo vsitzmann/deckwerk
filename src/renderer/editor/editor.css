@@ -152,7 +152,8 @@ button:disabled { opacity: 0.4; cursor: default; }
 button.primary {
   border-color: transparent;
   background: var(--accent);
-  color: #fff;
+  color: var(--on-accent, #fff);
+  font-weight: 600;
 }
 
 /* The one style for a side-panel's block action ("Open Morph editor…",
@@ -395,7 +396,7 @@ body.panel-resizing iframe { pointer-events: none; }
 }
 
 .notes-toggle:hover { background: var(--panel-2); }
-.notes-toggle.active { color: var(--accent); }
+.notes-toggle.active { color: var(--accent-text, var(--accent)); }
 
 .notes-toggle .notes-toggle-dot {
   position: absolute;
@@ -1129,8 +1130,7 @@ body.panel-resizing iframe { pointer-events: none; }
 /* The trigger is the card's headline: what makes this step fire. */
 .timeline-row select.build-trigger {
   flex: 1;
-  border-color: color-mix(in srgb, var(--build-orange) 55%, transparent);
-  color: var(--build-orange);
+  color: var(--text);
   font-weight: 650;
 }
 
@@ -1507,7 +1507,7 @@ input[type="range"] { accent-color: var(--accent); padding: 0; background: trans
   padding: 5px 10px;
   border: 0;
   background: transparent;
-  color: var(--accent);
+  color: var(--accent-text, var(--accent));
   font-size: 10px;
   text-align: left;
 }
@@ -1526,7 +1526,7 @@ input[type="range"] { accent-color: var(--accent); padding: 0; background: trans
   font-size: 10px;
   text-align: left;
 }
-.history-group-toggle:hover { color: var(--accent); text-decoration: underline; }
+.history-group-toggle:hover { color: var(--accent-text, var(--accent)); text-decoration: underline; }
 .history-group-steps {
   margin: 2px 0 0 10px;
   padding-left: 8px;
@@ -1637,7 +1637,7 @@ input[type="range"] { accent-color: var(--accent); padding: 0; background: trans
 
 .insp-subtitle {
   margin: 8px 0 5px;
-  color: var(--yellow);
+  color: var(--text);
   font-size: 10.5px;
   font-weight: 650;
   letter-spacing: 0.08em;
@@ -1731,7 +1731,7 @@ input[type="range"] { accent-color: var(--accent); padding: 0; background: trans
   border: 0;
   border-left: 1px solid rgb(255 255 255 / 35%);
   background: var(--accent);
-  color: #fff;
+  color: var(--on-accent, #fff);
   font-size: 20px;
   font-weight: 400;
   line-height: 1;
@@ -1836,12 +1836,13 @@ input[type="range"] { accent-color: var(--accent); padding: 0; background: trans
   border-radius: 50%;
   place-items: center;
   background: var(--accent);
-  color: white;
+  color: var(--on-accent, #fff);
+  font-weight: 600;
   font: 8px/1 system-ui, sans-serif;
 }
 .morph-actions { margin-bottom: 8px; }
 .morph-actions button { flex: 1; }
-.morph-message { color: var(--accent); }
+.morph-message { color: var(--accent-text, var(--accent)); }
 .morph-lists {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1887,9 +1888,10 @@ input[type="range"] { accent-color: var(--accent); padding: 0; background: trans
 .morph-list-item.paired .morph-list-badge {
   border-radius: 50%;
   background: var(--accent);
-  color: white;
+  color: var(--on-accent, #fff);
+  font-weight: 600;
 }
-.morph-list-item.paired .morph-list-pick { color: var(--accent); }
+.morph-list-item.paired .morph-list-pick { color: var(--accent-text, var(--accent)); }
 .morph-list-item.selected-source {
   background: rgb(245 158 11 / 10%);
   box-shadow: inset 0 0 0 1px #f59e0b;
@@ -1927,7 +1929,7 @@ input[type="range"] { accent-color: var(--accent); padding: 0; background: trans
   padding: 12px 16px;
   border-bottom: 1px solid var(--line);
 }
-.morph-modal > header h2 { margin: 0; font: 600 14px var(--mono); color: var(--accent); text-transform: uppercase; letter-spacing: .08em; }
+.morph-modal > header h2 { margin: 0; font: 600 14px var(--mono); color: var(--text); text-transform: uppercase; letter-spacing: .08em; }
 .morph-modal-content { overflow: auto; padding: 14px 18px 18px; }
 .morph-modal-content .morph-instruction { min-height: 0; text-align: center; }
 .morph-modal-content .morph-preview-label { font-size: 11px; text-align: left; }
@@ -1936,22 +1938,23 @@ input[type="range"] { accent-color: var(--accent); padding: 0; background: trans
 
 /* ============================================================= */
 /* Final design layer: terminal-inspired. Monospace UI, hard      */
-/* right angles, muted pastel accents on a deep neutral ground.   */
+/* right angles, one blue accent on a deep neutral ground.       */
 /* Later rules override the earlier refresh wholesale.            */
 /* ============================================================= */
 
 :root {
-  --bg: #16161e;
-  --panel: #1a1b26;
-  --panel-2: #20212e;
-  --line: #2c2e3d;
-  --text: #c0caf5;
-  --muted: #565f89;
-  --accent: #7aa2f7;      /* pastel blue */
-  --accent-soft: rgb(122 162 247 / 12%);
-  --green: #9ece6a;
-  --yellow: #e0af68;
-  --danger: #f7768e;      /* pastel red */
+  /* The dark roles of appChrome.css again, over the older layers above. */
+  --bg: var(--zinc-950);
+  --panel: var(--zinc-900);
+  --panel-2: var(--zinc-800);
+  --line: var(--zinc-800);
+  --text: var(--zinc-200);
+  --muted: var(--zinc-400);
+  --accent: var(--azure-550);
+  --accent-soft: var(--azure-900);
+  --green: var(--green-400);
+  --yellow: var(--amber-400);
+  --danger: var(--red-400);
   --radius: 0;
   --mono: "Monaspace Krypton", monospace;
 }
@@ -1997,10 +2000,10 @@ button:hover:not(:disabled) {
 button.primary {
   background: var(--accent-soft);
   border-color: var(--accent);
-  color: var(--accent);
+  color: var(--accent-text, var(--accent));
   font-weight: 600;
 }
-button.primary:hover:not(:disabled) { background: rgb(122 162 247 / 22%); }
+button.primary:hover:not(:disabled) { background: var(--accent-hover); }
 
 .bar-select {
   border: 1px solid var(--line);
@@ -2018,12 +2021,12 @@ button.primary:hover:not(:disabled) { background: rgb(122 162 247 / 22%); }
   background: transparent;
 }
 .rail-item:hover { background: var(--panel-2); border-color: var(--line); }
-.rail-item.selected { background: rgb(122 162 247 / 7%); border-color: rgb(122 162 247 / 55%); }
+.rail-item.selected { background: var(--accent-soft); border-color: var(--accent); }
 .rail-item.active { background: var(--accent-soft); border-color: var(--accent); }
 
 .rail-num { font: 10px var(--mono); color: var(--muted); }
-.rail-item.selected .rail-num { color: var(--accent); }
-.rail-item.active .rail-num { color: var(--accent); }
+.rail-item.selected .rail-num { color: var(--accent-text, var(--accent)); }
+.rail-item.active .rail-num { color: var(--accent-text, var(--accent)); }
 
 .rail-thumb {
   --rail-thumb-stroke: var(--line);
@@ -2033,11 +2036,11 @@ button.primary:hover:not(:disabled) { background: rgb(122 162 247 / 22%); }
      and clips the opposite edges instead of framing it symmetrically. */
   box-shadow: inset 0 0 0 1px var(--rail-thumb-stroke);
 }
-.rail-item.selected .rail-thumb { --rail-thumb-stroke: rgb(122 162 247 / 65%); }
+.rail-item.selected .rail-thumb { --rail-thumb-stroke: var(--accent); }
 .rail-item.active .rail-thumb { --rail-thumb-stroke: var(--accent); }
 
 /* Canvas: flat, focused. */
-.canvas-host { background: #101017; }
+.canvas-host { background: var(--canvas-ground); }
 .canvas-host .stage { box-shadow: 0 0 0 1px var(--line), 0 18px 50px rgb(0 0 0 / 60%); border-radius: 0; }
 
 /* Panels read like a TUI: uppercase mono section headers, ruled groups. */
@@ -2057,7 +2060,9 @@ button.primary:hover:not(:disabled) { background: rgb(122 162 247 / 22%); }
   border-color: var(--line);
   border-bottom-color: var(--panel);
   background: var(--panel);
-  color: var(--accent);
+  /* The label is accent text; a bar of the accent itself marks the tab. */
+  box-shadow: inset 0 2px 0 var(--accent);
+  color: var(--accent-text, var(--accent));
 }
 
 .insp-group {
@@ -2068,13 +2073,13 @@ button.primary:hover:not(:disabled) { background: rgb(122 162 247 / 22%); }
 
 .insp-group h3 {
   font: 10px var(--mono);
-  color: var(--yellow);
+  color: var(--text);
   letter-spacing: 0.12em;
 }
 
 .insp-title {
   font: 600 12px var(--mono);
-  color: var(--green);
+  color: var(--text);
   text-transform: uppercase;
   letter-spacing: 0.1em;
 }
@@ -2179,7 +2184,7 @@ input[type="range"] { accent-color: var(--accent); border: 0; background: transp
   box-shadow: inset 0 0 0 1px rgb(0 0 0 / 12%);
 }
 .color-picker-trigger.is-theme { box-shadow: 0 0 0 1px var(--accent); }
-.color-picker-trigger.is-css { box-shadow: 0 0 0 1px var(--yellow); }
+.color-picker-trigger.is-css { box-shadow: 0 0 0 1px var(--muted); }
 .color-picker-source-badge {
   position: absolute;
   right: 1px;
@@ -2191,13 +2196,15 @@ input[type="range"] { accent-color: var(--accent); border: 0; background: transp
   border: 1px solid rgb(255 255 255 / 75%);
   border-radius: 3px;
   background: var(--accent);
-  color: #fff;
+  color: var(--on-accent, #fff);
+  font-weight: 600;
   font: 700 8px/1 var(--mono);
   box-shadow: 0 1px 3px rgb(0 0 0 / 45%);
 }
 .color-picker-css-badge {
   width: 22px;
-  background: #a86d00;
+  background: var(--text);
+  color: var(--panel);
   font-size: 7px;
   letter-spacing: -.04em;
 }
@@ -2226,13 +2233,13 @@ input[type="range"] { accent-color: var(--accent); border: 0; background: transp
   align-items: center;
   margin-bottom: 10px;
   padding: 7px;
-  border: 1px solid color-mix(in srgb, var(--yellow) 45%, var(--line));
+  border: 1px solid var(--line);
   border-radius: 5px;
-  background: color-mix(in srgb, var(--yellow) 8%, transparent);
+  background: var(--panel-2);
   color: var(--muted);
   font: 10px/1.25 var(--mono);
 }
-.color-picker-source-note strong { color: var(--yellow); font-size: 9px; }
+.color-picker-source-note strong { color: var(--text); font-size: 9px; }
 .color-picker-palette {
   display: flex;
   flex-wrap: wrap;
@@ -2421,7 +2428,7 @@ input[type="range"] { accent-color: var(--accent); border: 0; background: transp
   color: var(--text);
   font-size: 11px;
 }
-.color-picker-clear-theme { color: var(--accent); }
+.color-picker-clear-theme { color: var(--accent-text, var(--accent)); }
 
 
 /* Sidebar trim preview: the frame under the handle. */
@@ -2544,7 +2551,7 @@ input[type="range"] { accent-color: var(--accent); border: 0; background: transp
   padding: 6px 10px;
   text-align: left;
 }
-#ctx-menu button:hover { background: var(--accent-soft); color: var(--accent); }
+#ctx-menu button:hover { background: var(--accent-soft); color: var(--accent-text, var(--accent)); }
 .ctx-sep { border-top: 1px solid var(--line); margin: 4px 6px; }
 #ctx-menu .ctx-heading {
   color: var(--muted);
@@ -2802,7 +2809,7 @@ input[type="range"] { accent-color: var(--accent); border: 0; background: transp
 }
 .layout-editor-header > div:first-child { display: flex; flex-direction: column; gap: 3px; }
 .layout-editor-header > div:first-child span {
-  color: var(--accent);
+  color: var(--muted);
   font: 700 8px/1 var(--mono);
   letter-spacing: .1em;
   text-transform: uppercase;
@@ -3039,7 +3046,7 @@ button.morph-object-hit.selected-source:hover:not(:disabled) {
   vertical-align: 1px;
 }
 
-.agent-chat-status[data-state="ready"]::before { background: #4ade80; }
+.agent-chat-status[data-state="ready"]::before { background: var(--green); }
 .agent-chat-status[data-state="busy"]::before { background: var(--accent); }
 .agent-chat-status[data-state="error"]::before { background: var(--danger); }
 
@@ -3116,9 +3123,9 @@ button.morph-object-hit.selected-source:hover:not(:disabled) {
 .agent-chat-fast-mode[hidden] { display: none; }
 
 .agent-chat-fast-mode.active {
-  border-color: #f59e0b;
-  background: rgb(245 158 11 / 14%);
-  color: #fbbf24;
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent-text, var(--accent));
 }
 
 .agent-chat-scratchpad-bar {
@@ -3229,7 +3236,7 @@ button.morph-object-hit.selected-source:hover:not(:disabled) {
   width: 100%;
   border-color: transparent;
   background: var(--accent);
-  color: white;
+  color: var(--on-accent, #fff);
   font-weight: 600;
 }
 
@@ -3344,7 +3351,7 @@ button.morph-object-hit.selected-source:hover:not(:disabled) {
 .agent-chat-message-system .agent-chat-message-body,
 .agent-chat-message.error .agent-chat-message-body {
   border-color: color-mix(in srgb, var(--danger) 60%, var(--line));
-  color: #ffb4ad;
+  color: var(--danger);
 }
 
 .agent-chat-error {
@@ -3353,7 +3360,7 @@ button.morph-object-hit.selected-source:hover:not(:disabled) {
   padding: 7px 9px;
   border: 1px solid color-mix(in srgb, var(--danger) 60%, var(--line));
   border-radius: 6px;
-  color: #ffb4ad;
+  color: var(--danger);
   font-size: 11px;
 }
 
@@ -3383,10 +3390,10 @@ button.morph-object-hit.selected-source:hover:not(:disabled) {
 .agent-chat-composer-actions { display: flex; align-items: center; gap: 6px; }
 .agent-chat-hint { color: var(--muted); font-size: 10px; }
 .agent-chat-action { min-width: 64px; }
-.agent-chat-stop { min-width: 54px; border-color: transparent; background: var(--danger); color: white; }
+.agent-chat-stop { min-width: 54px; border-color: transparent; background: var(--danger); color: var(--on-danger, white); font-weight: 600; }
 .agent-chat-stop[hidden] { display: none; }
-.agent-chat-action.ui-button-primary { border-color: transparent; background: var(--accent); color: white; }
-.agent-chat-action.ui-button-danger { border-color: transparent; background: var(--danger); color: white; }
+.agent-chat-action.ui-button-primary { border-color: transparent; background: var(--accent); color: var(--on-accent, #fff); font-weight: 600; }
+.agent-chat-action.ui-button-danger { border-color: transparent; background: var(--danger); color: var(--on-danger, white); font-weight: 600; }
 
 @media (max-width: 560px) {
   .agent-chat-panel {
@@ -3423,7 +3430,7 @@ button.morph-object-hit.selected-source:hover:not(:disabled) {
 .workflow-dialog h2 {
   margin: 0;
   font: 600 14px var(--mono);
-  color: var(--accent);
+  color: var(--text);
   text-transform: uppercase;
   letter-spacing: .08em;
 }
@@ -3558,7 +3565,7 @@ button.morph-object-hit.selected-source:hover:not(:disabled) {
   text-align: left;
 }
 /* Someone is in the deck now. */
-.deck-picker-live { color: var(--accent); font-weight: 600; }
+.deck-picker-live { color: var(--accent-text, var(--accent)); font-weight: 600; }
 button.deck-picker-row:hover { border-color: var(--line); background: var(--panel-2); }
 button.deck-picker-row.active { border-color: var(--accent); }
 .deck-picker-name, .deck-picker-cell {
@@ -3786,8 +3793,8 @@ select.panel-action-select {
 /* `:not(:disabled)` matches the specificity of the generic button hover
    rule, which otherwise wins the background and leaves white text on the
    plain hover grey (unreadable in light mode). */
-.shape-menu-item:hover:not(:disabled) { background: var(--accent); color: #fff; border-color: transparent; }
-.shape-menu-item:hover:not(:disabled) svg { color: #fff; }
+.shape-menu-item:hover:not(:disabled) { background: var(--accent); color: var(--on-accent, #fff); font-weight: 600; border-color: transparent; }
+.shape-menu-item:hover:not(:disabled) svg { color: var(--on-accent, #fff); }
 .shape-menu-item[aria-checked]::after { content: ''; width: 1em; margin-left: auto; text-align: right; }
 .shape-menu-item[aria-checked="true"]::after { content: '✓'; }
 .shape-menu-item svg { flex: none; color: var(--muted); }
@@ -3887,7 +3894,7 @@ select.panel-action-select {
   padding: 0 5px;
   border-radius: 10px 10px 10px 2px;
   background: var(--comment);
-  color: #1a1b26;
+  color: var(--zinc-900);
   font: 700 11px/20px var(--mono, system-ui), sans-serif;
   text-align: center;
   box-shadow: 0 2px 6px rgb(0 0 0 / 35%);
@@ -3906,7 +3913,7 @@ select.panel-action-select {
   padding: 0 4px;
   border-radius: 8px 8px 8px 2px;
   background: var(--comment);
-  color: #1a1b26;
+  color: var(--zinc-900);
   font: 700 10px/16px var(--mono, system-ui), sans-serif;
   text-align: center;
   pointer-events: none;
@@ -3923,7 +3930,6 @@ select.panel-action-select {
   flex-direction: column;
   background: var(--panel);
   border: 1px solid var(--line);
-  border-top: 2px solid var(--comment);
   box-shadow: 0 10px 32px rgb(0 0 0 / 50%);
   overflow: hidden;
 }
@@ -3959,7 +3965,7 @@ select.panel-action-select {
 
 .cthread {
   border: 1px solid var(--line);
-  border-left: 3px solid var(--comment);
+  border-left: 3px solid var(--muted);
   background: var(--panel-2, var(--panel));
   padding: 6px 8px 8px;
 }
@@ -3985,7 +3991,7 @@ select.panel-action-select {
   background: transparent;
   color: var(--text);
 }
-.cthread-head .cthread-resolve { color: var(--comment); }
+.cthread-head .cthread-resolve { color: var(--accent-text, var(--accent)); }
 .cthread-where {
   min-width: 0;
   overflow: hidden;
@@ -4034,7 +4040,8 @@ button.cthread-where:disabled { cursor: default; opacity: 1; }
   border: 0;
   border-radius: 6px;
   background: var(--accent);
-  color: #fff;
+  color: var(--on-accent, #fff);
+  font-weight: 600;
   padding: 6px 10px;
   cursor: pointer;
 }
@@ -4057,7 +4064,7 @@ button.cthread-where:disabled { cursor: default; opacity: 1; }
 .brand-button:not(:disabled):hover {
   border-color: var(--line);
   background: transparent;
-  color: var(--accent);
+  color: var(--accent-text, var(--accent));
 }
 
 .about-dialog {
@@ -4154,7 +4161,8 @@ button.cthread-where:disabled { cursor: default; opacity: 1; }
 
 .align-button.is-active, .segment-button.is-active {
   background: var(--accent);
-  color: #fff;
+  color: var(--on-accent, #fff);
+  font-weight: 600;
 }
 
 /* Stand-in drag image for slide reordering; see SlideRail.makeDragImage. */
@@ -4457,7 +4465,7 @@ button.cthread-where:disabled { cursor: default; opacity: 1; }
   clip: rect(0 0 0 0);
   opacity: 0;
 }
-.toggle-segment:has(> input:checked) { background: var(--accent); color: #fff; }
+.toggle-segment:has(> input:checked) { background: var(--accent); color: var(--on-accent, #fff); font-weight: 600; }
 .toggle-segment:has(> input:indeterminate) { background: var(--accent-soft); color: var(--text); }
 .toggle-segment:has(> input:focus-visible) { outline: 2px solid var(--accent); outline-offset: -2px; }
 .toggle-segment > .toggle-segment-short { font: 10.5px var(--mono); letter-spacing: 0; text-transform: none; }
@@ -4631,7 +4639,8 @@ button.ghost:hover:not(:disabled) { color: var(--text); background: transparent;
   padding: 4px 9px;
   border-radius: 3px;
   background: var(--accent);
-  color: #fff;
+  color: var(--on-accent, #fff);
+  font-weight: 600;
   font: 700 9px/1.3 var(--mono);
   letter-spacing: .08em;
   text-transform: uppercase;
@@ -4665,7 +4674,7 @@ button.ghost:hover:not(:disabled) { color: var(--text); background: transparent;
   padding: 0;
   border: 0;
   background: none;
-  color: var(--accent);
+  color: var(--accent-text, var(--accent));
   font: inherit;
   cursor: pointer;
 }
@@ -4706,7 +4715,8 @@ button.ghost:hover:not(:disabled) { color: var(--text); background: transparent;
   padding: 4px 9px;
   border-radius: 3px;
   background: var(--accent);
-  color: #fff;
+  color: var(--on-accent, #fff);
+  font-weight: 600;
   font: 700 9px/1.3 var(--mono);
   letter-spacing: .08em;
   text-transform: uppercase;

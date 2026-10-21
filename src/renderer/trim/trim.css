@@ -89,7 +89,8 @@ html, body {
   border-radius: 4px;
   margin-top: 8px;
   background: var(--accent);
-  color: #fff;
+  color: var(--on-accent, #fff);
+  font-weight: 600;
   font: 11px ui-monospace, monospace;
   transform: translateX(-50%);
   white-space: nowrap;

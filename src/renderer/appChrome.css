@@ -6,20 +6,63 @@
   font-display: swap;
 }
 
-/* Shared DeckWerk chrome. Slide content keeps using the deck's theme. */
+/* Shared DeckWerk chrome. Slide content keeps using the deck's theme.
+
+   Both UI themes draw every colour from one palette in OKLCH: Tailwind v4's
+   steps, plus the accent's own steps on the hue of #0588ff. Each hue has one
+   job: zinc for text, lines and surfaces; azure for what is selected,
+   active, focused or a link; red for errors and destructive actions; green
+   for success; amber for comment marks and warnings. Headings are plain
+   text. This block is the dark theme; lightTheme.css maps the same roles
+   onto lighter steps. */
 :root {
+  --zinc-50: oklch(98.5% 0 0);
+  --zinc-100: oklch(96.7% 0.001 286.375);
+  --zinc-200: oklch(92% 0.004 286.32);
+  --zinc-300: oklch(87.1% 0.006 286.286);
+  --zinc-400: oklch(70.5% 0.015 286.067);
+  --zinc-600: oklch(44.2% 0.017 285.786);
+  --zinc-800: oklch(27.4% 0.006 286.033);
+  --zinc-900: oklch(21% 0.006 285.885);
+  --zinc-950: oklch(14.1% 0.005 285.823);
+  --azure-50: oklch(97% 0.014 254.26);
+  --azure-100: oklch(95% 0.024 254.26);
+  --azure-300: oklch(75% 0.13 254.26);
+  --azure-500: oklch(63.24% 0.2014 254.26); /* #0588ff */
+  --azure-550: oklch(57% 0.19 254.26);
+  --azure-600: oklch(53.24% 0.191 254.26);
+  --azure-800: oklch(33% 0.08 254.26);
+  --azure-900: oklch(28% 0.06 254.26);
+  --red-50: oklch(97.1% 0.013 17.38);
+  --red-400: oklch(70.4% 0.191 22.216);
+  --red-700: oklch(50.5% 0.213 27.518);
+  --red-800: oklch(44.4% 0.177 26.899);
+  --green-400: oklch(79.2% 0.209 151.711);
+  --green-700: oklch(52.7% 0.154 150.069);
+  --amber-400: oklch(82.8% 0.189 84.429);
+  --amber-500: oklch(76.9% 0.188 70.08);
+  --amber-700: oklch(55.5% 0.163 48.998);
+
   color-scheme: dark;
-  --bg: #16161e;
-  --panel: #1a1b26;
-  --panel-2: #20212e;
-  --line: #2c2e3d;
-  --text: #c0caf5;
-  --muted: #565f89;
-  --accent: #7aa2f7;
-  --accent-soft: rgb(122 162 247 / 12%);
-  --green: #9ece6a;
-  --yellow: #e0af68;
-  --danger: #f7768e;
+  accent-color: var(--accent);
+  --bg: var(--zinc-950);
+  --panel: var(--zinc-900);
+  --panel-2: var(--zinc-800);
+  --canvas-ground: var(--zinc-950);
+  --line: var(--zinc-800);
+  --text: var(--zinc-200);
+  --muted: var(--zinc-400);
+  /* White on #0588ff is 3.5:1, so dark fills take the deeper step (4.5:1);
+     accent text takes a lighter one to read on the panels. */
+  --accent: var(--azure-550);
+  --accent-text: var(--azure-300);
+  --accent-soft: var(--azure-900);
+  --accent-hover: var(--azure-800);
+  --on-accent: white;
+  --danger: var(--red-400);
+  --on-danger: var(--zinc-950);
+  --green: var(--green-400);
+  --yellow: var(--amber-400);
   --radius: 0;
   --mono: "Monaspace Krypton", monospace;
   --shadow: 0 1px 2px rgb(0 0 0 / 40%);
@@ -58,14 +101,14 @@ button.primary,
 button.ui-button-primary {
   border-color: var(--accent);
   background: var(--accent-soft);
-  color: var(--accent);
+  color: var(--accent-text, var(--accent));
   font-weight: 600;
 }
 
 button.primary:hover:not(:disabled),
 button.ui-button-primary:hover:not(:disabled) {
   border-color: var(--accent);
-  background: rgb(122 162 247 / 22%);
+  background: var(--accent-hover);
 }
 
 button.danger,
@@ -95,7 +138,7 @@ select {
   appearance: none;
   -webkit-appearance: none;
   padding: 5px 24px 5px 9px;
-  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 10 10'><path d='M2 3.5l3 3 3-3' fill='none' stroke='%23565f89' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/></svg>");
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 10 10'><path d='M2 3.5l3 3 3-3' fill='none' stroke='%239f9fa9' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/></svg>");
   background-repeat: no-repeat;
   background-position: right 8px center;
   cursor: pointer;
@@ -145,7 +188,7 @@ input:focus-visible {
 .workflow-dialog h2,
 .app-dialog h2 {
   margin: 0;
-  color: var(--accent);
+  color: var(--text);
   font: 600 14px var(--mono);
   letter-spacing: .08em;
   text-transform: uppercase;
