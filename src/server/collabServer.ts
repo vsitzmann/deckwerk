@@ -773,13 +773,7 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
       }
       if (toId !== fromId) {
         localAgents?.relocate(fromDir, toDir, `The presentation was renamed to “${title}”.`);
-        // Forwarding addresses stay one hop: whatever pointed at the old id
-        // now points at the new one.
-        for (const [oldId, target] of movedDecks) {
-          if (target.id === fromId) movedDecks.set(oldId, { id: toId, title });
-        }
-        movedDecks.set(fromId, { id: toId, title });
-        movedDecks.delete(toId);
+        noteMoved(fromId, toId, title);
       }
       for (const peer of room?.peers.values() ?? []) {
         // Greeted or not: one still mid-hello must not reconnect to the old id.
@@ -789,6 +783,98 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
       return null;
     } finally {
       relocations.delete(fromId);
+      settle();
+    }
+  }
+
+  /** Leave a forwarding address at a deck's old id. */
+  function noteMoved(fromId: string, toId: string, title: string): void {
+    // Forwarding addresses stay one hop: whatever pointed at the old id now
+    // points at the new one.
+    for (const [oldId, target] of movedDecks) {
+      if (target.id === fromId) movedDecks.set(oldId, { id: toId, title });
+    }
+    movedDecks.set(fromId, { id: toId, title });
+    movedDecks.delete(toId);
+  }
+
+  /** Every deck id at any depth under a folder, read from disk. */
+  async function deckIdsUnder(folderPath: string, depth = 0): Promise<string[]> {
+    if (depth >= MAX_FOLDER_DEPTH) return [];
+    let entries;
+    try {
+      entries = await readdir(folderDirOf(folderPath), { withFileTypes: true });
+    } catch {
+      return [];
+    }
+    const ids: string[] = [];
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      const childId = `${folderPath}/${entry.name}`;
+      if (isDeckDir(join(rootDir, childId))) ids.push(childId);
+      else if (splitDeckPath(childId)) ids.push(...await deckIdsUnder(childId, depth + 1));
+    }
+    return ids;
+  }
+
+  /**
+   * Rename a folder, with people inside it or not. Every deck in it is filed
+   * under the folder's path, so this is relocateDeck's live rename done for
+   * all of them at once: their rooms stop applying edits and close (writing
+   * what they accepted), the folder moves, and every peer is sent on to its
+   * deck's new id. Each deck also gets a forwarding address, for a client that
+   * was offline during the rename.
+   */
+  async function relocateFolder(from: string, to: string): Promise<{ status: number; error: string } | null> {
+    const under = (id: string): boolean => id.startsWith(`${from}/`);
+    const ids = new Set([
+      ...await deckIdsUnder(from),
+      ...[...rooms.keys()].filter(under),
+      ...[...roomsOpening.keys()].filter(under),
+    ]);
+    if ([...relocations.keys()].some(under)) {
+      return { status: 409, error: 'a presentation in this folder is being moved or renamed — try again in a moment' };
+    }
+    // Registered before the first await, so a socket or route arriving from
+    // here on waits for the folder to land instead of opening a deck in it.
+    let settle!: () => void;
+    const landed = new Promise<void>((resolvePromise) => { settle = resolvePromise; });
+    for (const id of ids) relocations.set(id, landed);
+    try {
+      await Promise.all([...ids].map((id) => roomsOpening.get(id)?.catch(() => undefined)));
+      const closed = new Map<string, Room>();
+      for (const id of ids) {
+        const room = rooms.get(id);
+        if (room) {
+          room.relocating = true;
+          await room.session.close();
+          rooms.delete(id);
+          closed.set(id, room);
+        }
+        forgetDeckState(id);
+      }
+      try {
+        await rename(folderDirOf(from), folderDirOf(to));
+      } catch (error) {
+        // The sessions are already closed. Send their peers through an
+        // ordinary reconnect, which opens whatever the disk now holds.
+        for (const room of closed.values()) for (const peer of room.peers.values()) peer.socket.close(1011, 'renaming failed');
+        throw error;
+      }
+      for (const id of ids) {
+        const toId = `${to}${id.slice(from.length)}`;
+        const title = await loadDeck(deckDirOf(toId)).then((deck) => deck.title, () => basename(toId));
+        localAgents?.relocate(deckDirOf(id), deckDirOf(toId), `The presentation's folder was renamed; it is now at “${toId}”.`);
+        noteMoved(id, toId, title);
+        for (const peer of closed.get(id)?.peers.values() ?? []) {
+          // Greeted or not: one still mid-hello must not reconnect to the old id.
+          send(peer, { kind: 'deckMoved', deckId: toId, title });
+          peer.socket.close(COLLAB_CLOSE.moved, 'presentation renamed');
+        }
+      }
+      return null;
+    } finally {
+      for (const id of ids) relocations.delete(id);
       settle();
     }
   }
@@ -1956,22 +2042,10 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
         return respondJson(response, 400, { error: 'missing or invalid name' });
       }
       if (existsSync(to)) return respondJson(response, 409, { error: `"${renamed}" already exists` });
-      const inside = [...rooms.keys()].filter((id) => id.startsWith(`${target}/`));
-      if (inside.some((id) => (rooms.get(id)?.peers.size ?? 0) > 0)) {
-        return respondJson(response, 409, {
-          error: 'somebody has a presentation in this folder open — close it everywhere before renaming it',
-        });
-      }
-      for (const id of inside) {
-        const room = rooms.get(id);
-        if (room) {
-          await room.session.flush();
-          await room.session.close();
-          rooms.delete(id);
-        }
-        forgetDeckState(id);
-      }
-      await rename(dir, to);
+      // People with a presentation in it open are taken along, as with a
+      // deck rename: their clients follow the deckMoved to the new path.
+      const refused = await relocateFolder(target, renamed);
+      if (refused) return respondJson(response, refused.status, { error: refused.error });
       respondJson(response, 200, { path: renamed });
       return;
     }
