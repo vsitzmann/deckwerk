@@ -1,6 +1,12 @@
 import type { Slide } from '@shared/deck.js';
 import type { SlideState } from '@shared/timeline.js';
 import { whenWebElementReady } from '../player/render.js';
+import {
+  SYNC_BLACK_CLASS,
+  stillGroupFrames,
+  syncGroupsOf,
+  type MemberFrame,
+} from '../player/videoSync.js';
 
 const eventOrTimeout = (target: EventTarget, event: string, timeout = 5_000): Promise<void> =>
   new Promise((resolve) => {
@@ -52,7 +58,7 @@ async function freezeAnimatedImage(image: HTMLImageElement): Promise<void> {
   }
 }
 
-async function settleVideo(video: HTMLVideoElement, at: number): Promise<void> {
+async function claimVideo(video: HTMLVideoElement): Promise<void> {
   // Claim the frame before pausing: the Player restarts playback it believes
   // was interrupted, which would drift the frame this pins.
   video.dataset.holdFrame = 'true';
@@ -64,6 +70,10 @@ async function settleVideo(video: HTMLVideoElement, at: number): Promise<void> {
       eventOrTimeout(video, 'error'),
     ]);
   }
+}
+
+async function settleVideo(video: HTMLVideoElement, at: number): Promise<void> {
+  await claimVideo(video);
   if (!Number.isFinite(video.duration)) return;
   const target = Math.max(0, Math.min(at, Math.max(0, video.duration - 0.03)));
   // The PDF contract pins a video to its exact poster/in-point. A two-
@@ -155,10 +165,24 @@ export async function waitForPdfPage(
   // reveals itself on its own clock; print it once it has, or once its reveal
   // timeout has shown it as it is.
   await Promise.all([...page.querySelectorAll('.web-body')].map(whenWebElementReady));
-  await Promise.all([...page.querySelectorAll<HTMLVideoElement>('video')].map(async (video) => {
-    const id = video.closest<HTMLElement>('[data-element-id]')?.dataset.elementId;
+  const videos = [...page.querySelectorAll<HTMLVideoElement>('video')];
+  const idOf = (video: HTMLVideoElement) => video.closest<HTMLElement>('[data-element-id]')?.dataset.elementId;
+  // A synced group is pinned as one: its clips' lengths decide which frame,
+  // or black, each shows (videoSync.ts), so every duration is needed first.
+  await Promise.all(videos.map(claimVideo));
+  const durations = new Map(videos.map((video) => [idOf(video), video.duration]));
+  const grouped = new Map<string, MemberFrame>();
+  for (const members of syncGroupsOf(slide.elements).values()) {
+    const frames = stillGroupFrames(members, (id) => durations.get(id) ?? Number.NaN, state.seeks);
+    for (const [id, frame] of frames) grouped.set(id, frame);
+  }
+  await Promise.all(videos.map(async (video) => {
+    const id = idOf(video);
     const element = slide.elements.find((candidate) => candidate.id === id);
-    const at = element?.type === 'video' ? state.seeks.get(element.id) ?? element.start : 0;
+    const synced = id ? grouped.get(id) : undefined;
+    const at = synced?.time
+      ?? (element?.type === 'video' ? state.seeks.get(element.id) ?? element.start : 0);
+    video.classList.toggle(SYNC_BLACK_CLASS, synced?.black === true);
     await settleVideo(video, at);
     freezeVideoFrame(video);
   }));

@@ -41,6 +41,7 @@ backgrounds, request only the matching named recipe:
 
     slide-agent capabilities builds morph morph-target
     slide-agent capabilities image crop mask media-frame video shapes
+    slide-agent capabilities video-compare
     slide-agent capabilities text-roles lists auto-fit latex background background-image
     slide-agent capabilities comments web-element html-element
 

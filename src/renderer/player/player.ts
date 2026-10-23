@@ -14,6 +14,17 @@ import {
 } from '@shared/timeline.js';
 import { arrowHeadSize, shapeSvg } from '@shared/shapeSvg.js';
 import {
+  followerCorrection,
+  groupClock,
+  memberFrame,
+  SYNC_BLACK_CLASS,
+  syncGroupsOf,
+  type SyncClip,
+} from './videoSync.js';
+import { syncLengthOf, type SyncLength } from '@shared/compare.js';
+import { mountGroupScrubber } from './groupScrubber.js';
+import { mountWipeDrag } from './wipe.js';
+import {
   applyStageScale,
   fitAutoTextElement,
   renderSlide,
@@ -37,6 +48,7 @@ import {
 import { morphTransforms, type Rect, type TextLayout } from './morphTransform.js';
 import { isPendingSrc } from '@shared/media.js';
 import { WEB_BRIDGE_SOURCE, isWebBridgeAction, type WebBridgeEvent } from '@shared/webBridge.js';
+import { formatVideoRate, nextVideoRate, type VideoRateChange } from './videoRate.js';
 
 /**
  * The runtime that owns navigation and turns timeline entries into DOM and
@@ -81,6 +93,22 @@ const VIDEO_WARM_ELEMENT_LIMIT = 4;
 const VIDEO_WARM_TIMEOUT_MS = 20_000;
 /** How long the lookahead waits for the visible slide before starting anyway. */
 const LOOKAHEAD_HOLD_MS = 2_000;
+
+type VideoEl = Extract<SlideElement, { type: 'video' }>;
+
+/** A sync group's clock, as `Player.groupClockOf` finds it on the stage. */
+interface GroupClock {
+  /** Which member keeps time, and its element and `<video>`. */
+  index: number;
+  element: VideoEl;
+  video: HTMLVideoElement;
+  /** Every member's `<video>` and clip, in member order. */
+  videos: Array<HTMLVideoElement | null>;
+  clips: SyncClip[];
+  mode: SyncLength;
+  /** The group's length in seconds, once every member's is known. */
+  length: number | null;
+}
 
 /** A video the lookahead wants decoded before its slide is reached. */
 interface VideoWarmTarget {
@@ -132,11 +160,32 @@ export class Player {
   private mediaListeners: Array<() => void> = [];
   /** Videos already given a trim watcher, so listeners are not stacked. */
   private trimmed = new Set<string>();
+  /** Sync groups whose clock is already running on the current slide. */
+  private syncedGroups = new Set<string>();
+  /** Wipe dividers and group scrubbers are live for the current step. */
+  private compareMounted = false;
+  /** Sync groups the presenter paused from their scrubber, on slide `heldSlide`. */
+  private heldGroups = new Set<string>();
+  private heldSlide: string | null = null;
+  /**
+   * The presenter's playback speed for the videos on slide `rateSlide`
+   * (videoRate.ts). It belongs to the slide: leaving it returns to 1×.
+   */
+  private videoRate = 1;
+  private rateSlide: string | null = null;
+  private rateBadge: HTMLElement | null = null;
+  private rateBadgeTimer: ReturnType<typeof setTimeout> | null = null;
   /**
    * Videos the current build state says should be running, and the recovery
    * bookkeeping for keeping them that way. See `keepPlaying`.
    */
   private intendedPlaying = new Set<string>();
+  /**
+   * Sync-group followers that have run out before their group and wait,
+   * paused, for it to loop back (`syncVideoGroups`). Intended to play, yet
+   * not to be restarted by the play recovery.
+   */
+  private parkedVideos = new Set<HTMLVideoElement>();
   private playAttempts = new Map<string, number>();
   private playWatched = new WeakSet<HTMLVideoElement>();
   /** Videos whose retry budget ran out mid-load, waiting for `canplay` to try again. */
@@ -281,6 +330,8 @@ export class Player {
 
   destroy(): void {
     this.clearPending();
+    if (this.rateBadgeTimer) clearTimeout(this.rateBadgeTimer);
+    this.rateBadge?.remove();
     this.offBlobReady?.();
     this.offBlobReady = null;
     this.videoBlobs?.setInUse(null);
@@ -1292,6 +1343,10 @@ export class Player {
   /** Reconcile the DOM and media playback with a computed slide state. */
   private applyState(slide: Slide, state: SlideState): void {
     applyStaticSlideState(this.stage, slide, state);
+    if (this.rateSlide !== slide.id) {
+      this.rateSlide = slide.id;
+      this.videoRate = 1;
+    }
     for (const el of slide.elements) {
       const node = this.stage.querySelector<HTMLElement>(
         `[data-element-id="${CSS.escape(el.id)}"]`,
@@ -1317,6 +1372,9 @@ export class Player {
         continue;
       }
 
+      // Pooled videos arrive with whatever speed their last slide left them at.
+      if (video.playbackRate !== this.videoRate) video.playbackRate = this.videoRate;
+
       if (state.playing.has(el.id) && state.visible.has(el.id) && !this.blanked) {
         this.keepPlaying(el.id, video);
       } else {
@@ -1324,6 +1382,156 @@ export class Player {
         this.playAttempts.delete(el.id);
         if (!video.paused) video.pause();
       }
+    }
+    this.syncVideoGroups(slide);
+    this.mountCompareControls(slide);
+  }
+
+  /**
+   * The presenter's hands on a comparison: a draggable wipe divider, and a
+   * scrubber with play/pause for each sync group and each lone video
+   * (wipe.ts, groupScrubber.ts).
+   *
+   * A group the presenter paused stays paused through the slide's later
+   * builds -- they would otherwise restart it -- until it is played again or
+   * the slide is left. Pausing withdraws the play intent `keepPlaying`
+   * records, or its recovery would start the clips again a moment later.
+   */
+  private mountCompareControls(slide: Slide): void {
+    if (this.heldSlide !== slide.id) {
+      this.heldGroups.clear();
+      this.heldSlide = slide.id;
+    }
+    const groups = syncGroupsOf(slide.elements);
+    // A video outside any group gets the same bar, as a group of one. One that
+    // shows its own controls already has a scrubber.
+    for (const el of slide.elements) {
+      if (el.type !== 'video' || el.controls || (el.syncGroup && groups.has(el.syncGroup))) continue;
+      groups.set(`solo:${el.id}`, [el]);
+    }
+    const setPlaying = (members: Array<{ id: string }>, playing: boolean): void => {
+      for (const el of members) {
+        const video = this.videoFor(el.id);
+        if (!video || video.dataset.holdFrame === 'true') continue;
+        const node = video.closest<HTMLElement>('[data-element-id]');
+        if (playing && !this.blanked && node?.style.visibility !== 'hidden') {
+          this.keepPlaying(el.id, video);
+        } else if (!playing) {
+          this.intendedPlaying.delete(el.id);
+          this.playAttempts.delete(el.id);
+          if (!video.paused) video.pause();
+        }
+      }
+    };
+    for (const [group, members] of groups) {
+      if (this.heldGroups.has(group)) setPlaying(members, false);
+    }
+    if (this.compareMounted) return;
+    const root = this.stage.firstElementChild as HTMLElement | null;
+    if (!root) return;
+    this.compareMounted = true;
+    this.mediaListeners.push(mountWipeDrag(root));
+    for (const [group, members] of groups) {
+      if (!this.groupClockOf(members)) continue;
+      this.mediaListeners.push(mountGroupScrubber(root, {
+        members,
+        clock: () => this.groupClockOf(members),
+        setPlaying: (playing) => {
+          if (playing) this.heldGroups.delete(group);
+          else this.heldGroups.add(group);
+          setPlaying(members, playing);
+        },
+        getRate: () => this.videoRate,
+        setRate: (rate) => this.setVideoRate(rate, false),
+      }));
+    }
+  }
+
+  /**
+   * The member of a sync group that keeps its time (videoSync.ts
+   * `groupClock`): the shortest clip when the group is cut to the shortest,
+   * the longest otherwise, once every member's length is known. Null while
+   * the clock's `<video>` is not on the stage.
+   */
+  private groupClockOf(members: readonly VideoEl[]): GroupClock | null {
+    const videos = members.map((el) => this.videoFor(el.id));
+    const mode = syncLengthOf(members);
+    const clips = members.map((el, index) => ({
+      start: el.start, end: el.end, duration: videos[index]?.duration ?? Number.NaN,
+    }));
+    const { clock, length } = groupClock(clips, mode);
+    const video = videos[clock];
+    return video ? { index: clock, element: members[clock], video, videos, clips, mode, length } : null;
+  }
+
+  private videoFor(id: string): HTMLVideoElement | null {
+    return this.stage
+      .querySelector<HTMLElement>(`[data-element-id="${CSS.escape(id)}"]`)?.querySelector('video') ?? null;
+  }
+
+  /**
+   * Run one clock per sync group on the slide.
+   *
+   * The clock clip plays as any video does, and its own end -- a loop back to
+   * its in-point, or a stop -- is the group's. Every frame, each other member
+   * is put where the clock's elapsed time says it should be. Followers keep
+   * their own play intent (a follower hidden by a build stays paused), but
+   * while they play they are kept in step: by bending the playback rate for
+   * small drift, so nothing visibly jumps, and by seeking after a loop or a
+   * stall. A follower that runs out before the group parks on its last frame,
+   * or under black, until the group loops back to it.
+   */
+  private syncVideoGroups(slide: Slide): void {
+    for (const [group, members] of syncGroupsOf(slide.elements)) {
+      if (this.syncedGroups.has(group)) continue;
+      if (!this.groupClockOf(members)) continue;
+      this.syncedGroups.add(group);
+      const touched = new Set<HTMLVideoElement>();
+      let frame = 0;
+      const tick = (): void => {
+        const clock = this.groupClockOf(members);
+        if (!clock || !clock.video.isConnected) return;
+        const playing = !clock.video.paused;
+        const elapsed = clock.video.currentTime - clock.element.start;
+        members.forEach((el, index) => {
+          const video = clock.videos[index];
+          if (!video || video.dataset.holdFrame === 'true') return;
+          touched.add(video);
+          if (index === clock.index) {
+            // The clock may have been a follower a moment ago, before every
+            // length was known: it runs at the presenter's speed, unbent.
+            this.parkedVideos.delete(video);
+            video.classList.remove(SYNC_BLACK_CLASS);
+            if (video.playbackRate !== this.videoRate) video.playbackRate = this.videoRate;
+            return;
+          }
+          const at = memberFrame(elapsed, clock.clips[index], clock.mode, clock.length);
+          if (at.ended) this.parkedVideos.add(video);
+          else this.parkedVideos.delete(video);
+          video.classList.toggle(SYNC_BLACK_CLASS, at.black);
+          const followerPlaying = playing && !at.ended && this.intendedPlaying.has(el.id);
+          const fix = followerCorrection(video.currentTime, at.time, followerPlaying);
+          if (fix.seek !== undefined) video.currentTime = fix.seek;
+          // The correction bends the presenter's speed, not normal speed.
+          const rate = fix.rate * this.videoRate;
+          if (video.playbackRate !== rate) video.playbackRate = rate;
+          if (!followerPlaying && !video.paused) video.pause();
+          if (followerPlaying && video.paused) void video.play().catch(() => {});
+        });
+        frame = requestAnimationFrame(tick);
+      };
+      // The first correction is made now rather than on the next frame: a
+      // build step tears the previous tick down, and a parked clip would
+      // otherwise show its last frame for one frame between the two.
+      tick();
+      this.mediaListeners.push(() => {
+        cancelAnimationFrame(frame);
+        for (const video of touched) {
+          this.parkedVideos.delete(video);
+          video.classList.remove(SYNC_BLACK_CLASS);
+          video.playbackRate = this.videoRate;
+        }
+      });
     }
   }
 
@@ -1368,6 +1576,9 @@ export class Player {
   }
 
   private retryPlayback(id: string, video: HTMLVideoElement): void {
+    // A clip that played to its end has stopped, not been interrupted:
+    // `play()` would start it over. Nor is a parked follower to be restarted.
+    if (this.playedToEnd(id, video) || this.parkedVideos.has(video)) return;
     if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
     const attempts = this.playAttempts.get(id) ?? 0;
     if (attempts >= PLAY_RETRY_LIMIT) {
@@ -1403,6 +1614,16 @@ export class Player {
       });
     }, PLAY_RETRY_DELAY_MS);
     this.pending.push(timer);
+  }
+
+  /**
+   * Whether a video that does not loop has finished: at the end of its file,
+   * or held at its out-point by `enforceTrim`.
+   */
+  private playedToEnd(id: string, video: HTMLVideoElement): boolean {
+    if (video.ended) return true;
+    const el = this.deck.slides[this.cursor.slide]?.elements.find((candidate) => candidate.id === id);
+    return el?.type === 'video' && !el.loop && el.end !== null && video.currentTime >= el.end - 0.05;
   }
 
   /**
@@ -1591,6 +1812,48 @@ export class Player {
     // The listeners those ids refer to have just been removed, so a fresh
     // watcher must be attached when the slide is drawn again.
     this.trimmed.clear();
+    this.syncedGroups.clear();
+    this.compareMounted = false;
+  }
+
+  /**
+   * Speed every video on the current slide up or down together (the `>` and
+   * `<` keys), and show the new speed for a moment. Returns the new rate.
+   */
+  changeVideoRate(change: VideoRateChange): number {
+    return this.setVideoRate(nextVideoRate(this.videoRate, change));
+  }
+
+  /** Set the current slide's video speed directly (the hover bar's slider). */
+  setVideoRate(rate: number, badge = true): number {
+    this.videoRate = rate;
+    this.rateSlide = this.deck.slides[this.cursor.slide]?.id ?? null;
+    // Sync-group followers pick the rate up on their next correction tick.
+    for (const video of this.stage.querySelectorAll('video')) video.playbackRate = this.videoRate;
+    if (badge) this.showRateBadge();
+    return this.videoRate;
+  }
+
+  getVideoRate(): number {
+    return this.videoRate;
+  }
+
+  private showRateBadge(): void {
+    if (typeof document === 'undefined') return;
+    if (!this.rateBadge) {
+      const badge = document.createElement('div');
+      badge.className = 'player-rate-badge';
+      badge.setAttribute('role', 'status');
+      this.rateBadge = badge;
+    }
+    if (!this.rateBadge.isConnected) {
+      if (getComputedStyle(this.container).position === 'static') this.container.style.position = 'relative';
+      this.container.appendChild(this.rateBadge);
+    }
+    this.rateBadge.textContent = formatVideoRate(this.videoRate);
+    this.rateBadge.classList.add('visible');
+    if (this.rateBadgeTimer) clearTimeout(this.rateBadgeTimer);
+    this.rateBadgeTimer = setTimeout(() => this.rateBadge?.classList.remove('visible'), 1200);
   }
 
   /** Blank the screen (the `B` key) without losing position. */

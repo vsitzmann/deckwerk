@@ -6,6 +6,7 @@ import { canHoldText, shapeToTextBox } from '@shared/shapeText.js';
 import { moveCorner, polygonPoints } from '@shared/polygonShape.js';
 import { braceDepthToward, bracePolyline, braceTip } from '@shared/brace.js';
 import { type Rect, fitScale, makeId } from '@shared/geometry.js';
+import { isMeshName } from '@shared/meshFiles.js';
 
 type XY = { x: number; y: number };
 import {
@@ -93,6 +94,7 @@ type ContextMenuEntry =
   | 'separator';
 import { isWebBridgeAction } from '@shared/webBridge.js';
 import { reportSelectionViolations } from './selectionInvariants.js';
+import { COMPARE_CHIP_CLASS, compareChip } from './compareChip.js';
 import { KeptSelectionHighlight, TEXT_EDIT_PANEL_CHROME } from './keptSelection.js';
 import {
   HANDLES,
@@ -824,6 +826,8 @@ export class EditorCanvas {
   private stage: HTMLElement;
   private slideLayer: HTMLElement;
   private overlay: HTMLElement;
+  /** The comparison chip last drawn in the overlay (compareChip.ts). */
+  private compareChipNode: HTMLElement | null = null;
   private zoomInput: HTMLInputElement;
   private tableHeightSyncPending = false;
   /** Content-size passes run since the last frame; see scheduleTableHeightSync. */
@@ -2356,6 +2360,21 @@ export class EditorCanvas {
       frag.appendChild(box);
     }
 
+    // Two pictures selected: the way into a before/after wipe, or the length
+    // of the one they already are; out of the way while anything is dragged
+    // or edited. The same chip stays in the overlay, never detached, while it
+    // would draw the same: a pointer-up redraws the overlay, and a button
+    // taken out of the document between its press and release gets no click.
+    const chip = this.drag.kind === 'none' && !this.editingId && !this.maskingId
+      ? compareChip(this.store, elements, selection, deck.canvas, this.scale)
+      : null;
+    const drawn = this.compareChipNode;
+    const keptChip = chip && drawn?.parentNode === this.overlay && drawn.dataset.key === chip.dataset.key
+      ? drawn
+      : null;
+    this.compareChipNode = keptChip ?? chip;
+    if (chip && !keptChip) frag.appendChild(chip);
+
     for (const g of this.guides) {
       const line = document.createElement('div');
       line.className = `guide guide-${g.axis}`;
@@ -2419,7 +2438,12 @@ export class EditorCanvas {
       frag.appendChild(m);
     }
 
-    this.overlay.replaceChildren(frag);
+    if (keptChip) {
+      for (const child of [...this.overlay.childNodes]) if (child !== keptChip) child.remove();
+      this.overlay.insertBefore(frag, keptChip);
+    } else {
+      this.overlay.replaceChildren(frag);
+    }
 
     // In development, verify that everything the editor believes about
     // selection agrees with everything it just drew. The reporter settles
@@ -2534,7 +2558,7 @@ export class EditorCanvas {
     // are ordinary application controls. Capturing their pointer on the canvas
     // changes the pointer-up target and prevents Chromium from synthesising a
     // click, which made all three welcome actions appear inert.
-    if (target.closest('.welcome-screen, .zoom-controls, .notes-toggle, .notes-drawer')) return;
+    if (target.closest(`.welcome-screen, .zoom-controls, .notes-toggle, .notes-drawer, .${COMPARE_CHIP_CLASS}`)) return;
     const slide = this.store.slide;
     if (!slide) return;
     // A press that reaches the canvas was not on a live page (the frame keeps
@@ -3427,6 +3451,9 @@ export class EditorCanvas {
    * play a video, crop a picture (and double-click again to leave the crop).
    */
   private onDoubleClick(ev: PointerEvent | MouseEvent): void {
+    // Two quick presses on the comparison chip are two choices, not a way
+    // into whatever lies under it.
+    if ((ev.target as HTMLElement).closest(`.${COMPARE_CHIP_CLASS}`)) return;
     // Once editing is active, native browser double-click selection owns this
     // gesture. Calling beginTextEdit again would select the entire text box and
     // replace the word selection the browser just made. Under heavy renderer
@@ -7096,7 +7123,12 @@ export class EditorCanvas {
       // A file is media by its extension, or failing that by its MIME type:
       // Photos, a browser's "save image" and scanners hand over `image`,
       // `photo.jfif` or `scan.tiff`, and those used to vanish without a word.
-      const dropped = [...(e.dataTransfer?.files ?? [])];
+      // 3D models become one interactive page between them (dropMeshes); the
+      // rest of the drop goes on as usual.
+      const all = [...(e.dataTransfer?.files ?? [])];
+      const meshes = all.filter((file) => isMeshName(file.name));
+      if (meshes.length > 0) await this.dropMeshes(meshes, dropPoint);
+      const dropped = all.filter((file) => !isMeshName(file.name));
       const files = dropped.flatMap((original) => {
         const name = mediaFileName(original.name, original.type);
         const kind = name ? classifyMediaName(name) : null;
@@ -7113,16 +7145,17 @@ export class EditorCanvas {
       // A drag out of a web page carries no file at all -- only markup and the
       // image's URL -- so it takes the fetch-the-bytes path instead.
       if (files.length === 0) {
+        if (meshes.length > 0 && refused.length === 0) return;
         const fetched = await this.dropWebImage(e.dataTransfer, dropPoint);
         if (!fetched && (refused.length > 0 || offeredImage)) {
           this.notice(refused.length > 0
-            ? `Can't add ${refused.join(', ')}: only images and videos can go on a slide.`
+            ? `Can't add ${refused.join(', ')}: only images, videos and 3D models (.glb, .gltf, .obj) can go on a slide.`
             : "That image can't be copied out of the page it came from. Save it, then drop the file.");
         }
         return;
       }
       if (refused.length > 0) {
-        this.notice(`Skipped ${refused.join(', ')}: only images and videos can go on a slide.`);
+        this.notice(`Skipped ${refused.join(', ')}: only images, videos and 3D models (.glb, .gltf, .obj) can go on a slide.`);
       }
 
       // Natural size and a preview frame are read from the local bytes before
@@ -7224,6 +7257,39 @@ export class EditorCanvas {
    * straight away -- the browser can decode a remote image for display, so
    * its natural size and a live preview are known before the fetch lands.
    */
+  /**
+   * Dropped .glb/.gltf/.obj files: built into one interactive 3D page (the
+   * main process or the collab server does the work, see meshPage.ts) and
+   * placed as a web element centred on the drop.
+   */
+  private async dropMeshes(files: File[], dropPoint: { x: number; y: number }): Promise<void> {
+    if (!window.api.importMeshFiles) return;
+    this.notice(files.length > 1 ? `Building a 3D view of ${files.length} models…` : 'Building a 3D view…');
+    let page: Awaited<ReturnType<typeof window.api.importMeshFiles>>;
+    try {
+      page = await window.api.importMeshFiles(files);
+    } catch (error) {
+      this.notice(`Could not show that model: ${error instanceof Error ? error.message : String(error)}`);
+      return;
+    }
+    const { canvas } = this.store.get().deck;
+    const scale = Math.min(1, (canvas.w * 0.8) / page.w, (canvas.h * 0.8) / page.h);
+    const w = Math.round(page.w * scale);
+    const h = Math.round(page.h * scale);
+    const id = makeId('web');
+    this.store.commit((deck) => {
+      const slide = deck.slides[this.store.get().slideIndex];
+      const z = slide.elements.reduce((max, el) => Math.max(max, el.z), 0) + 1;
+      slide.elements.push({
+        id, type: 'web', src: page.src, poster: page.poster, title: page.title, interactive: true,
+        x: Math.round(Math.min(Math.max(0, dropPoint.x - w / 2), canvas.w - w)),
+        y: Math.round(Math.min(Math.max(0, dropPoint.y - h / 2), canvas.h - h)),
+        w, h, rot: 0, z, opacity: 1, class: [], style: {},
+      });
+    }, { label: 'Add 3D model' });
+    this.store.select([id]);
+  }
+
   private async dropWebImage(
     data: DataTransfer | null,
     dropPoint: { x: number; y: number },

@@ -986,7 +986,7 @@ guards. These rules keep the seams closed:
   Saves go through `DeckSerializer` (re-serialises only what an edit
   replaced), whole-deck messages through `DeckWire`, versions through the
   sliced, thread-pool writer. `test/collabStalls.test.ts` drives people and
-  agents against a 20 MB deck and fails on any block over 30 ms;
+  agents against a 20 MB deck and fails on any block over 50 ms;
   `STALL_TEST_DECK=<folder>` runs it against a copy of a real deck.
 
 **OS-event input smoke tier** (`npm run test:osinput`,

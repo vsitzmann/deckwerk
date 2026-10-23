@@ -29,6 +29,7 @@ export const IPC = {
   assetImport: 'asset:import',
   assetImportUrl: 'asset:importUrl',
   assetImportProgress: 'asset:importProgress',
+  meshImport: 'mesh:import',
   clipboardWrite: 'clipboard:write',
   clipboardRead: 'clipboard:read',
   assetProbe: 'asset:probe',
@@ -126,7 +127,9 @@ export type { AgentContextDraft, AgentRequest, AgentResponse };
 
 export type PresentationCommand =
   | { type: 'next' | 'prev' | 'toggleBlank' | 'swapDisplays' | 'exit' }
-  | { type: 'goTo'; slide: number };
+  | { type: 'goTo'; slide: number }
+  /** The presenter's video speed for the current slide (`>` / `<` / `=`). */
+  | { type: 'videoRate'; change: 'faster' | 'slower' | 'normal' };
 
 export interface PresentationState {
   cursor: { slide: number; step: number };
@@ -216,6 +219,19 @@ export interface DeckHistorySession {
 }
 
 /** Result of copying a media file into the deck's assets/ folder. */
+/** A dropped 3D model (or several), staged as one interactive web page. */
+export interface ImportedMeshPage {
+  /** Deck-relative page, e.g. "assets/web/crab.1a2b3c4d.html". */
+  src: string;
+  /** Its first frame, or null when it could not be captured. */
+  poster: string | null;
+  /** The models' names, for the element's title. */
+  title: string;
+  /** The box the page was laid out and captured for. */
+  w: number;
+  h: number;
+}
+
 export interface ImportedAsset {
   /** Deck-relative path, e.g. "assets/demo.mp4". */
   src: string;
