@@ -233,6 +233,108 @@ describe.skipIf(!electronBinary)('collaboration PDF export', () => {
       `/api/video-still?deck=${DECK_ID}&src=assets%2Fclip.mp4&t=0.5`,
     ]);
   }, 90_000);
+
+  it('prints a synced pair as one: the frame, held frame or black the presentation shows', async () => {
+    workDir = await mkdtemp(join(tmpdir(), 'collab-pdf-sync-'));
+    const decksRoot = join(workDir, 'decks');
+    const deckDir = join(decksRoot, DECK_ID);
+    const profileDir = join(workDir, 'electron-profile');
+    await mkdir(join(deckDir, 'assets'), { recursive: true });
+    await mkdir(profileDir, { recursive: true });
+    // testclip.mp4 runs 6 s. Each slide pairs a 1 s cut of it with the whole
+    // file and seeks the whole one to 3 s on a click: past the cut's end. The
+    // group runs to its longest clip, so the cut has run out there — black on
+    // slide 1, its last frame on slide 2. The whole file has no out-point, so
+    // its length has to be probed; nothing may mount a video to find it.
+    await copyFile(
+      join(__dirname, '..', 'decks', 'demo-deck', 'assets', 'testclip.mp4'),
+      join(deckDir, 'assets', 'clip.mp4'),
+    );
+    const deck = emptyDeck('Synced PDF deck');
+    const syncedSlide = (id: string, syncLength: 'black' | 'hold') => ({
+      ...emptyDeck(id).slides[0],
+      id,
+      elements: (['cut', 'whole'] as const).map((role, index) => ({
+        id: `${id}-${role}`, type: 'video' as const, x: 160 + index * 820, y: 300, w: 780, h: 440,
+        rot: 0, z: index + 1, opacity: 1, class: [], style: {},
+        src: 'assets/clip.mp4', fit: 'cover' as const, autoplay: true, loop: true, muted: true,
+        controls: false, start: 0, end: role === 'cut' ? 1 : null, poster: null, sourceBox: null,
+        syncGroup: `${id}-pair`, syncLength,
+      })),
+      timeline: [{
+        id: `${id}-seek`,
+        trigger: { on: 'click' as const, ref: null, delay: 0 },
+        action: { type: 'seek' as const, target: `${id}-whole`, value: 3 },
+      }],
+    });
+    deck.slides = [syncedSlide('black-slide', 'black'), syncedSlide('hold-slide', 'hold')];
+    await saveDeck(deckDir, deck);
+    await writeFile(join(deckDir, 'theme.css'), '.slide { background: #ffffff; }\n', 'utf8');
+
+    server = await startCollabServer({
+      rootDir: decksRoot, clientDir: await collabClientDir(), host: '127.0.0.1', port: 0,
+    });
+    browser = await launchBrowser(
+      `http://127.0.0.1:${server.port}/?deck=${DECK_ID}&name=PDF%20Tester`,
+      profileDir,
+    );
+    const target = await findTarget(
+      browser.debugPort,
+      (candidate) => candidate.url.includes(`deck=${DECK_ID}`),
+      browser.log,
+    );
+    editor = await Cdp.connect(target.webSocketDebuggerUrl!);
+    await editor.call('Page.enable');
+    await editor.call('Page.addScriptToEvaluateOnNewDocument', {
+      source: 'window.print = () => {};',
+    });
+    await editor.call('Page.navigate', {
+      url: `http://127.0.0.1:${server.port}/print.html?deck=${DECK_ID}&mode=final`,
+    });
+
+    const still = (t: number) => `/api/video-still?deck=${DECK_ID}&src=assets%2Fclip.mp4&t=${t}`;
+    const rendered = await eventually(async () => editor!.evaluate<{
+      ready: string;
+      error: string;
+      videos: number;
+      pages: Array<Record<string, { tag: string; black: boolean; src: string | null; drawn: boolean }>>;
+    }>(`(() => ({
+      ready: document.documentElement.dataset.ready ?? '',
+      error: document.documentElement.dataset.error ?? '',
+      videos: document.querySelectorAll('video').length,
+      pages: [...document.querySelectorAll('.pdf-page')].map((page) => Object.fromEntries(
+        [...page.querySelectorAll('[data-element-id]')].map((node) => {
+          const media = node.querySelector('img, canvas, video');
+          return [node.dataset.elementId, {
+            tag: media ? media.tagName.toLowerCase() : '',
+            black: Boolean(media?.classList.contains('sync-black')),
+            src: media?.getAttribute('src') ?? null,
+            drawn: media?.tagName === 'IMG' ? media.naturalWidth > 0 : false,
+          }];
+        }))),
+    }))()`), 'the print tab never finished rendering', (value) => (
+      value.ready !== '' || value.error !== ''
+    ), 60_000);
+
+    expect(rendered.error).toBe('');
+    expect(rendered.ready).toBe('true');
+    expect(rendered.videos).toBe(0);
+    expect(rendered.pages).toEqual([
+      {
+        'black-slide-cut': { tag: 'canvas', black: true, src: null, drawn: false },
+        'black-slide-whole': { tag: 'img', black: false, src: still(3), drawn: true },
+      },
+      {
+        // Held a frame short of the cut's out-point, where a frame is decoded.
+        'hold-slide-cut': { tag: 'img', black: false, src: still(0.97), drawn: true },
+        'hold-slide-whole': { tag: 'img', black: false, src: still(3), drawn: true },
+      },
+    ]);
+    // Black is the canvas's own ground, not a picture darkened in the page.
+    const blackBox = await editor.evaluate<string>(
+      `getComputedStyle(document.querySelector('[data-element-id="black-slide-cut"] canvas')).backgroundColor`);
+    expect(blackBox).toBe('rgb(0, 0, 0)');
+  }, 90_000);
 });
 
 describe.skipIf(electronBinary)('collaboration PDF export (skipped)', () => {
