@@ -29,6 +29,8 @@ example_presentations/
 
 # Local reference presentation (>100MB, stripped from history).
 reference.key
+# The generated reference deck the importer tests run against is checked in.
+!test/fixtures/keynote/reference.key
 
 # Packaged installers (electron-builder output).
 release/
