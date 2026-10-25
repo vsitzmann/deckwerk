@@ -942,8 +942,11 @@ for (const kind of ffmpeg ? BROWSERS : []) describe(`media transfer budget (${ki
     it('downloads nothing at a reload that already arrived', () => {
       expect(bytesTwice(log.all(), ['reload'])).toEqual([]);
     });
-    // PENDING(download clips whole): Chromium revalidates a clip it holds only
-    // part of (a 304) before fetching the rest.
+    // PENDING(fast-start streaming versions): the one file over budget keeps
+    // its index at the end, so a first look takes three requests (head, index,
+    // rest), and Chromium revalidates the scattered parts it holds (a 304)
+    // before the presentation fetches the remainder. A fast-start remux as the
+    // streaming version of such clips would cut both.
     pending(`takes at most ${REQUESTS_PER_FILE} requests per file over the session`, () => {
       expect(overRequestBudget(log.all())).toEqual([]);
     });
