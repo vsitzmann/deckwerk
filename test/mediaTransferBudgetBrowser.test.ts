@@ -824,6 +824,12 @@ async function streamingVersions(kind: BrowserKind): Promise<{ log: TransferLog;
   for (const id of decks) await log.learn(id, BIG_CLIP);
   const settled = () => renditions.filter((e) => e.status === 'started').length
     === renditions.filter((e) => e.status !== 'started').length;
+  // The premise: prepared before anyone opens the deck. The startup sweep
+  // does it; on a slow machine the editor must not beat it there.
+  await eventually(
+    async () => renditions.some((e) => e.status === 'done'),
+    'the startup sweep never prepared the recording', Boolean, 180_000,
+  );
 
   for (const id of decks) {
     await phase(log, id, async () => {
