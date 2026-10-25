@@ -242,6 +242,18 @@ function paintsBox(node: HTMLElement): boolean {
     || (style.boxShadow !== '' && style.boxShadow !== 'none');
 }
 
+/** Set inline styles for a while; returns what puts the old values back. */
+function holdStyle(node: HTMLElement, values: Partial<Record<'transformOrigin' | 'zIndex', string>>): () => void {
+  const before = Object.fromEntries(Object.keys(values).map((key) => [key, node.style[key as 'zIndex']]));
+  Object.assign(node.style, values);
+  let restored = false;
+  return () => {
+    if (restored) return;
+    restored = true;
+    Object.assign(node.style, before);
+  };
+}
+
 /**
  * Briefly move an object, or one marked term of its equation, about the
  * centre of what shows: swell it, turn it. Transforms only — nothing is laid
@@ -268,17 +280,21 @@ function emphasize(
     `${base}translate(${o.x}px, ${o.y}px) ${local} translate(${-o.x}px, ${-o.y}px)`;
 
   if (term === undefined) {
-    const frames: Keyframe[] = keyframes(about(visualCentre(node, text)))
-      .map((frame) => ({ ...frame, transformOrigin: 'center' }));
+    const frames: Keyframe[] = keyframes(about(visualCentre(node, text)));
+    const held: Partial<Record<'transformOrigin' | 'zIndex', string>> = { transformOrigin: 'center' };
     if (lift) {
-      const z = (Number.parseInt(getComputedStyle(node).zIndex, 10) || 0) + LIFT_Z;
+      held.zIndex = String((Number.parseInt(getComputedStyle(node).zIndex, 10) || 0) + LIFT_Z);
       frames.forEach((frame, index) => {
         // Up for every frame but the first and the last, the hold included.
         frame.filter = index === 0 || index === frames.length - 1 ? NO_SHADOW : LIFT_SHADOW;
-        frame.zIndex = String(z);
       });
     }
+    // The origin and the raised stacking are held on the node rather than
+    // animated: either one in the keyframes keeps the whole animation off the
+    // compositor, and on the main thread it stutters whenever the page is busy.
+    const restore = holdStyle(node, held);
     const animation = node.animate(frames, { duration, fill: 'none' });
+    void animation.finished.then(restore, restore);
     return () => animation.finish();
   }
 
@@ -295,12 +311,11 @@ function emphasize(
     // (unrotated) frame.
     const centre = { x: px(rect.x + rect.w / 2 - width / 2), y: px(rect.y + rect.h / 2 - height / 2) };
     const clone = isolatedClone(node, [nodePath(node, span)]);
+    // Set, not animated, so the move runs on the compositor (see above).
+    clone.style.transformOrigin = 'center';
     // Last in the slide, so the moving term paints over its neighbours.
     node.parentElement?.appendChild(clone);
-    const move = clone.animate(
-      keyframes(about(centre)).map((frame) => ({ ...frame, transformOrigin: 'center' })),
-      { duration, fill: 'forwards' },
-    );
+    const move = clone.animate(keyframes(about(centre)), { duration, fill: 'forwards' });
     // The term itself steps aside while its copy moves over it.
     const hide = span.animate([{ opacity: 0 }, { opacity: 0 }], { duration, fill: 'none' });
     const remove = (): void => clone.remove();

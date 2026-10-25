@@ -142,6 +142,35 @@ describe('the Player with a jiggle and a pop', () => {
     player.destroy();
   });
 
+  it('animates only what the compositor runs, so an emphasis never stutters on a busy page', async () => {
+    // BUG (fixed here): every emphasis keyframe carried transform-origin, and a
+    // lifting pulse z-index; either keeps the whole animation on the main
+    // thread, where a pulse stuttered and played differently each time.
+    const base = emptyDeck('Compositor');
+    base.slides[0].elements = [text('box', 'Look here')];
+    const step = (id: string, type: 'pulse' | 'jiggle' | 'pop', value: string | null = null) => ({
+      id, trigger: { on: 'click' as const, ref: null, delay: 0 }, action: { type, target: 'box', value },
+    });
+    base.slides[0].timeline = [step('a', 'pulse'), step('b', 'pulse', 'lift'), step('c', 'jiggle'), step('d', 'pop')];
+    const { player, host, animate } = mount(parseDeck(base));
+    player.goTo({ slide: 0, step: 0 });
+    const box = host.querySelector<HTMLElement>('[data-element-id="box"]')!;
+    const zBefore = box.style.zIndex;
+    const composited = new Set(['transform', 'filter', 'opacity', 'offset', 'easing', 'composite']);
+    for (let i = 0; i < 4; i++) {
+      animate.mockClear();
+      player.next();
+      const frames = animate.mock.calls[animate.mock.contexts.lastIndexOf(box)][0] as Keyframe[];
+      for (const frame of frames) expect(Object.keys(frame).filter((key) => !composited.has(key))).toEqual([]);
+      // The lift still raises the object while it is up, held on the node instead.
+      if (i === 1) expect(Number(box.style.zIndex)).toBeGreaterThan(Number(zBefore) || 0);
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(box.style.zIndex).toBe(zBefore);
+    }
+    player.destroy();
+  });
+
   it('eases a pulse in and out by default, holds it at the top, and lets damping sharpen or soften it', () => {
     const base = emptyDeck('Damping');
     base.slides[0].elements = [text('box', 'Look here')];
