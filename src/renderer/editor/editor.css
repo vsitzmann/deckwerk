@@ -3644,6 +3644,11 @@ button.deck-picker-row.active { border-color: var(--accent); }
 .web-export-quality { padding-top: 4px; }
 .web-export-detail { margin: 0; min-height: 3.6em; color: var(--muted); font-size: 12px; line-height: 1.5; }
 .pdf-export-builds { padding: 8px 0 4px; }
+.paper-card-dialog { width: min(520px, calc(100vw - 56px)); }
+.paper-card-dialog.drop-active { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent), 0 24px 90px rgb(0 0 0 / 65%); }
+.paper-card-detail { margin: 0; min-height: 3em; color: var(--muted); font-size: 12px; line-height: 1.5; }
+.paper-card-detail.is-error { color: var(--danger); }
+.paper-card-dialog .paper-card-choose { margin-right: auto; }
 
 /* Object names in the build and Morph lists carry colour swatches so two
    shapes of the same geometry are still told apart at a glance. */

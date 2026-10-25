@@ -4,6 +4,7 @@ import type { DeckHistoryDocument } from '@shared/deckHistory.js';
 import type { ClipboardReadResult, ClipboardWriteRequest } from '@shared/clipboard.js';
 import type { ClipboardImageSource } from '@shared/clipboardImages.js';
 import { IPC } from '@shared/ipc.js';
+import type { PaperCard } from '@shared/paperCard.js';
 import type {
   AgentContextDraft,
   AgentPanelState,
@@ -35,6 +36,7 @@ import type {
   VideoPosterRequest,
   VideoPosterResult,
   WebExportRequest,
+  ImportedMeshPage,
 } from '@shared/ipc.js';
 
 /**
@@ -114,6 +116,34 @@ const api = {
       IPC.assetImport,
       files.map((file) => webUtils.getPathForFile(file)).filter(Boolean),
       progressToken,
+    ),
+  /**
+   * Turn dropped 3D models (.glb, .gltf, .obj) into one interactive page in
+   * the deck, ready for a web element. The browser collab client uploads the
+   * bytes instead (netApi.ts).
+   */
+  importMeshFiles: (files: File[]): Promise<ImportedMeshPage> =>
+    ipcRenderer.invoke(
+      IPC.meshImport,
+      files.map((file) => webUtils.getPathForFile(file)).filter(Boolean),
+    ),
+  /**
+   * Make a paper card from a pasted arXiv id, DOI or URL, or from a PDF file.
+   * Phases arrive through onOperationProgress under `operationId`; the
+   * browser collab client streams them from the server instead (netApi.ts),
+   * which is what `onProgress` is for.
+   */
+  fetchPaperCard: (
+    request: { input: string } | { file: File },
+    operationId?: string,
+    _onProgress?: (message: string) => void,
+  ): Promise<PaperCard> =>
+    ipcRenderer.invoke(
+      IPC.paperCard,
+      'file' in request
+        ? { pdfPath: webUtils.getPathForFile(request.file), name: request.file.name }
+        : { input: request.input },
+      operationId,
     ),
   /**
    * Import an image that a drag or a paste only pointed at — a remote URL or

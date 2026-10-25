@@ -68,7 +68,7 @@ function isPrivateAddress(ip: string): boolean {
     || a >= 224;
 }
 
-async function assertPublicHost(url: URL): Promise<void> {
+export async function assertPublicHost(url: URL): Promise<void> {
   const host = url.hostname.replace(/^\[|\]$/g, '');
   const addresses = isIP(host)
     ? [{ address: host }]
