@@ -200,6 +200,8 @@ const SERVER_SIDECARS: ReadonlySet<string> = new Set(['agent-chats.json', 'acces
 interface Room {
   session: CollabSession;
   peers: Map<string, Peer>;
+  /** The clip variants this room's clients were last told, as JSON (see announceMedia). */
+  announcedMedia: string;
   guestCounter: number;
   /** Synthetic HTTP-agent presence, retained so peers joining later see it. */
   agentPresence: PresenceState | null;
@@ -383,7 +385,7 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
         for (const room of rooms.values()) {
           const assets = deckVideoAssets(room.session.dir, room.session.deck);
           if (!assets.some((asset) => asset === event.source || (key && renditions?.keyOf(asset) === key))) continue;
-          broadcast(room, { kind: 'media', variants: deckMediaVariants(room.session.dir, room.session.deck) });
+          announceMedia(room, false);
         }
       } else if (event.status === 'failed') {
         console.warn(`  could not prepare ${name}: ${event.detail ?? ''}`);
@@ -495,6 +497,25 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
    * path has to land exactly where the segments say, so no id can climb out
    * of the root; ids are otherwise opaque strings everywhere else.
    */
+  /**
+   * An imported asset's answer, with the variant a client should ask for if
+   * it is a video, so even the element the uploader builds first is on the
+   * URL it will keep.
+   */
+  async function withVariant<T extends { src: string }>(deckDir: string, imported: T): Promise<T & { variant?: string }> {
+    if (!renditions) return imported;
+    try {
+      const absolute = resolveAsset(deckDir, imported.src);
+      if (!isVideoAsset(absolute)) return imported;
+      await renditions.learn([absolute]);
+      const info = await stat(absolute);
+      const variant = renditions.variant(absolute, info.size, info.mtimeMs);
+      return variant ? { ...imported, variant } : imported;
+    } catch {
+      return imported;
+    }
+  }
+
   /** The id of the deck an asset file belongs to, or null outside the decks root. */
   function deckIdOfAsset(absolute: string): string | null {
     if (!absolute.startsWith(rootDir + sep)) return null;
@@ -1111,6 +1132,7 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
       participantLogins: new Map(),
       relocating: false,
       remotes: new Map(),
+      announcedMedia: '',
     };
     session.watch({
       onExternalDeck: (deck, seq) => broadcast(room, {
@@ -1128,7 +1150,10 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
     });
     // The welcome names each clip's variant, and a variant names content:
     // learn it (hashing only files never seen) before anyone is welcomed.
-    if (renditions) await renditions.learn(deckVideoAssets(session.dir, session.deck));
+    if (renditions) {
+      await renditions.learn(deckVideoAssets(session.dir, session.deck));
+      room.announcedMedia = JSON.stringify(deckMediaVariants(session.dir, session.deck));
+    }
     rooms.set(deckId, room);
     // Opening a deck is the earliest honest signal that someone intends to
     // present it, and preparing a talk's clips takes minutes of CPU. Queued in
@@ -1161,6 +1186,11 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
    * offers no way to share — but that runs on zlib's thread pool.)
    */
   const broadcast = (room: Room, message: ServerMessage, except?: string) => {
+    // A change that brings a clip in is preceded by the clip's variant, so
+    // every client builds its element on the URL it will keep.
+    if (message.kind === 'deck' || (message.kind === 'txn' && JSON.stringify(message.ops).includes('"type":"video"'))) {
+      announceMedia(room);
+    }
     let data: Buffer | null = null;
     for (const [id, peer] of room.peers) {
       if (id === except || !peer.greeted || peer.socket.readyState !== peer.socket.OPEN) continue;
@@ -1171,6 +1201,32 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
       peer.socket.send(data, { binary: false });
     }
   };
+  /**
+   * Tell a room's clients the variant of every clip in the deck, if that has
+   * changed since they were last told.
+   *
+   * Without it a clip brought in by an edit had no variant until the next
+   * page load: clients asked for it as a bare `o`, then under its key after a
+   * reload, so the bytes they held were orphaned under the first URL and
+   * downloaded again. A big clip nobody has hashed yet (written straight into
+   * the deck folder) is learned in the background and announced once known.
+   */
+  function announceMedia(room: Room, learn = true): void {
+    if (!renditions) return;
+    const variants = deckMediaVariants(room.session.dir, room.session.deck);
+    const encoded = JSON.stringify(variants);
+    if (encoded !== room.announcedMedia) {
+      room.announcedMedia = encoded;
+      broadcast(room, { kind: 'media', variants });
+    }
+    if (!learn) return;
+    const assets = deckVideoAssets(room.session.dir, room.session.deck);
+    // A clip brought in by an edit is a clip someone means to show.
+    renditions.warm(assets);
+    if (assets.every((asset) => renditions.keyOf(asset))) return;
+    void renditions.learn(assets).then(() => announceMedia(room, false)).catch(() => null);
+  }
+
   /** An agent behind an HTTP route, for the edit log: a linked bridge, or the server's agent. */
   const agentAuthor = (bridge: LocalAgentLink | null, participant: string | null): AgentAuthorship => ({
     name: bridge?.name ?? sharedAgent?.name ?? 'Agent',
@@ -1586,6 +1642,14 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
         response.end(found ? 'forbidden' : 'not found');
         return;
       }
+      // Somebody wants this clip now: if its streaming version is still to
+      // come, it goes to the front of the queue.
+      if (mediaMatch[1][0] === 'o') {
+        const info = statSync(found.file);
+        if (renditions.pending(found.file, info.size, info.mtimeMs)) {
+          void renditions.ensure(found.file, { urgent: true }).catch(() => null);
+        }
+      }
       trackAssetResponse(request, response, identity?.login ?? null, `media/${mediaMatch[1]}`);
       await serveFileWithRanges(request, response, found.file, undefined, {
         immutable: true,
@@ -1685,7 +1749,7 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
               response.end();
               return;
             }
-            if (pinnedFile === absolute && !ready) void renditions.ensure(absolute).catch(() => null);
+            if (pinnedFile === absolute && !ready) void renditions.ensure(absolute, { urgent: true }).catch(() => null);
           } else if (ready) {
             served = ready;
             revalidate = true;
@@ -1694,7 +1758,7 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
             // replacement may land at any moment, and an immutable copy would
             // never be asked about again.
             revalidate = true;
-            void renditions.ensure(absolute).catch(() => null);
+            void renditions.ensure(absolute, { urgent: true }).catch(() => null);
           }
         } catch {
           // Unreadable here means unreadable below; let the normal path 404.
@@ -2377,7 +2441,7 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
         // server's heap is what pushed it into the GC storms it died in.
         await pipeline(request, createWriteStream(tmpFile));
         const imported = await importAsset(deckDirOf(deckParam), tmpFile);
-        respondJson(response, 200, imported);
+        respondJson(response, 200, await withVariant(deckDirOf(deckParam), imported));
       } catch (error) {
         respondJson(response, 400, { error: String(error instanceof Error ? error.message : error) });
       } finally {
@@ -2447,7 +2511,7 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
             const page = await importWebPage(deckDirOf(deckParam), absolute, injectWebBridgeRuntime);
             return respondJson(response, 200, { src: page.src });
           }
-          respondJson(response, 200, await importAsset(deckDirOf(deckParam), absolute));
+          respondJson(response, 200, await withVariant(deckDirOf(deckParam), await importAsset(deckDirOf(deckParam), absolute)));
         } catch (error) {
           respondJson(response, 400, { error: String(error instanceof Error ? error.message : error) });
         }

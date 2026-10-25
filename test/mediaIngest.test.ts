@@ -466,9 +466,7 @@ describe.skipIf(!ffmpeg)('videos already on the server', () => {
 /* ------------------------------------------------------------------------ */
 
 describe.skipIf(!ffmpeg)('the encode queue', () => {
-  // PENDING(requested clip jumps the queue): encodes run one at a time in slide order,
-  // and asking for a clip that is waiting changes nothing.
-  it.fails('moves a clip somebody asks for ahead of the clips still waiting', async () => {
+  it('moves a clip somebody asks for ahead of the clips still waiting', async () => {
     const decksRoot = await freshRoot('queue');
     const names = [1, 2, 3, 4].map((n) => `assets/recording-q${n}.mp4`);
     const clips = await Promise.all(names.map((name, i) => uniqueCopy(recording, join(decksRoot, 'talk', name), `queue-${i}`)));

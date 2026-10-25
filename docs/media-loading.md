@@ -135,7 +135,13 @@ The rules that keep it honest:
 - **Serving never waits.** `ready()` is synchronous and returns null rather
   than blocking; a slide streaming the original beats a slide waiting for
   ffmpeg. The request that missed queues the transcode for next time.
-- **One at a time.** A presenting machine is also the server.
+- **One at a time, a requested clip first.** A presenting machine is also
+  the server, so encodes run one at a time, in slide order. A clip somebody
+  asks for while it waits (it is on screen, someone pressed play) goes ahead
+  of everything still waiting, so nobody waits behind the other 29 clips of
+  a fresh import. The probe that decides whether a clip needs encoding runs
+  in its turn too: run ahead of the queue, probes racing each other decided
+  its order.
 - **Pending means revalidate.** While a rendition is merely intended, the
   original is served `public, no-cache` even under a content-hashed name: an
   immutable copy of the original would never be asked about again, and the
@@ -154,7 +160,10 @@ The rules that keep it honest:
   immutably. A video the client has not been told about yet (just uploaded)
   pins a bare `o` on its deck URL and gets the original, revalidated. A deck
   URL with a keyed `?v=` (a tab older than `/media`) is redirected there
-  permanently. Unpinned URLs (agents, print) behave as above.
+  permanently. Unpinned URLs (agents, print) behave as above. A change that
+  brings a clip into a deck is preceded by a `media` message with its
+  variant, and an upload's answer carries it, so no client builds an element
+  on a URL it will later abandon (orphaning what it downloaded under it).
 - **Keyed by content.** A talk starts as a copy of the last one; in Oct 2026
   one 125 MB recording sat in five decks and was encoded once per copy. The
   key is the start of the file's SHA-256, so one encode, one rendition and

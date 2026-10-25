@@ -274,8 +274,11 @@ export class RenditionStore {
   private readonly keys: ContentKeys;
   /** Content being transcoded right now, and content queued behind it, by key. */
   private readonly inFlight = new Map<string, Promise<string | null>>();
-  private readonly queue: Array<() => void> = [];
+  /** Work waiting for a slot, in the order it was admitted. */
+  private readonly waiting: Array<{ key: string; urgency: number; start: () => void }> = [];
   private running = 0;
+  /** Stamps urgent requests, so the latest one goes first. */
+  private urgency = 0;
   /** Content found not to need a rendition, so it is probed once. */
   private readonly passed = new Set<string>();
 
@@ -403,32 +406,95 @@ export class RenditionStore {
   /**
    * Produce the rendition if this clip needs one. Safe to call repeatedly and
    * from several requests at once: the work is shared and metered.
+   *
+   * `urgent` is a clip somebody is asking for right now (it is on screen, or
+   * someone pressed play): it goes ahead of everything still waiting, so
+   * nobody waits behind the other 29 clips of a fresh import.
    */
-  async ensure(absolute: string): Promise<string | null> {
-    if (!isVideoAsset(absolute)) return null;
+  async ensure(absolute: string, options: { urgent?: boolean } = {}): Promise<string | null> {
+    return (await this.admit(absolute, options.urgent ?? false)).work;
+  }
+
+  /**
+   * Queue a deck's clips in the order a presenter reaches them. Each is
+   * admitted in turn, so the queue keeps slide order whichever file hashes
+   * or stats first.
+   */
+  warm(sources: string[]): void {
+    void (async () => {
+      for (const source of sources) await this.admit(source, false).catch(() => null);
+    })();
+  }
+
+  /**
+   * Find this clip's place: done already, nothing to do, or work in the queue.
+   * Resolves once the clip is admitted, with the work's promise wrapped so
+   * that awaiting the admission does not await the encode.
+   */
+  private async admit(absolute: string, urgent: boolean): Promise<{ work: Promise<string | null> | string | null }> {
+    if (!isVideoAsset(absolute)) return { work: null };
     let info;
     try {
       info = await stat(absolute);
-      if (!info.isFile() || info.size < MIN_SOURCE_BYTES) return null;
+      if (!info.isFile() || info.size < MIN_SOURCE_BYTES) return { work: null };
     } catch {
-      return null;
+      return { work: null };
     }
     const key = await this.keys.learn(absolute);
-    if (!key) return null;
+    if (!key) return { work: null };
     const target = renditionPath(key, this.cacheDir);
-    if (existsSync(target)) return target;
-    if (this.hasPassed(key)) return null;
+    if (existsSync(target)) return { work: target };
+    if (this.hasPassed(key)) return { work: null };
     // One encode per content, however many decks hold a copy.
     const existing = this.inFlight.get(key);
-    if (existing) return existing;
-    const work = this.transcode(absolute, key, target).finally(() => this.inFlight.delete(key));
+    if (existing) {
+      if (urgent) this.hurry(key);
+      return { work: existing };
+    }
+    const work = this.queued(key, urgent, () => this.transcode(absolute, key, target))
+      .finally(() => this.inFlight.delete(key));
     this.inFlight.set(key, work);
-    return work;
+    return { work };
   }
 
-  /** Queue a deck's clips, in the order a presenter reaches them. */
-  warm(sources: string[]): void {
-    for (const source of sources) void this.ensure(source).catch(() => null);
+  /**
+   * Run `job` when a slot is free: one at a time by default, since a
+   * presenter's machine is also a server. The probe that decides whether a
+   * clip needs encoding runs inside the slot too; outside it, probes racing
+   * each other decided the queue's order.
+   */
+  private queued<T>(key: string, urgent: boolean, job: () => Promise<T>): Promise<T> {
+    return new Promise<T>((resolve, reject) => {
+      this.waiting.push({
+        key,
+        urgency: urgent ? ++this.urgency : 0,
+        start: () => {
+          this.running += 1;
+          job().then(resolve, reject).finally(() => {
+            this.running -= 1;
+            this.next();
+          });
+        },
+      });
+      this.next();
+    });
+  }
+
+  private next(): void {
+    while (this.running < this.concurrency && this.waiting.length > 0) {
+      let index = 0;
+      this.waiting.forEach((entry, i) => {
+        if (entry.urgency > this.waiting[index].urgency) index = i;
+      });
+      const [entry] = this.waiting.splice(index, 1);
+      entry.start();
+    }
+  }
+
+  /** A clip somebody asks for while it waits: it goes next. */
+  private hurry(key: string): void {
+    const entry = this.waiting.find((candidate) => candidate.key === key);
+    if (entry) entry.urgency = ++this.urgency;
   }
 
   private async transcode(absolute: string, key: string, target: string): Promise<string | null> {
@@ -453,7 +519,6 @@ export class RenditionStore {
     const scale = longEdge > LONG_EDGE_CEILING ? LONG_EDGE_CEILING / longEdge : 1;
     const width = Math.round(media.width * scale);
     const height = Math.round(media.height * scale);
-    await this.slot();
     this.onProgress({ source: absolute, status: 'started' });
     // A partially written file must never be discoverable as a rendition:
     // write beside the target and rename, which is atomic on every platform
@@ -497,27 +562,6 @@ export class RenditionStore {
       // this run.
       this.passed.add(key);
       return null;
-    } finally {
-      this.release();
     }
-  }
-
-  /** One transcode at a time by default: a presenter's machine is also a server. */
-  private slot(): Promise<void> {
-    if (this.running < this.concurrency) {
-      this.running += 1;
-      return Promise.resolve();
-    }
-    return new Promise<void>((resolve) => {
-      this.queue.push(() => {
-        this.running += 1;
-        resolve();
-      });
-    });
-  }
-
-  private release(): void {
-    this.running -= 1;
-    this.queue.shift()?.();
   }
 }

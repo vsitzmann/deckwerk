@@ -784,7 +784,7 @@ async function editingSession(kind: BrowserKind): Promise<{ log: TransferLog; en
       element: { ...deck.slides[4].elements[3], src: LATE_CLIP } as never,
     }]);
     await eventually(
-      () => page.evaluate<boolean>(`Boolean(document.querySelector('#canvas [data-element-id="v5c"] video')?.getAttribute('src')?.includes('delta'))`),
+      () => page.evaluate<boolean>(`document.querySelector('#canvas [data-element-id="v5c"] video')?.dataset.assetSrc === ${JSON.stringify(LATE_CLIP)}`),
       'the replaced clip never reached the editor canvas',
     );
     await showSlide(page, 4);
@@ -865,6 +865,7 @@ async function waitingClip(kind: BrowserKind): Promise<{
   const renditions: TimedRendition[] = [];
   const { page, log, origin } = await startSession(kind, decksRoot, profileDir, (event) => renditions.push({ ...event, at: Date.now() }));
   await log.learn(deckId, BIG_CLIP);
+  await log.learn(deckId, DECOY_CLIP);
   let shownAt = 0;
   await phase(log, 'waiting', async () => {
     await page.goto(`${origin}/?deck=${deckId}&name=Budget`);
@@ -934,19 +935,14 @@ for (const kind of ffmpeg ? BROWSERS : []) describe(`media transfer budget (${ki
     it('downloads nothing for the presentation that the editor already has', () => {
       expect(bytesTwice(log.all(), ['present'])).toEqual([]);
     });
-    // PENDING(send the URL key when an edit adds a clip): a clip added by an
-    // edit is asked for as `?v=o` until a reload hands out its key.
-    pending('asks for a clip added by an edit under one URL for the whole session', () => {
+    it('asks for a clip added by an edit under one URL for the whole session', () => {
       expect(severalUrls(log.all())).toEqual([]);
     });
-    // PENDING(send the URL key when an edit adds a clip): the new clip's URL
-    // changes at the reload, so the bytes the browser holds are orphaned.
-    pending('downloads nothing at a reload that already arrived', () => {
+    it('downloads nothing at a reload that already arrived', () => {
       expect(bytesTwice(log.all(), ['reload'])).toEqual([]);
     });
-    // PENDING(send the URL key when an edit adds a clip; download clips whole):
-    // the new clip's changing URL adds requests, and Chromium revalidates a
-    // clip it holds only part of (a 304) before fetching the rest.
+    // PENDING(download clips whole): Chromium revalidates a clip it holds only
+    // part of (a 304) before fetching the rest.
     pending(`takes at most ${REQUESTS_PER_FILE} requests per file over the session`, () => {
       expect(overRequestBudget(log.all())).toEqual([]);
     });
@@ -1017,10 +1013,8 @@ for (const kind of ffmpeg ? BROWSERS : []) describe(`media transfer budget (${ki
 describe.skipIf(!electronBinary || !ffmpeg)("a video embedded in an agent's HTML", () => {
   afterAll(teardown);
 
-  // PENDING(encode on arrival): an embedded video is imported with the page,
-  // and waits for a browser to ask for it. The other ways in are
-  // mediaIngest.test.ts's; this one needs Electron, for the compile.
-  it.fails('gets its streaming version as it arrives', async () => {
+  // The other ways in are mediaIngest.test.ts's; this one needs Electron, for the compile.
+  it('gets its streaming version as it arrives', async () => {
     const { decksRoot } = await freshWorkDir('html');
     await saveDeck(join(decksRoot, 'talk'), emptyDeck('talk'));
     const clip = join(workDir, 'embedded.mp4');
