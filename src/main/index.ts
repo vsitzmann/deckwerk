@@ -1,5 +1,5 @@
 import { existsSync, mkdirSync, watch } from 'node:fs';
-import { writeFile } from 'node:fs/promises';
+import { readFile, writeFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { userInfo } from 'node:os';
 import { basename, dirname, extname, join, resolve, sep } from 'node:path';
@@ -20,6 +20,7 @@ import { importClipboardImageUrl, importImageSource } from './clipboardImageFetc
 import { clipboardFilePaths, firstClipboardMediaPath } from '@shared/clipboardFiles.js';
 import type { ClipboardImageSource } from '@shared/clipboardImages.js';
 import { injectWebBridgeRuntime } from '@shared/webBridge.js';
+import { importMeshPage } from './meshPage.js';
 import { IPC } from '@shared/ipc.js';
 import type {
   AgentContextDraft,
@@ -32,6 +33,7 @@ import type {
   DeckSessionSnapshot,
   DeckHistorySession,
   ImportedAsset,
+  ImportedMeshPage,
   PresentationImportResult,
   OperationProgress,
   PresentationCommand,
@@ -884,6 +886,13 @@ function registerHandlers(): void {
       : [read('text/uri-list'), read('x-special/gnome-copied-files')];
     return lists.map((list) => clipboardFilePaths(list)).find((paths) => paths.length > 0) ?? [];
   };
+
+  // Dropped 3D models become one interactive page in the deck (meshPage.ts).
+  ipcMain.handle(IPC.meshImport, async (event, paths: string[]): Promise<ImportedMeshPage> => {
+    const s = requireSession(event);
+    const sources = await Promise.all(paths.map(async (path) => ({ name: basename(path), bytes: await readFile(path) })));
+    return importMeshPage(s.dir, sources);
+  });
 
   // Copy: serialise the fragment onto the OS pasteboard under a private
   // format, with absolute asset paths attached, so any instance of this app —
