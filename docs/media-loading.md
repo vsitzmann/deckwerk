@@ -366,6 +366,20 @@ accumulates decoded bitmaps from the rest of the deck.
   not, the 1080p cap, one transcode shared between racing callers, the cache
   key surviving a rename but not an edit, and the synchronous ready/pending
   answers the serving path depends on.
+- `test/mediaTransferBudgetBrowser.test.ts` — what a whole editing session
+  costs on the wire, measured by a throttled link in front of the server
+  (`test/support/throttledLink.ts`): no byte of a file arrives twice, reloads
+  and deck copies included; browsing again, editing, a collaborator's edit and
+  coming back from presenting make no request; a file keeps one URL; a clip
+  waiting for its streaming version fetches only its frame, and once the
+  version exists costs at most one version more. Real Safari runs the same
+  budgets on a Mac with `RUN_SAFARI_MEDIA_BUDGET=1`.
+- `test/mediaIngest.test.ts` — every way a video reaches the server starts its
+  streaming encode at once; videos already on disk are swept at startup; one
+  encode serves every copy of the same bytes and survives restarts; a version
+  is kept while any deck uses its clip; a requested clip jumps the queue.
+  Budgets not met yet are `it.fails` under a PENDING note naming the change
+  that meets them.
 - `test/morph.test.ts` — the Morph panel's preview surfaces survive a
   re-render, and adopt their decoded elements when an edit rebuilds them.
 - `test/previewStillsBrowser.test.ts` — the real editor over a throttled link:
