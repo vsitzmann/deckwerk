@@ -7,7 +7,7 @@ import { pipeline } from 'node:stream/promises';
 import { copyFile, mkdir, mkdtemp, readdir, readFile, rename, rm, rmdir, stat, writeFile } from 'node:fs/promises';
 import { createHash, randomUUID } from 'node:crypto';
 import { networkInterfaces, tmpdir } from 'node:os';
-import { basename, dirname, extname, join, normalize, resolve } from 'node:path';
+import { basename, dirname, extname, join, normalize, resolve, sep } from 'node:path';
 import { isIP } from 'node:net';
 import { pathToFileURL } from 'node:url';
 import { gzipSync } from 'node:zlib';
@@ -377,10 +377,12 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
       if (event.status === 'started') console.log(`  preparing ${name} for streaming…`);
       else if (event.status === 'done') {
         console.log(`  prepared ${name} (${Math.round((event.savedBytes ?? 0) / 1048576)} MB smaller)`);
-        // Tell every deck showing this clip that its rendition now exists, so
-        // the next <video> each client builds for it asks for the small copy.
+        // Tell every deck showing this clip — or a copy of it — that its
+        // rendition now exists, so clients move to the small copy.
+        const key = renditions?.keyOf(event.source);
         for (const room of rooms.values()) {
-          if (!deckVideoAssets(room.session.dir, room.session.deck).includes(event.source)) continue;
+          const assets = deckVideoAssets(room.session.dir, room.session.deck);
+          if (!assets.some((asset) => asset === event.source || (key && renditions?.keyOf(asset) === key))) continue;
           broadcast(room, { kind: 'media', variants: deckMediaVariants(room.session.dir, room.session.deck) });
         }
       } else if (event.status === 'failed') {
@@ -493,6 +495,19 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
    * path has to land exactly where the segments say, so no id can climb out
    * of the root; ids are otherwise opaque strings everywhere else.
    */
+  /** The id of the deck an asset file belongs to, or null outside the decks root. */
+  function deckIdOfAsset(absolute: string): string | null {
+    if (!absolute.startsWith(rootDir + sep)) return null;
+    const relative = absolute.slice(rootDir.length + 1).split(sep).join('/');
+    // The deck is the folder holding deck.json above assets/; a folder may
+    // itself be called "assets", so try each candidate.
+    for (let at = relative.indexOf('/assets/'); at > 0; at = relative.indexOf('/assets/', at + 1)) {
+      const deckId = relative.slice(0, at);
+      if (existsSync(join(rootDir, ...deckId.split('/'), 'deck.json'))) return deckId;
+    }
+    return null;
+  }
+
   function deckDirOf(deckId: string): string {
     const segments = splitDeckPath(deckId);
     if (!segments) throw new Error(`invalid deck id: ${deckId}`);
@@ -1111,6 +1126,9 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
       }),
       onExternalTheme: (css) => broadcast(room, { kind: 'theme', css, byClientId: '' }),
     });
+    // The welcome names each clip's variant, and a variant names content:
+    // learn it (hashing only files never seen) before anyone is welcomed.
+    if (renditions) await renditions.learn(deckVideoAssets(session.dir, session.deck));
     rooms.set(deckId, room);
     // Opening a deck is the earliest honest signal that someone intends to
     // present it, and preparing a talk's clips takes minutes of CPU. Queued in
@@ -1544,6 +1562,38 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
       return redirectToViewer(response, url);
     }
 
+    // Content-addressed video: /media/<o|r><key>.<ext>, the one URL every
+    // deck holding the same bytes sends its keyed pins to (see the asset route
+    // below). Served immutable: the key names exact bytes.
+    const mediaMatch = /^\/media\/([or][0-9a-f]{24})(?:\.[a-z0-9]+)?$/.exec(path);
+    if (mediaMatch && renditions) {
+      const found = renditions.contentFile(mediaMatch[1]);
+      // With access control, only someone who may see a deck holding this
+      // content may have it.
+      let allowed = Boolean(found);
+      if (found && accessControl) {
+        allowed = false;
+        for (const source of found.sources) {
+          const deckId = deckIdOfAsset(source);
+          if (deckId && await deckAllowed(identity, deckId)) {
+            allowed = true;
+            break;
+          }
+        }
+      }
+      if (!found || !allowed) {
+        response.writeHead(found ? 403 : 404, { 'content-type': 'text/plain' });
+        response.end(found ? 'forbidden' : 'not found');
+        return;
+      }
+      trackAssetResponse(request, response, identity?.login ?? null, `media/${mediaMatch[1]}`);
+      await serveFileWithRanges(request, response, found.file, undefined, {
+        immutable: true,
+        etagSalt: mediaMatch[1][0] === 'r' ? 'rendition' : '',
+      });
+      return;
+    }
+
     // Deck-scoped asset streaming: /decks/<id>/assets/<relpath>
     // The deck id is a path, so it may itself contain slashes; the assets/
     // marker is what separates it from the file being served.
@@ -1604,6 +1654,8 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
       let pinned = false;
       if (renditions && isVideoAsset(absolute)) {
         try {
+          // Known already unless the file is new; then hashed once, here.
+          await renditions.learn([absolute]);
           const info = await stat(absolute);
           const ready = renditions.ready(absolute, info.size, info.mtimeMs);
           // A pinned URL (`?v=`) always answers with the variant it names, so a
@@ -1619,6 +1671,20 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
             // before small clips got keys still ask for a bare `o`.
             pinned = pin !== 'o' || CONTENT_HASHED_NAME.test(basename(absolute));
             revalidate = !pinned;
+            if (pin && pin !== 'o') {
+              // A keyed pin names content, and content has one URL on this
+              // server whichever deck holds a copy (clients ask for it
+              // directly; see mediaVariants.ts). A tab built before that still
+              // asks here: send it on, permanently, so it is asked once.
+              const extension = pin[0] === 'r' ? '.mp4' : extname(absolute).toLowerCase();
+              response.writeHead(308, {
+                location: `/media/${pin}${extension}`,
+                'cache-control': 'public, max-age=31536000, immutable',
+                'content-length': '0',
+              });
+              response.end();
+              return;
+            }
             if (pinnedFile === absolute && !ready) void renditions.ensure(absolute).catch(() => null);
           } else if (ready) {
             served = ready;

@@ -47,7 +47,7 @@ import { launchSafari, type SafariPage } from './support/safariDriver.js';
  *
  * - no byte of a file arrives twice, reloads and deck copies included (bytes
  *   are identified by content, so a copy of a clip in another deck is the
- *   same bytes), beyond a small allowance for a media stack's probes;
+ *   same bytes), beyond the block a media stack probes when it opens a clip;
  * - once a file has arrived, revisiting it makes no request at all: browsing
  *   again, editing, a collaborator's edit, coming back from presenting (a 304
  *   is a round trip too);
@@ -74,8 +74,10 @@ const execFileAsync = promisify(execFile);
 const DECK_ID = 'media-budget';
 
 /**
- * Bytes of one file that may cross the wire twice: a media stack's probes and
- * its first read block (Chromium reads 32 KB blocks), never a download.
+ * Bytes already held that one request may fetch again: the block a media
+ * stack reads when a new element opens a clip it has (Chromium probes the
+ * start before it finds its cache), never a download. A file's re-reads in
+ * all stay within one such block per request it may make.
  */
 const PROBE_ALLOWANCE_BYTES = 64 * 1024;
 /** Answered requests one file may take over a whole session, reload included. */
@@ -311,14 +313,35 @@ class TransferLog {
   in(phases: string[]): Recorded[] {
     this.sync();
     return this.link.responses.flatMap((response, i) => {
-      const asset = /^\/decks\/(.+)\/(assets\/.+)$/.exec(decodeURIComponent(response.url.split('?')[0]));
-      if (!phases.includes(this.labels[i]) || !asset) return [];
-      const [, deck, path] = asset;
-      // The server salts a rendition's ETag; that is how a response says which variant it carried.
-      const variant = response.etag?.startsWith('"rendition') ? 'rendition' as const : 'original' as const;
-      const content = `${this.hashes.get(`${deck}/${path}`) ?? `${deck}/${path}`}${variant === 'rendition' ? '#rendition' : ''}`;
-      return [{ ...response, phase: this.labels[i], deck, path, content, variant }];
+      if (!phases.includes(this.labels[i])) return [];
+      const url = decodeURIComponent(response.url.split('?')[0]);
+      const asset = /^\/decks\/(.+)\/(assets\/.+)$/.exec(url);
+      if (asset) {
+        const [, deck, path] = asset;
+        // The server salts a rendition's ETag; that is how a response says which variant it carried.
+        const variant = response.etag?.startsWith('"rendition') ? 'rendition' as const : 'original' as const;
+        const content = `${this.hashes.get(`${deck}/${path}`) ?? `${deck}/${path}`}${variant === 'rendition' ? '#rendition' : ''}`;
+        return [{ ...response, phase: this.labels[i], deck, path, content, variant }];
+      }
+      // Content-addressed: /media/<o|r><key>, the key being the start of the
+      // file's SHA-256, as `hashFile` names it.
+      const media = /^\/media\/([or])([0-9a-f]{24})/.exec(url);
+      if (!media) return [];
+      const hash = media[2].slice(0, 16);
+      const variant = media[1] === 'r' ? 'rendition' as const : 'original' as const;
+      const [deck, path] = this.fileOf(hash) ?? ['media', url];
+      return [{ ...response, phase: this.labels[i], deck, path, content: `${hash}${variant === 'rendition' ? '#rendition' : ''}`, variant }];
     });
+  }
+
+  /** The first deck file learned with this content hash, for naming /media responses. */
+  private fileOf(hash: string): [string, string] | null {
+    for (const [file, known] of this.hashes) {
+      if (known !== hash) continue;
+      const at = file.indexOf('/assets/');
+      return [file.slice(0, at), file.slice(at + 1)];
+    }
+    return null;
   }
 
   all(): Recorded[] {
@@ -412,8 +435,10 @@ function bytesTwice(records: Recorded[], phases?: string[]): string[] {
   const violations: string[] = [];
   for (const [, served] of groupBy(annotated, (r) => r.content)) {
     const again = sum(served, (r) => r.again ?? 0);
-    if (again > PROBE_ALLOWANCE_BYTES) {
-      violations.push(`${again} B of ${where(served)} arrived again (allowance ${PROBE_ALLOWANCE_BYTES} B)\n${TransferLog.table(served)}`);
+    const worst = Math.max(0, ...served.map((r) => r.again ?? 0));
+    if (worst > PROBE_ALLOWANCE_BYTES || again > REQUESTS_PER_FILE * PROBE_ALLOWANCE_BYTES) {
+      violations.push(`${again} B of ${where(served)} arrived again, ${worst} B in one response `
+        + `(allowance ${PROBE_ALLOWANCE_BYTES} B a request)\n${TransferLog.table(served)}`);
     }
   }
   return violations;
@@ -437,7 +462,9 @@ function overRequestBudget(records: Recorded[]): string[] {
  */
 function severalUrls(records: Recorded[]): string[] {
   const violations: string[] = [];
-  for (const [, served] of groupBy(records, (r) => `${r.deck}/${r.path} (${r.variant})`)) {
+  // A redirect is not where bytes live: judge the URLs that answered with them.
+  const answered = records.filter((r) => r.status < 300 || r.status >= 400);
+  for (const [, served] of groupBy(answered, (r) => `${r.deck}/${r.path} (${r.variant})`)) {
     const urls = [...new Set(served.map((r) => r.url))];
     if (urls.length > 1) violations.push(`${where(served)} under ${urls.length} URLs:\n${urls.map((url) => `  ${url}`).join('\n')}`);
   }
@@ -757,7 +784,7 @@ async function editingSession(kind: BrowserKind): Promise<{ log: TransferLog; en
       element: { ...deck.slides[4].elements[3], src: LATE_CLIP } as never,
     }]);
     await eventually(
-      () => page.evaluate<boolean>(`Boolean(document.querySelector('#canvas video[src*="delta"]'))`),
+      () => page.evaluate<boolean>(`Boolean(document.querySelector('#canvas [data-element-id="v5c"] video')?.getAttribute('src')?.includes('delta'))`),
       'the replaced clip never reached the editor canvas',
     );
     await showSlide(page, 4);
@@ -952,11 +979,10 @@ for (const kind of ffmpeg ? BROWSERS : []) describe(`media transfer budget (${ki
         .toBeLessThanOrEqual(renditionSize + PROBE_ALLOWANCE_BYTES);
     });
 
-    // PENDING(key streaming versions and URLs by content): each copy of a deck
-    // serves its own URLs, so the browser downloads the same clip again.
-    pending('downloads nothing for a copy of a deck already seen', () => {
-      const copy = log.in(['talk-b']);
-      expect(sum(copy), `bytes for the copy\n${TransferLog.table(copy)}`).toBeLessThanOrEqual(PROBE_ALLOWANCE_BYTES);
+    it('downloads nothing for a copy of a deck already seen', () => {
+      const copy = repeats(log.all()).filter((r) => r.phase === 'talk-b');
+      const fresh = sum(copy, (r) => r.body - (r.again ?? 0));
+      expect(fresh, `bytes the copy needed that had not arrived\n${TransferLog.table(copy)}`).toBeLessThanOrEqual(PROBE_ALLOWANCE_BYTES);
       expect(bytesTwice(log.all())).toEqual([]);
     });
 

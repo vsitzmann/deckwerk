@@ -368,9 +368,7 @@ describe.skipIf(!ffmpeg)('videos already on the server', () => {
     expect(await encodesAfterArrival(clip), 'encodes of a clip on disk at startup').toBe(1);
   }, 60_000);
 
-  // PENDING(sweep existing videos, key by content): today nothing is swept, and the
-  // cache is keyed by name, size and mtime, so each copy of a talk is encoded again.
-  it.fails('are encoded once, however many decks hold a copy', async () => {
+  it('are encoded once, however many decks hold a copy', async () => {
     const decksRoot = await freshRoot('copies');
     const first = await uniqueCopy(recording, join(decksRoot, 'talk-2025', 'assets', 'recording-9.mp4'), 'copies');
     const second = join(decksRoot, 'talk-2026', 'assets', 'recording-9.mp4');
@@ -403,9 +401,7 @@ describe.skipIf(!ffmpeg)('videos already on the server', () => {
     expect(encodesOf(clip), 'encodes after a restart').toBe(0);
   }, 90_000);
 
-  // PENDING(key by content): a discarded result is remembered only in memory, so every
-  // restart (every deploy) pays for the same encode again.
-  it.fails('are not encoded again after a restart once their streaming version was discarded', async () => {
+  it('are not encoded again after a restart once their streaming version was discarded', async () => {
     const decksRoot = await freshRoot('restart-discarded');
     const clip = await uniqueCopy(incompressible, join(decksRoot, 'talk', 'assets', 'noise-4.mp4'), 'discarded');
     await saveDeck(join(decksRoot, 'talk'), deckOf('talk', ['assets/noise-4.mp4']));

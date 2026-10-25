@@ -173,7 +173,7 @@ function requestProvidedStills(root: ParentNode): HTMLVideoElement[] {
     }
     const group = new Set([video]);
     waiting.set(key, group);
-    void provider(video.dataset.gateAbortedSrc ?? '', posterTime).then((url) => {
+    void provider(video.dataset.assetSrc ?? video.dataset.gateAbortedSrc ?? '', posterTime).then((url) => {
       if (url) {
         settle(key, url);
         return;

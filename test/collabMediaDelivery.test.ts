@@ -124,7 +124,7 @@ describe('media delivery from the collab server', () => {
     await before.arrayBuffer();
 
     // The rendition lands while that <video> is still playing.
-    await writeFile(renditionPath(source, info.size, info.mtimeMs, cacheDir), 'RENDITION');
+    await writeFile(renditionPath(pin!.slice(1), cacheDir), 'RENDITION');
 
     // BUG (fixed): a looping clip re-asked for bytes=0- and got the
     // rendition's bytes under the same URL — PIPELINE_ERROR_DECODE in Chromium.
@@ -343,6 +343,11 @@ describe('pinning video variants in client URLs', () => {
     expect(pinMediaVariant('assets/talk.mov', '/decks/d/assets/talk.mov')).toBe('/decks/d/assets/talk.mov?v=r0123');
     expect(pinMediaVariant('assets/new.mp4', '/decks/d/assets/new.mp4')).toBe('/decks/d/assets/new.mp4?v=o');
     expect(pinMediaVariant('assets/photo.jpg', '/decks/d/assets/photo.jpg')).toBe('/decks/d/assets/photo.jpg');
+    // A full content key names the clip's one URL on the server, whatever deck holds it.
+    const key = '0123456789abcdef01234567';
+    setMediaVariants({ 'assets/talk.mov': `o${key}`, 'assets/cut.mp4': `r${key}` }, true);
+    expect(pinMediaVariant('assets/talk.mov', '/decks/d/assets/talk.mov')).toBe(`/media/o${key}.mov`);
+    expect(pinMediaVariant('assets/cut.mp4', '/decks/other/assets/cut.mp4')).toBe(`/media/r${key}.mp4`);
     setMediaVariants({}, true);
   });
 });

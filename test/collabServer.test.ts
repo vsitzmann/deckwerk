@@ -8,7 +8,7 @@ import { connect as connect_ } from 'node:net';
 import { emptyDeck, parseDeck, type Deck } from '../src/shared/deck.js';
 import { saveDeck } from '../src/main/deckStore.js';
 import { COLLAB_PROTOCOL_VERSION, ServerMessageSchema, type ClientMessage, type ServerMessage } from '../src/shared/collab.js';
-import { renditionPath } from '../src/server/streamingRenditions.js';
+import { contentKeyOfFile, renditionPath } from '../src/server/streamingRenditions.js';
 import { startCollabServer, type RunningCollabServer } from '../src/server/collabServer.js';
 
 const DECK_ID = 'demo';
@@ -381,7 +381,7 @@ describe('collab server', () => {
     expect(original.headers.get('content-length')).toBe(String(info.size));
     expect(original.headers.get('cache-control')).toBe('public, no-cache');
 
-    await writeFile(renditionPath(source, info.size, info.mtimeMs, cacheDir), 'RENDITION');
+    await writeFile(renditionPath(await contentKeyOfFile(source), cacheDir), 'RENDITION');
     const served = await fetch(`${base}/assets/huge.mp4`);
     expect(await served.text()).toBe('RENDITION');
     // A different variant of the same URL must not answer 304 to the ETag the

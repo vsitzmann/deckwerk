@@ -148,13 +148,24 @@ The rules that keep it honest:
   Chromium failed it with `PIPELINE_ERROR_DECODE`. The welcome therefore
   carries `mediaVariants` (`o<key>` original, `r<key>` rendition, per deck
   src), a `media` message announces each rendition as it lands, and the
-  browser clients pin the variant into every video URL (`?v=`;
-  `src/renderer/collab/mediaVariants.ts`). A pinned URL is answered with
-  exactly that variant and cached immutably; a video the client has not been
-  told about yet (just uploaded) pins a bare `o` and gets the original,
-  revalidated. Unpinned URLs (agents, print, older clients) behave as above.
-- **Keyed by name, size and mtime**, not by path, so renaming a deck or a
-  folder does not throw away an hour of encoding.
+  browser clients ask for exactly that variant
+  (`src/renderer/collab/mediaVariants.ts`): a keyed variant is the URL
+  `/media/<o|r><key>.<ext>`, answered with exactly those bytes and cached
+  immutably. A video the client has not been told about yet (just uploaded)
+  pins a bare `o` on its deck URL and gets the original, revalidated. A deck
+  URL with a keyed `?v=` (a tab older than `/media`) is redirected there
+  permanently. Unpinned URLs (agents, print) behave as above.
+- **Keyed by content.** A talk starts as a copy of the last one; in Oct 2026
+  one 125 MB recording sat in five decks and was encoded once per copy. The
+  key is the start of the file's SHA-256, so one encode, one rendition and
+  one `/media` URL serve every copy, and a copy of a deck costs a browser
+  nothing it already has. Hashing never happens on the serving path: a file
+  is hashed when its deck opens (or it arrives) and the key is remembered
+  under its name, size and mtime in `content-keys.json` beside the
+  renditions, so a renamed deck costs nothing and a restart re-reads the
+  index. What an encode concluded survives a restart too: a rendition is a
+  file, and "none worth having" leaves `<key>.passed`. With access control
+  on, `/media` serves only someone who may see a deck holding that content.
 - **Never bigger than the source.** A rendition that came out larger is
   discarded and the original served; failure of any kind falls back to the
   original.

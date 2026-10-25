@@ -10,7 +10,8 @@
  * exists without importing the capture code that imports render.ts.
  */
 
-export type PreviewPosterProvider = (resolvedSrc: string, time: number) => Promise<string | null>;
+/** `src` is the clip's deck-relative path where known, else its URL. */
+export type PreviewPosterProvider = (src: string, time: number) => Promise<string | null>;
 
 let provider: PreviewPosterProvider | null = null;
 
@@ -22,7 +23,7 @@ export function previewPosterProvider(): PreviewPosterProvider | null {
   return provider;
 }
 
-/** Deck-relative path from an asset URL, for either asset server. */
+/** Deck-relative path from a deck-relative path or an asset URL, for either asset server. */
 function deckRelativePath(resolvedSrc: string): string | null {
   try {
     const url = new URL(resolvedSrc, document.baseURI);

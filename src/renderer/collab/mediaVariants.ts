@@ -36,5 +36,17 @@ export function mediaVariantsSnapshot(): Record<string, string> {
 export function pinMediaVariant(src: string, url: string): string {
   const variant = variants.get(src) ?? (classifyMediaName(src) === 'video' ? 'o' : null);
   if (!variant) return url;
+  // A keyed variant names content, and content has one URL on the server
+  // whichever deck holds a copy: a copy of a talk is then bytes the browser
+  // already has. (The deck URL with `?v=` would redirect there too, but the
+  // detour made Chromium's media stack fetch again what it was holding.)
+  if (CONTENT_VARIANT.test(variant)) return `/media/${variant}${variant[0] === 'r' ? '.mp4' : extensionOf(src)}`;
   return `${url}${url.includes('?') ? '&' : '?'}v=${encodeURIComponent(variant)}`;
+}
+
+const CONTENT_VARIANT = /^[or][0-9a-f]{24}$/;
+
+function extensionOf(src: string): string {
+  const match = /\.[A-Za-z0-9]+$/.exec(src.split('?')[0]);
+  return match ? match[0].toLowerCase() : '';
 }

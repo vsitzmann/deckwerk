@@ -1515,13 +1515,12 @@ export class EditorCanvas {
    */
   refreshMediaSources(srcs: Iterable<string>): void {
     const resolveSrc = (src: string) => window.api.assetUrl(src);
-    // By path: the URL a clip is fetched from, before its `?v=`.
-    const current = new Map([...srcs].map((src) => [resolveSrc(src).split('?')[0], resolveSrc(src)]));
-    if (current.size === 0) return;
+    const changed = new Set(srcs);
+    if (changed.size === 0) return;
     const outdated = (video: HTMLVideoElement) => {
-      const url = video.getAttribute('src') ?? video.dataset.gateAbortedSrc ?? '';
-      const now = current.get(url.split('?')[0]);
-      return now !== undefined && now !== url;
+      const src = video.dataset.assetSrc;
+      if (!src || !changed.has(src)) return false;
+      return (video.getAttribute('src') ?? video.dataset.gateAbortedSrc ?? '') !== resolveSrc(src);
     };
     this.videoPool.releaseWhere(outdated);
     for (const el of this.store.slide?.elements ?? []) {

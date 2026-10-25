@@ -149,6 +149,7 @@ export function applyMediaFitStyles(
   // covers a changed box and in-point as well as a changed fit or crop.
   if (el.type === 'video' && tag.tagName.toLowerCase() === 'video') {
     tag.dataset.mediaKey = videoPresentationKey(el, tag.getAttribute('src') ?? '');
+    tag.dataset.assetSrc = el.src;
     // The poster-frame stamp is part of that same identity: a recovery pass
     // reads it to re-seek an element whose frame was dropped, and a stale
     // in-point here would restore the frame the clip no longer starts at.
@@ -1133,6 +1134,8 @@ function renderVideo(
   const video = document.createElement('video');
   video.playsInline = true;
   video.dataset.mediaKey = videoPresentationKey(el, opts.resolveSrc(el.src));
+  // Which deck file this is: its URL may name content rather than a path.
+  video.dataset.assetSrc = el.src;
   // Black only once decoding has failed (player.css): a black surface behind a
   // working video shows as a dark hairline at its scaled edges on light slides.
   video.addEventListener('error', () => video.classList.add('media-failed'));
