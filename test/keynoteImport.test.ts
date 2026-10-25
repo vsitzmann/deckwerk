@@ -450,11 +450,14 @@ describe('keynote importer', () => {
   /** Run a Python snippet against the importer with real Keynote protobuf classes. */
   function importerProbe(lines: string[]): unknown {
     const stdout = execFileSync(PYTHON, ['-c', [
-      'import json, tempfile',
+      'import importlib, json, pkgutil, tempfile',
       'from pathlib import Path',
       'from PIL import Image',
+      'import keynote_parser.versions as versions',
       'import importers.keynote.import_keynote as k',
-      'from keynote_parser.versions.v14_4.generated import TSDArchives_pb2 as TSD, TSWPArchives_pb2 as TSWP',
+      'NEWEST = max(module.name for module in pkgutil.iter_modules(versions.__path__))',
+      'TSD = importlib.import_module(f"keynote_parser.versions.{NEWEST}.generated.TSDArchives_pb2")',
+      'TSWP = importlib.import_module(f"keynote_parser.versions.{NEWEST}.generated.TSWPArchives_pb2")',
       'def geo(msg, x, y, w, h, angle=0.0, flags=3):',
       '    g = msg.geometry',
       '    g.position.x, g.position.y, g.size.width, g.size.height = x, y, w, h',
