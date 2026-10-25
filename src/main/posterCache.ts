@@ -1,9 +1,7 @@
-import { createHash } from 'node:crypto';
-import { existsSync } from 'node:fs';
-import { mkdir, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { app } from 'electron';
-import { extractPosterFrame } from './ffmpeg.js';
+import { extractPosterFrame, extractStillFrame } from './ffmpeg.js';
+import { createFrameCache } from './frameCache.js';
 
 /**
  * Poster frames for preview surfaces, extracted out of process.
@@ -40,68 +38,17 @@ export function setPosterCacheDirForTests(dir: string | null): void {
   cacheDirOverride = dir;
 }
 
-/** Bound ffmpeg fan-out: a deck open asks for many frames at once. */
-const MAX_CONCURRENT = 3;
-let running = 0;
-const queue: Array<() => void> = [];
-/** One extraction per key, however many elements want it. */
-const inFlight = new Map<string, Promise<string | null>>();
-
-function acquire(): Promise<void> {
-  if (running < MAX_CONCURRENT) {
-    running += 1;
-    return Promise.resolve();
-  }
-  return new Promise((resolve) => queue.push(() => {
-    running += 1;
-    resolve();
-  }));
-}
-
-function release(): void {
-  running -= 1;
-  queue.shift()?.();
-}
-
 /**
  * The cached poster file name for `absolutePath` at `time` seconds, cutting
  * it first if it is not there yet. Null when the frame cannot be produced —
- * the renderer then falls back to its in-browser capture.
+ * the renderer then falls back to its in-browser capture. Bounded to three
+ * ffmpeg runs at once: a deck open asks for many frames together.
  */
-export async function posterFor(absolutePath: string, time: number): Promise<string | null> {
-  let info;
-  try {
-    info = await stat(absolutePath);
-  } catch {
-    return null;
-  }
-  const seconds = Number.isFinite(time) && time >= 0 ? time : 0;
-  const key = createHash('sha256')
-    .update(`${absolutePath}|${info.size}|${Math.round(info.mtimeMs)}|${seconds.toFixed(3)}`)
-    .digest('hex')
-    .slice(0, 32);
-  const name = `${key}.jpg`;
-  const dir = posterCacheDir();
-  const output = join(dir, name);
-  if (existsSync(output)) return name;
+export const posterFor = createFrameCache({ dir: posterCacheDir, extract: extractPosterFrame });
 
-  const pending = inFlight.get(name);
-  if (pending) return pending;
-  const job = (async () => {
-    await acquire();
-    try {
-      if (existsSync(output)) return name;
-      await mkdir(dir, { recursive: true });
-      await extractPosterFrame(absolutePath, seconds, output);
-      return name;
-    } catch (error) {
-      console.error(`Could not extract a poster frame from ${absolutePath}:`, error);
-      return null;
-    } finally {
-      release();
-      inFlight.delete(name);
-    }
-  })();
-  inFlight.set(name, job);
-  return job;
-}
+/**
+ * A full-resolution still for a printed PDF page, from the same cache folder
+ * (and so the same `deck://posters/` route). The print window takes these
+ * instead of mounting every video in the deck at once.
+ */
+export const printStillFor = createFrameCache({ dir: posterCacheDir, extract: extractStillFrame, variant: 'print|' });

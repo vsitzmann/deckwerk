@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
+import { rm } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import type { MediaInfo, TrimRequest } from '@shared/ipc.js';
 
@@ -133,6 +134,54 @@ export async function extractPosterFrame(input: string, seconds: number, output:
     '-vf', "scale='min(960,iw)':-2",
     '-q:v', '4', '-f', 'image2', output,
   ]);
+}
+
+/**
+ * Cut one full-resolution frame of `input` at `seconds` to a JPEG at
+ * `output`, for a printed page rather than a thumbnail.
+ *
+ * Converted to BT.601 full range, which is what every JPEG decoder
+ * assumes; leaving the clip's own BT.709 limited-range YUV in the file would
+ * shift its colours away from the Player's. Chroma stays full (4:4:4) because
+ * screen recordings are mostly text. A time past the last frame cuts nothing,
+ * so that case falls back to the last frame — the same frame the browser
+ * clamps such a seek to. A clip with an alpha channel is refused: JPEG would
+ * flatten it, and the caller then shows the clip itself instead.
+ */
+export async function extractStillFrame(input: string, seconds: number, output: string): Promise<void> {
+  if (await videoHasAlpha(input)) throw new Error(`${input} has an alpha channel`);
+  const encode = ['-an', '-vf', 'scale=out_color_matrix=bt601:out_range=pc,format=yuvj444p', '-q:v', '2'];
+  await rm(output, { force: true });
+  await run(getFfmpegPath(), [
+    '-hide_banner', '-loglevel', 'error', '-y',
+    '-ss', Math.max(0, seconds).toFixed(3), '-i', input,
+    '-frames:v', '1', ...encode, '-f', 'image2', output,
+  ]);
+  if (existsSync(output)) return;
+  await run(getFfmpegPath(), [
+    '-hide_banner', '-loglevel', 'error', '-y',
+    '-sseof', '-0.5', '-i', input,
+    ...encode, '-update', '1', '-f', 'image2', output,
+  ]);
+  if (!existsSync(output)) throw new Error(`no frame could be cut from ${input}`);
+}
+
+/** Whether the clip's first video stream carries transparency. */
+async function videoHasAlpha(absolutePath: string): Promise<boolean> {
+  try {
+    const out = await run(getFfprobePath(), [
+      '-v', 'error', '-select_streams', 'v:0',
+      '-show_entries', 'stream=pix_fmt:stream_tags=alpha_mode', '-of', 'json', absolutePath,
+    ]);
+    const stream = (JSON.parse(out.stdout) as { streams?: Array<{ pix_fmt?: string; tags?: Record<string, string> }> })
+      .streams?.[0];
+    // VP8/VP9 keep alpha in a side channel and report a plain pix_fmt; the
+    // container tag is what says it is there.
+    if (stream?.tags?.alpha_mode === '1' || stream?.tags?.ALPHA_MODE === '1') return true;
+    return /^(yuva|rgba|bgra|argb|abgr|gbrap|ya)/.test(stream?.pix_fmt ?? '');
+  } catch {
+    return false;
+  }
 }
 
 /**

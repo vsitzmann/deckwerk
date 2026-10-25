@@ -69,7 +69,7 @@ import { exportDeck } from './exportDeck.js';
 import { writeExportThumbnail } from './exportThumbnail.js';
 import { probeMedia, runTrim } from './ffmpeg.js';
 import { attachRendererHealth } from './windowHealth.js';
-import { POSTER_HOST, posterFor } from './posterCache.js';
+import { POSTER_HOST, posterFor, printStillFor } from './posterCache.js';
 import { showOpenDialog, showSaveDialog } from './dialogs.js';
 import { importKeynote } from './keynoteImport.js';
 import { importPowerPoint } from './pptxImport.js';
@@ -1467,7 +1467,7 @@ function registerHandlers(): void {
   ipcMain.handle(IPC.videoPoster, async (event, req: VideoPosterRequest): Promise<VideoPosterResult> => {
     const s = requireSession(event);
     const input = resolveAsset(s.dir, req.src);
-    const name = await posterFor(input, req.time);
+    const name = await (req.print ? printStillFor : posterFor)(input, req.time);
     return { url: name ? `deck://${POSTER_HOST}/${encodeURIComponent(name)}` : null };
   });
 

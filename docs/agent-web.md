@@ -49,3 +49,13 @@ Pages run in `sandbox="allow-scripts"`: scripts work, but navigation, popups,
 deck access, and arbitrary local files do not. The injected `window.deckwerk`
 bridge provides `onActive`, `onInactive`, `onStep`, `next`, and `prev`.
 
+
+A page that draws the slide's builds itself must handle `onActive({ step })`
+at any step, not only 0: the deck sends it when the slide comes on screen,
+which is the last step when presenting backwards — and it is the only message
+a PDF page gets. PDF export prints one copy of the page per build stage (or
+just the last, by default), each told its step that way and given 5 seconds
+to draw it before the page is captured. So on `onActive`, jump straight to
+the settled end of that step rather than animating up to it, and keep any
+opening animation shorter than that. A looping animation prints at whatever
+moment it has reached.
