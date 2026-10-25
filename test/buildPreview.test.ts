@@ -170,6 +170,75 @@ describe('Build panel Preview', () => {
     expect(preview.playing).toBeNull();
   });
 
+  it('previews a pop-in as a pop-in, held until it has finished growing', async () => {
+    // jsdom has no Web Animations; record what the player asks for instead.
+    const animations: Array<{ keyframes: Keyframe[]; options: KeyframeAnimationOptions }> = [];
+    (Element.prototype as unknown as { animate: unknown }).animate = function animate(
+      keyframes: Keyframe[], options: KeyframeAnimationOptions,
+    ) {
+      animations.push({ keyframes, options });
+      return { finish() {}, cancel() {}, finished: new Promise(() => {}) };
+    };
+    try {
+      const { store, preview, button, visible } = setup();
+      store.commit((deck) => {
+        deck.slides[0].timeline = [{
+          id: 't-pop', trigger: { on: 'click', ref: null, delay: 0 },
+          action: { type: 'appear', target: 'a', value: 'pop', duration: 900, popFrom: 0.2, popPeak: 1.25 },
+        }];
+      });
+      store.select(['a']);
+      button().click();
+      expect(preview.playing).toBe('builds');
+      expect(visible('a')).toBe(true);
+      expect(animations).toHaveLength(1);
+      expect(animations[0].keyframes.map((frame) => frame.scale)).toEqual(['0.2', '1.25', '1']);
+      expect(animations[0].options.duration).toBe(900);
+
+      // The pause before the slide comes back starts once the pop has ended.
+      await vi.advanceTimersByTimeAsync(900);
+      expect(preview.playing).toBe('builds');
+      await vi.advanceTimersByTimeAsync(PREVIEW_PAUSE_MS);
+      expect(preview.playing).toBeNull();
+    } finally {
+      delete (Element.prototype as unknown as { animate?: unknown }).animate;
+    }
+  });
+
+  it('previews an emphasis by playing it, held until it has settled', async () => {
+    const animations: Array<{ keyframes: Keyframe[]; options: KeyframeAnimationOptions }> = [];
+    (Element.prototype as unknown as { animate: unknown }).animate = function animate(
+      keyframes: Keyframe[], options: KeyframeAnimationOptions,
+    ) {
+      animations.push({ keyframes, options });
+      return { finish() {}, cancel() {}, finished: new Promise(() => {}) };
+    };
+    try {
+      const { store, preview, button, visible } = setup();
+      // a is on the slide from the start; its one build is a jiggle.
+      store.commit((deck) => {
+        deck.slides[0].timeline = [{
+          id: 't-jiggle', trigger: { on: 'click', ref: null, delay: 0 },
+          action: { type: 'jiggle', target: 'a', value: null, duration: 800 },
+        }];
+      });
+      store.select(['a']);
+      button().click();
+      expect(preview.playing).toBe('builds');
+      expect(visible('a')).toBe(true);
+      expect(animations).toHaveLength(1);
+      expect(animations[0].options.duration).toBe(800);
+      expect(animations[0].keyframes.some((frame) => /rotate\(/.test(String(frame.transform)))).toBe(true);
+
+      await vi.advanceTimersByTimeAsync(800);
+      expect(preview.playing).toBe('builds');
+      await vi.advanceTimersByTimeAsync(PREVIEW_PAUSE_MS);
+      expect(preview.playing).toBeNull();
+    } finally {
+      delete (Element.prototype as unknown as { animate?: unknown }).animate;
+    }
+  });
+
   it('ends when the slide changes under it', () => {
     const { store, preview, button } = setup();
     store.commit((deck) => { deck.slides.push(structuredClone(deck.slides[0])); deck.slides[1].id = 's2'; });
