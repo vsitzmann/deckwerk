@@ -6,7 +6,7 @@ import { canHoldText, shapeToTextBox } from '@shared/shapeText.js';
 import { flipped, moveCorner, polygonPoints } from '@shared/polygonShape.js';
 import { flipsOf } from '@shared/flip.js';
 import { braceDepthToward, bracePolyline, braceTip } from '@shared/brace.js';
-import { type Rect, fitScale, makeId } from '@shared/geometry.js';
+import { type Rect, fitScale, makeId, snapAngle } from '@shared/geometry.js';
 
 type XY = { x: number; y: number };
 import {
@@ -3240,8 +3240,8 @@ export class EditorCanvas {
 
         let rotation = drag.originRotation + drag.accumulatedAngle * (180 / Math.PI);
         // Shift gives a precise, discoverable snap without changing the normal
-        // free-rotation gesture.
-        if (ev.shiftKey) rotation = Math.round(rotation / 15) * 15;
+        // free-rotation gesture -- the same step the inspector's dial snaps to.
+        if (ev.shiftKey) rotation = snapAngle(rotation);
         rotation = Math.round(rotation * 10) / 10;
         this.store.updateSelected((target) => {
           if (target.id === drag.elementId) target.rot = rotation;

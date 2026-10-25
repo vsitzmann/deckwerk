@@ -48,6 +48,18 @@ export function clamp(v: number, lo: number, hi: number): number {
   return Math.min(hi, Math.max(lo, v));
 }
 
+/**
+ * The step Shift snaps a rotation to, wherever an angle is turned by hand:
+ * the canvas's rotate gesture and every angle dial in the inspector. One
+ * constant, so the two gestures cannot drift apart.
+ */
+export const ANGLE_SNAP_DEGREES = 15;
+
+/** `degrees` to the nearest Shift step (see `ANGLE_SNAP_DEGREES`). */
+export function snapAngle(degrees: number): number {
+  return Math.round(degrees / ANGLE_SNAP_DEGREES) * ANGLE_SNAP_DEGREES;
+}
+
 export function rectsIntersect(a: Rect, b: Rect): boolean {
   return (
     a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y
