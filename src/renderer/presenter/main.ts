@@ -32,6 +32,6 @@ async function load(session: DeckSession): Promise<void> {
 window.api.onDeckState((session) => void load(session));
 window.api.onPresentState((state) => view.setState(state));
 window.addEventListener('resize', () => view.refresh());
-bindSpeakerKeys(window, (command) => window.api.sendPresentCommand(command));
+bindSpeakerKeys(window, (command) => window.api.sendPresentCommand(command), view);
 
 void window.api.getDeck().then((session) => session && load(session));

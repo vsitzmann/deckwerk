@@ -161,6 +161,40 @@ describe.skipIf(!electronBinary)('browser presentation pair', () => {
     expect(advanced.position).toBe('Slide 3 / 4 · Build 1 / 1');
     expect(advanced.next).toBeNull();
 
+    // The overview stays on the speaker's screen and jumps the audience.
+    await speaker.click('.speaker-slides', 'open slide overview');
+    expect(await speaker.evaluate<boolean>(
+      `document.querySelector('.speaker-overview').getBoundingClientRect().right <= document.querySelector('.speaker-current').getBoundingClientRect().left`,
+    )).toBe(true);
+    expect(await speaker.evaluate<string[]>(
+      `[...document.querySelectorAll('.speaker-overview-slide')].map((button) => button.getAttribute('data-slide'))`,
+    )).toEqual(['1', '2']);
+    await eventually(
+      async () => speaker!.evaluate<string | null>(
+        `document.querySelector('.speaker-overview-slide[data-slide="1"] .preview .slide')?.textContent?.trim() ?? null`,
+      ),
+      'the overview did not paint its thumbnail',
+      (value) => value === 'BRAVO SLIDE',
+    );
+    await speaker.click('.speaker-overview-slide[data-slide="1"]', 'jump to slide 2');
+    await eventually(
+      async () => audience!.evaluate<{ slide: string | null }>(AUDIENCE_PROBE),
+      'the audience did not follow the overview selection',
+      (value) => value.slide === 'BRAVO SLIDE',
+    );
+    expect(await speaker.evaluate<boolean>(
+      `!document.querySelector('.speaker-overview').hidden`,
+    )).toBe(true);
+    await speaker.click('.speaker-grid', 'open all slides grid');
+    expect(await speaker.evaluate<boolean>(
+      `document.querySelector('.speaker-overview').getBoundingClientRect().width > document.querySelector('.speaker-current').getBoundingClientRect().width`,
+    )).toBe(true);
+    await speaker.click('.speaker-overview-close', 'return to slide rail');
+    expect(await speaker.evaluate<boolean>(
+      `document.querySelector('#speaker').classList.contains('overview-open')`,
+    )).toBe(true);
+    await speaker.click('.speaker-next-button', 'return to slide 3');
+
     // Blank: the audience blanks without the Speaker View going dark with it.
     await speaker.click('.speaker-blank', 'Speaker View blank');
     await eventually(

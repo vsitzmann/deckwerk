@@ -348,7 +348,7 @@ function mountSpeaker(): void {
   if (themeCss) speaker.setTheme(themeCss);
   if (deck) speaker.setDeck(deck);
   speaker.setState(lastState);
-  unbindSpeakerKeys = bindSpeakerKeys(window, sendCommand);
+  unbindSpeakerKeys = bindSpeakerKeys(window, sendCommand, speaker);
   retitle();
   // Announce, so an audience surface that is already running answers with the
   // deck and the live cursor rather than leaving this one blank until the next

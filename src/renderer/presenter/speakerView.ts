@@ -50,6 +50,11 @@ export interface SpeakerView {
   refresh(): void;
   /** Advance the clocks. Called on a timer internally; exposed for tests. */
   tick(): void;
+  toggleOverview(): void;
+  toggleGrid(): void;
+  closeOverview(): boolean;
+  isOverviewOpen(): boolean;
+  isGridOpen(): boolean;
   destroy(): void;
 }
 
@@ -75,8 +80,14 @@ const MARKUP = `
       </section>
     </aside>
   </section>
+  <section class="speaker-overview" role="region" aria-label="Slides" hidden>
+    <div class="speaker-overview-heading"><h2>Slides</h2><button class="speaker-overview-close">Close</button></div>
+    <div class="speaker-overview-list"></div>
+  </section>
   <footer>
     <button class="speaker-prev">← Previous</button>
+    <button class="speaker-slides" aria-expanded="false" aria-keyshortcuts="O">Slides</button>
+    <button class="speaker-grid" aria-expanded="false" aria-keyshortcuts="G">All slides</button>
     <button class="speaker-blank">Blank</button>
     <button class="speaker-next-button primary">Next →</button>
     <button class="speaker-swap">Switch displays</button>
@@ -105,6 +116,12 @@ export function createSpeakerView(options: SpeakerViewOptions): SpeakerView {
   const notes = pick('.speaker-notes');
   const swap = pick<HTMLButtonElement>('.speaker-swap');
   const end = pick<HTMLButtonElement>('.speaker-end');
+  const overview = pick('.speaker-overview');
+  const overviewList = pick('.speaker-overview-list');
+  const slidesButton = pick<HTMLButtonElement>('.speaker-slides');
+  const gridButton = pick<HTMLButtonElement>('.speaker-grid');
+  const layout = pick('.speaker-layout');
+  const footer = pick('footer');
   if (options.endLabel) end.textContent = options.endLabel;
   for (const action of options.extraActions ?? []) end.before(action);
 
@@ -123,6 +140,11 @@ export function createSpeakerView(options: SpeakerViewOptions): SpeakerView {
     startedAt: openedAt,
     slideStartedAt: openedAt,
   };
+  let overviewObserver: IntersectionObserver | null = null;
+  let overviewDeck: Deck | null = null;
+  let overviewRange = '';
+  let overviewMode: 'closed' | 'rail' | 'grid' = 'closed';
+  let returnToRail = false;
 
   function preview(target: HTMLElement, slideIndex: number, step = 0): void {
     // Every advance throws this preview away and builds another. A video still
@@ -161,6 +183,119 @@ export function createSpeakerView(options: SpeakerViewOptions): SpeakerView {
     preview(nextHost, nextSlide <= lastSlide ? nextSlide : -1);
     position.textContent = presentationLabel(state, deck.slides.length);
     notes.textContent = deck.slides[state.cursor.slide]?.notes ?? '';
+    if (!overview.hidden) {
+      const range = `${state.range?.start ?? 0}:${state.range?.end ?? deck.slides.length - 1}`;
+      if (deck !== overviewDeck || range !== overviewRange) buildOverview();
+      for (const button of overviewList.querySelectorAll<HTMLButtonElement>('button[data-slide]')) {
+        if (Number(button.dataset.slide) === state.cursor.slide) button.setAttribute('aria-current', 'true');
+        else button.removeAttribute('aria-current');
+      }
+    }
+  }
+
+  function clearOverview(): void {
+    overviewObserver?.disconnect();
+    overviewObserver = null;
+    releasePreviewVideos(overviewList);
+    overviewList.replaceChildren();
+    overviewDeck = null;
+  }
+
+  function buildOverview(): void {
+    clearOverview();
+    if (!deck) return;
+    const start = state.range?.start ?? 0;
+    const end = state.range?.end ?? deck.slides.length - 1;
+    overviewDeck = deck;
+    overviewRange = `${start}:${end}`;
+    if (typeof IntersectionObserver !== 'undefined') {
+      overviewObserver = new IntersectionObserver((entries) => {
+        for (const entry of entries) {
+          const target = entry.target as HTMLElement;
+          if (entry.isIntersecting) preview(target, Number(target.dataset.slide));
+          else {
+            releasePreviewVideos(target);
+            target.replaceChildren();
+          }
+        }
+      }, { root: overviewList, rootMargin: '300px' });
+    }
+    for (let index = start; index <= end; index++) {
+      const slide = deck.slides[index];
+      if (!slide) continue;
+      const button = document.createElement('button');
+      button.className = `speaker-overview-slide${slide.skipped ? ' skipped' : ''}`;
+      button.dataset.slide = String(index);
+      button.setAttribute('aria-label', `Slide ${index + 1}: ${slide.name || 'Untitled'}${slide.skipped ? ', hidden' : ''}`);
+      const thumbnail = document.createElement('div');
+      thumbnail.className = 'preview';
+      thumbnail.dataset.slide = String(index);
+      const label = document.createElement('span');
+      label.className = 'speaker-overview-label';
+      label.textContent = `${index + 1}  ${slide.name || 'Untitled'}`;
+      button.append(thumbnail, label);
+      if (slide.skipped) {
+        const badge = document.createElement('span');
+        badge.className = 'speaker-overview-hidden';
+        badge.textContent = 'Hidden';
+        button.appendChild(badge);
+      }
+      button.addEventListener('click', () => {
+        onCommand({ type: 'goTo', slide: index });
+        if (overviewMode === 'grid') closeOverview();
+      });
+      overviewList.appendChild(button);
+      if (overviewObserver) overviewObserver.observe(thumbnail);
+      else preview(thumbnail, index);
+    }
+  }
+
+  function showOverview(mode: 'closed' | 'rail' | 'grid'): void {
+    overviewMode = mode;
+    overview.hidden = mode === 'closed';
+    host.classList.toggle('overview-open', mode === 'rail');
+    host.classList.toggle('overview-grid', mode === 'grid');
+    layout.inert = mode === 'grid';
+    footer.inert = mode === 'grid';
+    slidesButton.setAttribute('aria-expanded', String(mode === 'rail'));
+    gridButton.setAttribute('aria-expanded', String(mode === 'grid'));
+    overview.setAttribute('role', mode === 'grid' ? 'dialog' : 'region');
+    if (mode === 'grid') overview.setAttribute('aria-modal', 'true');
+    else overview.removeAttribute('aria-modal');
+    if (mode === 'closed') {
+      clearOverview();
+      slidesButton.focus();
+      return;
+    }
+    if (!overviewDeck) buildOverview();
+    render();
+    for (const thumbnail of overviewList.querySelectorAll<HTMLElement>('.preview')) {
+      const stage = thumbnail.querySelector<HTMLElement>('.stage');
+      if (!stage || !deck) continue;
+      const bounds = thumbnail.getBoundingClientRect();
+      applyStageScale(stage, deck, { w: bounds.width, h: bounds.height });
+    }
+    const current = overviewList.querySelector<HTMLElement>('[aria-current="true"]');
+    current?.scrollIntoView?.({ block: 'nearest' });
+    (current ?? pick('.speaker-overview-close')).focus();
+  }
+
+  function closeOverview(): boolean {
+    if (overviewMode === 'closed') return false;
+    showOverview(overviewMode === 'grid' && returnToRail ? 'rail' : 'closed');
+    return true;
+  }
+
+  function toggleOverview(): void {
+    showOverview(overviewMode === 'rail' ? 'closed' : 'rail');
+  }
+
+  function toggleGrid(): void {
+    if (overviewMode === 'grid') closeOverview();
+    else {
+      returnToRail = overviewMode === 'rail';
+      showOverview('grid');
+    }
   }
 
   function tick(): void {
@@ -174,6 +309,9 @@ export function createSpeakerView(options: SpeakerViewOptions): SpeakerView {
   pick('.speaker-prev').addEventListener('click', send({ type: 'prev' }));
   pick('.speaker-next-button').addEventListener('click', send({ type: 'next' }));
   pick('.speaker-blank').addEventListener('click', send({ type: 'toggleBlank' }));
+  slidesButton.addEventListener('click', toggleOverview);
+  gridButton.addEventListener('click', toggleGrid);
+  pick('.speaker-overview-close').addEventListener('click', closeOverview);
   end.addEventListener('click', send({ type: 'exit' }));
   if (swap.isConnected) swap.addEventListener('click', send({ type: 'swapDisplays' }));
 
@@ -197,37 +335,59 @@ export function createSpeakerView(options: SpeakerViewOptions): SpeakerView {
       render();
       tick();
     },
-    refresh: render,
+    refresh() {
+      render();
+      if (!deck || overview.hidden) return;
+      for (const thumbnail of overviewList.querySelectorAll<HTMLElement>('.preview')) {
+        const stage = thumbnail.querySelector<HTMLElement>('.stage');
+        if (!stage) continue;
+        const bounds = thumbnail.getBoundingClientRect();
+        applyStageScale(stage, deck, { w: bounds.width, h: bounds.height });
+      }
+    },
     tick,
+    toggleOverview,
+    toggleGrid,
+    closeOverview,
+    isOverviewOpen: () => overviewMode !== 'closed',
+    isGridOpen: () => overviewMode === 'grid',
     destroy() {
       clearInterval(clock);
+      clearOverview();
       theme?.remove();
       theme = null;
       host.replaceChildren();
-      host.classList.remove('speaker-view');
+      host.classList.remove('speaker-view', 'overview-open', 'overview-grid');
     },
   };
 }
 
 /**
  * The presenter key map. Deliberately narrower than the audience player's: a
- * speaker surface only ever forwards commands, so it never needs the player's
- * overview or home keys.
+ * speaker surface only ever forwards commands, apart from its local overview.
  */
 export function bindSpeakerKeys(
   target: Window | HTMLElement,
   onCommand: (command: PresentationCommand) => void,
+  overview?: Pick<SpeakerView, 'toggleOverview' | 'toggleGrid' | 'closeOverview' | 'isOverviewOpen' | 'isGridOpen'>,
 ): () => void {
   const onKey = (event: Event) => {
     const key = (event as KeyboardEvent).key;
+    if (overview?.isGridOpen() && !['Escape', 'o', 'O', 'g', 'G'].includes(key)) return;
+    const onControl = (event.target as HTMLElement | null)?.closest?.('button, input, select, textarea, [contenteditable]');
+    if (onControl && (key === 'Enter' || key === ' ')) return;
     if (['ArrowRight', 'ArrowDown', ' ', 'PageDown', 'Enter'].includes(key)) {
       onCommand({ type: 'next' });
     } else if (['ArrowLeft', 'ArrowUp', 'PageUp', 'Backspace'].includes(key)) {
       onCommand({ type: 'prev' });
     } else if (key === 'b' || key === 'B') {
       onCommand({ type: 'toggleBlank' });
+    } else if (key === 'o' || key === 'O') {
+      overview?.toggleOverview();
+    } else if (key === 'g' || key === 'G') {
+      overview?.toggleGrid();
     } else if (key === 'Escape') {
-      onCommand({ type: 'exit' });
+      if (!overview?.closeOverview()) onCommand({ type: 'exit' });
     } else if (videoRateChangeForKey(key)) {
       onCommand({ type: 'videoRate', change: videoRateChangeForKey(key)! });
     } else {

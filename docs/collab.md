@@ -381,7 +381,10 @@ the participant id.
 - **Present → Present in Speaker View** — opens the audience in a second
   browser window and turns this tab into Speaker View: current and next slide,
   build position, presentation and slide timers, wall clock, and
-  previous/blank/next/end. Move the audience window to the projector and press
+  previous/blank/next/end. **Slides** (or `O`) opens a scrollable thumbnail
+  rail beside the current slide; **All slides** (or `G`) opens a full grid.
+  Hidden slides appear dimmed and marked Hidden in both views, and clicking one
+  can show it directly. Move the audience window to the projector and press
   `F` there for fullscreen. The two surfaces are the same page in different
   roles, and they talk over a `BroadcastChannel` scoped to the deck rather than
   through the server — presenter commands stay private to the presenter and
