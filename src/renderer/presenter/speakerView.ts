@@ -387,7 +387,9 @@ export function bindSpeakerKeys(
     } else if (key === 'g' || key === 'G') {
       overview?.toggleGrid();
     } else if (key === 'Escape') {
-      if (!overview?.closeOverview()) onCommand({ type: 'exit' });
+      // Escape ends the show even with the rail open, as it does without it;
+      // only the full-screen grid, a dialog over everything, closes first.
+      if (!(overview?.isGridOpen() && overview.closeOverview())) onCommand({ type: 'exit' });
     } else if (videoRateChangeForKey(key)) {
       onCommand({ type: 'videoRate', change: videoRateChangeForKey(key)! });
     } else {

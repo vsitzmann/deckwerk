@@ -292,7 +292,7 @@ describe('speaker view', () => {
     expect(commands).toHaveLength(5);
   });
 
-  it('uses O for the rail and Escape to close it before ending the show', () => {
+  it('uses O for the rail, and Escape ends the show even while the rail is open', () => {
     const view = open();
     view.setDeck(deckOf(['Intro', 'Method']));
     const unbind = bindSpeakerKeys(window, (command) => commands.push(command), view);
@@ -301,8 +301,12 @@ describe('speaker view', () => {
     window.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', cancelable: true }));
     expect(commands).toEqual([{ type: 'next' }]);
     window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', cancelable: true }));
-    expect(view.isOverviewOpen()).toBe(false);
+    expect(commands).toEqual([{ type: 'next' }, { type: 'exit' }]);
+    // The grid is a dialog over everything: Escape closes it first.
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'g', cancelable: true }));
+    expect(view.isGridOpen()).toBe(true);
     window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', cancelable: true }));
+    expect(view.isGridOpen()).toBe(false);
     expect(commands).toEqual([{ type: 'next' }, { type: 'exit' }]);
     unbind();
     view.destroy();
