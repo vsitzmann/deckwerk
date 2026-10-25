@@ -43,6 +43,7 @@ import { CollabBridge } from './collabBridge.js';
 import { createConnectionNotice } from './connectionNotice.js';
 import { createDeckOnServer, folderOf, importKeynoteToServer, importPowerPointToServer, showDeckPicker, showShareDialog } from './deckPicker.js';
 import { downloadOriginalAsset, installNetApi } from './netApi.js';
+import { installWindowApiPosterProvider } from '../player/previewPosterProvider.js';
 import { PresenceOverlay } from './presenceOverlay.js';
 import { PresenceBar, isAgentPeer } from './presenceBar.js';
 import { ChatPanel } from './chatPanel.js';
@@ -230,6 +231,8 @@ if (!deckId) {
 /* --- boot ----------------------------------------------------------------- */
 
 installNetApi({ deckId, saveTheme: (css) => bridge.sendTheme(css) });
+// Thumbnails get server-cut stills instead of loading the clips they show.
+installWindowApiPosterProvider();
 
 const store = new EditorStore(emptyDeck('Connecting…'));
 // Development builds verify after every in-place patch that the canvas DOM
@@ -487,6 +490,7 @@ const bridge = new CollabBridge(wsUrl, undefined, {
     presence.remove(clientId);
     rail.refreshPresence();
   },
+  onMediaVariants: (srcs) => canvas.refreshMediaSources(srcs),
   onThemeCss: (css) => {
     // Never yank the CodeMirror buffer out from under someone typing in it.
     if (!cssEditor.hasFocus() && css !== cssEditor.getValue()) cssEditor.setValue(css);

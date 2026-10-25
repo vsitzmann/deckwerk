@@ -900,12 +900,11 @@ for (const kind of ffmpeg ? BROWSERS : []) describe(`media transfer budget (${ki
       expect(anyTransfer(log.in(['new-clip']).filter((r) => r.path !== LATE_CLIP))).toEqual([]);
     });
     it('encodes nothing small and web-safe', () => {
-      expect(encodes.map((run) => run.args.join(' '))).toEqual([]);
+      // A still cut for a thumbnail is not an encode of the clip.
+      expect(encodes.filter((run) => !run.args.includes('-frames:v')).map((run) => run.args.join(' '))).toEqual([]);
     });
 
-    // PENDING(presentation reuses the editor's downloads): the presentation's
-    // in-memory cache downloads every clip again, whole.
-    pending('downloads nothing for the presentation that the editor already has', () => {
+    it('downloads nothing for the presentation that the editor already has', () => {
       expect(bytesTwice(log.all(), ['present'])).toEqual([]);
     });
     // PENDING(send the URL key when an edit adds a clip): a clip added by an
@@ -918,8 +917,9 @@ for (const kind of ffmpeg ? BROWSERS : []) describe(`media transfer budget (${ki
     pending('downloads nothing at a reload that already arrived', () => {
       expect(bytesTwice(log.all(), ['reload'])).toEqual([]);
     });
-    // PENDING(presentation reuses the editor's downloads; send the URL key when
-    // an edit adds a clip): the presentation and the changing URL add requests.
+    // PENDING(send the URL key when an edit adds a clip; download clips whole):
+    // the new clip's changing URL adds requests, and Chromium revalidates a
+    // clip it holds only part of (a 304) before fetching the rest.
     pending(`takes at most ${REQUESTS_PER_FILE} requests per file over the session`, () => {
       expect(overRequestBudget(log.all())).toEqual([]);
     });
@@ -933,22 +933,22 @@ for (const kind of ffmpeg ? BROWSERS : []) describe(`media transfer budget (${ki
       ({ log, renditions, size } = await streamingVersions(kind));
     }, 600_000);
     afterAll(teardown);
-    const ready = () => renditions.find((e) => e.status === 'done');
+    // The first deck's streaming version; what the copy costs is the copy's test.
+    const ready = () => renditions.find((e) => e.status === 'done' && e.source.includes('/talk-a/'));
 
     it('fixture: the streaming version landed while the original was still arriving', () => {
       const done = ready();
       expect(done, 'the server produced a streaming version').toBeDefined();
-      const before = sum(log.all().filter((r) => r.variant === 'original'), (r) => r.body - bodyAfter(r, done!.at));
+      const before = sum(log.in(['talk-a']).filter((r) => r.variant === 'original'), (r) => r.body - bodyAfter(r, done!.at));
       expect(before).toBeLessThan(size);
     });
 
-    // PENDING(stop downloading the original once the streaming version exists):
-    // a clip keeps the original it started with until a new element is built.
-    pending('costs at most one streaming version more, once that version exists', () => {
+    it('costs at most one streaming version more, once that version exists', () => {
       const done = ready()!;
       const renditionSize = size - (done.savedBytes ?? 0);
-      const after = sum(log.all(), (r) => bodyAfter(r, done.at));
-      expect(after, `bytes of the clip after its ${renditionSize} B streaming version was ready\n${TransferLog.table(log.all())}`)
+      const records = log.in(['talk-a']);
+      const after = sum(records, (r) => bodyAfter(r, done.at));
+      expect(after, `bytes of the clip after its ${renditionSize} B streaming version was ready\n${TransferLog.table(records)}`)
         .toBeLessThanOrEqual(renditionSize + PROBE_ALLOWANCE_BYTES);
     });
 

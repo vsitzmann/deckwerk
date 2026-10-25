@@ -60,6 +60,12 @@ export interface CollabBridgeHooks {
   onPeerCursor: (clientId: string, cursor: CursorPosition | null) => void;
   onPeerLeft: (clientId: string) => void;
   onThemeCss: (css: string) => void;
+  /**
+   * The server now names a different variant for these srcs (a streaming
+   * version landed): every URL built from here on asks for it, and surfaces
+   * holding the old URL should move what they can.
+   */
+  onMediaVariants?: (srcs: string[]) => void;
   /** One accepted chat message, including the echo of this client's own. */
   onChat?: (message: ChatMessage) => void;
   onStatus: (text: string) => void;
@@ -334,7 +340,8 @@ export class CollabBridge {
     const message = ServerMessageSchema.parse(renameRetiredFields(raw));
     switch (message.kind) {
       case 'welcome': {
-        setMediaVariants(message.mediaVariants, true);
+        const changedMedia = setMediaVariants(message.mediaVariants, true);
+        if (changedMedia.length > 0) this.hooks.onMediaVariants?.(changedMedia);
         this.clientId = message.clientId;
         this.seq = message.seq;
         this.shadow = message.deck;
@@ -426,9 +433,11 @@ export class CollabBridge {
       case 'theme':
         this.hooks.onThemeCss(message.css);
         return;
-      case 'media':
-        setMediaVariants(message.variants);
+      case 'media': {
+        const changed = setMediaVariants(message.variants);
+        if (changed.length > 0) this.hooks.onMediaVariants?.(changed);
         return;
+      }
       case 'chat':
         this.hooks.onChat?.(message.message);
         return;

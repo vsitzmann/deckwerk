@@ -16,9 +16,12 @@ import { classifyMediaName } from '@shared/media.js';
  */
 const variants = new Map<string, string>();
 
-export function setMediaVariants(next: Record<string, string> | undefined, replace = false): void {
+/** Take the server's variants; returns the srcs whose variant changed, for surfaces to re-point. */
+export function setMediaVariants(next: Record<string, string> | undefined, replace = false): string[] {
+  const before = new Map(variants);
   if (replace) variants.clear();
   for (const [src, variant] of Object.entries(next ?? {})) variants.set(src, variant);
+  return [...new Set([...before.keys(), ...variants.keys()])].filter((src) => before.get(src) !== variants.get(src));
 }
 
 export function mediaVariantsSnapshot(): Record<string, string> {

@@ -1501,6 +1501,43 @@ export class EditorCanvas {
   }
 
   /**
+   * Move paused clips onto the variant the server now names for them.
+   *
+   * A clip's streaming version can land while the canvas shows its original:
+   * the server announces it, and every URL built for the clip from then on
+   * asks for the version. An element already built keeps its URL, and a
+   * paused one goes on reading the original as far ahead as the browser
+   * buffers — 16 MB of a 30 MB recording after its 6 MB version existed. So
+   * each paused element is rebuilt on the new URL, which cancels the old
+   * fetch, and pooled elements built for the old URL are released. A playing
+   * clip keeps its bytes: swapping them under a playing element is the
+   * PIPELINE_ERROR_DECODE the variant pins exist to prevent.
+   */
+  refreshMediaSources(srcs: Iterable<string>): void {
+    const resolveSrc = (src: string) => window.api.assetUrl(src);
+    // By path: the URL a clip is fetched from, before its `?v=`.
+    const current = new Map([...srcs].map((src) => [resolveSrc(src).split('?')[0], resolveSrc(src)]));
+    if (current.size === 0) return;
+    const outdated = (video: HTMLVideoElement) => {
+      const url = video.getAttribute('src') ?? video.dataset.gateAbortedSrc ?? '';
+      const now = current.get(url.split('?')[0]);
+      return now !== undefined && now !== url;
+    };
+    this.videoPool.releaseWhere(outdated);
+    for (const el of this.store.slide?.elements ?? []) {
+      if (el.type !== 'video') continue;
+      const video = this.videoNode(el.id);
+      if (!video || !video.paused || !outdated(video)) continue;
+      const fresh = renderElement(el, { resolveSrc, mediaPreload: 'metadata' }).querySelector('video');
+      if (!fresh) continue;
+      fresh.removeAttribute('autoplay');
+      video.replaceWith(fresh);
+      ungateVideoLoad(video);
+      releaseDecodedVideo(video);
+    }
+  }
+
+  /**
    * Move the outgoing slide's decoded videos into the pool before the layer is
    * torn down, so the next render of the same media paints instantly.
    */

@@ -46,6 +46,20 @@ export class DecodedVideoPool {
     return (this.entries.get(key)?.length ?? 0) > 0;
   }
 
+  /** Tear down every parked element `stale` picks: nothing will adopt it again. */
+  releaseWhere(stale: (video: HTMLVideoElement) => boolean): void {
+    for (const [key, list] of [...this.entries]) {
+      const keep = list.filter((video) => {
+        if (!stale(video)) return true;
+        releaseDecodedVideo(video);
+        this.count -= 1;
+        return false;
+      });
+      if (keep.length > 0) this.entries.set(key, keep);
+      else this.entries.delete(key);
+    }
+  }
+
   values(): HTMLVideoElement[] {
     return [...this.entries.values()].flat();
   }

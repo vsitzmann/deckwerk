@@ -146,6 +146,27 @@ export function installNetApi(options: NetApiOptions): void {
 
     assetUrl: (src: string): string => pinMediaVariant(src, deckAssetPath(options.deckId, src)),
 
+    /**
+     * One frame of a deck video, cut by the server (`/api/video-still`), for
+     * preview surfaces (previewPosterProvider.ts). Without it a thumbnail
+     * loads the clip itself to capture its frame: the original, as far in as
+     * the in-point, which for a recording shown from 10 s in is 12 MB read to
+     * paint one picture. Null when the server cannot cut one (an alpha clip),
+     * so the surface falls back to capturing in the page. The still is
+     * fetched once here and the `<img>` showing it reads it from the cache.
+     */
+    videoPoster: async (req: { src: string; time: number }): Promise<{ url: string | null }> => {
+      const url = `/api/video-still?deck=${deck}&src=${encodeURIComponent(req.src)}&t=${req.time}`;
+      try {
+        const response = await fetch(url);
+        if (!response.ok) return { url: null };
+        await response.arrayBuffer();
+        return { url };
+      } catch {
+        return { url: null };
+      }
+    },
+
     importAssetFiles: async (files: File[], progressToken?: string): Promise<ImportedAsset[]> => {
       const imported: ImportedAsset[] = [];
       for (const file of files) {

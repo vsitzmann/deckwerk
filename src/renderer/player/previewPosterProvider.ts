@@ -3,8 +3,8 @@
  *
  * In the desktop app the main process does it with ffmpeg (posterCache.ts)
  * and the renderer never opens a video pipeline for a thumbnail — the reason
- * this seam exists, see that file. The browser collab client has no such
- * helper and keeps capturing frames from a `<video>` in the page.
+ * this seam exists, see that file. In the browser collab client the server
+ * does (`/api/video-still`, through netApi's `videoPoster`).
  *
  * Kept apart from previewPoster.ts so render.ts can ask whether a provider
  * exists without importing the capture code that imports render.ts.

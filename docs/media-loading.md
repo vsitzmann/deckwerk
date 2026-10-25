@@ -98,9 +98,11 @@ never opens a media pipeline for a thumbnail. This is not a refinement: in
 Sept 2026 the create-and-tear-down churn of thumbnail pipelines on an
 81-video deck hit a lock inversion between Chromium's main and media threads
 and froze the editor window for good (`docs/confirmed-bugs.md`). The browser
-collab client has no provider and keeps the in-page capture; so does any
-element the provider cannot serve, whose source is restored and gated as
-before. Recovery (`previewFrameRecovery.ts`) leaves a pending element alone.
+collab client's provider is the server: `/api/video-still` cuts the frame with
+ffmpeg (cached beside the renditions), so a thumbnail costs one small JPEG
+rather than the clip read as far as its in-point — 12 MB of a screen recording
+shown from 10 s in. Any element the provider cannot serve keeps the in-page
+capture, its source restored and gated as before. Recovery (`previewFrameRecovery.ts`) leaves a pending element alone.
 
 The editor canvas and the Player keep real `<video>` elements: they play. A
 capture path (`holdFrame`) is skipped, and if a frame cannot be read (a tainted
