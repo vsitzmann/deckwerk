@@ -2,11 +2,14 @@
 import { describe, expect, it } from 'vitest';
 import {
   caretAtBlockStart,
+  deleteAcrossLines,
+  indentListItem,
   isEmptyListItem,
   isTopLevelListItem,
   listItemParagraphs,
   mergeParagraphIntoList,
   outdentListItem,
+  settleEmptiedItems,
   unbulletListItems,
 } from '../src/renderer/editor/listEditing.js';
 
@@ -284,6 +287,35 @@ describe('moving an indented item out one level', () => {
     expect(outdentListItem(items(root)[0])).toBe(false);
     expect(root.innerHTML).toBe('<ul><li>one</li></ul>');
   });
+
+  it('takes the holder of an indented first item away with it', () => {
+    const root = content('<ul><li data-list-holder=""><ul><li>one</li></ul></li><li>two</li></ul>');
+    expect(outdentListItem(items(root)[1])).toBe(true);
+    expect(root.innerHTML).toBe('<ul><li>one</li><li>two</li></ul>');
+  });
+
+  it('leaves the holder to the indented items still in it', () => {
+    const root = content('<ul><li data-list-holder=""><ul><li>one</li><li>two</li></ul></li></ul>');
+    expect(outdentListItem(items(root)[2])).toBe(true);
+    expect(root.innerHTML)
+      .toBe('<ul><li data-list-holder=""><ul><li>one</li></ul></li><li>two</li></ul>');
+  });
+});
+
+describe('moving an item in one level', () => {
+  it('hangs the first item in a holder, the shape the deck stores', () => {
+    // Built as Chromium builds it -- a bare sub-list in the list -- it drew no
+    // marker while editing and an empty bullet once the save gave it an item.
+    const root = content('<ol><li>one</li><li>two</li></ol>');
+    expect(indentListItem(items(root)[0])).toBe(true);
+    expect(root.innerHTML).toBe('<ol><li data-list-holder=""><ol><li>one</li></ol></li><li>two</li></ol>');
+  });
+
+  it('hangs the next item beside it in the same holder', () => {
+    const root = content('<ul><li data-list-holder=""><ul><li>one</li></ul></li><li>two</li></ul>');
+    expect(indentListItem(items(root)[2])).toBe(true);
+    expect(root.innerHTML).toBe('<ul><li data-list-holder=""><ul><li>one</li><li>two</li></ul></li></ul>');
+  });
 });
 
 describe('unbulletListItems and stray sub-lists', () => {
@@ -304,5 +336,86 @@ describe('unbulletListItems and stray sub-lists', () => {
     unbulletListItems([one]);
     expect(body.textContent).toBe('onetwothreefour');
     expect([...body.querySelectorAll(':scope > p')].map((p) => p.textContent)).toEqual(['one', 'two', 'three']);
+  });
+});
+
+describe('deleting a selection that runs from one line into another', () => {
+  /** The range from `from` characters into the first text to `to` characters into the last. */
+  function span(root: HTMLElement, first: string, from: number, last: string, to: number): Range {
+    const texts: Text[] = [];
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) texts.push(node as Text);
+    const range = document.createRange();
+    range.setStart(texts.find((text) => text.data === first)!, from);
+    range.setEnd(texts.find((text) => text.data === last)!, to);
+    return range;
+  }
+
+  it('joins the rest of the last line onto the first across a line between two lists', () => {
+    const root = content('<ul><li>alpha</li></ul><p>beta</p><ul><li>gamma</li><li>delta</li></ul>');
+    const caret = deleteAcrossLines(root, span(root, 'alpha', 0, 'delta', 2));
+    expect(root.innerHTML).toBe('<ul><li>lta</li></ul>');
+    expect(caret?.collapsed).toBe(true);
+    expect(caret?.startContainer.parentElement?.tagName ?? caret?.startContainer.nodeName).toBe('LI');
+  });
+
+  it('keeps both ends of the words and their formatting', () => {
+    const root = content('<ul><li>al<b>pha</b></li><li>beta</li></ul><p>ga<i>mma</i></p>');
+    deleteAcrossLines(root, span(root, 'pha', 1, 'mma', 1));
+    expect(root.innerHTML).toBe('<ul><li>al<b>p</b><i>ma</i></li></ul>');
+  });
+
+  it('gives the start line the end line\'s sub-items', () => {
+    const root = content('<ul><li>alpha</li><li>beta<ul><li>sub</li></ul></li></ul>');
+    deleteAcrossLines(root, span(root, 'alpha', 2, 'beta', 2));
+    expect(root.innerHTML).toBe('<ul><li>alta<ul><li>sub</li></ul></li></ul>');
+  });
+
+  it('leaves an emptied line holding its place', () => {
+    const root = content('<p>alpha</p><ul><li>beta</li></ul>');
+    deleteAcrossLines(root, span(root, 'alpha', 0, 'beta', 4));
+    expect(root.innerHTML).toBe('<p><br></p>');
+  });
+
+  it('leaves one line and an item with its own sub-item to Chromium', () => {
+    const one = content('<ul><li>alpha</li></ul>');
+    expect(deleteAcrossLines(one, span(one, 'alpha', 1, 'alpha', 3))).toBeNull();
+    const nested = content('<ul><li>alpha<ul><li>beta</li></ul></li></ul>');
+    expect(deleteAcrossLines(nested, span(nested, 'alpha', 1, 'beta', 2))).toBeNull();
+  });
+
+  it('joins two paragraphs, and puts sub-items after a paragraph rather than in it', () => {
+    const plain = content('<p>alpha</p><p>beta</p>');
+    deleteAcrossLines(plain, span(plain, 'alpha', 1, 'beta', 2));
+    expect(plain.innerHTML).toBe('<p>ata</p>');
+    const held = content('<p>alpha</p><ul><li>beta<ul><li>sub</li></ul></li></ul>');
+    deleteAcrossLines(held, span(held, 'alpha', 1, 'beta', 2));
+    expect(held.innerHTML).toBe('<p>ata</p><ul><li>sub</li></ul>');
+  });
+});
+
+describe('settling the items a deletion emptied', () => {
+  it('turns an item that lost its words but holds sub-items into a holder', () => {
+    const root = content('<p>alphabeta</p><ul><li><ul><li>sub</li></ul></li></ul>');
+    expect(settleEmptiedItems(root, root.querySelector('p')!.firstChild)).toBe(true);
+    expect(root.innerHTML).toBe('<p>alphabeta</p><ul><li data-list-holder=""><ul><li>sub</li></ul></li></ul>');
+  });
+
+  it('keeps the item the caret is in, which the author is still writing in', () => {
+    const root = content('<ul><li><span></span><ul><li>sub</li></ul></li></ul>');
+    const span = root.querySelector('span')!;
+    expect(settleEmptiedItems(root, span)).toBe(false);
+    expect(root.querySelector('li')!.hasAttribute('data-list-holder')).toBe(false);
+  });
+
+  it('drops holders and lists left with nothing', () => {
+    const root = content('<p>a</p><ol><li data-list-holder=""><ol></ol></li></ol><ul><li>b</li></ul>');
+    expect(settleEmptiedItems(root, null)).toBe(true);
+    expect(root.innerHTML).toBe('<p>a</p><ul><li>b</li></ul>');
+  });
+
+  it('leaves an empty bullet that holds its line open', () => {
+    const root = content('<ul><li><br><ul><li>sub</li></ul></li></ul>');
+    expect(settleEmptiedItems(root, null)).toBe(false);
   });
 });

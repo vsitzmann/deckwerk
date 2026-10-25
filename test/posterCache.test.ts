@@ -5,8 +5,8 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 vi.mock('electron', () => ({ app: { getPath: () => '/nonexistent' } }));
 
-import { extractPosterFrame } from '../src/main/ffmpeg.js';
-import { posterFor, setPosterCacheDirForTests } from '../src/main/posterCache.js';
+import { extractPosterFrame, extractStillFrame, probeMedia, run, getFfprobePath } from '../src/main/ffmpeg.js';
+import { posterFor, printStillFor, setPosterCacheDirForTests } from '../src/main/posterCache.js';
 
 /**
  * Poster frames cut in the main process, against real ffmpeg: a JPEG comes
@@ -56,5 +56,38 @@ describe('poster cache', () => {
 
   it('answers null for a clip that is not there', async () => {
     expect(await posterFor(join(root, 'missing.mp4'), 0)).toBeNull();
+  });
+});
+
+async function imageSize(path: string): Promise<string> {
+  const out = await run(getFfprobePath(), [
+    '-v', 'error', '-show_entries', 'stream=width,height', '-of', 'csv=p=0:s=x', path,
+  ]);
+  return out.stdout.trim();
+}
+
+describe('print stills', () => {
+  it('cuts the frame at full resolution, unlike a thumbnail', async () => {
+    const info = await probeMedia(FIXTURE);
+    const out = join(root, 'still.jpg');
+    await extractStillFrame(FIXTURE, 0.5, out);
+    expect((await readFile(out)).subarray(0, 3)).toEqual(Buffer.from([0xff, 0xd8, 0xff]));
+    expect(await imageSize(out)).toBe(`${info.width}x${info.height}`);
+  });
+
+  it('falls back to the last frame for a time past the end of the clip', async () => {
+    // ffmpeg cuts nothing at all for such a seek and still exits 0.
+    const out = join(root, 'past-end.jpg');
+    await extractStillFrame(FIXTURE, 10_000, out);
+    expect((await readFile(out)).subarray(0, 3)).toEqual(Buffer.from([0xff, 0xd8, 0xff]));
+  });
+
+  it('caches apart from the posters of the same clip and time', async () => {
+    const still = await printStillFor(FIXTURE, 0.03);
+    expect(still).toMatch(/^[0-9a-f]{32}\.jpg$/);
+    expect(still).not.toBe(await posterFor(FIXTURE, 0.03));
+    expect(await printStillFor(FIXTURE, 0.03)).toBe(still);
+    // Nothing half-written is left behind for the next request to serve.
+    expect((await readdir(join(root, 'cache'))).filter((name) => name.includes('partial'))).toEqual([]);
   });
 });

@@ -110,10 +110,26 @@ describe('paragraph normalisation', () => {
     expect(normalizeParagraphHtml('<ul><li>a</li><ul><li>b</li></ul><li>c</li></ul>')).toBe(
       '<ul><li>a<ul><li>b</li></ul></li><li>c</li></ul>',
     );
-    // Indenting the first bullet leaves no item to attach to; it gets one.
+    // Indenting the first bullet leaves no item to attach to; it gets one,
+    // which is not a line of its own (no marker, no number; see type.css).
     expect(normalizeParagraphHtml('<ul><ul><li>a</li></ul></ul>')).toBe(
-      '<ul><li><ul><li>a</li></ul></li></ul>',
+      '<ul><li data-list-holder=""><ul><li>a</li></ul></li></ul>',
     );
+  });
+
+  it('keeps a holder item while it holds blocks, and only then', () => {
+    const held = '<ul><li data-list-holder=""><ul><li>a</li></ul></li><li>b</li></ul>';
+    expect(normalizeParagraphHtml(held), 'already settled').toBe(held);
+    // Its item un-bulleted: the paragraph is still indented, still unmarked.
+    const freed = '<ol><li data-list-holder=""><p>a</p></li><li>b</li></ol>';
+    expect(normalizeParagraphHtml(freed)).toBe(freed);
+    // Its item outdented, it holds nothing and goes.
+    expect(normalizeParagraphHtml('<ul><li data-list-holder=""><br></li><li>a</li></ul>'))
+      .toBe('<ul><li>a</li></ul>');
+    expect(normalizeParagraphHtml('<p>x</p><ul><li data-list-holder=""></li></ul>')).toBe('<p>x</p>');
+    // Words pasted straight into it are a line: an ordinary item.
+    expect(normalizeParagraphHtml('<ul><li data-list-holder="">w<ul><li>a</li></ul></li></ul>'))
+      .toBe('<ul><li>w<ul><li>a</li></ul></li></ul>');
   });
 
   it('joins adjacent ordered lists created by editing back into one sequence', () => {

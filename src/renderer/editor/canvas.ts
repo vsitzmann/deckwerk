@@ -43,13 +43,16 @@ import {
   paragraphsToOrderedList,
   applyTableColumnWidths,
   pastedTableData,
+  LIST_HOLDER_ATTRIBUTE,
   LIST_MARKER_COLOR_ATTRIBUTE,
+  mergeAdjacentLists,
   LIST_MARKER_COLOR_PROPERTY,
   TYPING_STYLE_SENTINEL,
   type ListMarkerColorState,
 } from '@shared/paragraphs.js';
 import {
   caretAtBlockStart,
+  deleteAcrossLines,
   flattenListToParagraphs,
   indentListItem,
   isEmptyListItem,
@@ -57,6 +60,7 @@ import {
   liftItemOutOfItem,
   outdentListItem,
   mergeParagraphIntoList,
+  settleEmptiedItems,
   parentListItem,
   unbulletListItems,
 } from './listEditing.js';
@@ -4379,10 +4383,12 @@ export class EditorCanvas {
           stripFittedFontSize(body, body.style.fontSize);
         }
         if (typed.inputType === 'insertFromPaste' && pastedFit) stripFittedFontSize(body, pastedFit);
+        joinAdjacentLists();
       }
       if (typed?.inputType === 'insertFromPaste') pastedFit = null;
       if (typed?.inputType.startsWith('delete')) {
         repairEmptiedBox();
+        settleEmptiedItems(body, this.activeTextRange(body)?.startContainer ?? null);
         // Deleting a selection that spans a whole cell's text can take the
         // cell's editor-only highlight class with it (Chromium rebuilds the
         // cell's content), leaving a live cell range that paints nothing
@@ -4429,6 +4435,29 @@ export class EditorCanvas {
         || (inputType === 'insertText' && /^[\s\u00a0]+$/.test(typed?.data ?? ''));
       if (endsRun) sealTextChunk();
       else scheduleIdleSeal();
+    };
+    // Two lists of a kind left side by side -- the line between them deleted
+    // -- are one list in the deck. Left apart while editing, the second kept
+    // its own start, and an item shown as 2. became 3. the moment editing
+    // ended (list fuzz seed 2026102302). Moving the items drops the caret out
+    // of them, so it is put back where it stood.
+    const joinAdjacentLists = () => {
+      const range = this.activeTextRange(body);
+      const kept = range
+        ? { start: [range.startContainer, range.startOffset], end: [range.endContainer, range.endOffset] } as const
+        : null;
+      if (!mergeAdjacentLists(body) || !kept) return;
+      const next = document.createRange();
+      try {
+        next.setStart(kept.start[0], kept.start[1]);
+        next.setEnd(kept.end[0], kept.end[1]);
+      } catch {
+        return;
+      }
+      const selection = window.getSelection();
+      selection?.removeAllRanges();
+      selection?.addRange(next);
+      this.textSelectionRange = next.cloneRange();
     };
     const sealActiveTypingStyle = () => {
       const range = this.activeTextRange(body);
@@ -4485,6 +4514,40 @@ export class EditorCanvas {
         event.preventDefault();
         this.toggleTextSelectionFormat(nativeFormat);
         return;
+      }
+      if (!event.isComposing && /^(?:deleteContent(?:Backward|Forward)|deleteWord(?:Backward|Forward)|deleteByCut|insertText)$/
+        .test(event.inputType)) {
+        // A selection from one line into another, where a list is involved:
+        // the two ends become one line (see deleteAcrossLines), and a typed
+        // letter goes in at the join.
+        const span = this.activeTextRange(body);
+        const join = span && !span.collapsed ? deleteAcrossLines(body, span) : null;
+        if (join) {
+          event.preventDefault();
+          if (event.inputType === 'insertText' && event.data) {
+            const at = join.startContainer;
+            if (at instanceof Text) {
+              at.insertData(join.startOffset, event.data);
+              join.setStart(at, join.startOffset + event.data.length);
+            } else {
+              const typed = document.createTextNode(event.data);
+              const ref = at.childNodes[join.startOffset] ?? null;
+              if (ref instanceof HTMLElement && ref.tagName === 'BR' && at.childNodes.length === 1) {
+                ref.replaceWith(typed);
+              } else {
+                at.insertBefore(typed, ref);
+              }
+              join.setStart(typed, typed.data.length);
+            }
+            join.collapse(true);
+          }
+          const selection = window.getSelection();
+          selection?.removeAllRanges();
+          selection?.addRange(join);
+          this.textSelectionRange = join.cloneRange();
+          onInput(event);
+          return;
+        }
       }
       if (
         event.inputType !== 'insertText'
@@ -5675,8 +5738,20 @@ export class EditorCanvas {
       const item = container?.closest<HTMLElement>('li') ?? null;
       return item && content.contains(item) ? [item] : [];
     }
+    // An item is touched where the range reaches its own line, not merely
+    // its sub-list: a selection inside a sub-item lies inside the item it
+    // hangs under too, and Tab then moved that parent, carrying the sub-item,
+    // instead of the sub-item (list fuzz seed 2026101501). A holder item
+    // has no line at all.
+    const intersects = (node: Node): boolean => {
+      try { return range.intersectsNode(node); } catch { return false; }
+    };
     return [...content.querySelectorAll<HTMLElement>('li')].filter((item) => {
-      try { return range.intersectsNode(item); } catch { return false; }
+      if (item.hasAttribute(LIST_HOLDER_ATTRIBUTE)) return false;
+      const own = [...item.childNodes]
+        .filter((node) => !(node instanceof Element && /^(?:UL|OL)$/.test(node.tagName)));
+      if (own.length > 0) return own.some(intersects);
+      return !item.querySelector('ul, ol') && intersects(item);
     });
   }
 

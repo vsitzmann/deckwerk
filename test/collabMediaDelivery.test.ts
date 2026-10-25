@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { execFile } from 'node:child_process';
 import { readFileSync } from 'node:fs';
-import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -101,7 +101,9 @@ describe('media delivery from the collab server', () => {
 
   async function start(slides: unknown[]) {
     await saveDeck(deckDir, parseDeck({ ...emptyDeck('Talk'), slides }));
-    server = await startCollabServer({ rootDir, port: 0, host: '127.0.0.1', mediaRenditions: { cacheDir } });
+    server = await startCollabServer({
+      rootDir, port: 0, host: '127.0.0.1', mediaRenditions: { cacheDir }, printStillCacheDir: join(rootDir, '.print-stills'),
+    });
     return `http://127.0.0.1:${server.port}/decks/${DECK_ID}/assets`;
   }
 
@@ -191,6 +193,34 @@ describe('media delivery from the collab server', () => {
     const served = await fetch(`${base}/screen.mp4?v=${media.variants['assets/screen.mp4']}`);
     expect(Number(served.headers.get('content-length'))).toBeLessThan((await stat(source)).size);
   }, 90_000);
+
+  it.skipIf(!ffmpeg)('cuts a video still for the print tab instead of making it load the video', async () => {
+    // Oct 2026: printing a 90-page talk mounted all 61 of its videos at once
+    // and took Chromium past 4 GB and into a media-thread crash. The print
+    // tab now asks for one ffmpeg-cut frame per video.
+    await copyFile(
+      join(__dirname, '..', 'decks', 'demo-deck', 'assets', 'testclip.mp4'),
+      join(deckDir, 'assets', 'clip.mp4'),
+    );
+    await writeFile(join(deckDir, 'assets', 'notes.txt'), 'not a video', 'utf8');
+    await start([{ id: 's1', elements: [video('v1', 'assets/clip.mp4')] }]);
+    const still = (query: Record<string, string>) => fetch(
+      `http://127.0.0.1:${server.port}/api/video-still?${new URLSearchParams({ deck: DECK_ID, ...query })}`,
+    );
+
+    const response = await still({ src: 'assets/clip.mp4', t: '0.5' });
+    expect(response.status).toBe(200);
+    expect(response.headers.get('content-type')).toBe('image/jpeg');
+    expect(Buffer.from(await response.arrayBuffer()).subarray(0, 3)).toEqual(Buffer.from([0xff, 0xd8, 0xff]));
+    // Cached outside the deck, which stays exactly the author's files.
+    expect(await readdir(join(rootDir, '.print-stills'))).toHaveLength(1);
+    expect((await readdir(join(deckDir, 'assets'))).sort()).toEqual(['clip.mp4', 'notes.txt']);
+
+    // The tab falls back to the video itself on anything but a still.
+    expect((await still({ src: 'assets/missing.mp4', t: '0' })).status).toBe(404);
+    expect((await still({ src: 'assets/notes.txt', t: '0' })).status).toBe(400);
+    expect((await still({ src: '../../outside.mp4', t: '0' })).status).toBe(403);
+  }, 60_000);
 
   it('compresses the welcome and the client bundle for slow links', async () => {
     // A deck the size of a real talk's.

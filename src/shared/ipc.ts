@@ -264,6 +264,8 @@ export interface VideoPosterRequest {
   src: string;
   /** Seconds into the clip. */
   time: number;
+  /** A full-resolution still for a printed page instead of a thumbnail. */
+  print?: boolean;
 }
 
 export interface VideoPosterResult {

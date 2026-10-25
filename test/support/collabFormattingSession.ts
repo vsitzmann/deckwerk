@@ -222,6 +222,12 @@ export class FormattingSession {
         browser.log,
       );
       editor = await Cdp.connect(target.webSocketDebuggerUrl!);
+      // CI shows every suite's window on one bare Xvfb, where the window
+      // mapped last takes the keyboard. Losing it blurs the field being typed
+      // into, the blur commits it, and the rebuilt panel drops the field a
+      // test is still typing into. This page stands for the window an author
+      // is working in, so it keeps focus.
+      await editor.call('Emulation.setFocusEmulationEnabled', { enabled: true });
       await eventually(async () => editor!.evaluate<boolean>(`(
         document.getElementById('status')?.textContent?.includes(${JSON.stringify(`connected as ${userName}`)}) === true
         && Boolean(document.querySelector('${ON_CANVAS(TABLE_ID)} table'))
