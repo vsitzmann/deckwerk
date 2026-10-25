@@ -89,6 +89,12 @@ ANIMATED_IMAGE_EXTS = {".gif", ".apng", ".webp"}
 WEB_SAFE_VIDEO_CODECS = {"h264", "vp8", "vp9", "av1", "theora"}
 
 DEFAULT_CANVAS = (1920.0, 1080.0)
+# TSD.GeometryArchive.flags: bits 1 and 2 mark the size and angle valid; 4 and
+# 8 are the Flip Horizontally / Flip Vertically commands. Unnamed in the
+# protos; read from a strip that is the same PDF as its neighbour, flags 7
+# instead of 3, and drawn mirrored by Keynote.
+GEOMETRY_HORIZONTAL_FLIP = 4
+GEOMETRY_VERTICAL_FLIP = 8
 
 
 @dataclass
@@ -526,6 +532,45 @@ def editable_path_to_svg(source: Any) -> tuple[str, tuple[float, float, float, f
     if not xs:
         return "", (0.0, 0.0, 0.0, 0.0)
     return " ".join(parts), (min(xs), min(ys), max(xs), max(ys))
+
+
+def point_path_to_svg(source: Any) -> tuple[str, tuple[float, float, float, float]]:
+    """Outline of a parametric arrow (Keynote's point path source).
+
+    The source stores no path: only its kind, its natural size, and one
+    control point whose x is the head's length and whose y is the stem's
+    thickness as a fraction of the height. A head as long as the shape is
+    wide leaves just the head — the solid ▶ between two figures. Stars and
+    plus signs are not drawn here and come back empty.
+    """
+    kind = _enum_name(source, "type", int(source.type))
+    width = float(source.naturalSize.width)
+    height = float(source.naturalSize.height)
+    if width <= 0 or height <= 0:
+        return "", (0.0, 0.0, 0.0, 0.0)
+    double = kind == "kTSDDoubleArrow"
+    if kind not in ("kTSDRightSingleArrow", "kTSDLeftSingleArrow") and not double:
+        return "", (0.0, 0.0, 0.0, 0.0)
+    head = min(max(0.0, float(source.point.x)), width / 2 if double else width)
+    stem = min(1.0, max(0.0, float(source.point.y))) * height
+    top, bottom, mid = (height - stem) / 2, (height + stem) / 2, height / 2
+    if double:
+        points = [
+            (0, mid), (head, 0), (head, top), (width - head, top), (width - head, 0),
+            (width, mid), (width - head, height), (width - head, bottom),
+            (head, bottom), (head, height),
+        ]
+    else:
+        points = [
+            (0, top), (width - head, top), (width - head, 0), (width, mid),
+            (width - head, height), (width - head, bottom), (0, bottom),
+        ]
+        if kind == "kTSDLeftSingleArrow":
+            points = [(width - x, y) for x, y in points]
+    # Drop the stem's corners where the head covers the whole shape.
+    unique = list(dict.fromkeys((round(x, 2), round(y, 2)) for x, y in points))
+    data = "M " + " L ".join(f"{x:.2f} {y:.2f}" for x, y in unique) + " Z"
+    return data, (0.0, 0.0, width, height)
 
 
 def flip_svg_path(
@@ -1725,6 +1770,7 @@ class Importer:
     progress: Progress = field(default_factory=SilentProgress)
     _asset_cache: dict[int, str | None] = field(default_factory=dict)
     _instant_alpha_cache: dict[tuple[str, str], str | None] = field(default_factory=dict)
+    _mirror_cache: dict[tuple[str, bool, bool], str] = field(default_factory=dict)
     _counter: int = 0
 
     def next_id(self, prefix: str) -> str:
@@ -2052,6 +2098,40 @@ class Importer:
             return src
         return derived
 
+    def _mirror_image(self, src: str, flip_h: bool, flip_v: bool) -> str:
+        """A mirrored copy of a deck asset, for Keynote's Flip commands."""
+        cache_key = (src, flip_h, flip_v)
+        if cache_key in self._mirror_cache:
+            return self._mirror_cache[cache_key]
+        source = Path(src)
+        suffix = "-flipped" + ("-h" if flip_h else "") + ("-v" if flip_v else "")
+        derived = f"assets/{source.stem}{suffix}{source.suffix}"
+        self._mirror_cache[cache_key] = derived
+        if self.dry_run:
+            return derived
+        destination = self.out_dir / derived
+        if destination.exists():
+            return derived
+        try:
+            from PIL import Image, ImageOps
+
+            with Image.open(self.out_dir / src) as opened:
+                bitmap = opened.copy()
+            if flip_h:
+                bitmap = ImageOps.mirror(bitmap)
+            if flip_v:
+                bitmap = ImageOps.flip(bitmap)
+            options = {"lossless": True} if source.suffix.lower() == ".webp" else {}
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            bitmap.save(destination, **options)
+        except Exception as exc:
+            self.report.warnings.append(
+                f"Could not flip {source.name}; it is shown unflipped: {exc}"
+            )
+            self._mirror_cache[cache_key] = src
+            return src
+        return derived
+
     # --- drawables ----------------------------------------------------------
 
     def convert_drawable(
@@ -2126,16 +2206,15 @@ class Importer:
     def _convert_group(
         self, obj: Any, z: int, box: dict[str, float]
     ) -> list[dict[str, Any]]:
-        """Flatten a group, composing its origin into each child's position.
+        """Flatten a group, composing its frame into each child's geometry.
 
         v1 models no group container, so children are lifted to slide level.
-        Group *rotation* is not composed — a rotated group would need a full
-        transform stack — and is reported rather than silently mis-placed.
+        Children are stored in the group's unrotated space, and a rotated
+        group turns every child about the frame's centre: the word-vector
+        rows on the dictionary slides are columns of squares grouped and
+        turned a quarter, which flattened without the turn as tall columns
+        spilling out of their box.
         """
-        if abs(box["rot"]) > 0.01:
-            self.report.warnings.append(
-                "Rotated group flattened; child rotation may be wrong"
-            )
         out: list[dict[str, Any]] = []
         for i, child in enumerate(obj.children):
             out.extend(
@@ -2143,6 +2222,25 @@ class Importer:
                     int(child.identifier), z + i, (box["x"], box["y"])
                 )
             )
+        if abs(box["rot"]) > 0.01:
+            centre_x = box["x"] + box["w"] / 2
+            centre_y = box["y"] + box["h"] / 2
+            theta = math.radians(box["rot"])
+            cos, sin = math.cos(theta), math.sin(theta)
+
+            def turned(x: float, y: float) -> tuple[float, float]:
+                dx, dy = x - centre_x, y - centre_y
+                return centre_x + dx * cos - dy * sin, centre_y + dx * sin + dy * cos
+
+            for el in out:
+                cx, cy = turned(el["x"] + el["w"] / 2, el["y"] + el["h"] / 2)
+                el["x"] = round(cx - el["w"] / 2, 2)
+                el["y"] = round(cy - el["h"] / 2, 2)
+                el["rot"] = round(_normalise_angle(float(el.get("rot") or 0.0) + box["rot"]), 2)
+                # A curve's control point is in canvas space, not the box's.
+                if el.get("control"):
+                    px, py = turned(el["control"]["x"], el["control"]["y"])
+                    el["control"] = {"x": round(px, 2), "y": round(py, 2)}
         # Keynote diagrams commonly store nodes before their connecting lines,
         # but mask each connector below the filled node at paint time. Once the
         # group is flattened, reproduce that semantic layering: a native line
@@ -2227,16 +2325,33 @@ class Importer:
         # times the size of the slide and anchored off-canvas — and using it as
         # the element box puts a giant, wrongly-placed picture on the slide.
         # The visible box is the mask; the image is then offset inside it.
+        #
+        # A flipped image is mirrored inside its frame, and so is its mask:
+        # the mask's stored position is measured on the unflipped picture.
+        # The deck has no flip, so the mirror is baked into the asset.
+        flags = int(getattr(find_geometry(obj), "flags", 0) or 0)
+        flip_h = bool(flags & GEOMETRY_HORIZONTAL_FLIP)
+        flip_v = bool(flags & GEOMETRY_VERTICAL_FLIP)
+        if flip_h or flip_v:
+            src = self._mirror_image(src, flip_h, flip_v)
         mask_geometry = self._mask_geometry(obj)
         mask_shape = self._mask_shape(obj, mask_geometry)
         source_box = None
         if mask_geometry is not None:
+            mask_x = float(mask_geometry.position.x)
+            mask_y = float(mask_geometry.position.y)
+            mask_w = float(mask_geometry.size.width)
+            mask_h = float(mask_geometry.size.height)
+            if flip_h:
+                mask_x = box["w"] - mask_x - mask_w
+            if flip_v:
+                mask_y = box["h"] - mask_y - mask_h
             visible = {
                 # Mask position is relative to the image's own origin.
-                "x": box["x"] + float(mask_geometry.position.x),
-                "y": box["y"] + float(mask_geometry.position.y),
-                "w": max(1.0, float(mask_geometry.size.width)),
-                "h": max(1.0, float(mask_geometry.size.height)),
+                "x": box["x"] + mask_x,
+                "y": box["y"] + mask_y,
+                "w": max(1.0, mask_w),
+                "h": max(1.0, mask_h),
                 "rot": box["rot"],
             }
             self.report.cropped_images += 1
@@ -2373,24 +2488,36 @@ class Importer:
         # bordered conviction box also owns its caption text. Empty-pattern
         # strokes were filtered while resolving the style, so ordinary text
         # boxes still do not acquire phantom borders here.
-        vector = self._convert_vector(obj, box, z)
+        #
+        # A filled text box sized to its content stores a 0×0 frame, and its
+        # fill covers the laid-out text — the white label that cuts the
+        # "Denoising" arrow line. Painted from the stored frame it shrinks to
+        # a 1px dot and the line runs straight through the words.
+        auto_sized = box["w"] <= 1 or box["h"] <= 1
+        text_style = resolve_text_style(self.objects, obj) if text.strip() else None
+        text_box = None
+        if text_style is not None:
+            text_box = self._size_text_box(
+                box,
+                text,
+                text_style.font_size or DEFAULT_FONT_SIZE,
+                text_style.align,
+                text_style.valign,
+                self._text_natural_size(obj),
+                text_style.font_name,
+                bool(text_style.bold),
+                text_style.horizontal_padding,
+            )
+        vector = self._convert_vector(
+            obj, text_box if auto_sized and text_box is not None else box, z
+        )
         if vector is not None:
             out.append(vector)
 
-        if text.strip():
-            style = resolve_text_style(self.objects, obj)
+        if text_style is not None and text_box is not None:
+            style = text_style
             font_size = style.font_size or DEFAULT_FONT_SIZE
-            box = self._size_text_box(
-                box,
-                text,
-                font_size,
-                style.align,
-                style.valign,
-                self._text_natural_size(obj),
-                style.font_name,
-                bool(style.bold),
-                style.horizontal_padding,
-            )
+            box = text_box
 
             # Layout-critical Keynote typography keeps wrapping and light-on-
             # dark labels faithful. Deleting these inline values hands control
@@ -2732,6 +2859,11 @@ class Importer:
             if field_name == "editable_bezier_path_source":
                 path_data, bounds = editable_path_to_svg(source)
                 break
+            if field_name == "point_path_source":
+                path_data, bounds = point_path_to_svg(source)
+                if path_data:
+                    break
+                continue
             # Some path sources wrap the real one in `super`.
             base = source.super if _has(source, "super") else source
             if not _has(base, "path"):

@@ -447,6 +447,110 @@ describe('keynote importer', () => {
     });
   });
 
+  /** Run a Python snippet against the importer with real Keynote protobuf classes. */
+  function importerProbe(lines: string[]): unknown {
+    const stdout = execFileSync(PYTHON, ['-c', [
+      'import json, tempfile',
+      'from pathlib import Path',
+      'from PIL import Image',
+      'import importers.keynote.import_keynote as k',
+      'from keynote_parser.versions.v14_4.generated import TSDArchives_pb2 as TSD, TSWPArchives_pb2 as TSWP',
+      'def geo(msg, x, y, w, h, angle=0.0, flags=3):',
+      '    g = msg.geometry',
+      '    g.position.x, g.position.y, g.size.width, g.size.height = x, y, w, h',
+      '    g.angle, g.flags = angle, flags',
+      ...lines,
+    ].join('\n')], { encoding: 'utf8', cwd: process.cwd() });
+    return JSON.parse(stdout);
+  }
+
+  it('turns a rotated group\'s children about the group\'s centre', () => {
+    // Multi-modal generative modeling slide 12: each word vector is a column
+    // of squares grouped and turned 270°. Flattened without the turn, the
+    // rows stood up as columns spilling out of the dictionary box.
+    const [square] = importerProbe([
+      'group = TSD.GroupArchive(); geo(group.super, 100, 100, 20, 200, angle=270)',
+      'group.children.add().identifier = 2',
+      'class Probe(k.Importer):',
+      '    def convert_drawable(self, obj_id, z, offset=(0.0, 0.0)):',
+      "        return [{'x': offset[0], 'y': offset[1], 'w': 20, 'h': 20, 'rot': 0}]",
+      'imp = Probe(objects={1: group}, datas={}, pkg=None, out_dir=None, report=k.Report())',
+      'print(json.dumps(imp._convert_group(group, 0, imp._box(group.super.geometry, (0, 0)))))',
+    ]) as Array<{ x: number; y: number; rot: number }>;
+    // The top square of the column ends at the row's right-hand end.
+    expect(square).toMatchObject({ x: 190, y: 190, rot: 90 });
+  });
+
+  it('mirrors a flipped image and the crop measured on the unflipped picture', () => {
+    // Slides 28-32: the denoising strip is the noising strip flipped, and
+    // the x_t crops cut from it landed off the slide's left edge.
+    const result = importerProbe([
+      'with tempfile.TemporaryDirectory() as tmp:',
+      '    tmp = Path(tmp); (tmp / "assets").mkdir()',
+      '    strip = Image.new("RGB", (4, 1)); strip.putpixel((0, 0), (255, 0, 0)); strip.save(tmp / "assets/strip.png")',
+      '    mask = TSD.MaskArchive(); geo(mask.super, 100, 0, 50, 30)',
+      '    image = TSD.ImageArchive(); geo(image.super, 10, 20, 400, 30, flags=7)',
+      '    image.mask.identifier = 9',
+      '    imp = k.Importer(objects={9: mask}, datas={}, pkg=None, out_dir=tmp, report=k.Report())',
+      '    imp.copy_data = lambda data_id: "assets/strip.png"',
+      '    el = imp._convert_image_el(image, imp._box(image.super.geometry, (0, 0)), 0)',
+      '    with Image.open(tmp / el["src"]) as flipped:',
+      '        red = list(flipped.getpixel((3, 0)))',
+      '    print(json.dumps({"x": el["x"], "w": el["w"], "src": el["src"], "sourceBox": el["sourceBox"], "red": red}))',
+    ]);
+    expect(result).toEqual({
+      x: 260,
+      w: 50,
+      src: 'assets/strip-flipped-h.png',
+      sourceBox: { x: -250, y: 0, w: 400, h: 30 },
+      red: [255, 0, 0],
+    });
+  });
+
+  it('draws Keynote\'s parametric arrows, which store no path', () => {
+    const result = importerProbe([
+      'arrow = TSD.PointPathSourceArchive(type=TSD.PointPathSourceArchive.kTSDRightSingleArrow)',
+      'arrow.point.x, arrow.point.y = 40, 0.5',
+      'arrow.naturalSize.width, arrow.naturalSize.height = 100, 50',
+      'shaft = k.point_path_to_svg(arrow)[0]',
+      'arrow.point.x = 200',
+      'print(json.dumps({"arrow": shaft, "triangle": k.point_path_to_svg(arrow)[0]}))',
+    ]);
+    expect(result).toEqual({
+      arrow: 'M 0.00 12.50 L 60.00 12.50 L 60.00 0.00 L 100.00 25.00 L 60.00 50.00 L 60.00 37.50 L 0.00 37.50 Z',
+      // A head longer than the shape leaves the solid ▶ between two figures.
+      triangle: 'M 0.00 12.50 L 0.00 0.00 L 100.00 25.00 L 0.00 50.00 L 0.00 37.50 Z',
+    });
+  });
+
+  it('paints a filled, text-sized label behind its text rather than as a dot', () => {
+    // Slide 27: the white label that cuts the "Diffusion: Just add noise"
+    // arrow is a 0×0 text box; its fill came across as a 1px square.
+    const [fill, text] = importerProbe([
+      'label = TSWP.ShapeInfoArchive()',
+      'g = label.super.super.geometry',
+      'g.position.x, g.position.y, g.flags = 960, 195, 0',
+      'source = label.super.pathsource.scalar_path_source',
+      'source.type = 0',
+      'source.naturalSize.width, source.naturalSize.height = 199, 65',
+      'k.extract_text = lambda objects, shape: "Denoising"',
+      'k.styled_text_to_html = lambda objects, shape, style: "Denoising"',
+      'k.resolve_shape_style = lambda objects, style_id: k.ShapeStyle(fill="#ffffff")',
+      'real_style = k.resolve_text_style',
+      'def centred(objects, shape):',
+      '    style = real_style(objects, shape)',
+      '    style.align, style.valign, style.font_size = "center", "middle", 42',
+      '    return style',
+      'k.resolve_text_style = centred',
+      'k._measure_text_width = lambda *args: 199.0',
+      'imp = k.Importer(objects={}, datas={}, pkg=None, out_dir=None, report=k.Report())',
+      'out = imp._convert_shape(label, imp._box(g, (0, 0)), 0)',
+      'print(json.dumps([{"type": el["type"], **{key: round(el[key]) for key in ("x", "y", "w", "h")}} for el in out]))',
+    ]) as Array<Record<string, unknown>>;
+    expect(fill).toEqual({ type: 'shape', x: 860, y: 162, w: 199, h: 65 });
+    expect(text).toEqual({ type: 'text', x: 860, y: 162, w: 199, h: 65 });
+  });
+
   it.skipIf(!existsSync(geometricFieldsDeck))(
     'bakes Keynote Instant Alpha paths into transparent PNG pixels',
     () => {
