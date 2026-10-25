@@ -32,6 +32,28 @@
   display: none;
 }
 
+/* A keyboard build's caret: a thin bar the height of the line it stands in,
+   in the colour of the text around it. It sits between two characters and
+   takes no room of its own. */
+.build-caret {
+  position: relative;
+}
+
+.build-caret::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -0.04em;
+  width: max(2px, 0.08em);
+  background: currentColor;
+}
+
+/* A list item whose first character has not been typed yet has no marker. */
+.build-unmarked::before {
+  visibility: hidden;
+}
+
 .element {
   position: absolute;
   box-sizing: border-box;

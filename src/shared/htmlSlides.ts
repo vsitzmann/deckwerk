@@ -5,6 +5,7 @@ import { fitAutoTextElement } from './autoFit.js';
 import { KATEX_AUTO_RENDER_JS, KATEX_CSS, KATEX_JS } from './katexInline.js';
 import { shapeSvg } from './shapeSvg.js';
 import { applyTableColumnWidths } from './paragraphs.js';
+import { isBuildEffectName } from './timeline.js';
 import { normalizeHtmlLineHeights, normalizeStyleLineHeight } from './lineHeight.js';
 import { layoutMaster, placeNewPlaceholders, syncSlideWithLayoutMaster, type FixedLayout } from './layoutMasters.js';
 import {
@@ -861,11 +862,17 @@ function mergedTimeline(previous: Slide, compiled: Slide, theirs = new Set<strin
  * a by-paragraph reveal — stays as it was.
  */
 function pageEffect(previous: TimelineEntry['action'], page: TimelineEntry['action']): TimelineEntry['action'] {
-  const { duration: _previousDuration, ...rest } = structuredClone(previous);
-  if (isEffectName(page.value)) {
-    return { ...rest, value: page.value, ...(page.duration !== undefined ? { duration: page.duration } : {}) };
+  const { duration: _previousDuration, popFrom: _from, popPeak: _peak, ...rest } = structuredClone(previous);
+  if (isBuildEffectName(page.value)) {
+    return {
+      ...rest,
+      value: page.value,
+      ...(page.duration !== undefined ? { duration: page.duration } : {}),
+      ...(page.popFrom !== undefined ? { popFrom: page.popFrom } : {}),
+      ...(page.popPeak !== undefined ? { popPeak: page.popPeak } : {}),
+    };
   }
-  return { ...rest, value: isEffectName(previous.value) ? null : previous.value };
+  return { ...rest, value: isBuildEffectName(previous.value) ? null : previous.value };
 }
 
 /* --- what a page was exported from ---------------------------------------- */
@@ -938,8 +945,15 @@ function buildSpec(slide: Slide, elementId: string): string {
   // An effect is part of what the page states, so a change to it is a change
   // to the object; without one the spec is what it always was, so pages
   // exported before effects existed still match.
-  return isEffectName(entry.action.value)
-    ? `${spec}~${entry.action.value}/${entry.action.duration ?? ''}` : spec;
+  return isBuildEffectName(entry.action.value)
+    ? `${spec}~${entry.action.value}/${entry.action.duration ?? ''}${popSpec(entry)}` : spec;
+}
+
+/** A pop's sizes, when it states any; empty otherwise, so other builds fingerprint as before. */
+function popSpec(entry: TimelineEntry): string {
+  const { value, popFrom, popPeak } = entry.action;
+  return value === 'pop' && (popFrom !== undefined || popPeak !== undefined)
+    ? `/${popFrom ?? ''}/${popPeak ?? ''}` : '';
 }
 
 /** cyrb53: a quick 53-bit string hash, the same in Node and in any browser. */
@@ -1502,16 +1516,15 @@ export function elementFromNode(
 /**
  * `data-build="click"`, `data-build="afterPrev"`, `data-build="afterPrev+500"`.
  * `data-build-effect="dissolve"` fades the element in, `"blur"` brings it into
- * focus as it fades, and on a line or arrow
+ * focus as it fades, `"pop"` grows it in with a slight overshoot, `"keyboard"`
+ * types text in a character at a time behind a caret, and on a line or arrow
  * `data-build-effect="draw"` draws it in; `data-build-duration` is the time in ms.
+ * A pop's sizes ride beside it: `data-build-pop-from="0.6"` (where it starts)
+ * and `data-build-pop-peak="1.06"` (how far it overshoots before settling).
  *
  * Builds have no CSS analogue, so they ride on data attributes rather than in
  * a side-channel the author has to keep in sync with the markup.
  */
-function isEffectName(value: unknown): value is 'draw' | 'dissolve' | 'blur' {
-  return value === 'draw' || value === 'dissolve' || value === 'blur';
-}
-
 export function buildFromNode(
   node: MeasuredNode,
   elementId: string,
@@ -1523,10 +1536,10 @@ export function buildFromNode(
   const on = (['click', 'afterPrev', 'withPrev', 'mediaEnd'] as const)
     .find((candidate) => candidate.toLowerCase() === name.trim().toLowerCase());
   if (!on) return null;
-  // `data-build-effect` draws a line or arrow in ("draw") or fades anything in
-  // ("dissolve"); its time rides beside it.
+  // `data-build-effect` names the animation (a line drawn in, a dissolve, a
+  // pop, ...); its time rides beside it.
   const effect = node.dataset.buildEffect;
-  const animated = effect === 'draw' || effect === 'dissolve' || effect === 'blur';
+  const animated = isBuildEffectName(effect);
   const duration = Number(node.dataset.buildDuration);
   return {
     id: `${elementId}-build-${index + 1}`,
@@ -1536,7 +1549,18 @@ export function buildFromNode(
       target: elementId,
       value: animated ? effect : null,
       ...(animated && Number.isFinite(duration) && duration >= 0 ? { duration } : {}),
+      ...(effect === 'pop' ? popSizes(node.dataset.buildPopFrom, node.dataset.buildPopPeak) : {}),
     },
+  };
+}
+
+/** A pop's sizes as a page states them, each kept only when it is a size the schema allows. */
+function popSizes(from: string | undefined, peak: string | undefined): { popFrom?: number; popPeak?: number } {
+  const start = Number(from);
+  const top = Number(peak);
+  return {
+    ...(from !== undefined && Number.isFinite(start) && start >= 0 && start <= 1 ? { popFrom: start } : {}),
+    ...(peak !== undefined && Number.isFinite(top) && top >= 1 && top <= 2 ? { popPeak: top } : {}),
   };
 }
 
@@ -1608,11 +1632,15 @@ function elementToHtml(element: SlideElement, build?: TimelineEntry, base?: stri
     base ? `data-base="${escape(base)}"` : '',
     build ? `data-build="${build.trigger.on}${build.trigger.delay ? `+${build.trigger.delay}` : ''}"` : '',
     build?.trigger.ref ? `data-build-ref="${escape(build.trigger.ref)}"` : '',
-    build && isEffectName(build.action.value)
+    build && isBuildEffectName(build.action.value)
       ? `data-build-effect="${build.action.value}"` : '',
-    build && isEffectName(build.action.value)
+    build && isBuildEffectName(build.action.value)
       && build.action.duration !== undefined
       ? `data-build-duration="${build.action.duration}"` : '',
+    build?.action.value === 'pop' && build.action.popFrom !== undefined
+      ? `data-build-pop-from="${build.action.popFrom}"` : '',
+    build?.action.value === 'pop' && build.action.popPeak !== undefined
+      ? `data-build-pop-peak="${build.action.popPeak}"` : '',
     element.type === 'text' && element.layoutPlaceholder
       ? `data-layout-slot="${element.layoutPlaceholder}"` : '',
   ].filter(Boolean).join(' ');

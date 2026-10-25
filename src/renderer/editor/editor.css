@@ -4607,6 +4607,8 @@ button.ghost:hover:not(:disabled) { color: var(--text); background: transparent;
 .duration-field .duration-number { flex: 0 0 76px; }
 .duration-field .duration-number > input { width: 100%; padding: 3px 24px 3px 6px; height: 24px; }
 .build-duration-wrap { width: 100%; }
+.pop-size { width: 76px; }
+.pop-size > input { width: 100%; padding: 3px 24px 3px 6px; height: 24px; }
 .timeline-row select.build-action { padding: 2px 20px 2px 6px; height: 24px; font: 10.5px var(--mono); }
 .timeline-row select.build-trigger { flex: none; }
 .build-num { min-width: 16px; height: 16px; font: 700 9.5px/1 var(--mono); color: #000; }
