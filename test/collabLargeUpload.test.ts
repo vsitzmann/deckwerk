@@ -74,8 +74,11 @@ describe('large video upload on the headless server', () => {
     expect(imported.kind).toBe('video');
     expect((await stat(join(rootDir, DECK_ID, imported.src))).size).toBe(size);
 
-    // Playback: the browser fetches a video by ranges.
-    const ranged = await fetch(`http://127.0.0.1:${server.port}/decks/${DECK_ID}/${imported.src}`, {
+    // Playback: the browser fetches a video by ranges. The upload has already
+    // queued its streaming version, which an unpinned URL serves once it
+    // exists; a bare `o` asks for the original, as a client does before it
+    // knows the clip's variant.
+    const ranged = await fetch(`http://127.0.0.1:${server.port}/decks/${DECK_ID}/${imported.src}?v=o`, {
       headers: { range: `bytes=0-${clip.length - 1}` },
     });
     expect(ranged.status).toBe(206);
