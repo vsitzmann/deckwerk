@@ -593,6 +593,11 @@ export class Cdp {
     if (end <= start) throw new Error(`cannot select empty range ${start}..${end}`);
     const from = await this.textGlyphPoint(selector, start, 0.15, `${label} start`);
     const to = await this.textGlyphPoint(selector, end - 1, 0.85, `${label} end`);
+    await this.selectBetween(from, to);
+  }
+
+  /** A click at `from` and a shift-click at `to`: the selection a person makes. */
+  async selectBetween(from: { x: number; y: number }, to: { x: number; y: number }): Promise<void> {
     await this.call('Input.dispatchMouseEvent', {
       type: 'mouseMoved', x: from.x, y: from.y, button: 'none', buttons: 0,
     });

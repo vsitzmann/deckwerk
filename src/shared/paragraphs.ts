@@ -22,6 +22,13 @@ const LIST_TAGS = new Set(['UL', 'OL']);
 export const TYPING_STYLE_SENTINEL = '\u2060';
 export const LIST_MARKER_COLOR_ATTRIBUTE = 'data-list-marker-color';
 export const LIST_MARKER_COLOR_PROPERTY = '--list-marker-color';
+/**
+ * Marks an item that only holds an indented list: the first item of a list,
+ * indented, has no item to hang under, so it hangs in one of its own. That
+ * item is not a line of the text -- type.css gives it no marker and no
+ * number -- and it goes when it holds no list any more.
+ */
+export const LIST_HOLDER_ATTRIBUTE = 'data-list-holder';
 /** Inline wrappers that only format their text. */
 const INLINE_FORMAT_TAGS = new Set([
   'SPAN', 'FONT', 'B', 'STRONG', 'I', 'EM', 'U', 'S', 'STRIKE', 'DEL', 'INS',
@@ -682,10 +689,37 @@ function nestStrayLists(root: ParentNode & Node): void {
     if (prev?.tagName === 'LI') {
       prev.appendChild(list);
     } else {
-      // No item to attach to (indented the first bullet): give it one.
+      // No item to attach to (indented the first bullet): give it one, which
+      // is not a line of its own. An ordinary item here drew an empty bullet
+      // above the indented one the moment editing ended.
       const li = (root.ownerDocument ?? document).createElement('li');
+      li.setAttribute(LIST_HOLDER_ATTRIBUTE, '');
       list.parentNode?.insertBefore(li, list);
       li.appendChild(list);
+    }
+  }
+}
+
+/**
+ * A holder item (`LIST_HOLDER_ATTRIBUTE`) holds blocks -- the indented list,
+ * and the paragraph an item of it becomes when its bullet is taken off --
+ * and never a line of its own. Words directly in it (a paste can put them
+ * there) are such a line, and make it an ordinary item; holding no block any
+ * more, it is nothing at all and goes, with its list if that leaves the list
+ * empty. Either way the box looks as it did while it was being edited.
+ */
+function settleListHolders(root: ParentNode & Node): void {
+  for (const holder of [...root.querySelectorAll<HTMLElement>(`li[${LIST_HOLDER_ATTRIBUTE}]`)]) {
+    const inline = [...holder.childNodes]
+      .filter((node) => !(node instanceof Element && BLOCK_TAGS.has(node.tagName)));
+    if (hasContent(inline)) {
+      holder.removeAttribute(LIST_HOLDER_ATTRIBUTE);
+    } else if (inline.length < holder.childNodes.length) {
+      for (const node of inline) node.remove();
+    } else {
+      const list = holder.parentElement;
+      holder.remove();
+      if (list && LIST_TAGS.has(list.tagName) && list.children.length === 0) list.remove();
     }
   }
 }
@@ -837,8 +871,15 @@ export function stripStructuralWhitespace(root: ParentNode & Node): void {
   }
 }
 
-/** Contenteditable can split one list into adjacent sibling lists on Return. */
-function mergeAdjacentLists(root: ParentNode & Node): void {
+/**
+ * Contenteditable can split one list into adjacent sibling lists on Return,
+ * and a deleted line between two lists leaves them side by side. Either way
+ * they are one list: numbered, the second's own `start` no longer applies.
+ * The editor runs this on the live box too, so the numbers an author sees
+ * while editing are the ones the deck stores. Returns whether it joined any.
+ */
+export function mergeAdjacentLists(root: ParentNode & Node): boolean {
+  let joined = false;
   let current = root.firstElementChild;
   while (current) {
     // Directly adjacent: a bare run of text between two lists is a paragraph
@@ -848,10 +889,12 @@ function mergeAdjacentLists(root: ParentNode & Node): void {
     if (next && LIST_TAGS.has(current.tagName) && next.tagName === current.tagName) {
       while (next.firstChild) current.appendChild(next.firstChild);
       next.remove();
+      joined = true;
       continue;
     }
     current = current.nextElementSibling;
   }
+  return joined;
 }
 
 /**
@@ -871,6 +914,7 @@ export function normalizeParagraphHtml(html: string, splitBreaks = false): strin
   adoptOrphanListItems(template.content);
   nestStrayLists(template.content);
   adoptStrayListContent(template.content);
+  settleListHolders(template.content);
   mergeAdjacentLists(template.content);
   hoistBlocksOutOfInlines(template.content);
   // Nesting a stray list into the item before it puts that item's trailing

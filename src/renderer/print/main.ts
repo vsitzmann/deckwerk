@@ -31,7 +31,11 @@ void (async () => {
     slideFilter,
     resolveSrc: window.api.assetUrl,
   });
-  await waitForPdfDocument(pages);
+  await waitForPdfDocument(pages, {
+    // Cut by ffmpeg in the main process, like the rail's posters, so the
+    // window never decodes every video in the deck at once.
+    stillFor: async (src, time) => (await window.api.videoPoster({ src, time, print: true })).url,
+  });
   document.documentElement.dataset.ready = 'true';
   window.api.pdfReady(jobId);
 })().catch((error) => {

@@ -2,8 +2,10 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { electronBinary } from './support/browserSession.js';
 import {
   CONTENT,
+  LEAVE_ROUTES,
   TEXT_ID,
   MOD,
+  seenDifference,
   startListEditingSession,
   type ListEditingSession,
 } from './support/listEditingSession.js';
@@ -349,6 +351,117 @@ describe.skipIf(!electronBinary)('editing bulleted lists', () => {
     await session.expectPersisted(
       (lines) => lines.join('|') === 'ol|- alpha|- beta|- gamma', 'undone');
   });
+
+  // Found by the list fuzz (seeds 2026101901, 2026102101): forward Delete at
+  // the end of a line pulls the next line up into it. When that line was an
+  // item with sub-items, the item stayed behind with no words, holding them
+  // -- an empty bullet where the line had been.
+  it('leaves no empty bullet where Delete pulled an item with sub-items up', {
+    timeout: 120_000,
+  }, async () => {
+    await session.reset('<p>alpha</p><ul><li>beta<ul><li>sub</li></ul></li></ul>');
+    await session.edit();
+    await session.caretIn('alpha', 'end');
+    await session.cdp.key('Delete', 46);
+    const lines = await session.seenLines();
+    expect(lines.map((line) => `${line.markers} ${line.text}`.trim()), 'beta joined alpha; sub stays')
+      .toEqual(['alphabeta', '- sub']);
+    await session.leaveEditing('escape');
+    expect(seenDifference(lines, await session.seenLines()), 'leaving the box changed it').toBeNull();
+    await expectSoundMarkup('after pulling an item with sub-items up');
+  });
+
+  // Found by the list fuzz (seed 2026102302): a line deleted from between two
+  // numbered lists left them side by side, the second still with the start
+  // it was split at. The deck stores one list, so the number shown while
+  // editing changed the moment editing ended.
+  it('numbers two lists that end up side by side as one, while editing too', {
+    timeout: 120_000,
+  }, async () => {
+    await session.reset('<ol><li>alpha</li><li>beta</li></ol><p>gamma</p><ol start="2"><li>delta</li></ol>');
+    await session.edit();
+    await session.caretIn('beta', 'end');
+    await session.cdp.key('Delete', 46);
+    const editing = await session.seenLines();
+    expect(editing.map((line) => `${line.markers} ${line.text}`), 'numbered as one list')
+      .toEqual(['1. alpha', '2. betagamma', '3. delta']);
+    await session.leaveEditing('escape');
+    expect(seenDifference(editing, await session.seenLines()), 'leaving the box renumbered it').toBeNull();
+    await expectSoundMarkup('after joining two numbered lists');
+  });
+
+  // Found by the list fuzz (seed 20261023): a selection from the very start
+  // of a list into a later item, erased, left an empty bullet above the rest
+  // of that item instead of joining the two ends into one line.
+  const SPANS = {
+    'one list': '<ul><li>alpha</li><li>beta</li><li>gamma</li><li>delta</li></ul>',
+    'a line between two lists': '<ul><li>alpha</li></ul><p>beta</p><ul><li>gamma</li><li>delta</li></ul>',
+  };
+  for (const [shape, html] of Object.entries(SPANS))
+  for (const [name, key] of [['erased', 'Backspace'], ['typed over', 'x']] as const) {
+    it(`joins the two ends of a selection from the start of ${shape}, ${name}`, {
+      timeout: 120_000,
+    }, async () => {
+      await session.reset(html);
+      await session.edit();
+      const at = await session.cdp.evaluate<number>(
+        `document.querySelector('${CONTENT}').textContent.indexOf('delta')`);
+      await session.cdp.selectTextRange(CONTENT, 0, at + 2, 'alpha to "de" of delta');
+      if (key === 'Backspace') await session.cdp.key('Backspace', 8);
+      else await session.cdp.typeKeys(key);
+      const line = key === 'Backspace' ? 'lta' : 'xlta';
+      expect(await session.outline(), 'one line holding the rest').toEqual(['ul', `- ${line}`]);
+      await session.expectPersisted((lines) => lines.join('|') === `ul|- ${line}`, 'stored as one line');
+      await expectSoundMarkup(`after a selection was ${name}`);
+    });
+  }
+
+  // Found by the list fuzz (seed 2026101501): a selection inside a sub-item
+  // also lies inside the item it hangs under, which was counted as touched,
+  // so Tab moved the parent -- carrying the sub-item -- and not the sub-item.
+  it('indents only the sub-item part of whose words are selected', {
+    timeout: 120_000,
+  }, async () => {
+    await session.reset('<ul><li>alpha<ul><li>beta</li><li>gamma</li></ul></li><li>delta</li></ul>');
+    await session.edit();
+    const at = await session.cdp.evaluate<number>(
+      `document.querySelector('${CONTENT}').textContent.indexOf('gamma')`);
+    await session.cdp.selectTextRange(CONTENT, at, at + 3, '"gam" of gamma');
+    await session.cdp.key('Tab', 9);
+    await session.expectPersisted(
+      (lines) => lines.join('|') === 'ul|- alpha|  ul|  - beta|    ul|    - gamma|- delta',
+      'gamma under beta, alpha where it was');
+    await expectSoundMarkup('after indenting a sub-item');
+  });
+
+  // Reported: an empty bullet turned up when a box stopped being edited, and
+  // would not come back on purpose. Tab on the first item of a list gets
+  // there. Chromium writes that item as a list inside the list, with no item
+  // around it, and the save gives it one: an item holding nothing but the
+  // indented list, which drew a marker of its own -- and, numbered, took the
+  // number 1 from the item after it.
+  for (const [kind, name] of [['ul', 'bullet'], ['ol', 'numbered item']] as const) {
+    for (const route of LEAVE_ROUTES) {
+      it(`indenting the first ${name} looks the same after leaving the box (${route})`, {
+        timeout: 120_000,
+      }, async () => {
+        await session.reset(`<${kind}><li>alpha</li><li>beta</li></${kind}>`);
+        await session.edit();
+        await session.caretIn('alpha');
+        await session.cdp.key('Tab', 9);
+        const editing = await session.seenLines();
+        expect(editing.map((line) => line.text), 'two lines while editing').toEqual(['alpha', 'beta']);
+        await session.leaveEditing(route);
+        await session.expectPersisted((lines) => lines.join('|').includes('alpha'), 'stored');
+        expect(seenDifference(editing, await session.seenLines()), 'leaving the box changed it')
+          .toBeNull();
+        await session.edit();
+        expect(seenDifference(editing, await session.seenLines()), 'editing it again changed it')
+          .toBeNull();
+        await expectSoundMarkup(`after indenting the first ${name}`);
+      });
+    }
+  }
 });
 
 describe.skipIf(electronBinary)('editing bulleted lists (skipped)', () => {

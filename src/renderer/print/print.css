@@ -15,6 +15,19 @@ html, body { margin: 0; padding: 0; background: #000; }
   contain: size layout paint;
   transform-origin: top left;
 }
+/* A page whose web pages are still drawing their build step is held inside
+   the viewport, where Chromium keeps their animation frames running, while a
+   spacer keeps its place (showWebPagesAtStep in readiness.ts). */
+@media screen {
+  .pdf-page.web-settling {
+    position: fixed;
+    top: 0;
+    left: 0;
+    opacity: 0;
+    pointer-events: none;
+  }
+}
 @media print {
   html, body, #pages { background: transparent; }
+  .pdf-page-spacer { display: none; }
 }
