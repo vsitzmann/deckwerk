@@ -48,9 +48,11 @@ import { launchSafari, type SafariPage } from './support/safariDriver.js';
  * - no byte of a file arrives twice, reloads and deck copies included (bytes
  *   are identified by content, so a copy of a clip in another deck is the
  *   same bytes), beyond the block a media stack probes when it opens a clip;
- * - once a file has arrived, revisiting it makes no request at all: browsing
- *   again, editing, a collaborator's edit, coming back from presenting (a 304
- *   is a round trip too);
+ * - browsing again, editing, a collaborator's edit and coming back from
+ *   presenting re-download nothing and revalidate nothing (a 304 is a round
+ *   trip too). The browser may go on fetching parts of a clip it never had —
+ *   Chromium resumes buffering a partly loaded clip when its slide redraws —
+ *   since those bytes still cross once;
  * - a file keeps one URL for the whole session, so nothing the browser holds
  *   is orphaned under a URL nobody asks for again;
  * - a deck whose clips were prepared before it was opened is sent only their
@@ -425,6 +427,18 @@ function repeats(records: Recorded[]): Recorded[] {
 /** Any request at all. */
 function anyTransfer(records: Recorded[]): string[] {
   return records.length === 0 ? [] : [`${records.length} asset requests (${sum(records)} B)\n${TransferLog.table(records)}`];
+}
+
+/**
+ * What revisiting may not cost: bytes that already arrived, or a round trip
+ * to revalidate them. Judged over the whole session, reported for `phases`.
+ */
+function revisitCost(records: Recorded[], phases: string[]): string[] {
+  const revalidated = records.filter((r) => phases.includes(r.phase) && (r.conditional || r.status === 304));
+  return [
+    ...bytesTwice(records, phases),
+    ...(revalidated.length > 0 ? [`${revalidated.length} revalidations\n${TransferLog.table(revalidated)}`] : []),
+  ];
 }
 
 /**
@@ -916,23 +930,27 @@ for (const kind of ffmpeg ? BROWSERS : []) describe(`media transfer budget (${ki
     it('downloads each byte once on first contact', () => {
       expect(bytesTwice(log.in(['open', 'browse-1']))).toEqual([]);
     });
-    it('costs nothing to browse again', () => {
-      expect(anyTransfer(log.in(['browse-2']))).toEqual([]);
+    it('re-downloads nothing when browsing again', () => {
+      expect(revisitCost(log.all(), ['browse-2'])).toEqual([]);
     });
-    it('costs nothing to edit text', () => {
-      expect(anyTransfer(log.in(['text-edit']))).toEqual([]);
+    it('re-downloads nothing when text is edited', () => {
+      expect(revisitCost(log.all(), ['text-edit'])).toEqual([]);
     });
-    it("costs nothing to change a clip's crop, trim and size", () => {
-      expect(anyTransfer(log.in(['media-edit']))).toEqual([]);
+    it("re-downloads nothing when a clip's crop, trim and size change", () => {
+      expect(revisitCost(log.all(), ['media-edit'])).toEqual([]);
     });
-    it("costs nothing when a collaborator's edit arrives", () => {
-      expect(anyTransfer(log.in(['peer-edit']))).toEqual([]);
+    it("re-downloads nothing when a collaborator's edit arrives", () => {
+      expect(revisitCost(log.all(), ['peer-edit'])).toEqual([]);
     });
-    it('costs nothing to come back from presenting', () => {
-      expect(anyTransfer(log.in(['after-present']))).toEqual([]);
+    it('re-downloads nothing coming back from presenting', () => {
+      expect(revisitCost(log.all(), ['after-present'])).toEqual([]);
     });
-    it('moves only the new bytes when a collaborator swaps in a clip', () => {
-      expect(anyTransfer(log.in(['new-clip']).filter((r) => r.path !== LATE_CLIP))).toEqual([]);
+    it('asks for no other file when a collaborator swaps in a clip nobody has', () => {
+      // Only the new clip is new; the rest may at most finish what they started.
+      expect(revisitCost(log.all(), ['new-clip'])).toEqual([]);
+      const others = log.in(['new-clip']).filter((r) => r.path !== LATE_CLIP);
+      const before = new Set(log.all().filter((r) => r.phase !== 'new-clip' && r.phase !== 'reload').map((r) => r.path));
+      expect(anyTransfer(others.filter((r) => !before.has(r.path)))).toEqual([]);
     });
     it('encodes nothing small and web-safe', () => {
       // A still cut for a thumbnail is not an encode of the clip.

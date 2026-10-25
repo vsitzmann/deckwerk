@@ -400,7 +400,8 @@ accumulates decoded bitmaps from the rest of the deck.
   costs on the wire, measured by a throttled link in front of the server
   (`test/support/throttledLink.ts`): no byte of a file arrives twice, reloads
   and deck copies included; browsing again, editing, a collaborator's edit and
-  coming back from presenting make no request; a file keeps one URL; a clip
+  coming back from presenting re-download and revalidate nothing; a file keeps
+  one URL; a clip
   waiting for its streaming version fetches only its frame, and once the
   version exists costs at most one version more. Real Safari runs the same
   budgets on a Mac with `RUN_SAFARI_MEDIA_BUDGET=1`.
