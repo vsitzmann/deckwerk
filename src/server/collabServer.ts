@@ -412,13 +412,7 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
     }
     return variants;
   }
-  // Renditions of assets that have since been edited or deleted are dead
-  // weight on a server that hosts years of talks.
-  if (renditions) {
-    void pruneRenditions(
-      typeof options.mediaRenditions === 'object' ? options.mediaRenditions.cacheDir : undefined,
-    ).catch(() => 0);
-  }
+  const renditionCacheDir = typeof options.mediaRenditions === 'object' ? options.mediaRenditions.cacheDir : undefined;
   /**
    * Video stills for the print tab. A PDF needs one picture per video, never
    * playback, and a browser asked to load every video in a long deck at once
@@ -514,6 +508,77 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
     } catch {
       return imported;
     }
+  }
+
+  /**
+   * Every video file in every deck under the root, most recently edited deck
+   * first. Read from the folders rather than deck.json (parsing a 20 MB deck
+   * holds every room's event loop), so a clip a deck holds but no longer shows
+   * still counts while its file is kept.
+   */
+  async function videosInDecks(): Promise<string[]> {
+    const decks: Array<{ dir: string; mtimeMs: number }> = [];
+    const walk = async (dir: string): Promise<void> => {
+      const entries = await readdir(dir, { withFileTypes: true }).catch(() => []);
+      if (entries.some((entry) => entry.isFile() && entry.name === 'deck.json')) {
+        const info = await stat(join(dir, 'deck.json')).catch(() => null);
+        decks.push({ dir, mtimeMs: info?.mtimeMs ?? 0 });
+        return;
+      }
+      for (const entry of entries) {
+        if (entry.isDirectory() && !entry.name.startsWith('.')) await walk(join(dir, entry.name));
+      }
+    };
+    await walk(rootDir);
+    decks.sort((a, b) => b.mtimeMs - a.mtimeMs);
+    const videos: string[] = [];
+    for (const deck of decks) videos.push(...await videosUnder(join(deck.dir, 'assets')));
+    return videos;
+  }
+
+  async function videosUnder(dir: string): Promise<string[]> {
+    const videos: string[] = [];
+    const entries = await readdir(dir, { withFileTypes: true }).catch(() => []);
+    for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
+      const path = join(dir, entry.name);
+      if (entry.isDirectory()) videos.push(...await videosUnder(path));
+      else if (entry.isFile() && isVideoAsset(path)) videos.push(path);
+    }
+    return videos;
+  }
+
+  /**
+   * Prepare every video already on the server, once, then let go of the
+   * streaming versions no deck holds any more.
+   *
+   * Opening a deck used to be the first moment its clips were prepared, so
+   * whoever opened it first streamed the originals. Now a restart (every
+   * deploy) queues them all — content already encoded or found not worth
+   * encoding costs a lookup, a file never seen costs one hash — behind
+   * anything somebody asks for.
+   */
+  async function sweepMedia(): Promise<void> {
+    if (!renditions) return;
+    const videos = await videosInDecks();
+    await renditions.warm(videos);
+    const inUse = new Set(videos.map((video) => renditions.keyOf(video)).filter((key): key is string => Boolean(key)));
+    await pruneRenditions(renditionCacheDir, undefined, { inUse });
+  }
+
+  /** A video just reached this deck folder: prepare it now, not when someone first asks. */
+  function prepareArrival(deckDir: string, src: string): void {
+    if (!renditions) return;
+    try {
+      const absolute = resolveAsset(deckDir, src);
+      if (isVideoAsset(absolute)) void renditions.warm([absolute]);
+    } catch {
+      // Not an asset of this deck.
+    }
+  }
+
+  /** A whole deck just arrived (an import, an archive): prepare its clips. */
+  async function prepareDeckArrival(deckDir: string): Promise<void> {
+    if (renditions) void renditions.warm(await videosUnder(join(deckDir, 'assets')));
   }
 
   /** The id of the deck an asset file belongs to, or null outside the decks root. */
@@ -2376,6 +2441,7 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
         await writeFile(sourceFile, body);
         const report = await importRoute.run(sourceFile, dir);
         await writeImportedDeckAccess(dir);
+        await prepareDeckArrival(dir);
         await keepUpload(sourceFile, { ...upload, ok: true });
         respondJson(response, 200, { id, report });
       } catch (error) {
@@ -2422,6 +2488,7 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
           await writeFile(target, file.data);
         }
         await writeImportedDeckAccess(dir);
+        await prepareDeckArrival(dir);
         respondJson(response, 200, { id, report: { files: files.length } });
       } catch (error) {
         await rm(dir, { recursive: true, force: true });
@@ -2441,6 +2508,7 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
         // server's heap is what pushed it into the GC storms it died in.
         await pipeline(request, createWriteStream(tmpFile));
         const imported = await importAsset(deckDirOf(deckParam), tmpFile);
+        prepareArrival(deckDirOf(deckParam), imported.src);
         respondJson(response, 200, await withVariant(deckDirOf(deckParam), imported));
       } catch (error) {
         respondJson(response, 400, { error: String(error instanceof Error ? error.message : error) });
@@ -2511,7 +2579,9 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
             const page = await importWebPage(deckDirOf(deckParam), absolute, injectWebBridgeRuntime);
             return respondJson(response, 200, { src: page.src });
           }
-          respondJson(response, 200, await withVariant(deckDirOf(deckParam), await importAsset(deckDirOf(deckParam), absolute)));
+          const imported = await importAsset(deckDirOf(deckParam), absolute);
+          prepareArrival(deckDirOf(deckParam), imported.src);
+          respondJson(response, 200, await withVariant(deckDirOf(deckParam), imported));
         } catch (error) {
           respondJson(response, 400, { error: String(error instanceof Error ? error.message : error) });
         }
@@ -2531,7 +2601,8 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
         const tmpFile = join(dir, sanitizeFilename(requestedName));
         await writeFile(tmpFile, downloaded.bytes);
         const imported = await importAsset(deckDirOf(deckParam), tmpFile);
-        respondJson(response, 200, imported);
+        prepareArrival(deckDirOf(deckParam), imported.src);
+        respondJson(response, 200, await withVariant(deckDirOf(deckParam), imported));
       } catch (error) {
         respondJson(response, 400, { error: String(error instanceof Error ? error.message : error) });
       } finally {
@@ -3053,6 +3124,7 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
       const temporary = `${absolute}.${randomUUID()}.tmp`;
       await writeFile(temporary, body);
       await rename(temporary, absolute);
+      prepareArrival(room.session.dir, relative);
       respondJson(response, 200, { path: relative, status: 'written' });
       return;
     }
@@ -4124,6 +4196,7 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
   });
   boundPort = port;
   unsubscribeSharedAgent = sharedAgent?.subscribe(emitSharedAgentState);
+  void sweepMedia().catch(() => null);
 
   return {
     port,
@@ -4135,6 +4208,7 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
       for (const room of rooms.values()) broadcast(room, { kind: 'ended' });
     },
     close: async () => {
+      renditions?.stop();
       wss.close();
       unsubscribeSharedAgent?.();
       for (const stream of sharedAgentStreams) stream.response.end();

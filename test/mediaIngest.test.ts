@@ -244,10 +244,10 @@ async function finished(source: string, timeoutMs = 60_000): Promise<RenditionEv
   }
 }
 
-/** The files the rendition cache holds, other than encodes in progress. */
+/** The streaming versions the rendition cache holds, other than encodes in progress. */
 async function cachedVersions(): Promise<string[]> {
   try {
-    return (await readdir(join(workDir, 'renditions'))).filter((name) => !name.includes('.tmp')).sort();
+    return (await readdir(join(workDir, 'renditions'))).filter((name) => name.endsWith('.mp4') && !name.includes('.tmp')).sort();
   } catch {
     return [];
   }
@@ -258,8 +258,7 @@ async function cachedVersions(): Promise<string[]> {
 /* ------------------------------------------------------------------------ */
 
 describe.skipIf(!ffmpeg)('a video gets its streaming version as it arrives', () => {
-  // PENDING(encode on arrival): nothing encodes until a browser opens the deck or asks for the clip.
-  it.fails('dropped, pasted or uploaded into the editor', async () => {
+  it('dropped, pasted or uploaded into the editor', async () => {
     const decksRoot = await freshRoot('upload');
     await saveDeck(join(decksRoot, 'talk'), emptyDeck('talk'));
     const clip = await uniqueCopy(recording, join(workDir, 'in', 'screen recording.mp4'), 'upload');
@@ -273,9 +272,8 @@ describe.skipIf(!ffmpeg)('a video gets its streaming version as it arrives', () 
     expect(await encodesAfterArrival(join(decksRoot, 'talk', src)), 'encodes of the uploaded clip').toBe(1);
   }, 60_000);
 
-  // PENDING(encode on arrival, key by content): the pasted copy is the source's bytes;
-  // one encode, made when either arrived, must serve both.
-  it.fails('pasted from another deck', async () => {
+  // The pasted copy is the source's bytes: one encode serves both.
+  it('pasted from another deck', async () => {
     const decksRoot = await freshRoot('paste');
     const sourceClip = await uniqueCopy(recording, join(decksRoot, 'source', 'assets', 'clip-77.mp4'), 'paste');
     await saveDeck(join(decksRoot, 'source'), deckOf('source', ['assets/clip-77.mp4']));
@@ -292,8 +290,7 @@ describe.skipIf(!ffmpeg)('a video gets its streaming version as it arrives', () 
   }, 60_000);
 
   for (const format of ['Keynote', 'PowerPoint'] as const) {
-    // PENDING(encode on arrival): an imported deck's clips wait for someone to open it.
-    it.fails(`imported from ${format}`, async () => {
+    it(`imported from ${format}`, async () => {
       const decksRoot = await freshRoot(format.toLowerCase());
       const clip = await uniqueCopy(recording, join(workDir, 'in', 'movie.mp4'), format);
       const importer = async (_source: string, outDir: string) => {
@@ -311,8 +308,7 @@ describe.skipIf(!ffmpeg)('a video gets its streaming version as it arrives', () 
     }, 60_000);
   }
 
-  // PENDING(encode on arrival): an unpacked archive's clips wait for someone to open it.
-  it.fails('unpacked from a deck archive', async () => {
+  it('unpacked from a deck archive', async () => {
     const decksRoot = await freshRoot('archive');
     const clip = await uniqueCopy(recording, join(workDir, 'in', 'movie.mp4'), 'archive');
     await start(decksRoot);
@@ -326,8 +322,7 @@ describe.skipIf(!ffmpeg)('a video gets its streaming version as it arrives', () 
     expect(await encodesAfterArrival(join(decksRoot, 'archived', 'assets', 'movie-12.mp4')), 'encodes of the archived clip').toBe(1);
   }, 60_000);
 
-  // PENDING(encode on arrival): a file an agent's mirror uploads waits until a browser asks for it.
-  it.fails("uploaded by an agent's mirror", async () => {
+  it("uploaded by an agent's mirror", async () => {
     const decksRoot = await freshRoot('mirror');
     await saveDeck(join(decksRoot, 'talk'), emptyDeck('talk'));
     const clip = await uniqueCopy(recording, join(workDir, 'in', 'movie.mp4'), 'mirror');
@@ -358,8 +353,7 @@ describe.skipIf(!ffmpeg)('a video gets its streaming version as it arrives', () 
 /* ------------------------------------------------------------------------ */
 
 describe.skipIf(!ffmpeg)('videos already on the server', () => {
-  // PENDING(sweep existing videos): a deck nobody opens is never prepared.
-  it.fails('are prepared at startup, before anyone opens their deck', async () => {
+  it('are prepared at startup, before anyone opens their deck', async () => {
     const decksRoot = await freshRoot('sweep');
     const clip = await uniqueCopy(recording, join(decksRoot, 'old-talk', 'assets', 'recording-5.mp4'), 'sweep');
     await saveDeck(join(decksRoot, 'old-talk'), deckOf('old-talk', ['assets/recording-5.mp4']));
@@ -417,9 +411,7 @@ describe.skipIf(!ffmpeg)('videos already on the server', () => {
     expect(encodesOf(clip), 'encodes after a restart').toBe(0);
   }, 90_000);
 
-  // PENDING(never delete a version in use): the cache drops anything unused for a season,
-  // whether or not a deck still shows its clip.
-  it.fails('keep their streaming version however long it goes unused', async () => {
+  it('keep their streaming version however long it goes unused', async () => {
     const decksRoot = await freshRoot('keep');
     const clip = await uniqueCopy(recording, join(decksRoot, 'talk', 'assets', 'recording-6.mp4'), 'keep');
     await saveDeck(join(decksRoot, 'talk'), deckOf('talk', ['assets/recording-6.mp4']));

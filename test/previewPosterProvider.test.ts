@@ -63,11 +63,13 @@ describe('preview poster provider', () => {
     await flush();
 
     expect(provider).toHaveBeenCalledTimes(1);
-    expect(provider).toHaveBeenCalledWith('deck://abc123/assets/clip.mov', 1);
+    // The clip's deck-relative src, not its URL: a URL may name content
+    // (`/media/<key>`) rather than the file.
+    expect(provider).toHaveBeenCalledWith('assets/clip.mov', 1);
     expect(document.querySelectorAll('video')).toHaveLength(0);
     const stills = document.querySelectorAll<HTMLImageElement>('img[data-preview-still]');
     expect(stills).toHaveLength(2);
-    expect(stills[0].getAttribute('src')).toBe('deck://posters/1-29.jpg');
+    expect(stills[0].getAttribute('src')).toBe('deck://posters/1-15.jpg');
     expect(stills[0].dataset.previewSrc).toBe('deck://abc123/assets/clip.mov');
 
     // A third element for the same frame is served from the cache, synchronously.

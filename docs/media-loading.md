@@ -178,15 +178,23 @@ The rules that keep it honest:
 - **Never bigger than the source.** A rendition that came out larger is
   discarded and the original served; failure of any kind falls back to the
   original.
-- **Pruned after 90 days.** Every edited or deleted asset leaves its rendition
-  behind, and a server hosting years of talks would keep all of them. Losing
-  one that is still wanted costs a background re-encode and nothing else.
+- **Kept while any deck holds the clip.** Every edited or deleted asset
+  leaves its rendition behind, so what no deck folder holds any more is
+  pruned after 90 days (a deck in the trash may come back). A rendition of
+  content some deck still holds is never pruned, however long it went unasked
+  for: a talk not opened for a year must not stream originals the day it is
+  given again.
 
-Renditions are built when a deck is opened (in slide order, so the front of
-the talk is ready first) and on demand when an asset is requested. Neither is
-the right moment to discover a gigabyte of screen recordings, so there is also
-`npm run prepare:media -- <deck-or-decks-root>`, which does the whole job up
-front — what you want the day before a talk.
+Renditions are built as soon as a video reaches the server — a drop, paste or
+upload into the editor, a paste from another deck, a Keynote, PowerPoint or
+deck-archive import, an agent's mirror upload, an edit that brings a clip into
+a deck (which covers HTML an agent compiles) — and everything already on disk
+is swept once when the server starts (most recently edited deck first), so
+the first person to open a deck is not the one who streams its originals.
+Opening a deck and asking for a clip still queue it too. The sweep reads the
+deck folders, not deck.json, so a clip a deck holds but no longer shows is
+prepared and kept as well; the cost is one encode per content, once.
+`npm run prepare:media -- <deck-or-decks-root>` does the same up front.
 
 Measured after, cold, on the same 8 Mbit/s link: the 48 MB clip starts in
 0.8 s and the 51 MB one in 0.6 s. At 3 Mbit/s they start in under 2 s. The

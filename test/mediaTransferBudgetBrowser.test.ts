@@ -53,9 +53,10 @@ import { launchSafari, type SafariPage } from './support/safariDriver.js';
  *   is a round trip too);
  * - a file keeps one URL for the whole session, so nothing the browser holds
  *   is orphaned under a URL nobody asks for again;
- * - a clip still waiting for its streaming version fetches only enough of
- *   the original to show its frame, and once the version exists, the clip
- *   costs at most one streaming version more.
+ * - a deck whose clips were prepared before it was opened is sent only their
+ *   streaming versions; a clip still waiting for its streaming version (it
+ *   just arrived) fetches only enough of the original to show its frame, and
+ *   once the version exists costs at most one streaming version more.
  *
  * Each scenario runs once (`beforeAll`) and each budget is its own test.
  * Budgets marked `pending` (`it.fails` in Chromium) describe behaviour not
@@ -803,8 +804,8 @@ async function editingSession(kind: BrowserKind): Promise<{ log: TransferLog; en
 }
 
 /**
- * A screen recording in a deck and in a copy of that deck, opened one after
- * the other, worked on while the server prepares the streaming version.
+ * A screen recording in a deck and in a copy of that deck, on disk when the
+ * server starts, opened one after the other and worked on.
  */
 async function streamingVersions(kind: BrowserKind): Promise<{ log: TransferLog; renditions: TimedRendition[]; size: number }> {
   const { decksRoot, profileDir } = await freshWorkDir('copies');
@@ -948,31 +949,18 @@ for (const kind of ffmpeg ? BROWSERS : []) describe(`media transfer budget (${ki
     });
   });
 
-  describe('streaming versions', () => {
+  describe('a deck whose clips were prepared ahead, and a copy of it', () => {
     let log: TransferLog;
-    let renditions: TimedRendition[] = [];
-    let size = 0;
     beforeAll(async () => {
-      ({ log, renditions, size } = await streamingVersions(kind));
+      ({ log } = await streamingVersions(kind));
     }, 600_000);
     afterAll(teardown);
-    // The first deck's streaming version; what the copy costs is the copy's test.
-    const ready = () => renditions.find((e) => e.status === 'done' && e.source.includes('/talk-a/'));
 
-    it('fixture: the streaming version landed while the original was still arriving', () => {
-      const done = ready();
-      expect(done, 'the server produced a streaming version').toBeDefined();
-      const before = sum(log.in(['talk-a']).filter((r) => r.variant === 'original'), (r) => r.body - bodyAfter(r, done!.at));
-      expect(before).toBeLessThan(size);
-    });
-
-    it('costs at most one streaming version more, once that version exists', () => {
-      const done = ready()!;
-      const renditionSize = size - (done.savedBytes ?? 0);
-      const records = log.in(['talk-a']);
-      const after = sum(records, (r) => bodyAfter(r, done.at));
-      expect(after, `bytes of the clip after its ${renditionSize} B streaming version was ready\n${TransferLog.table(records)}`)
-        .toBeLessThanOrEqual(renditionSize + PROBE_ALLOWANCE_BYTES);
+    // The server prepares what is on disk when it starts, so nobody who
+    // opens the deck afterwards is handed the 30 MB original.
+    it('sends only the streaming version, never the original', () => {
+      const original = log.all().filter((r) => r.variant === 'original');
+      expect(sum(original), `bytes of the original\n${TransferLog.table(log.all())}`).toBeLessThanOrEqual(PROBE_ALLOWANCE_BYTES);
     });
 
     it('downloads nothing for a copy of a deck already seen', () => {
@@ -997,6 +985,16 @@ for (const kind of ffmpeg ? BROWSERS : []) describe(`media transfer budget (${ki
 
     it('fixture: the clip waited long enough to measure', () => {
       expect(readyAt() - result.shownAt).toBeGreaterThan(2_000);
+    });
+
+    it('costs at most one streaming version more, once that version exists', () => {
+      const done = result.renditions.find((e) => e.source === result.source && e.status === 'done');
+      expect(done, 'the server produced a streaming version').toBeDefined();
+      const versionSize = result.size - (done!.savedBytes ?? 0);
+      const records = result.log.all().filter((r) => r.path === BIG_CLIP);
+      const after = sum(records, (r) => bodyAfter(r, done!.at));
+      expect(after, `bytes of the clip after its ${versionSize} B streaming version was ready\n${TransferLog.table(records)}`)
+        .toBeLessThanOrEqual(versionSize + PROBE_ALLOWANCE_BYTES);
     });
 
     it('fetches only enough of the original to show its frame', () => {

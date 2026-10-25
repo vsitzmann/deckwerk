@@ -71,15 +71,21 @@ export interface RenditionEvent {
 /**
  * Forget renditions nothing has needed for a season.
  *
- * The cache is keyed by the source's identity, so every edited, replaced or
- * deleted asset leaves its rendition behind — on a server that hosts a
- * person's whole talk history, that is unbounded growth for files nobody will
- * ask for again. Losing one that is still wanted costs a background re-encode
- * and nothing else, which is the right side of this trade.
+ * The cache is keyed by content, so every edited, replaced or deleted asset
+ * leaves its rendition behind — on a server that hosts a person's whole talk
+ * history, that is unbounded growth for files nobody will ask for again.
+ *
+ * Given `inUse` (the content keys some deck still holds), a rendition or
+ * `.passed` marker of content in use is kept however long it went unasked
+ * for: a talk not opened for a year is still a talk, and its clips must not
+ * stream as originals the day it is given again. What no deck holds goes
+ * after `maxAgeMs` (a deck in the trash may come back), and files from the
+ * cache's old naming go at once: nothing reads them any more.
  */
 export async function pruneRenditions(
   cacheDir = defaultRenditionCacheDir(),
   maxAgeMs = 90 * 24 * 60 * 60 * 1000,
+  options: { inUse?: Set<string> } = {},
 ): Promise<number> {
   let removed = 0;
   let entries: string[];
@@ -89,12 +95,24 @@ export async function pruneRenditions(
     return 0;
   }
   const cutoff = Date.now() - maxAgeMs;
+  const dayAgo = Date.now() - 24 * 60 * 60 * 1000;
   for (const entry of entries) {
     if (entry === KEY_INDEX) continue;
     const path = join(cacheDir, entry);
     try {
       const info = await stat(path);
-      if (!info.isFile() || info.mtimeMs >= cutoff) continue;
+      if (!info.isFile()) continue;
+      if (options.inUse) {
+        const keyed = /^([0-9a-f]{24})\.(?:mp4|passed)$/.exec(entry);
+        // An encode still writing is left alone; one a crash abandoned is not.
+        if (entry.includes('.tmp')) {
+          if (info.mtimeMs >= dayAgo) continue;
+        } else if (keyed) {
+          if (options.inUse.has(keyed[1]) || info.mtimeMs >= cutoff) continue;
+        }
+      } else if (info.mtimeMs >= cutoff) {
+        continue;
+      }
       await rm(path, { force: true });
       removed += 1;
     } catch {
@@ -279,6 +297,7 @@ export class RenditionStore {
   private running = 0;
   /** Stamps urgent requests, so the latest one goes first. */
   private urgency = 0;
+  private stopped = false;
   /** Content found not to need a rendition, so it is probed once. */
   private readonly passed = new Set<string>();
 
@@ -420,10 +439,16 @@ export class RenditionStore {
    * admitted in turn, so the queue keeps slide order whichever file hashes
    * or stats first.
    */
-  warm(sources: string[]): void {
-    void (async () => {
+  warm(sources: string[]): Promise<void> {
+    return (async () => {
       for (const source of sources) await this.admit(source, false).catch(() => null);
     })();
+  }
+
+  /** Start nothing new: the server is closing. What is running finishes. */
+  stop(): void {
+    this.stopped = true;
+    this.waiting.length = 0;
   }
 
   /**
@@ -481,7 +506,7 @@ export class RenditionStore {
   }
 
   private next(): void {
-    while (this.running < this.concurrency && this.waiting.length > 0) {
+    while (!this.stopped && this.running < this.concurrency && this.waiting.length > 0) {
       let index = 0;
       this.waiting.forEach((entry, i) => {
         if (entry.urgency > this.waiting[index].urgency) index = i;
