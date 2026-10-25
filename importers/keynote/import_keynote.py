@@ -414,7 +414,10 @@ def extract_text(objects: dict[int, Any], shape: Any) -> str:
     size, colour, gradient and alignment; theme.css remains available for
     deliberate restyling after import.
     """
-    for field_name in ("owned_storage", "deprecated_storage"):
+    # A slide's KN.NoteArchive keeps its text in `containedStorage`, the one
+    # field it has; read only the drawable fields, every talk's speaker notes
+    # imported empty.
+    for field_name in ("owned_storage", "deprecated_storage", "containedStorage"):
         # Placeholders wrap a ShapeInfoArchive, so the storage reference can sit
         # one or more levels up the `super` chain rather than on the drawable.
         reference = find_in_super_chain(shape, field_name)
@@ -981,6 +984,7 @@ class TextStyle:
     font_size: float | None = None
     font_name: str | None = None
     bold: bool | None = None
+    italic: bool | None = None
     align: str = "left"
     valign: str = "middle"
     color: str | None = None
@@ -1135,6 +1139,8 @@ def _read_char_properties(chars: Any, out: TextStyle) -> None:
         out.font_name = str(chars.font_name) or None
     if out.bold is None and chars.HasField("bold"):
         out.bold = bool(chars.bold)
+    if out.italic is None and chars.HasField("italic"):
+        out.italic = bool(chars.italic)
     if out.tracking is None and chars.HasField("tracking"):
         out.tracking = float(chars.tracking)
     if out.color is None and chars.HasField("font_color"):
@@ -1425,7 +1431,9 @@ def _list_label(objects: dict[int, Any], style_id: int | None, level: int) -> tu
                     number = _enum_name(style, "number_types", style.number_types[level])
                     kind = next((css for key, css in LIST_NUMBER_TYPES if key in number), None)
                 return ("ol", kind)
-            if label in ("kBullet", "kImage"):
+            # kString is a character bullet ("•", "–"), what Keynote's bulleted
+            # lists use; kImage an image bullet. The enum has no kBullet.
+            if label in ("kString", "kImage"):
                 return ("ul", None)
             return None
         try:
@@ -1600,22 +1608,36 @@ def styled_text_to_html(
         gap_after = para.space_after or 0.0
         decoration = _para_decoration_css(objects, style_id)
         underlined = decoration.pop("text-decoration", None) is not None
-        block_css.update(decoration)
+        para_italic = decoration.pop("font-style", None) == "italic"
 
         boundaries = sorted(
             {line_start, line_end}
             | {start for start, _ in char_styles if line_start < start < line_end}
         )
         runs: list[tuple[str, dict[str, str], bool]] = []
+        slants: list[bool] = []
         for run_start, run_end in zip(boundaries, boundaries[1:]):
             run_id = _table_at(char_styles, run_start)
             css = _char_run_css(objects, run_id, para)
             css.pop("text-decoration", None)
+            css.pop("font-style", None)
             chars = objects[run_id].char_properties if run_id in objects and _has(objects[run_id], "char_properties") else None
             run_underlined = (
                 int(chars.underline) != 0 if chars is not None and chars.HasField("underline") else underlined
             )
             runs.append((html.escape(text[run_start:run_end]), css, run_underlined))
+            slants.append(bool(chars.italic) if chars is not None and chars.HasField("italic") else para_italic)
+        # Italic as for underline below: a paragraph style can slant the block
+        # while its runs set it upright again (a title Keynote draws upright
+        # over an italic paragraph style). The box states the first
+        # paragraph's slant; a block or run states only where it differs.
+        visible = [slant for (piece, _, _), slant in zip(runs, slants) if piece.strip()]
+        block_italic = bool(visible) and all(visible)
+        if block_italic != bool(base.italic):
+            block_css["font-style"] = "italic" if block_italic else "normal"
+        for (_, css, _), slant in zip(runs, slants):
+            if slant != block_italic:
+                css["font-style"] = "italic" if slant else "normal"
         # An underline the paragraph style applies belongs on the block —
         # unless a run switches it off again ("Token-matched" underlined, the
         # rest of the heading not), which CSS cannot do inside an underlined
@@ -1706,6 +1728,20 @@ def styled_text_to_html(
             for block in blocks
         )
     return None if out == text_to_html(text) else out
+
+
+def _face_css(style: TextStyle) -> dict[str, str]:
+    """Weight and slant, always stated.
+
+    The theme's role classes are bold (.role-title 700, .role-heading 600),
+    and a box classed by its size takes them on unless it says otherwise:
+    regular 60pt "Results" imported bold.
+    """
+    if style.bold:
+        weight = "700"
+    else:
+        weight = _font_weight_css(style.font_name or "") or "400"
+    return {"font-weight": weight, "font-style": "italic" if style.italic else "normal"}
 
 
 def _font_family_css(font_name: str) -> str:
@@ -2468,9 +2504,7 @@ class Importer:
             inline = {"font-size": f"{font_size:.0f}px"}
             if style.font_name:
                 inline["font-family"] = _font_family_css(style.font_name)
-                weight = _font_weight_css(style.font_name)
-                if weight:
-                    inline["font-weight"] = weight
+            inline.update(_face_css(style))
             element.update(
                 {
                     "html": PLACEHOLDER_TEXT,
@@ -2525,12 +2559,7 @@ class Importer:
             inline = {"font-size": f"{font_size:.0f}px"}
             if style.font_name:
                 inline["font-family"] = _font_family_css(style.font_name)
-            if style.bold:
-                inline["font-weight"] = "700"
-            elif style.font_name:
-                weight = _font_weight_css(style.font_name)
-                if weight:
-                    inline["font-weight"] = weight
+            inline.update(_face_css(style))
             if style.gradient:
                 inline.update(
                     {

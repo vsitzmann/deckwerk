@@ -87,6 +87,7 @@ const SERIAL_BY_NATURE = [
   'test/exportDeckCompression.test.ts',
   'test/ffmpeg.test.ts',
   'test/keynoteImport.test.ts',
+  'test/keynoteReference.test.ts',
   'test/mediaImportFormats.test.ts',
   'test/mp4FastStart.test.ts',
   'test/posterCache.test.ts',
