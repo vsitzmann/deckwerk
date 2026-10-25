@@ -972,6 +972,13 @@ guards. These rules keep the seams closed:
 - **Harness recoveries are findings.** Test helpers that repair lost
   selections/sessions must record it (`recordRecovery`) — a silent retry hides
   exactly the bug class these suites exist to catch.
+- **Leaving a box changes nothing on it.** A box that stops being edited is
+  drawn again from what was stored, and whatever normalisation did on the way
+  must not show. Markup checks cannot see this (an empty bullet is sound
+  markup), so the list fuzz compares the painted lines before and after every
+  way out — Escape, bare slide, another box — with `seenLines` /
+  `seenDifference` (`test/support/listEditingSession.ts`). An item that only
+  holds an indented list carries `data-list-holder` and draws no line.
 
 - **Nothing on the collab server's event loop scales with the deck.** Every
   room shares one loop, so a whole-deck stringify, parse or encode is a pause

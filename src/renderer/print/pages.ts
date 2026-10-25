@@ -1,9 +1,10 @@
 import type { Deck, Slide } from '@shared/deck.js';
 import type { PdfBuildMode } from '@shared/ipc.js';
-import { resolveState, type SlideState } from '@shared/timeline.js';
+import { resolveState, stepCount, type SlideState } from '@shared/timeline.js';
 import { pdfSteps } from '@shared/pdfExport.js';
 import { renderSlide } from '../player/render.js';
 import { applyStaticSlideState } from '../player/staticState.js';
+import { holdVideoSource, showWebPagesAtStep } from './readiness.js';
 
 /**
  * Building the printable pages for a deck, shared by the two ways a PDF is
@@ -59,15 +60,17 @@ export function buildPrintPages(
       stage.className = 'pdf-stage';
       stage.style.width = `${deck.canvas.w}px`;
       stage.style.height = `${deck.canvas.h}px`;
-      // Full preload, deliberately: this is a one-shot capture, and readiness
-      // pins every video to an exact frame under a timeout. 'metadata' would
-      // leave the pinned seek racing the network inside that timeout, which
-      // showed up as nondeterministic frames in the PDF-vs-player pixel test.
+      // Full preload, deliberately, for a video readiness ends up playing
+      // here: it pins the frame under a timeout, and 'metadata' would leave
+      // that seek racing the network — nondeterministic frames in the
+      // PDF-vs-player pixel test. The source itself is held back below.
       stage.appendChild(renderSlide(slide, { resolveSrc }));
       const state = resolveState(slide, step);
       applyStaticSlideState(stage, slide, state);
+      for (const video of stage.querySelectorAll('video')) holdVideoSource(video);
       page.appendChild(stage);
       container.appendChild(page);
+      showWebPagesAtStep(page, step, stepCount(slide));
       pages.push({ page, slide, state });
     }
   }

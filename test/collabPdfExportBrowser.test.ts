@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -59,7 +59,21 @@ describe.skipIf(!electronBinary)('collaboration PDF export', () => {
 
     // Two slides: one plain, one with a build — so 'final' is two pages and
     // 'every' is three, which is what the dialog's checkbox chooses between.
+    // Slide 1 also has a video: the print tab must show a still the server
+    // cut for it, never mount the video (Oct 2026: a 90-page talk's 61 videos
+    // all loading at once crashed Chromium).
     const deck = emptyDeck('PDF export deck');
+    await mkdir(join(deckDir, 'assets'), { recursive: true });
+    await copyFile(
+      join(__dirname, '..', 'decks', 'demo-deck', 'assets', 'testclip.mp4'),
+      join(deckDir, 'assets', 'clip.mp4'),
+    );
+    deck.slides[0].elements.push({
+      id: 'clip', type: 'video', x: 160, y: 400, w: 640, h: 360,
+      rot: 0, z: 2, opacity: 1, class: [], style: {},
+      src: 'assets/clip.mp4', fit: 'contain', autoplay: true, loop: true, muted: true,
+      controls: false, start: 0.5, end: null, poster: null, sourceBox: null,
+    });
     deck.slides[0].elements.push({
       id: 'title', type: 'text', x: 160, y: 100, w: 1600, h: 140,
       rot: 0, z: 1, opacity: 1, class: ['role-title'], style: {},
@@ -172,6 +186,8 @@ describe.skipIf(!electronBinary)('collaboration PDF export', () => {
       buttonDisabled: boolean;
       text: string;
       background: string;
+      videos: number;
+      stills: string[];
     }>(`(() => {
       const pages = [...document.querySelectorAll('.pdf-page')];
       return {
@@ -185,7 +201,11 @@ describe.skipIf(!electronBinary)('collaboration PDF export', () => {
         status: document.getElementById('status').textContent,
         buttonDisabled: document.getElementById('print').disabled,
         text: document.body.textContent,
-        background: getComputedStyle(pages[0].querySelector('.slide')).backgroundColor
+        background: getComputedStyle(pages[0].querySelector('.slide')).backgroundColor,
+        videos: document.querySelectorAll('video').length,
+        stills: [...document.querySelectorAll('img')]
+          .filter((image) => image.naturalWidth > 0)
+          .map((image) => image.getAttribute('src')),
       };
     })()`), 'the print tab never finished rendering', (value) => (
       value.ready !== '' || value.error !== ''
@@ -208,6 +228,10 @@ describe.skipIf(!electronBinary)('collaboration PDF export', () => {
     expect(rendered.buttonDisabled).toBe(false);
     expect(rendered.status).toContain('3 pages ready');
     expect(rendered.printed).toBe(1);
+    expect(rendered.videos).toBe(0);
+    expect(rendered.stills).toEqual([
+      `/api/video-still?deck=${DECK_ID}&src=assets%2Fclip.mp4&t=0.5`,
+    ]);
   }, 90_000);
 });
 

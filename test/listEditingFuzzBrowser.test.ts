@@ -1,15 +1,18 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { electronBinary, eventually, wait } from './support/browserSession.js';
+import { electronBinary, eventually, textEditingState, wait } from './support/browserSession.js';
 import { extraFuzzSeeds } from './support/fuzzSeeds.js';
 import {
   BOX_DEFAULTS,
   CONTENT,
+  LEAVE_ROUTES,
   MOD,
   OTHER_CONTENT,
+  seenDifference,
   startListEditingSession,
   TEXT_BLOCKS,
   type BoxShape,
   type ListEditingSession,
+  type SeenLine,
   type TextRun,
 } from './support/listEditingSession.js';
 import {
@@ -50,6 +53,12 @@ import {
  * "- " becomes one bullet holding the text; indenting a selection moves the
  * items it covers and nothing else.
  *
+ * And it leaves the box -- Escape, a click on bare slide or on another box,
+ * often straight after Tab, Return or Backspace, before that edit has sealed
+ * -- and comes back, comparing what the box *shows* at each crossing. An
+ * empty bullet that turns up as editing ends is sound markup; one was
+ * reported from use long before any check here could see it.
+ *
  * `RUN_EXHAUSTIVE_LIST_FUZZ=1` runs every sweep case and a much longer walk,
  * `LIST_FUZZ_SEED=<n>` walks a different order, and `LIST_FUZZ_TRACE=1` prints
  * the box's markup before every step — the three knobs a failure needs.
@@ -61,7 +70,16 @@ const SEED = Number.parseInt(process.env.LIST_FUZZ_SEED ?? '', 10) || 9012026;
  * The LIST_FUZZ_SEED walk (or the fixed default) is the regression corpus;
  * FUZZ_SEED (CI's nightly exports the current date) walks extra seeds too.
  */
-const WALK_SEEDS = [...new Set([SEED, ...extraFuzzSeeds()])];
+const GIVEN_SEEDS = [...new Set([SEED, ...extraFuzzSeeds()])];
+/**
+ * The exhaustive run walks two more seeds from each one it is given: one walk
+ * a night left most of the vocabulary's combinations to chance. Each derived
+ * seed is printed in the test name and replays on its own, like any other:
+ * `LIST_FUZZ_SEED=2026102301`.
+ */
+const WALK_SEEDS = RUN_EXHAUSTIVE
+  ? [...new Set(GIVEN_SEEDS.flatMap((seed) => [seed, seed * 100 + 1, seed * 100 + 2]))]
+  : GIVEN_SEEDS;
 const DECK_ID = 'list-editing-fuzz';
 /**
  * The boxes the sweep and the walks run in. The shared box is so tall that no
@@ -161,9 +179,14 @@ async function inBox(shape: BoxShape, body: () => Promise<void>): Promise<void> 
   await session.shapeBox(shape);
   try {
     await body();
-  } finally {
-    await session.shapeBox(BOX_DEFAULTS);
+  } catch (error) {
+    // Put the box back for the next test, but report what the walk found.
+    // A walk that lost the box fails the restore too, and that error, thrown
+    // from a `finally`, replaced the one saying how (seed 20261021).
+    await session.shapeBox(BOX_DEFAULTS).catch(() => undefined);
+    throw error;
   }
+  await session.shapeBox(BOX_DEFAULTS);
 }
 
 const compact = (value: string) => value.replace(/\s+/g, '');
@@ -353,7 +376,8 @@ async function runWalk(seed: number, box: string): Promise<void> {
     'backspace at start', 'type', 'indent', 'outdent', 'undo',
     'other box', 'escape and re-enter', 'cut words', 'cut bullet', 'paste',
     'format and type', 'format and type', 'dash bullet', 'indent selection', 'outdent selection',
-    'line spacing',
+    'line spacing', 'leave and return', 'leave and return', 'indent first item', 'list lines',
+    'soft return', 'delete forward', 'type over lines', 'erase lines', 'indent within sub-item',
   ] as const;
   // The clipboard holds whatever the last cut put there; a paste before any
   // cut would paste another test's leftovers, which reproduces nothing.
@@ -430,6 +454,49 @@ async function runWalk(seed: number, box: string): Promise<void> {
       case 'line spacing':
         await lineSpacing(next, label);
         break;
+      case 'leave and return':
+        await leaveAndReturn(next, label);
+        break;
+      case 'indent first item':
+        await indentFirstItem(next, label);
+        break;
+      case 'list lines':
+        await listLines(next, label);
+        break;
+      case 'soft return': {
+        await moveCaret(next);
+        const items = (await session.blocksOf('li')).length;
+        const blocks = (await session.blocks()).length;
+        await session.cdp.chord('Enter', 'Enter', 13, SHIFT);
+        expect(compact(await session.text()), `${label}: Shift+Return changed the text`).toBe(before);
+        expect((await session.blocks()).length, `${label}: Shift+Return is a line break, not a new line`)
+          .toBe(blocks);
+        expect((await session.blocksOf('li')).length, `${label}: Shift+Return changed the items`).toBe(items);
+        break;
+      }
+      case 'delete forward': {
+        // Forward Delete at the end of a line joins the next line onto it.
+        await moveCaret(next, 'end');
+        const items = await session.blocksOf('li');
+        await session.cdp.key('Delete', 46);
+        const after = await session.blocksOf('li');
+        expect(compact(await session.text()), `${label}: joining two lines lost or invented characters`)
+          .toBe(before);
+        expect(after.length, `${label}: joining two lines added an item; ${await session.markup()}`)
+          .toBeLessThanOrEqual(items.length);
+        expect(after.filter((text) => text === '').length,
+          `${label}: joining two lines left a new empty bullet; ${await session.markup()}`)
+          .toBeLessThanOrEqual(items.filter((text) => text === '').length);
+        break;
+      }
+      case 'type over lines':
+      case 'erase lines':
+        await replaceAcrossLines(next, action === 'type over lines' ? `r${step}` : '', label);
+        if (action === 'type over lines') typed += 1;
+        break;
+      case 'indent within sub-item':
+        await indentWithinSubItem(label);
+        break;
       case 'undo':
         // The restoration oracle: undo must actually restore the previous
         // persisted state, and redo must re-reach the undone state.
@@ -455,6 +522,7 @@ async function runWalk(seed: number, box: string): Promise<void> {
           const r = range.getBoundingClientRect();
           return root.contains(document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2));
         })()`))) break;
+        const editing = await session.seenLines();
         await session.cdp.doubleClickText(OTHER_CONTENT, 'the other text box');
         await eventually(async () => session.cdp.evaluate<boolean>(
           `document.querySelector('${OTHER_CONTENT}')?.isContentEditable === true`,
@@ -466,6 +534,7 @@ async function runWalk(seed: number, box: string): Promise<void> {
         expect(otherText, `${label}: the nonce landed in the other box`).toContain(nonce);
         expect(await session.text(), `${label}: the nonce stayed out of the list box`)
           .not.toContain(nonce);
+        await expectSeen(editing, `${label}: editing the other box changed what the list box shows`);
         await session.edit();
         await moveCaret(next);
         expect(compact(await session.text()), `${label}: the excursion left the list box unchanged`)
@@ -508,17 +577,28 @@ async function runWalk(seed: number, box: string): Promise<void> {
         // Its first character, not its centre: a long walk grows the box down
         // over the other text box, whose paragraph then owns the centre point
         // (seed 20261013) -- the same overlap the 'other box' step skips.
-        await session.caretAt(await reachableGlyph(0));
+        await clickGlyph(0);
+        const editing = await session.seenLines();
         await session.cdp.key('Escape', 27);
         await eventually(async () => session.cdp.evaluate<boolean>(
           `document.querySelector('${CONTENT}')?.isContentEditable !== true`,
         ), `${label}: Escape did not leave text editing`);
+        await expectSeen(editing, `${label}: leaving the box changed what it shows`);
         await session.edit();
+        await expectSeen(editing, `${label}: editing the box again changed what it shows`);
         await moveCaret(next);
         expect(compact(await session.text()), `${label}: the round trip changed the list box`)
           .toBe(before);
         break;
       }
+    }
+    // Every step ends with the box being edited. A click that grabs a resize
+    // handle instead of placing a caret ends editing, and the next key then
+    // acts on the selected box: Backspace deletes it (seed 20261021).
+    const editingNow = await session.cdp.evaluate<boolean>(
+      `document.querySelector('${CONTENT}')?.isContentEditable === true`);
+    if (!editingNow) {
+      expect.fail(`${label}: the step left text editing; ${await textEditingState(session.cdp, CONTENT)}`);
     }
     await expectSound(label);
     const outline = await session.outline();
@@ -567,8 +647,8 @@ function caretBlockIndex(): Promise<number> {
     if (!root || !selection || selection.rangeCount === 0) return -1;
     const node = selection.getRangeAt(0).startContainer;
     const holder = node.nodeType === Node.TEXT_NODE ? node.parentElement : node;
-    const block = holder && holder.closest('li, p, div, td, th');
-    return block ? [...root.querySelectorAll('li, p, div, td, th')].indexOf(block) : -1;
+    const block = holder && holder.closest('${TEXT_BLOCKS}');
+    return block ? [...root.querySelectorAll('${TEXT_BLOCKS}')].indexOf(block) : -1;
   })()`);
 }
 
@@ -633,22 +713,30 @@ async function formatAndType(next: () => number, step: number, label: string): P
   if (switchOff) firstExpected[chosen[0]] = !firstExpected[chosen[0]];
   expect(flags(firstRun), `${label}: the word before Return changed its formatting`)
     .toBe(flags(firstExpected));
-  // The line Return opens is the next block after the typed word's own —
-  // past any block nested inside that item *before* the word (an item can
-  // hold a paragraph ahead of its text; the list walk builds such items).
-  const nestedBefore = await session.cdp.evaluate<number>(`(() => {
+  // The line Return opens comes right after the typed word's: the second
+  // word is in another block, with no words between the two. Counting
+  // blocks instead went wrong wherever an item holds a paragraph: Return
+  // there opens an item holding one, two blocks on (seed 20261016).
+  const opened = await session.cdp.evaluate<string>(`(() => {
     const root = document.querySelector('${CONTENT}');
     const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    let from = null;
+    let to = null;
     for (let node = walker.nextNode(); node; node = walker.nextNode()) {
-      if (!node.data.includes(${JSON.stringify(first)})) continue;
-      const block = node.parentElement.closest('${TEXT_BLOCKS}');
-      return [...block.querySelectorAll('${TEXT_BLOCKS}')].filter((inner) =>
-        inner.compareDocumentPosition(node) & Node.DOCUMENT_POSITION_FOLLOWING).length;
+      if (!from && node.data.includes(${JSON.stringify(first)})) from = node;
+      if (node.data.includes(${JSON.stringify(second)})) to = node;
     }
-    return 0;
+    if (!from || !to) return 'a word is missing';
+    if (from.parentElement.closest('${TEXT_BLOCKS}') === to.parentElement.closest('${TEXT_BLOCKS}')) {
+      return 'both words are on one line';
+    }
+    const between = document.createRange();
+    between.setStart(from, from.data.indexOf(${JSON.stringify(first)}) + ${first.length});
+    between.setEnd(to, to.data.indexOf(${JSON.stringify(second)}));
+    const words = between.toString().replace(/[\\s\\u200b\\u2060]+/g, '');
+    return words ? 'words between them: ' + words : '';
   })()`);
-  expect(secondRun.block, `${label}: Return did not open a new line`)
-    .toBe(firstRun.block + 1 + nestedBefore);
+  expect(opened, `${label}: Return did not open the next line; ${await session.markup()}`).toBe('');
   expect(flags(secondRun), `${label}: ${JSON.stringify(second)} typed on the line Return opened `
     + `${switchOff ? `after switching ${chosen[0]} off` : ''}`).toBe(flags(expected));
 }
@@ -715,7 +803,7 @@ async function selectAcrossLevelBoundary(): Promise<boolean> {
   return session.cdp.evaluate<boolean>(`(() => {
     const root = document.querySelector('${CONTENT}');
     if (!root) return false;
-    const items = [...root.querySelectorAll('li')];
+    const items = [...root.querySelectorAll('li:not([data-list-holder])')];
     const depth = (item) => {
       let levels = 0;
       for (let node = item.parentElement; node && node !== root; node = node.parentElement) {
@@ -746,6 +834,9 @@ async function selectAcrossLevelBoundary(): Promise<boolean> {
       const range = document.createRange();
       range.setStart(head, 0);
       range.setEnd(tail, tail.data.length);
+      // Focus where a person's drag would leave it: a list choice before
+      // left it in the inspector, and Tab there walks the page's controls.
+      root.focus({ preventScroll: true });
       const selection = window.getSelection();
       selection.removeAllRanges();
       selection.addRange(range);
@@ -770,9 +861,15 @@ async function shiftSelection(next: () => number, direction: 'in' | 'out', label
   // indent the second item, which is the gesture an author uses to make a
   // sub-bullet -- and only then is the pair selected and shifted.
   if (!(await selectAcrossLevelBoundary())) {
-    await session.caretIn(itemsBefore[1], 'end');
-    await session.cdp.key('Tab', 9);
-    await wait(60);
+    // An item with words to click: an empty one has no glyph to aim at.
+    const second = itemsBefore.slice(1).find((text) => text.length > 0);
+    if (second !== undefined) {
+      await clickGlyph(await session.cdp.evaluate<number>(
+        `document.querySelector('${CONTENT}').textContent.indexOf(${JSON.stringify(second)})`));
+      await session.cdp.key('End', 35);
+      await session.cdp.key('Tab', 9);
+      await wait(60);
+    }
     if (!(await selectAcrossLevelBoundary())) {
       // Still flat (the item refused to indent): straddle two ordinary lines.
       await moveCaret(next, 'start');
@@ -812,18 +909,33 @@ const LINE_SPACINGS = ['1', '1.25', '1.6', '2'];
 
 /** Type a value into a Props number field and commit it with Enter. */
 async function setNumberField(label: string, value: string): Promise<void> {
-  const id = `fuzz-${label.replace(/\s+/g, '-').toLowerCase()}`;
-  const found = await session.cdp.evaluate<boolean>(`(() => {
+  // Where the field is, not the field itself: the server's echo of the last
+  // edit can rebuild the panel at any moment, and a node looked up again
+  // after that is gone (nightly seed 20261020); its replacement sits at the
+  // same place.
+  const point = await session.cdp.evaluate<{ x: number; y: number } | null>(`(() => {
     const field = [...document.querySelectorAll('#inspector .field-number')]
       .find((node) => node.querySelector('span')?.textContent === ${JSON.stringify(label)});
     const input = field?.querySelector('input');
-    if (!input) return false;
-    input.id = ${JSON.stringify(id)};
-    return true;
+    if (!input) return null;
+    input.scrollIntoView({ block: 'nearest' });
+    const r = input.getBoundingClientRect();
+    return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
   })()`);
-  expect(found, `no "${label}" field in Props`).toBe(true);
-  await session.cdp.click(`#${id}`, label);
-  await session.cdp.evaluate(`document.querySelector('#${id}').select()`);
+  expect(point, `no "${label}" field in Props`).not.toBeNull();
+  await session.cdp.clickAt(point!.x, point!.y);
+  // The click can end in a rebuild of the panel (the server's echo of the
+  // last edit lands), which replaces the field tagged above with a new one
+  // and hands focus to it, as it does for a person. Select whatever holds
+  // the focus (nightly seeds 20261016, 20261019, 20261022).
+  const focused = await session.cdp.evaluate<string | null>(`(() => {
+    const input = document.activeElement;
+    if (!(input instanceof HTMLInputElement)) return null;
+    const name = input.closest('.field-number')?.querySelector('span')?.textContent ?? null;
+    if (name === ${JSON.stringify(label)}) input.select();
+    return name;
+  })()`);
+  expect(focused, `clicking "${label}" did not leave that field focused`).toBe(label);
   await session.cdp.typeKeys(value);
   await session.cdp.key('Enter', 13);
   await wait(120);
@@ -921,7 +1033,7 @@ async function runUndoCheckpoint(next: () => number, label: string): Promise<voi
   }
   // Its first character: in a short box the text's centre sits below the
   // box, on its resize handle.
-  if ((await session.text()).length > 0) await session.caretAt(await reachableGlyph(0));
+  if ((await session.text()).length > 0) await clickGlyph(0);
   else await cdp.click(CONTENT, 'the text box before undoing');
   await session.undo();
   const undone = await deckSnapshotEventually(cdp, port, DECK_ID, before);
@@ -943,6 +1055,327 @@ describe.skipIf(electronBinary)('list editing under a sweep of real edits (skipp
 });
 
 /** Click into a random paragraph or item, then go to one end of it. */
+/**
+ * The box must show `before` again: the same lines, markers and places. Read
+ * until it does -- leaving re-renders the box a frame or two later -- and
+ * fail with both pictures if it never does.
+ */
+async function expectSeen(before: SeenLine[], label: string): Promise<void> {
+  let difference: string | null = null;
+  try {
+    await eventually(async () => {
+      difference = seenDifference(before, await session.seenLines());
+      return difference === null;
+    }, label, (same) => same, 3_000);
+  } catch {
+    expect.fail(`${label}:\n${difference}\nmarkup: ${await session.markup()}`);
+  }
+}
+
+/** The lines that hold words, top to bottom: what Tab and a list style must keep. */
+const wordLines = (lines: SeenLine[]) => lines.filter((line) => line.text).map((line) => line.text);
+
+const STRUCTURAL_KEYS = ['Tab', 'shift-Tab', 'Return', 'Backspace'] as const;
+
+async function pressStructuralKey(key: typeof STRUCTURAL_KEYS[number]): Promise<void> {
+  if (key === 'Tab') await session.cdp.key('Tab', 9);
+  if (key === 'shift-Tab') await session.cdp.chord('Tab', 'Tab', 9, SHIFT);
+  if (key === 'Return') await session.cdp.key('Enter', 13);
+  if (key === 'Backspace') await session.cdp.key('Backspace', 8);
+}
+
+/**
+ * Stop editing the box the way a person does and come back. What the box
+ * shows must not change at either crossing. Half the time the box is left
+ * straight after a key that changes its structure, before that edit has
+ * sealed: leaving is when the editor normalises what it has, and an empty
+ * bullet that turned up there (reported, with no way to reproduce it) is
+ * invisible to every soundness check -- an empty bullet is a sound thing.
+ */
+async function leaveAndReturn(next: () => number, label: string): Promise<void> {
+  const route = LEAVE_ROUTES[Math.floor(next() * LEAVE_ROUTES.length)];
+  const key = next() < 0.5 ? STRUCTURAL_KEYS[Math.floor(next() * STRUCTURAL_KEYS.length)] : null;
+  await moveCaret(next, key === 'Backspace' ? 'start' : key === 'Return' ? 'end' : 'middle');
+  if (key) await pressStructuralKey(key);
+  const how = `leaving by ${route}${key ? ` straight after ${key}` : ''}`;
+  const editing = await session.seenLines();
+  await session.leaveEditing(route);
+  await expectSeen(editing, `${label}: ${how} changed what the box shows`);
+  await session.edit();
+  await expectSeen(editing, `${label}: editing the box again after ${how} changed what it shows`);
+  await moveCaret(next);
+}
+
+/** Flat text offset of the first glyph of each block that holds words, by block index. */
+async function firstGlyphs(): Promise<Array<{ index: number; offset: number; first: boolean }>> {
+  return session.cdp.evaluate(`(() => {
+    const root = document.querySelector('${CONTENT}');
+    const blocks = [...root.querySelectorAll('${TEXT_BLOCKS}')];
+    const out = [];
+    let flat = 0;
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+      const at = node.data.search(/[^\\s\\u00a0\\u200b\\u2060]/);
+      const block = node.parentElement.closest('${TEXT_BLOCKS}');
+      const index = blocks.indexOf(block);
+      if (at >= 0 && index >= 0 && !out.some((entry) => entry.index === index)) {
+        out.push({
+          index,
+          offset: flat + at,
+          // The first item of its list: nothing above it to hang under.
+          first: block.tagName === 'LI' && !block.previousElementSibling
+            && /^(?:UL|OL)$/.test(block.parentElement?.tagName ?? ''),
+        });
+      }
+      flat += node.data.length;
+    }
+    return out;
+  })()`);
+}
+
+/**
+ * Tab on the first item of a list, aimed at: a random caret lands there
+ * rarely, and it is the one item with nothing above it to hang under. Tab
+ * only ever moves lines sideways, so the lines keep their words and no line
+ * comes or goes; and half the time the box is left at once, which is where
+ * the reported empty bullet appeared.
+ */
+async function indentFirstItem(next: () => number, label: string): Promise<void> {
+  let firsts = (await firstGlyphs()).filter((entry) => entry.first);
+  if (firsts.length === 0) {
+    if ((await session.text()).length === 0) return;
+    await session.cdp.chord('a', 'KeyA', 65, MOD, ['selectAll']);
+    await session.chooseList(next() < 0.5 ? 'Bulleted' : 'Numbered');
+    firsts = (await firstGlyphs()).filter((entry) => entry.first);
+    if (firsts.length === 0) return;
+  }
+  const target = firsts[Math.floor(next() * firsts.length)];
+  // Only a glyph a click really reaches; another line's would aim elsewhere.
+  const glyph = await reachableGlyph(target.offset);
+  if (glyph !== target.offset) return;
+  await session.caretAt(glyph);
+  await session.cdp.key('Home', 36);
+  const before = await session.seenLines();
+  await session.cdp.key('Tab', 9);
+  const after = await session.seenLines();
+  const picture = `${seenDifference(before, after) ?? 'no change'}\nmarkup: ${await session.markup()}`;
+  expect(wordLines(after), `${label}: Tab changed the lines; ${picture}`).toEqual(wordLines(before));
+  expect(after.length, `${label}: Tab added or took away a line; ${picture}`).toBe(before.length);
+  if (next() < 0.5) {
+    const route = LEAVE_ROUTES[Math.floor(next() * LEAVE_ROUTES.length)];
+    await session.leaveEditing(route);
+    await expectSeen(after, `${label}: leaving by ${route} straight after Tab changed what the box shows`);
+    await session.edit();
+    await expectSeen(after, `${label}: editing the box again changed what it shows`);
+    await moveCaret(next);
+  }
+}
+
+/**
+ * A list style chosen for one to three lines, not the whole box. The lines
+ * keep their words and their order, whatever becomes of the lists around
+ * them.
+ */
+async function listLines(next: () => number, label: string): Promise<void> {
+  if ((await session.text()).length === 0) return;
+  await moveCaret(next, 'start');
+  const extra = Math.floor(next() * 3);
+  for (let line = 0; line < extra; line += 1) {
+    await session.cdp.chord('ArrowDown', 'ArrowDown', 40, SHIFT);
+  }
+  await session.cdp.chord('End', 'End', 35, SHIFT);
+  const style = (['Bulleted', 'Numbered', 'None'] as const)[Math.floor(next() * 3)];
+  const textBefore = compact(await session.text());
+  const before = await session.seenLines();
+  await session.chooseList(style);
+  const after = await session.seenLines();
+  expect(compact(await session.text()), `${label}: ${style} changed the text`).toBe(textBefore);
+  expect(wordLines(after), `${label}: ${style} on ${extra + 1} line(s) joined or split lines; `
+    + `${seenDifference(before, after)}\nmarkup: ${await session.markup()}`).toEqual(wordLines(before));
+}
+
+/**
+ * A selection from one glyph to another, often lines apart, typed over or
+ * erased. The text that results is exactly computable, and joining lines
+ * never adds an item.
+ */
+async function replaceAcrossLines(next: () => number, word: string, label: string): Promise<void> {
+  const flat = await session.cdp.evaluate<string>(`document.querySelector('${CONTENT}')?.textContent ?? ''`);
+  if (compact(flat).length < 2) return;
+  const a = await reachableGlyph(Math.floor(next() * flat.length));
+  const b = await reachableGlyph(Math.floor(next() * flat.length));
+  if (a === b || a < 0 || b < 0) return;
+  // Both points first, then the clicks: the first click can seal a pending
+  // typing style, which takes its invisible sentinel out of the text and
+  // shifts every offset after it.
+  const points = await session.cdp.evaluate<Array<{ x: number; y: number }> | null>(`(() => {
+    const root = document.querySelector('${CONTENT}');
+    const point = (offset, at) => {
+      const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+      let flat = 0;
+      for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+        if (offset < flat + node.data.length) {
+          const range = document.createRange();
+          range.setStart(node, offset - flat);
+          range.setEnd(node, offset - flat + 1);
+          const r = range.getBoundingClientRect();
+          return { x: r.left + r.width * at, y: r.top + r.height / 2 };
+        }
+        flat += node.data.length;
+      }
+      return null;
+    };
+    const from = point(${Math.min(a, b)}, 0.15);
+    const to = point(${Math.max(a, b)}, 0.85);
+    return from && to ? [from, to] : null;
+  })()`);
+  if (!points) return;
+  const items = await session.blocksOf('li');
+  await session.cdp.selectBetween(points[0], points[1]);
+  // What the clicks selected, in the text as it now stands: that is what
+  // the key replaces, and what the oracle works from.
+  const selected = await session.cdp.evaluate<{
+    text: string; start: number; end: number; continues: boolean;
+  } | null>(`(() => {
+    const root = document.querySelector('${CONTENT}');
+    const range = window.getSelection()?.rangeCount ? window.getSelection().getRangeAt(0) : null;
+    if (!range || range.collapsed || !root.contains(range.commonAncestorContainer)) return null;
+    const offsetOf = (container, offset) => {
+      const before = document.createRange();
+      before.setStart(root, 0);
+      before.setEnd(container, offset);
+      return before.toString().length;
+    };
+    const text = root.textContent;
+    const start = offsetOf(range.startContainer, range.startOffset);
+    const end = offsetOf(range.endContainer, range.endOffset);
+    const blockAt = (offset) => {
+      const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+      let flat = 0;
+      for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+        if (offset < flat + node.data.length) return node.parentElement.closest('${TEXT_BLOCKS}');
+        flat += node.data.length;
+      }
+      return null;
+    };
+    // Whether the line the selection ends on goes on past it: then what
+    // follows must end up on the caret's line, joined to it.
+    const rest = text.slice(end).search(/[^\\s\\u200b\\u2060]/);
+    const continues = end > 0 && rest >= 0 && blockAt(end - 1) !== null && blockAt(end - 1) === blockAt(end + rest);
+    return { text, start, end, continues };
+  })()`);
+  if (!selected) return;
+  if (word) await session.cdp.typeKeys(word);
+  else await session.cdp.key('Backspace', 8);
+  const after = await session.blocksOf('li');
+  const { text, start, end } = selected;
+  const picture = `${JSON.stringify(text.slice(start, end))} ${word ? `typed over with ${word}` : 'erased'}; `
+    + `${await session.markup()}`;
+  // The sentinel a pending typing style leaves is no character, and typing
+  // over the selection rightly takes it away.
+  const words = (value: string) => compact(value).replace(/[\u200b\u2060]/g, '');
+  expect(words(await session.text()), `${label}: ${picture}`)
+    .toBe(words(text.slice(0, start) + word + text.slice(end)));
+  expect(after.length, `${label}: replacing a selection added an item; ${picture}`)
+    .toBeLessThanOrEqual(items.length);
+  if (selected.continues) {
+    // The first character after the caret is on the caret's own line.
+    const joined = await session.cdp.evaluate<boolean>(`(() => {
+      const range = window.getSelection()?.getRangeAt(0);
+      if (!range) return false;
+      const caretBlock = (range.startContainer.nodeType === Node.TEXT_NODE
+        ? range.startContainer.parentElement : range.startContainer).closest('${TEXT_BLOCKS}');
+      const walker = document.createTreeWalker(document.querySelector('${CONTENT}'), NodeFilter.SHOW_TEXT);
+      let node = walker.nextNode();
+      while (node && !(node === range.startContainer
+        || (range.startContainer.compareDocumentPosition(node) & Node.DOCUMENT_POSITION_FOLLOWING))) {
+        node = walker.nextNode();
+      }
+      for (; node; node = walker.nextNode()) {
+        const from = node === range.startContainer ? range.startOffset : 0;
+        if (/[^\\s\\u200b\\u2060]/.test(node.data.slice(from))) {
+          return node.parentElement.closest('${TEXT_BLOCKS}') === caretBlock;
+        }
+      }
+      return false;
+    })()`);
+    expect(joined, `${label}: the rest of the last line did not join the caret's line; ${picture}`).toBe(true);
+  }
+}
+
+/** Every item that holds words, top to bottom, with its nesting depth. */
+async function itemDepths(): Promise<Array<{ text: string; depth: number; offset: number; under: number[] }>> {
+  return session.cdp.evaluate(`(() => {
+    const root = document.querySelector('${CONTENT}');
+    const own = (item) => {
+      const clone = item.cloneNode(true);
+      clone.querySelectorAll('ul, ol').forEach((nested) => nested.remove());
+      return (clone.textContent ?? '').replace(/[\\s\\u00a0\\u200b\\u2060]+/g, '');
+    };
+    const depth = (item) => {
+      let levels = 0;
+      for (let node = item.parentElement; node && node !== root; node = node.parentElement) {
+        if (/^(?:UL|OL)$/.test(node.tagName)) levels += 1;
+      }
+      return levels;
+    };
+    const offsets = new Map();
+    let flat = 0;
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+      const item = node.parentElement.closest('li');
+      const at = node.data.search(/[^\\s\\u00a0\\u200b\\u2060]/);
+      if (item && at >= 0 && !offsets.has(item)) offsets.set(item, flat + at);
+      flat += node.data.length;
+    }
+    const items = [...root.querySelectorAll('li')].filter((item) => own(item) && offsets.has(item));
+    // The items that move with an item: inside it, or in the sub-list
+    // Chromium writes as its sibling.
+    const sub = (item) => {
+      const next = item.nextElementSibling;
+      return next && /^(?:UL|OL)$/.test(next.tagName) ? next : null;
+    };
+    return items.map((item) => ({
+      text: own(item),
+      depth: depth(item),
+      offset: offsets.get(item),
+      under: items.flatMap((other, index) => other !== item
+        && (item.contains(other) || sub(item)?.contains(other)) ? [index] : []),
+    }));
+  })()`);
+}
+
+/**
+ * Part of a sub-item's words selected, then Tab: that item moves in one
+ * level, with the items under it, and nothing else moves. The range lies
+ * inside the parent item as well, so a parent counted as touched -- and
+ * moved, carrying its child along -- is the shape aimed at.
+ */
+async function indentWithinSubItem(label: string): Promise<void> {
+  let items = await itemDepths();
+  if (!items.some((item) => item.depth > 1)) {
+    // Make one, the way an author does: Tab on the second item of a list.
+    if (items.length < 2) return;
+    await clickGlyph(items[1].offset);
+    await session.cdp.key('Tab', 9);
+    items = await itemDepths();
+  }
+  const index = items.findIndex((item) => item.depth > 1 && item.text.length >= 2);
+  if (index < 0) return;
+  const target = items[index];
+  if (await reachableGlyph(target.offset) !== target.offset) return;
+  await session.cdp.selectTextRange(CONTENT, target.offset, target.offset + 2, 'part of a sub-item');
+  await session.cdp.key('Tab', 9);
+  const after = await itemDepths();
+  const expected = items.map((item, at) => ({
+    text: item.text,
+    depth: at === index || target.under.includes(at) ? item.depth + 1 : item.depth,
+  }));
+  expect(after.map(({ text, depth }) => ({ text, depth })),
+    `${label}: Tab with "${target.text.slice(0, 2)}" of "${target.text}" selected; ${await session.markup()}`)
+    .toEqual(expected);
+}
+
 async function moveCaret(next: () => number, where: 'start' | 'end' | 'middle' = 'middle') {
   const length = await session.cdp.evaluate<number>(
     `(document.querySelector('${CONTENT}')?.textContent ?? '').length`);
@@ -950,11 +1383,11 @@ async function moveCaret(next: () => number, where: 'start' | 'end' | 'middle' =
     // No glyph to click, but the caret still has to be in the box: the last
     // list choice left focus in the inspector's select, and the next typed
     // word would land there rather than in the text (seed 9012026, step 123).
-    await session.cdp.click(CONTENT, 'the empty text box');
+    await session.clickIntoBox('the empty text box');
     return;
   }
   const chosen = Math.min(length - 1, Math.floor(next() * length));
-  await session.caretAt(await reachableGlyph(chosen));
+  await clickGlyph(chosen);
   if (where === 'start') await session.cdp.key('Home', 36);
   if (where === 'end') await session.cdp.key('End', 35);
 }
@@ -969,6 +1402,7 @@ async function moveCaret(next: () => number, where: 'start' | 'end' | 'middle' =
 async function reachableGlyph(chosen: number): Promise<number> {
   return session.cdp.evaluate<number>(`(() => {
     const root = document.querySelector('${CONTENT}');
+    const frame = root.closest('.element').getBoundingClientRect();
     const glyphs = [];
     const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
     for (let node = walker.nextNode(); node; node = walker.nextNode()) {
@@ -982,11 +1416,28 @@ async function reachableGlyph(chosen: number): Promise<number> {
       range.setEnd(node, at + 1);
       const rect = range.getBoundingClientRect();
       if (rect.width <= 0 || rect.height <= 0) continue;
-      const hit = document.elementFromPoint(rect.left + rect.width * 0.2, rect.top + rect.height / 2);
+      const x = rect.left + rect.width * 0.2;
+      const y = rect.top + rect.height / 2;
+      // Text running out of a short box is painted past its frame, but the
+      // canvas hit-tests the frame: a click there lands on the slide and
+      // ends editing, and the next Backspace deleted the box (seed 2026101501).
+      if (x <= frame.left || x >= frame.right || y <= frame.top || y >= frame.bottom) continue;
+      const hit = document.elementFromPoint(x, y);
       if (hit && root.contains(hit)) return index;
     }
-    return ${chosen};
+    return -1;
   })()`);
+}
+
+/**
+ * Put the caret at glyph `chosen`, or the first one after it that a click
+ * reaches; with none in reach (the lines inside a short box's frame empty),
+ * click the box's text where a click lands in it.
+ */
+async function clickGlyph(chosen: number): Promise<void> {
+  const glyph = await reachableGlyph(chosen);
+  if (glyph >= 0) await session.caretAt(glyph);
+  else await session.clickIntoBox('no glyph in reach');
 }
 
 async function runSweepCase({ kind, length, at, route }: SweepCase, box: string): Promise<void> {

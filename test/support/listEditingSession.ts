@@ -38,6 +38,27 @@ export const OTHER_CONTENT = `#canvas [data-element-id="${OTHER_TEXT_ID}"] .text
 export const OTHER_HTML = '<p>other box</p>';
 export const MOD = process.platform === 'darwin' ? 4 : 2;
 
+/** The list box as the deck is created with it (see `startListEditingSession`). */
+const LIST_BOX = {
+  id: TEXT_ID, type: 'text', x: 100, y: 100, w: 1720, h: 860,
+  rot: 0, z: 1, opacity: 1, class: ['role-body'], style: {},
+  html: '<p>Text</p>', align: 'left', valign: 'top',
+};
+
+/**
+ * The list box in a deck, put back first if a test lost it: a walk that
+ * deletes the box has failed already, and every later test failing on the
+ * missing box only buried what it found (seed 2026101501).
+ */
+const FIXTURE_BOX = `((deck) => {
+  let element = deck.slides[0].elements.find((candidate) => candidate.id === ${JSON.stringify(TEXT_ID)});
+  if (!element) {
+    element = ${JSON.stringify(LIST_BOX)};
+    deck.slides[0].elements.push(element);
+  }
+  return element;
+})`;
+
 /**
  * A readable picture of the block structure: one line per top-level block,
  * a header line for each list so that two adjacent lists can never look like
@@ -56,6 +77,14 @@ const OUTLINE = `(root) => {
     const start = list.getAttribute('start');
     out.push('  '.repeat(depth) + list.tagName.toLowerCase() + (start ? '@' + start : ''));
     for (const item of [...list.children]) {
+      if (item.hasAttribute('data-list-holder')) {
+        // An item that only holds an indented list draws no line of its own
+        // (the first item of a list, indented): its lists are what is seen.
+        for (const child of [...item.children]) {
+          if (/^(?:UL|OL)$/.test(child.tagName)) walk(child, depth + 1);
+        }
+        continue;
+      }
       if (item.tagName !== 'LI') {
         // A sub-list Chromium wrote as a sibling of the items. It is marked,
         // and then walked like any other: an empty item inside it is an
@@ -78,8 +107,11 @@ const OUTLINE = `(root) => {
   return out;
 }`;
 
-/** The blocks an author puts a caret in; the nearest one holds the caret. */
-export const TEXT_BLOCKS = 'li, p, div, td, th';
+/**
+ * The blocks an author puts a caret in; the nearest one holds the caret. An
+ * item that only holds an indented list is not one: it draws no line.
+ */
+export const TEXT_BLOCKS = 'li:not([data-list-holder]), p, div, td, th';
 
 /** Nested lists: the block holding a caret is always the nearest match. */
 export const CARET_BLOCKS = TEXT_BLOCKS;
@@ -121,6 +153,168 @@ const OWN_TEXT = `((block) => {
 
 /** One character with a glyph box, typed to find out where text lands. */
 const PROBE_CHARACTER = 'x';
+
+/**
+ * A point where a click reaches the list box, as the canvas hit-tests it:
+ * inside the box's frame -- text running out of a short box is painted, but
+ * a click on it lands on the slide -- and clear of the resize handles a
+ * selected box puts up: in a short box the first glyph sits right on the
+ * top-left one, and an empty box overflowing with blank lines centres on the
+ * bottom one. A glyph that is both, or failing that (a box whose lines are
+ * empty, or whose text all sits in a corner) a bare point: anywhere in the
+ * frame for a double-click, which enters editing there, but on the text
+ * itself for a click while editing -- the empty part of a box below its
+ * lines is the box, and a click there ends editing.
+ */
+const REACHABLE_POINT = `((onText) => {
+  const root = document.querySelector('${CONTENT}');
+  const node = root?.closest('.element');
+  if (!root || !node) return null;
+  const box = node.getBoundingClientRect();
+  const text = root.getBoundingClientRect();
+  const handles = [0, 0.5, 1].flatMap((fx) => [0, 0.5, 1]
+    .filter((fy) => fx !== 0.5 || fy !== 0.5)
+    .map((fy) => [box.left + box.width * fx, box.top + box.height * fy]));
+  const reaches = (x, y) => x > box.left + 2 && x < box.right - 2
+    && y > box.top + 2 && y < box.bottom - 2
+    && handles.every(([hx, hy]) => Math.hypot(hx - x, hy - y) > 20)
+    && (onText ? root : node).contains(document.elementFromPoint(x, y));
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  for (let text = walker.nextNode(); text; text = walker.nextNode()) {
+    for (let i = 0; i < text.data.length; i++) {
+      if (/\\s/.test(text.data[i])) continue;
+      const range = document.createRange();
+      range.setStart(text, i);
+      range.setEnd(text, i + 1);
+      const r = range.getBoundingClientRect();
+      const x = r.left + r.width / 2;
+      const y = r.top + r.height / 2;
+      if (r.width > 0 && reaches(x, y)) return { x, y };
+    }
+  }
+  // Where the text and the frame overlap: lines run past a short box's
+  // frame, and only the part inside it takes a click.
+  const area = onText
+    ? {
+      left: Math.max(text.left, box.left),
+      top: Math.max(text.top, box.top),
+      width: Math.min(text.right, box.right) - Math.max(text.left, box.left),
+      height: Math.min(text.bottom, box.bottom) - Math.max(text.top, box.top),
+    }
+    : box;
+  for (const fy of [0.5, 0.3, 0.7]) {
+    for (const fx of [0.25, 0.75, 0.4, 0.6]) {
+      const x = area.left + area.width * fx;
+      const y = area.top + area.height * fy;
+      if (reaches(x, y)) return { x, y };
+    }
+  }
+  return null;
+})`;
+
+/** One line of a box as a reader sees it; see `ListEditingSession.seenLines`. */
+/**
+ * The ways a person stops editing a box: Escape (once, which keeps the box
+ * selected, or twice), a click on bare slide, or a click on another box.
+ */
+export type LeaveRoute = 'escape' | 'escape twice' | 'slide' | 'other box';
+export const LEAVE_ROUTES: LeaveRoute[] = ['escape', 'escape twice', 'slide', 'other box'];
+
+export interface SeenLine {
+  /** The line's top, in the slide's own pixels below the top of the box's text. */
+  top: number;
+  /** The markers drawn on it: `•`, `-`, a number such as `2.`, or `*` for a browser marker. */
+  markers: string;
+  /** Its glyphs, whitespace dropped. */
+  text: string;
+}
+
+/**
+ * The box line by line, from what is painted rather than from the markup:
+ * leaving editing re-renders the box from the stored html, whose markup is
+ * legitimately not the live surface's (Chromium's sibling sub-lists are
+ * repaired on the way), so only the picture can be compared. Numbers are
+ * worked out the way CSS counts `list-item`, which the page cannot be asked.
+ */
+const SEEN_LINES = `((selector) => {
+  const root = document.querySelector(selector);
+  if (!root) return null;
+  const origin = root.getBoundingClientRect();
+  const scale = origin.width / (root.offsetWidth || 1);
+  const numbers = new Map();
+  for (const list of root.querySelectorAll('ol')) {
+    let count = (Number.parseInt(list.getAttribute('start') ?? '', 10) || 1) - 1;
+    for (const item of list.children) {
+      if (item.tagName !== 'LI' || getComputedStyle(item).display !== 'list-item') continue;
+      const value = Number.parseInt(item.getAttribute('value') ?? '', 10);
+      const step = /list-item\\s+(-?\\d+)/.exec(getComputedStyle(item).counterIncrement);
+      count = Number.isFinite(value) ? value : count + (step ? Number(step[1]) : 1);
+      numbers.set(item, count);
+    }
+  }
+  const rows = [];
+  const range = document.createRange();
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+    for (let at = 0; at < node.data.length; at += 1) {
+      if (/[\\s\\u00a0\\u200b\\u2060]/.test(node.data[at])) continue;
+      range.setStart(node, at);
+      range.setEnd(node, at + 1);
+      const rect = range.getBoundingClientRect();
+      if (rect.height <= 0) continue;
+      const middle = (rect.top + rect.bottom) / 2;
+      const row = rows.find((candidate) => middle >= candidate.top && middle <= candidate.bottom);
+      if (row) {
+        row.text += node.data[at];
+        row.top = Math.min(row.top, rect.top);
+        row.bottom = Math.max(row.bottom, rect.bottom);
+      } else {
+        rows.push({ top: rect.top, bottom: rect.bottom, markers: [], text: node.data[at] });
+      }
+    }
+  }
+  for (const item of root.querySelectorAll('li')) {
+    const before = getComputedStyle(item, '::before');
+    const own = getComputedStyle(item);
+    let marker = '';
+    if (before.content && before.content !== 'none' && before.display !== 'none') {
+      if (before.content.includes('counter')) marker = (numbers.get(item) ?? '?') + '.';
+      else if (before.content === '""') marker = before.backgroundImage !== 'none' ? '•' : '';
+      else marker = before.content.replace(/^"|"$/g, '');
+    } else if (own.listStyleType !== 'none' && getComputedStyle(item, '::marker').content !== '""') {
+      marker = '*';
+    }
+    if (!marker) continue;
+    const box = item.getBoundingClientRect();
+    const top = box.top + (Number.parseFloat(own.paddingTop) || 0) * scale;
+    const line = (Number.parseFloat(own.lineHeight) || Number.parseFloat(own.fontSize) * 1.2) * scale;
+    const row = rows.find((candidate) => top + line / 2 >= candidate.top && top + line / 2 <= candidate.bottom);
+    if (row) row.markers.push(marker);
+    else rows.push({ top, bottom: top + line, markers: [marker], text: '' });
+  }
+  rows.sort((a, b) => a.top - b.top);
+  return rows.map((row) => ({
+    top: Math.round((row.top - origin.top) / scale),
+    markers: row.markers.join(' '),
+    text: row.text,
+  }));
+})`;
+
+/**
+ * How two pictures of a box differ, or null when a reader would see the same
+ * lines: the same text and markers on each, no line more or less, and every
+ * line within `tolerance` slide pixels of where it was.
+ */
+export function seenDifference(before: SeenLine[], after: SeenLine[], tolerance = 2): string | null {
+  const show = (lines: SeenLine[]) => lines
+    .map((line) => `${line.top}: ${line.markers ? `${line.markers} ` : ''}${line.text}`).join(' | ');
+  const differs = before.length !== after.length || before.some((line, index) => (
+    line.text !== after[index].text
+    || line.markers !== after[index].markers
+    || Math.abs(line.top - after[index].top) > tolerance
+  ));
+  return differs ? `before: ${show(before)}\n after: ${show(after)}` : null;
+}
 
 /**
  * Chromium's own list-editing output, legal in the live box and never in what
@@ -313,6 +507,8 @@ export interface ListEditingSession {
   renderDivergences(): Promise<string[]>;
   /** Enter text editing with a real double-click. */
   edit(): Promise<void>;
+  /** A real click at a point of the box that a click reaches (see `REACHABLE_POINT`). */
+  clickIntoBox(label: string): Promise<void>;
   /** Click the glyph at a flat text offset, putting a real caret there. */
   caretAt(offset: number): Promise<void>;
   /** Click into the first item/paragraph whose text starts with `text`. */
@@ -335,6 +531,19 @@ export interface ListEditingSession {
   typedCharacterStart(): Promise<number>;
   /** The live block structure. */
   outline(): Promise<string[]>;
+  /**
+   * The box (default: the list box) as a reader sees it, line by line, after
+   * two frames so a re-render or a fit has landed. Leaving text editing must
+   * not change it: an empty bullet that turns up when the box stops being
+   * edited is invisible to every structural check, because an empty bullet
+   * is a perfectly sound thing to have.
+   */
+  seenLines(selector?: string): Promise<SeenLine[]>;
+  /**
+   * Leave text editing the way `route` says a person does, and wait until
+   * the box is no longer being edited.
+   */
+  leaveEditing(route: LeaveRoute): Promise<void>;
   /** Own text (sub-lists excluded, whitespace collapsed) of every `selector` block, in order. */
   blocksOf(selector: string): Promise<string[]>;
   /**
@@ -390,11 +599,7 @@ export async function startListEditingSession(deckId: string, name: string, opti
 
   const deck = emptyDeck('List editing');
   deck.themePreset = 'basic';
-  deck.slides[0].elements.push({
-    id: TEXT_ID, type: 'text', x: 100, y: 100, w: 1720, h: 860,
-    rot: 0, z: 1, opacity: 1, class: ['role-body'], style: {},
-    html: '<p>Text</p>', align: 'left', valign: 'top',
-  } as never, {
+  deck.slides[0].elements.push({ ...LIST_BOX } as never, {
     id: OTHER_TEXT_ID, type: 'text', x: 100, y: 975, w: 900, h: 100,
     rot: 0, z: 2, opacity: 1, class: ['role-body'], style: {},
     html: OTHER_HTML, align: 'left', valign: 'top',
@@ -427,6 +632,11 @@ export async function startListEditingSession(deckId: string, name: string, opti
     browser.log,
   );
   let cdp: Cdp | null = await Cdp.connect(target.webSocketDebuggerUrl!);
+  // CI shows every suite's window on one bare Xvfb, where the window mapped
+  // last takes the keyboard. Losing it blurs the field being typed into, and
+  // a blur commits the field: half of a typed "20" became the size. These
+  // pages stand for the window an author is typing in, so they keep focus.
+  await cdp.call('Emulation.setFocusEmulationEnabled', { enabled: true });
   await eventually(async () => cdp!.evaluate<boolean>(
     `Boolean(document.querySelector('${CONTENT}'))`), 'the list fixture never loaded');
   await cdp.click('#side-tabs button[data-panel="inspector"]', 'Props tab');
@@ -465,16 +675,31 @@ function buildSession(cdp: Cdp, port: number, deckId: string): ListEditingSessio
     return outline(root);
   })()`);
 
+  const reachablePoint = (onText: boolean) => cdp.evaluate<{ x: number; y: number } | null>(
+    `${REACHABLE_POINT}(${onText})`);
+  const clickIntoBox = async (label: string): Promise<void> => {
+    const point = await reachablePoint(true);
+    if (!point) {
+      const where = await cdp.evaluate<string>(`(() => {
+        const root = document.querySelector('${CONTENT}');
+        const frame = root.closest('.element').getBoundingClientRect();
+        const text = root.getBoundingClientRect();
+        const r = (b) => [b.left, b.top, b.width, b.height].map(Math.round).join(',');
+        const hit = document.elementFromPoint(frame.left + frame.width / 2, frame.top + frame.height / 2);
+        return 'frame ' + r(frame) + ' text ' + r(text) + ' window ' + innerWidth + 'x' + innerHeight
+          + ' centre hits ' + (hit ? hit.tagName + '.' + hit.className : 'nothing');
+      })()`);
+      throw new Error(`no point of the text box is left to click: ${label}; ${where}`);
+    }
+    await cdp.clickAt(point.x, point.y);
+  };
+
   const leaveEditing = async (): Promise<void> => {
     if (!await cdp.evaluate<boolean>(
       `document.querySelector('${CONTENT}')?.isContentEditable === true`,
     )) return;
-    // Its first character, not its centre: text that overflows a short box
-    // centres below the box's bottom edge, on the resize handle there.
-    const hasGlyphs = await cdp.evaluate<boolean>(
-      `((document.querySelector('${CONTENT}')?.textContent ?? '').trim().length > 0)`);
-    if (hasGlyphs) await cdp.clickTextAtOffset(CONTENT, 0, 'the text box before leaving editing');
-    else await cdp.click(CONTENT, 'the text box before leaving editing');
+    // Focus back in the box first: Escape in the inspector means something else.
+    await clickIntoBox('before leaving editing');
     await cdp.key('Escape', 27);
     await eventually(async () => cdp.evaluate<boolean>(
       `document.querySelector('${CONTENT}')?.isContentEditable !== true`,
@@ -484,12 +709,12 @@ function buildSession(cdp: Cdp, port: number, deckId: string): ListEditingSessio
   const session: ListEditingSession = {
     cdp,
     port,
+    clickIntoBox,
     async shapeBox(box) {
       await leaveEditing();
       await cdp.evaluate(`(() => {
         window.store.commit((deck) => {
-          const element = deck.slides[0].elements.find(
-            (candidate) => candidate.id === ${JSON.stringify(TEXT_ID)});
+          const element = ${FIXTURE_BOX}(deck);
           element.h = ${box.h};
           element.style = ${JSON.stringify(box.style)};
           if (${box.autoFit}) element.autoFit = true;
@@ -512,8 +737,7 @@ function buildSession(cdp: Cdp, port: number, deckId: string): ListEditingSessio
       await leaveEditing();
       await cdp.evaluate(`(() => {
         window.store.commit((deck) => {
-          const element = deck.slides[0].elements.find(
-            (candidate) => candidate.id === ${JSON.stringify(TEXT_ID)});
+          const element = ${FIXTURE_BOX}(deck);
           element.html = ${JSON.stringify(html)};
         }, { label: 'List editing fixture' });
         return true;
@@ -522,39 +746,12 @@ function buildSession(cdp: Cdp, port: number, deckId: string): ListEditingSessio
         (lines) => lines.length > 0);
     },
     async edit() {
-      // A box whose every line is empty has no glyph to aim at; its own box
-      // is still there to double-click.
-      // The first click selects the box and puts its resize handles up, so
-      // the glyph aimed at must be clear of where they will be: in a short
-      // box the first glyph sits right on the top-left handle.
-      const offset = await cdp.evaluate<number>(`(() => {
-        const root = document.querySelector('${CONTENT}');
-        const box = root?.closest('.element')?.getBoundingClientRect();
-        if (!root || !box) return -1;
-        const handles = [0, 0.5, 1].flatMap((fx) => [0, 0.5, 1]
-          .filter((fy) => fx !== 0.5 || fy !== 0.5)
-          .map((fy) => [box.left + box.width * fx, box.top + box.height * fy]));
-        const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
-        let flat = 0;
-        let first = -1;
-        for (let node = walker.nextNode(); node; node = walker.nextNode()) {
-          for (let i = 0; i < node.data.length; i++) {
-            if (/\\s/.test(node.data[i])) continue;
-            if (first < 0) first = flat + i;
-            const range = document.createRange();
-            range.setStart(node, i);
-            range.setEnd(node, i + 1);
-            const r = range.getBoundingClientRect();
-            const x = r.left + r.width / 2;
-            const y = r.top + r.height / 2;
-            if (handles.every(([hx, hy]) => Math.hypot(hx - x, hy - y) > 20)) return flat + i;
-          }
-          flat += node.data.length;
-        }
-        return first;
-      })()`);
-      if (offset >= 0) await cdp.doubleClickTextAtOffset(CONTENT, offset, 'text box');
-      else await cdp.doubleClick(CONTENT, 'text box with no text');
+      // A double-click enters editing only where the canvas hands it to the
+      // box. Falling back to the first glyph grabbed the handle (nightly
+      // seeds 20261015, 20261020, 20261023) or the slide (20261017).
+      const point = await reachablePoint(false);
+      if (!point) throw new Error('no point of the text box is left to double-click');
+      await cdp.doubleClickAt(point.x, point.y);
       try {
         await eventually(async () => cdp.evaluate<boolean>(
           `document.querySelector('${CONTENT}')?.isContentEditable === true`,
@@ -685,11 +882,62 @@ function buildSession(cdp: Cdp, port: number, deckId: string): ListEditingSessio
         return root ? outline(root) : ['the text box is gone'];
       })()`);
     },
+    async seenLines(selector = CONTENT) {
+      const lines = await cdp.evaluate<SeenLine[] | null>(`new Promise((resolve) => {
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve(
+          ${SEEN_LINES}(${JSON.stringify(selector)}))));
+      })`);
+      if (!lines) throw new Error(`no ${selector} to look at`);
+      return lines;
+    },
+    async leaveEditing(route) {
+      let way = route;
+      if (way === 'other box') {
+        // The list box can grow down over the other box; then there is none
+        // of it left to click, for a person either, and bare slide will do.
+        const reachable = await cdp.evaluate<boolean>(`(() => {
+          const root = document.querySelector('${OTHER_CONTENT}');
+          const text = root && document.createTreeWalker(root, NodeFilter.SHOW_TEXT).nextNode();
+          if (!text) return false;
+          const range = document.createRange();
+          range.setStart(text, 0);
+          range.setEnd(text, 1);
+          const r = range.getBoundingClientRect();
+          return root.contains(document.elementFromPoint(r.left + r.width * 0.2, r.top + r.height / 2));
+        })()`);
+        if (reachable) await cdp.clickTextAtOffset(OTHER_CONTENT, 0, 'the other text box');
+        else way = 'slide';
+      }
+      if (way === 'slide') {
+        const point = await cdp.evaluate<{ x: number; y: number } | null>(`(() => {
+          const slide = document.querySelector('#canvas .slide');
+          if (!slide) return null;
+          const r = slide.getBoundingClientRect();
+          for (const [fx, fy] of [[0.97, 0.97], [0.97, 0.5], [0.97, 0.03], [0.5, 0.97], [0.03, 0.97]]) {
+            const x = r.left + r.width * fx;
+            const y = r.top + r.height * fy;
+            const hit = document.elementFromPoint(x, y);
+            if (hit && slide.contains(hit) && !hit.closest('.element, .handle')) return { x, y };
+          }
+          return null;
+        })()`);
+        if (!point) throw new Error('no bare slide left to click');
+        await cdp.clickAt(point.x, point.y);
+      }
+      if (way === 'escape' || way === 'escape twice') {
+        await cdp.key('Escape', 27);
+        if (way === 'escape twice') await cdp.key('Escape', 27);
+      }
+      await eventually(async () => cdp.evaluate<boolean>(
+        `document.querySelector('${CONTENT}')?.isContentEditable !== true`,
+      ), `${route} did not leave text editing`);
+    },
     blocksOf(selector) {
       return cdp.evaluate<string[]>(`(() => {
         const root = document.querySelector('${CONTENT}');
         if (!root) return [];
-        return [...root.querySelectorAll(${JSON.stringify(selector)})].map((block) => {
+        return [...root.querySelectorAll(${JSON.stringify(selector)})]
+          .filter((block) => !block.hasAttribute('data-list-holder')).map((block) => {
           const clone = block.cloneNode(true);
           clone.querySelectorAll('ul, ol').forEach((nested) => nested.remove());
           return (clone.textContent ?? '').replace(/[\\s\\u00a0\\u200b\\u2060]+/g, ' ').trim();

@@ -202,6 +202,19 @@
   text-indent: -1.4em;
 }
 
+/* An item that only holds an indented list -- the first item of a list,
+   indented, hangs in one -- is not a line of the text: no marker, so no line
+   of its own, and no number, so the item after it is still 1. After the
+   rules above, which an authored list-style-type on the list would reach. */
+.text-body li[data-list-holder] {
+  counter-increment: list-item 0;
+  list-style-type: none;
+}
+.text-body li[data-list-holder]::before,
+.text-body li[data-list-holder]::marker {
+  content: none;
+}
+
 /* Blocks nested in an item (a wrapped paragraph, a sub-list) are not the
    marker line and must not inherit its hanging indent. */
 .text-body li > :is(p, div, ul, ol, table) {

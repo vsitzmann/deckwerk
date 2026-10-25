@@ -1,6 +1,7 @@
 import type { Slide } from '@shared/deck.js';
 import type { SlideState } from '@shared/timeline.js';
-import { whenWebElementReady } from '../player/render.js';
+import { WEB_BRIDGE_SOURCE, type WebBridgeEvent } from '@shared/webBridge.js';
+import { WEB_REVEAL_TIMEOUT_MS, whenWebElementReady } from '../player/render.js';
 
 const eventOrTimeout = (target: EventTarget, event: string, timeout = 5_000): Promise<void> =>
   new Promise((resolve) => {
@@ -137,12 +138,165 @@ function deepImages(root: ParentNode): HTMLImageElement[] {
   return images;
 }
 
-/** Wait until a PDF page contains the same decoded assets and media frame as the player. */
-export async function waitForPdfPage(
-  page: HTMLElement,
-  slide: Slide,
-  state: SlideState,
+/**
+ * Keep a print page's video from loading until its turn comes.
+ *
+ * A long deck prints dozens of videos, some of them 4K, and every build stage
+ * of a slide repeats its clips. Mounted with a source, each one opens its own
+ * decoder at once: a 90-page talk took a tab past 4 GB and crashed Chromium's
+ * media thread. Taking the source away before the browser's resource
+ * selection runs (it waits for the current task to end) means nothing is
+ * fetched or decoded until waitForPdfDocument asks for it.
+ */
+export function holdVideoSource(video: HTMLVideoElement): void {
+  const src = video.getAttribute('src');
+  if (!src) return;
+  video.dataset.printSrc = src;
+  video.removeAttribute('src');
+  video.load();
+}
+
+function releaseVideoSource(video: HTMLVideoElement): void {
+  const src = video.dataset.printSrc;
+  if (!src) return;
+  delete video.dataset.printSrc;
+  video.src = src;
+}
+
+/**
+ * Show the still cut for this video in its place. False when the still does
+ * not arrive, so the caller can fall back to the video itself.
+ */
+async function replaceWithStill(video: HTMLVideoElement, url: string): Promise<boolean> {
+  const image = document.createElement('img');
+  image.className = video.className;
+  image.style.cssText = video.style.cssText;
+  // Same letterbox colour as a video surface (see freezeVideoFrame).
+  image.style.backgroundColor = 'black';
+  image.alt = '';
+  image.src = url;
+  // A still cut on demand can queue behind others; give it longer than an
+  // asset that only has to be read.
+  await Promise.race([eventOrTimeout(image, 'load', 30_000), eventOrTimeout(image, 'error', 30_000)]);
+  if (!image.naturalWidth) return false;
+  await image.decode().catch(() => {});
+  video.replaceWith(image);
+  return true;
+}
+
+export interface PdfReadinessOptions {
+  /**
+   * A URL for a still of deck video `src` at `time` seconds, cut outside the
+   * page (ffmpeg on the server or in the desktop's main process), or null to
+   * have this page load that video and capture the frame itself.
+   */
+  stillFor?: (src: string, time: number) => Promise<string | null>;
+  /** Called as videos settle, with how many are done out of how many. */
+  onProgress?: (settled: number, total: number) => void;
+}
+
+/** Stills are only image fetches; the server bounds its own ffmpeg work. */
+const STILL_CONCURRENCY = 4;
+
+async function settlePrintVideos(
+  pages: Array<{ page: HTMLElement; slide: Slide; state: SlideState }>,
+  options: PdfReadinessOptions,
 ): Promise<void> {
+  const videos = pages.flatMap(({ page, slide, state }) =>
+    [...page.querySelectorAll<HTMLVideoElement>('video')].map((video) => ({ video, slide, state })));
+  let settled = 0;
+  options.onProgress?.(0, videos.length);
+  // A video that has to play in the page is the expensive case: one at a time.
+  let live = Promise.resolve();
+  const oneLiveVideo = (task: () => Promise<void>): Promise<void> => {
+    const run = live.then(task);
+    live = run.catch(() => {});
+    return run;
+  };
+  const settleOne = async ({ video, slide, state }: typeof videos[number]): Promise<void> => {
+    const id = video.closest<HTMLElement>('[data-element-id]')?.dataset.elementId;
+    const element = slide.elements.find((candidate) => candidate.id === id);
+    const at = element?.type === 'video' ? state.seeks.get(element.id) ?? element.start : 0;
+    const url = element?.type === 'video' && options.stillFor
+      ? await options.stillFor(element.src, at).catch(() => null)
+      : null;
+    if (!url || !(await replaceWithStill(video, url))) {
+      await oneLiveVideo(async () => {
+        releaseVideoSource(video);
+        await settleVideo(video, at);
+        freezeVideoFrame(video);
+      });
+    }
+    options.onProgress?.(++settled, videos.length);
+  };
+  let next = 0;
+  await Promise.all(Array.from({ length: Math.min(STILL_CONCURRENCY, videos.length) }, async () => {
+    while (next < videos.length) await settleOne(videos[next++]);
+  }));
+}
+
+/**
+ * How long a web page gets to draw the step it was told before the PDF page
+ * is captured. Pages that take part in builds jump to the step they enter at,
+ * but some apply it only once their own loading is done, and a page entered
+ * at its first step plays its opening beats; the deck cannot see inside the
+ * sandboxed frame to know when that is over. 1.5 s caught a text-conditioning
+ * page's opening half drawn; 5 s matched the Player on every build stage of
+ * the TRI site-visit deck's eight web elements. Every page settles at once,
+ * so this is added to an export once, not per page.
+ */
+export const WEB_STEP_SETTLE_MS = 5_000;
+
+/** Settles once a print page's web element has had its step and time to draw it. */
+const webStepShown = new WeakMap<Element, Promise<void>>();
+
+/**
+ * Show each web page on a print page at that page's build step.
+ *
+ * A web element draws its own builds: the Player tells it the step when its
+ * slide comes on screen (`active`, which going backwards is the last step)
+ * and on every click after (`step`). A print page has no clicks, so it enters
+ * at its step, exactly as presenting backwards does — without this every
+ * printed copy sat at step 0, a chart of empty bars.
+ *
+ * Being told is not enough to draw: pages animate with requestAnimationFrame,
+ * which Chromium stops in a sandboxed frame scrolled out of view — and nearly
+ * every print page is. So while its web pages load and settle, the print page
+ * is held inside the viewport, invisible, with a spacer keeping its place in
+ * the preview (print.css). Call it as soon as `page` is in the document: the
+ * frames load from then, and a message sent earlier reaches the frame's blank
+ * initial document.
+ */
+export function showWebPagesAtStep(page: HTMLElement, step: number, steps: number): void {
+  const frames = [...page.querySelectorAll<HTMLIFrameElement>('iframe.web-frame')];
+  if (frames.length === 0) return;
+  const event: WebBridgeEvent = { source: WEB_BRIDGE_SOURCE, event: 'active', step, steps };
+  const spacer = document.createElement('div');
+  spacer.className = 'pdf-page-spacer';
+  spacer.style.width = page.style.width;
+  spacer.style.height = page.style.height;
+  page.before(spacer);
+  page.classList.add('web-settling');
+  const settled = Promise.all(frames.map((frame) => new Promise<void>((resolve) => {
+    // A page that never loads is printed as the reveal timeout leaves it.
+    const giveUp = setTimeout(resolve, WEB_REVEAL_TIMEOUT_MS + WEB_STEP_SETTLE_MS);
+    frame.addEventListener('load', () => {
+      frame.contentWindow?.postMessage(event, '*');
+      clearTimeout(giveUp);
+      setTimeout(resolve, WEB_STEP_SETTLE_MS);
+    }, { once: true });
+  }))).then(() => {
+    page.classList.remove('web-settling');
+    spacer.remove();
+  });
+  for (const frame of frames) {
+    const box = frame.closest('.web-body');
+    if (box) webStepShown.set(box, settled);
+  }
+}
+
+/** Wait until a PDF page's images, embeds and web pages are as the player shows them. */
+async function waitForPdfPage(page: HTMLElement): Promise<void> {
   const images = deepImages(page);
   await Promise.all(images.map(freezeAnimatedImage));
   await Promise.all(images.map(settleImage));
@@ -154,22 +308,22 @@ export async function waitForPdfPage(
   // A live web page stays hidden (under its poster) until it is ready, and
   // reveals itself on its own clock; print it once it has, or once its reveal
   // timeout has shown it as it is.
-  await Promise.all([...page.querySelectorAll('.web-body')].map(whenWebElementReady));
-  await Promise.all([...page.querySelectorAll<HTMLVideoElement>('video')].map(async (video) => {
-    const id = video.closest<HTMLElement>('[data-element-id]')?.dataset.elementId;
-    const element = slide.elements.find((candidate) => candidate.id === id);
-    const at = element?.type === 'video' ? state.seeks.get(element.id) ?? element.start : 0;
-    await settleVideo(video, at);
-    freezeVideoFrame(video);
+  await Promise.all([...page.querySelectorAll('.web-body')].map(async (box) => {
+    await whenWebElementReady(box);
+    await webStepShown.get(box);
   }));
 }
 
 /** Wait for font replacement, auto-fit, decoded media, and finite CSS motion. */
 export async function waitForPdfDocument(
   pages: Array<{ page: HTMLElement; slide: Slide; state: SlideState }>,
+  options: PdfReadinessOptions = {},
 ): Promise<void> {
   await document.fonts.ready;
-  await Promise.all(pages.map(({ page, slide, state }) => waitForPdfPage(page, slide, state)));
+  await Promise.all([
+    ...pages.map(({ page }) => waitForPdfPage(page)),
+    settlePrintVideos(pages, options),
+  ]);
   await new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
   for (const animation of document.getAnimations()) {
     const iterations = animation.effect?.getComputedTiming().iterations;
