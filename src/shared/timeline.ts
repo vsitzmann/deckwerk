@@ -1,5 +1,16 @@
 import type { Slide, SlideElement, TimelineEntry } from './deck.js';
 import { countParagraphs } from './paragraphs.js';
+import {
+  DEFAULT_TERM_DURATION,
+  applyTermAction,
+  defaultEmphasisDuration,
+  initialTermStates,
+  isEmphasisType,
+  isTermBuild,
+  type EmphasisType,
+  termBuildLabels,
+  type TermState,
+} from './equationTerms.js';
 
 /**
  * Timeline reasoning, shared by the player and the editor's timeline panel.
@@ -58,11 +69,16 @@ export function popScales(entry: TimelineEntry): { from: number; peak: number } 
  * `draw` draws a line or arrow in from its start; `pop` (appear only) grows the
  * element in from smaller, overshoots a little and settles.
  */
-export type BuildEffect = 'draw' | 'dissolve' | 'blur' | 'pop';
+export type BuildEffect = 'draw' | 'dissolve' | 'blur' | 'pop' | 'terms' | 'emphasis';
 
 /** The effect an entry animates with, or null for an instant change. */
 export function buildEffect(entry: TimelineEntry, slide: Slide): BuildEffect | null {
   const { type, value } = entry.action;
+  // A term fades in (or changes colour) and an emphasis swells or wobbles and
+  // settles; both take time, so an "after previous" build waits them out like
+  // any other.
+  if (type === 'terms') return type;
+  if (isEmphasisType(type)) return 'emphasis';
   if ((value === 'dissolve' || value === 'blur') && (type === 'appear' || type === 'disappear')) {
     return value;
   }
@@ -74,7 +90,9 @@ export function buildEffect(entry: TimelineEntry, slide: Slide): BuildEffect | n
 /** Milliseconds an animated build takes. */
 export function effectDuration(entry: TimelineEntry, effect: BuildEffect): number {
   return entry.action.duration
-    ?? (effect === 'draw' ? DEFAULT_DRAW_DURATION
+    ?? (effect === 'terms' ? DEFAULT_TERM_DURATION
+      : effect === 'emphasis' ? defaultEmphasisDuration(entry.action.type as EmphasisType)
+      : effect === 'draw' ? DEFAULT_DRAW_DURATION
       : effect === 'blur' ? DEFAULT_BLUR_DURATION
       : effect === 'pop' ? DEFAULT_POP_DURATION : DEFAULT_DISSOLVE_DURATION);
 }
@@ -107,6 +125,24 @@ export function drawDuration(entry: TimelineEntry): number {
 export function expandTimeline(slide: Slide): ExpandedEntry[] {
   const out: ExpandedEntry[] = [];
   for (const entry of slide.timeline) {
+    // An equation's terms fan out the same way, one unit per term label, each
+    // naming its term so it can be run on its own.
+    if (isTermBuild(entry) && !entry.action.term) {
+      const labels = termBuildLabels(entry, slide);
+      if (labels.length > 0) {
+        labels.forEach((term, index) => out.push({
+          id: index === 0 ? entry.id : `${entry.id}#t${index}`,
+          sourceId: entry.id,
+          part: null,
+          partCount: 1,
+          trigger: index === 0
+            ? entry.trigger
+            : { on: entry.trigger.on === 'click' ? 'click' : 'afterPrev', ref: null, delay: entry.trigger.delay },
+          action: { ...entry.action, term },
+        }));
+        continue;
+      }
+    }
     if (!isParagraphBuild(entry, slide)) {
       out.push({ ...entry, sourceId: entry.id, part: null, partCount: 1 });
       continue;
@@ -179,6 +215,8 @@ export interface SlideState {
   seeks: Map<string, number>;
   /** For by-paragraph targets: how many leading paragraphs are revealed. */
   parts: Map<string, number>;
+  /** For equations with term builds: which terms are still hidden, and term colours. */
+  terms: Map<string, TermState>;
 }
 
 /**
@@ -210,6 +248,7 @@ export function resolveState(slide: Slide, step: number): SlideState {
         .filter((entry) => isParagraphBuild(entry, slide))
         .map((entry) => [entry.action.target, 0]),
     ),
+    terms: initialTermStates(slide),
   };
 
   const steps = groupIntoSteps(slide);
@@ -260,6 +299,15 @@ export function applyAction(
     case 'removeClass':
       if (typeof value === 'string') classSet(state, target).delete(value);
       break;
+    case 'terms':
+      applyTermAction(state.terms, entry, slide);
+      break;
+    // An emphasis changes nothing it leaves behind: the state after it is
+    // the state before it, which is what makes it safe to jump over.
+    case 'pulse':
+    case 'jiggle':
+    case 'pop':
+      break;
   }
 }
 
@@ -300,16 +348,32 @@ export function nextCursor(slides: Slide[], cur: Cursor): Cursor {
   return cur;
 }
 
+/** A step whose every build is an emphasis: stepping back over it changes nothing. */
+function isEmphasisStep(step: ExpandedEntry[] | undefined): boolean {
+  return Boolean(step?.length) && step!.every((entry) => isEmphasisType(entry.action.type));
+}
+
 /**
  * Go back one step, rolling onto the *last* step of the previous slide so that
  * stepping backwards over a slide boundary restores the fully-built state
- * rather than resetting it.
+ * rather than resetting it. Steps that only play an emphasis are stepped over.
  */
 export function prevCursor(slides: Slide[], cur: Cursor): Cursor {
-  if (cur.step > 0) return { slide: cur.slide, step: cur.step - 1 };
+  const slide = slides[cur.slide];
+  if (slide && cur.step > 0) {
+    // Undoing an emphasis changes nothing on screen, so a press that only
+    // stepped back over one would look ignored: keep going until the step
+    // undone is one that changed the picture. A slide whose steps so far were
+    // all emphasis has nothing to undo, and goes back to the previous slide.
+    const steps = groupIntoSteps(slide);
+    let step = cur.step - 1;
+    while (step > 0 && isEmphasisStep(steps[step + 1])) step -= 1;
+    if (step > 0 || !isEmphasisStep(steps[1])) return { slide: cur.slide, step };
+  }
   for (let i = cur.slide - 1; i >= 0; i--) {
     if (slides[i].skipped) continue;
     return { slide: i, step: stepCount(slides[i]) - 1 };
   }
-  return cur;
+  // The first slide: nothing before it, so its start, ready to play again.
+  return cur.step > 0 ? { slide: cur.slide, step: 0 } : cur;
 }

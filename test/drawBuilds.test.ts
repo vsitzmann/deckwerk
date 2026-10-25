@@ -476,6 +476,8 @@ describe('choosing dissolve from the Build panel', () => {
       .toEqual([
         'appear', 'appear:dissolve', 'appear:blur', 'appear:pop', 'appear:paragraph',
         'disappear', 'disappear:dissolve', 'disappear:blur', 'play', 'pause',
+        // Any object can pulse, jiggle or pop for emphasis (equation builds add them for every element).
+        'pulse', 'pulse:lift', 'jiggle', 'pop',
       ]);
     const choose = (value: string) => {
       select().value = value;

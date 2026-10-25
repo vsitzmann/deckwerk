@@ -4580,6 +4580,10 @@ button.ghost:hover:not(:disabled) { color: var(--text); background: transparent;
 .build-delay-wrap > input { padding: 3px 24px 3px 6px; height: 24px; }
 .build-card-what { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; }
 .build-action-label { color: var(--muted); font: 9.5px var(--mono); letter-spacing: 0.08em; text-transform: uppercase; }
+/* Equation builds: the highlight colour spans the card; the pulse size is a small number. */
+.build-card-what > .build-term-color { grid-column: 1 / -1; }
+.build-scale-wrap { width: 72px; }
+.build-scale-wrap > input { padding: 3px 20px 3px 6px; height: 24px; width: 100%; }
 /* A shadow's direction: the knob, then Angle and Distance. */
 .shadow-direction-row { grid-template-columns: 40px repeat(2, minmax(0, 1fr)); }
 .angle-dial {
@@ -4609,7 +4613,7 @@ button.ghost:hover:not(:disabled) { color: var(--text); background: transparent;
 .build-duration-wrap { width: 100%; }
 .pop-size { width: 76px; }
 .pop-size > input { width: 100%; padding: 3px 24px 3px 6px; height: 24px; }
-.timeline-row select.build-action { padding: 2px 20px 2px 6px; height: 24px; font: 10.5px var(--mono); }
+.timeline-row select.build-action, .timeline-row select.build-term { padding: 2px 20px 2px 6px; height: 24px; font: 10.5px var(--mono); }
 .timeline-row select.build-trigger { flex: none; }
 .build-num { min-width: 16px; height: 16px; font: 700 9.5px/1 var(--mono); color: #000; }
 

@@ -412,6 +412,13 @@ export const ActionSchema = z.object({
     'seek',
     'addClass',
     'removeClass',
+    // An equation's marked terms, revealed or coloured one per step (see
+    // shared/equationTerms.ts), and the emphases a term or an object can
+    // take: a pulse, a jiggle and a pop.
+    'terms',
+    'pulse',
+    'jiggle',
+    'pop',
   ]),
   target: Id,
   /**
@@ -421,6 +428,9 @@ export const ActionSchema = z.object({
    * `"dissolve"` fades the element in or out and `"blur"` brings it into (or
    * takes it out of) focus as it fades. On `appear`, `"pop"` grows the
    * element in from smaller, overshoots a little and settles.
+   *
+   * On `pulse` of a whole object, `"lift"` also casts a drop shadow at the
+   * peak and paints the object over its neighbours while it is up.
    */
   value: z.union([z.number(), z.string()]).nullable().default(null),
   /** Milliseconds an animated build takes (`"draw"`, `"dissolve"`, `"blur"`, `"pop"`). */
@@ -429,6 +439,26 @@ export const ActionSchema = z.object({
   popFrom: z.number().min(0).max(1).optional(),
   /** On a `"pop"`: the size it overshoots to before settling at 1 (default 1.06). */
   popPeak: z.number().min(1).max(2).optional(),
+  /**
+   * The equation term a `terms` action or an emphasis (`pulse`, `jiggle`,
+   * `pop`) acts on: the label of a `\step{label}{…}`
+   * (`\htmlClass{step-label}{…}`) marker in the target's TeX. Absent, a
+   * `terms` action steps through every term in order — one step each, like a
+   * by-paragraph reveal — and an emphasis moves the whole object. On
+   * `terms`, `value` is `"appear"` (default) or `"color"`.
+   */
+  term: z.string().regex(/^[A-Za-z0-9_-]+$/).optional(),
+  /** The colour a `terms` action with value `"color"` paints its terms. */
+  color: z.string().optional(),
+  /** How far a `pulse` (default 1.6) or a `pop` (default 1.3) enlarges its target at the peak. */
+  scale: z.number().min(1).max(4).optional(),
+  /**
+   * How softly an emphasis moves, 0 to 1. On `pulse` and `pop`, 0 is a sharp
+   * snap out of rest and back into it, and 1 a fully smooth ease at both
+   * ends (defaults 0.8 and 1); on `jiggle`, how fast the swings die out, 0
+   * hardly at all and 1 quickly (default 0.5).
+   */
+  damping: z.number().min(0).max(1).optional(),
 });
 
 export const TimelineEntrySchema = z.object({
