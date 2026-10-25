@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { existsSync, readdirSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -16,19 +16,15 @@ import { loadDeck, loadTheme } from '../src/main/deckStore.js';
  * inches wide, which maps to the 1920px canvas at 144px per inch and 2px per
  * point. The assertions below are those numbers.
  *
- * Point PPTX_FIXTURES at a folder of real .pptx decks to run the corpus check
- * as well; it skips itself when the folder is absent so a fresh checkout passes.
+ * Both decks are checked in, so nothing here skips: a missing fixture or
+ * importer venv is a broken checkout, and the suite fails on it.
  */
 
-const PYTHON = existsSync(join(process.cwd(), '.venv-import/bin/python'))
-  ? join(process.cwd(), '.venv-import/bin/python')
-  : 'python3';
+const PYTHON = join(process.cwd(), '.venv-import/bin/python');
 
 const REFERENCE = join(process.cwd(), 'test/fixtures/pptx/reference.pptx');
 // reference.pptx plus one slide: a bent arrow and an embedded PDF (make_embedded.py).
 const EMBEDDED = join(process.cwd(), 'test/fixtures/pptx/embedded.pptx');
-const FIXTURES = process.env.PPTX_FIXTURES;
-const LOCAL_FIXTURES = join(process.cwd(), 'example_presentations');
 
 const IN = 144;
 
@@ -51,7 +47,12 @@ function shape(deck: Deck, slide: number, predicate: (el: SlideElement) => boole
   return found;
 }
 
-describe.skipIf(!existsSync(REFERENCE))('powerpoint importer', () => {
+describe('powerpoint importer', () => {
+  it('has its checked-in decks', () => {
+    expect(existsSync(REFERENCE)).toBe(true);
+    expect(existsSync(EMBEDDED)).toBe(true);
+  });
+
   let cached: ReturnType<typeof analyse> | null = null;
   const reference = () => (cached ??= analyse(REFERENCE));
 
@@ -223,7 +224,7 @@ describe.skipIf(!existsSync(REFERENCE))('powerpoint importer', () => {
     }
   }, 60_000);
 
-  describe.skipIf(!existsSync(EMBEDDED))('OLE-era content', () => {
+  describe('OLE-era content', () => {
     let embedded: ReturnType<typeof analyse> | null = null;
     const deck = () => (embedded ??= analyse(EMBEDDED)).deck;
 
@@ -284,15 +285,8 @@ describe.skipIf(!existsSync(REFERENCE))('powerpoint importer', () => {
     }, 60_000);
   });
 
-  const fixtures = FIXTURES && existsSync(FIXTURES)
-    ? FIXTURES
-    : existsSync(LOCAL_FIXTURES) ? LOCAL_FIXTURES : null;
-  const corpus = fixtures
-    ? readdirSync(fixtures).filter((f) => f.endsWith('.pptx') && !f.startsWith('~$')).map((f) => join(fixtures, f))
-    : [];
-
-  it.skipIf(corpus.length === 0)('imports every corpus deck without failing', () => {
-    for (const deckPath of corpus) {
+  it('imports every checked-in deck with sane geometry and few placeholders', () => {
+    for (const deckPath of [REFERENCE, EMBEDDED]) {
       const { deck, report } = analyse(deckPath);
       expect(report.slides, `${deckPath} produced no slides`).toBeGreaterThan(0);
       const skipped = Object.values(report.unsupported).reduce((a, b) => a + b, 0);

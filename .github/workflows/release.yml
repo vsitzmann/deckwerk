@@ -115,6 +115,13 @@ jobs:
       - name: Build the Keynote importer
         run: npm run build:importer
 
+      # The frozen binary is what installed apps run: check it reads the
+      # reference deck (every slide, notes included) before shipping it.
+      - name: Check the frozen importer against the reference deck
+        env:
+          KEYNOTE_PACKAGED: '1'
+        run: npx vitest run --config vitest.serial.config.ts test/keynoteImport.test.ts -t "packaged sidecar"
+
       - name: Import Apple signing certificate
         if: matrix.platform == 'mac'
         env:

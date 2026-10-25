@@ -23,11 +23,19 @@ jobs:
         with:
           node-version: 22
           cache: npm
+      # ffmpeg, for the reference deck's clip in a codec browsers cannot play.
+      - name: Install system dependencies (ffmpeg)
+        uses: ./.github/actions/electron-system-deps
       - run: npm ci
       - name: Typecheck
         run: npm run typecheck
       - name: Unit tests
         run: npm run test:unit
+      # The Keynote and PowerPoint importers against their checked-in
+      # reference decks. Deterministic, so they gate merges; run alone (the
+      # serial config) so importer start-up cannot be starved by a busy pool.
+      - name: Importer tests
+        run: npm run test:importers
 
   # These jobs launch real Electron under Xvfb. They are valuable integration
   # signals, but the input, focus, IME, clipboard, and compositor paths are not

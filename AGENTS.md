@@ -948,6 +948,14 @@ guards. These rules keep the seams closed:
   real-input test that proves it (see the `*Bugs.test.ts` suites for the
   conventions: real CDP key/pointer input, soundness controls, `// BUG:`
   markers while red).
+- **Import fixes land on the reference decks.** A Keynote import bug gets a
+  named slide in `test/fixtures/keynote/make_reference.py` (regenerate
+  `reference.key` with the importer venv; the output is byte-stable) and a
+  block in `test/keynoteReference.test.ts`; PowerPoint bugs go into
+  `test/fixtures/pptx/`. Rebuild the archive shapes the real deck used with
+  neutral content, never a slide of an actual talk, and never a test that
+  skips without a private deck. `npm run test:importers` runs them; it is
+  part of the required CI job.
 - **Text-edit session rules** (all guarded by tests — breaking one turns a
   suite red, but know why): commit targets resolve by element id deck-wide,
   never through `slideIndex` at fire time; a formatting/list/table commit

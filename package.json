@@ -30,6 +30,7 @@
     "test:browser": "vitest run --config vitest.browser.config.ts",
     "pretest:serial": "node scripts/check-test-environment.cjs",
     "test:serial": "vitest run --config vitest.serial.config.ts",
+    "test:importers": "vitest run --config vitest.serial.config.ts test/keynoteImport.test.ts test/keynoteReference.test.ts test/pptxImport.test.ts",
     "pretest:long": "node scripts/check-test-environment.cjs",
     "test:long": "vitest run --config vitest.long.config.ts",
     "pretest:performance": "node scripts/check-test-environment.cjs",
