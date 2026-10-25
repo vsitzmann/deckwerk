@@ -335,7 +335,7 @@ function setSession(state: DeckWindowState, dir: string, deck: Deck): DeckSessio
   void writeAgentGuide(dir, { launcher: defaultLauncherPath() }).catch((error) => {
     console.error(`Could not write ${AGENT_GUIDE_FILE} in ${dir}:`, error);
   });
-  void state.agentRuntime.open(dir);
+  void state.agentRuntime.open(dir, deck);
   return session;
 }
 
@@ -642,7 +642,7 @@ app.on('window-all-closed', () => {
 
 app.on('before-quit', () => {
   quitting = true;
-  for (const state of editorStates()) void state.agentRuntime.close();
+  for (const state of editorStates()) state.agentRuntime.closeSync();
   localAgents.close();
   void collabServer?.close();
 });
