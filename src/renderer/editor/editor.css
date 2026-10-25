@@ -455,6 +455,9 @@ body.panel-resizing iframe { pointer-events: none; }
   cursor: pointer;
 }
 
+/* Beside the left ruler when the rulers are shown (RULER_SIZE in rulers.ts). */
+.canvas-host.rulers-shown > .notes-toggle { left: calc(20px + 12px); }
+
 .notes-toggle:hover { background: var(--panel-2); }
 .notes-toggle.active { color: var(--accent); }
 

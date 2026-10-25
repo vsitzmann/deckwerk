@@ -120,6 +120,30 @@ describe.skipIf(!electronBinary)('canvas rulers in the desktop app', () => {
     expect(reading.top.some((tick) => tick.value === 0)).toBe(true);
   });
 
+  it('moves the floating speaker-notes button clear of the left ruler', { timeout: 60_000 }, async () => {
+    // BUG (fixed here): the notes toggle floats 12px from the canvas's left
+    // edge, which is where the left ruler is drawn, so it sat on the ruler.
+    const { cdp } = desktop!;
+    const place = () => cdp.evaluate<{ toggle: number; ruler: number; canvas: number }>(`(() => ({
+      toggle: document.querySelector('#canvas .notes-toggle').getBoundingClientRect().left,
+      ruler: document.querySelector('#canvas .canvas-ruler-left').getBoundingClientRect().right,
+      canvas: document.querySelector('#canvas').getBoundingClientRect().left,
+    }))()`);
+    if (!(await shown())) {
+      await rulersKey();
+      await eventually(shown, 'Cmd/Ctrl+R did not show the rulers');
+    }
+    const withRulers = await place();
+    // The same 12px gap it keeps from the canvas edge, measured from the ruler.
+    expect(withRulers.toggle - withRulers.ruler).toBeGreaterThanOrEqual(11);
+    await rulersKey();
+    await eventually(async () => !(await shown()), 'Cmd/Ctrl+R did not hide the rulers');
+    const without = await place();
+    expect(Math.round(without.toggle - without.canvas)).toBe(12);
+    await rulersKey();
+    await eventually(shown, 'Cmd/Ctrl+R did not show the rulers again');
+  });
+
   it('keeps the ticks on slide coordinates through zoom and pan', { timeout: 60_000 }, async () => {
     const { cdp } = desktop!;
     await cdp.chord('=', 'Equal', 187, MOD);
