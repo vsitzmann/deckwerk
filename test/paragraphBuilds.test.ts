@@ -227,6 +227,8 @@ describe('Build panel by-paragraph card', () => {
     const host = document.createElement('div');
     document.body.appendChild(host);
     new TimelinePanel(host, store);
+    // The settings card shows the build on what is selected.
+    if (timeline.length > 0) store.select(['txt']);
     return { host, store };
   }
 

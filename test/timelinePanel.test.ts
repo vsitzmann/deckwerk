@@ -7,7 +7,7 @@ import { TimelinePanel } from '../src/renderer/editor/timelinePanel.js';
 describe('Build panel interactions', () => {
   beforeEach(() => document.body.replaceChildren());
 
-  it('adds selected reveals and reorders them through the visible drag grip', () => {
+  it('adds selected reveals and reorders them by dragging their rows in the build order', () => {
     const deck = emptyDeck('Build');
     deck.slides[0].elements.push(
       { id: 'a', type: 'text', x: 0, y: 0, w: 100, h: 50, rot: 0, z: 1,
@@ -33,9 +33,13 @@ describe('Build panel interactions', () => {
     addAnimation();
     expect(store.slide?.timeline.map((entry) => entry.action.target)).toEqual(['a', 'b']);
 
-    const rows = host.querySelectorAll<HTMLElement>('.timeline-row');
+    // The build order lists one compact row per build; the row itself is the
+    // drag handle.
+    const rows = host.querySelectorAll<HTMLElement>('.build-overview-row');
+    expect(rows).toHaveLength(2);
     const first = rows[0];
-    const secondGrip = rows[1].querySelector<HTMLElement>('.build-drag-handle')!;
+    const secondGrip = rows[1];
+    expect(secondGrip.draggable).toBe(true);
     first.getBoundingClientRect = () => ({ top: 0, height: 90 } as DOMRect);
     const transfer = { setData() {}, effectAllowed: '', dropEffect: '' };
     const start = new Event('dragstart', { bubbles: true });
@@ -75,26 +79,39 @@ describe('Build panel interactions', () => {
     document.body.appendChild(host);
     new TimelinePanel(host, store);
 
-    const rows = [...host.querySelectorAll<HTMLElement>('.timeline-row')];
+    // The build order: one row per build, numbered as the canvas badges are.
+    const rows = [...host.querySelectorAll<HTMLElement>('.build-overview-row')];
     expect(rows).toHaveLength(2);
-    // No element dropdown: the card names its element instead.
+    // No element dropdown: the row names its element instead.
     expect(host.querySelector('select.build-target')).toBeNull();
     expect(rows.map((r) => r.querySelector('.build-num')?.textContent)).toEqual(['1', '2']);
     expect(rows[0].querySelector('.build-target-name')?.textContent).toContain('Alpha');
     expect(rows[1].querySelector('.build-target-name')?.textContent).toContain('Beta');
-    // The element is the card's headline; the trigger sits on the line below.
-    expect(rows[0].querySelector('.build-card-head .build-target-name')).toBeTruthy();
-    expect(rows[0].querySelector('.build-card-when select.build-trigger')).toBeTruthy();
+    // Nothing picked yet: the settings card waits for a build.
+    expect(host.querySelectorAll('.timeline-row')).toHaveLength(0);
+    // Picking a row selects its element and shows that build's card, bound to
+    // one element: the element is the card's headline, the trigger below it.
+    rows[1].click();
+    expect([...store.get().selection]).toEqual(['b']);
+    const cards = [...host.querySelectorAll<HTMLElement>('.timeline-row')];
+    expect(cards).toHaveLength(1);
+    expect(cards[0].dataset.entryId).toBe('t-2');
+    expect(cards[0].querySelector('.build-card-head .build-num')?.textContent).toBe('2');
+    expect(cards[0].querySelector('.build-card-head .build-target-name')?.textContent).toContain('Beta');
+    expect(cards[0].querySelector('.build-field select.build-trigger')).toBeTruthy();
+    expect(host.querySelector('.build-overview-row[data-entry-id="t-2"]')!.classList.contains('selected')).toBe(true);
     // Elements are named by their content or shape, not their raw type.
     const listNames = [...host.querySelectorAll('.build-element-row')]
       .map((r) => r.textContent);
     expect(listNames).toEqual(['Alpha', 'Beta', 'rectangle']);
-    // Clicking a list row selects that element in the store.
-    (host.querySelector('.build-element-row[data-element-id="b"]') as HTMLButtonElement).click();
-    expect([...store.get().selection]).toEqual(['b']);
-    // The redundant "Click N" step labels are gone.
-    const labels = [...host.querySelectorAll('.step-label')].map((l) => l.textContent);
-    expect(labels.some((t) => /^Click \d/.test(t ?? ''))).toBe(false);
+    // Clicking a list row selects that element in the store, and its build.
+    (host.querySelector('.build-element-row[data-element-id="a"]') as HTMLButtonElement).click();
+    expect([...store.get().selection]).toEqual(['a']);
+    expect(host.querySelector<HTMLElement>('.timeline-row')!.dataset.entryId).toBe('t-1');
+    // The order groups builds under the click that starts them: the second
+    // follows the first, so both sit under one click.
+    const labels = [...host.querySelectorAll('.build-overview-step')].map((l) => l.textContent);
+    expect(labels).toEqual(['On enter · everything visible', 'Click 1']);
   });
 
   it('writes an element\'s steps in the list as the canvas badge does', () => {

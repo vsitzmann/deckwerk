@@ -257,7 +257,13 @@ describe('choosing draw in from the Build panel', () => {
     const host = document.createElement('div');
     document.body.appendChild(host);
     new TimelinePanel(host, store);
-    const card = (id: string) => host.querySelector<HTMLElement>(`.timeline-row[data-entry-id="${id}"]`)!;
+    // The settings card shows the build picked in the order above it.
+    const card = (id: string) => {
+      if (!host.querySelector(`.timeline-row[data-entry-id="${id}"]`)) {
+        host.querySelector<HTMLElement>(`.build-overview-row[data-entry-id="${id}"]`)!.click();
+      }
+      return host.querySelector<HTMLElement>(`.timeline-row[data-entry-id="${id}"]`)!;
+    };
     const options = (id: string) => [...card(id).querySelectorAll<HTMLOptionElement>('select.build-action option')]
       .map((option) => option.value);
     const entry = () => store.slide!.timeline.find((candidate) => candidate.id === 't-draw')!;
@@ -501,14 +507,18 @@ describe('choosing dissolve from the Build panel', () => {
     const host = document.createElement('div');
     document.body.appendChild(host);
     new TimelinePanel(host, store);
+    store.select(['label']);
     const select = () => host.querySelector<HTMLSelectElement>('.timeline-row select.build-action')!;
-    expect([...select().options].map((option) => option.value))
-      .toEqual([
-        'appear', 'appear:dissolve', 'appear:blur', 'appear:pop', 'appear:paragraph',
-        'disappear', 'disappear:dissolve', 'disappear:blur', 'play', 'pause',
-        // Any object can pulse, jiggle or pop for emphasis (equation builds add them for every element).
-        'pulse', 'pulse:lift', 'jiggle', 'pop',
-      ]);
+    // The menu groups its effects under what they do.
+    const groups = () => [...select().querySelectorAll('optgroup')]
+      .map((group) => [group.label, [...group.querySelectorAll('option')].map((option) => option.value)]);
+    expect(groups()).toEqual([
+      ['Appear', ['appear', 'appear:dissolve', 'appear:blur', 'appear:pop', 'appear:paragraph']],
+      ['Disappear', ['disappear', 'disappear:dissolve', 'disappear:blur']],
+      // Any object can pulse, jiggle or pop for emphasis (equation builds add them for every element).
+      ['Emphasis', ['pulse', 'pulse:lift', 'jiggle', 'pop']],
+      ['Video', ['play', 'pause']],
+    ]);
     const choose = (value: string) => {
       select().value = value;
       select().dispatchEvent(new Event('change', { bubbles: true }));
@@ -569,6 +579,7 @@ describe('the duration slider on a build card', () => {
     const host = document.createElement('div');
     document.body.appendChild(host);
     new TimelinePanel(host, store);
+    store.select(['arrow']);
     const slider = host.querySelector<HTMLInputElement>('.timeline-row .duration-slider')!;
     const number = () => host.querySelector<HTMLInputElement>('.timeline-row .build-duration')!;
     expect(host.querySelector<HTMLSelectElement>('select.build-action')!.value).toBe('appear:blur');

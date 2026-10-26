@@ -123,6 +123,7 @@ describe('pop sizes in the Build panel', () => {
     const host = document.createElement('div');
     document.body.appendChild(host);
     new TimelinePanel(host, store);
+    store.select([store.slide!.timeline[0].action.target]);
     const field = (cls: string) => host.querySelector<HTMLInputElement>(`input.${cls}`)!;
     expect(field('build-pop-from').value).toBe('60');
     expect(field('build-pop-peak').value).toBe('106');

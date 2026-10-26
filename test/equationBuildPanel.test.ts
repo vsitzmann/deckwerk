@@ -54,8 +54,11 @@ describe('equation builds in the Build panel', () => {
     // Lift is offered beside the plain pulse; it applies to a whole object.
     expect([...host.querySelector<HTMLSelectElement>('select.build-action')!.options].map((option) => option.value))
       .toContain('pulse:lift');
+    // The card shows the build on what is selected: the equation's pulse.
     const cards = host.querySelectorAll<HTMLElement>('.timeline-row');
-    const term = cards[1].querySelector<HTMLSelectElement>('select.build-term')!;
+    expect(cards).toHaveLength(1);
+    expect(cards[0].dataset.entryId).toBe(store.slide!.timeline[1].id);
+    const term = cards[0].querySelector<HTMLSelectElement>('select.build-term')!;
     expect([...term.options].map((option) => option.textContent)).toEqual(['whole object', 'term 1', 'term 2']);
     change(term, '2');
     expect(store.slide!.timeline[1].action.term).toBe('2');
@@ -90,8 +93,9 @@ describe('equation builds in the Build panel', () => {
     store.select(['eq']);
     button('Add pulse')!.click();
     const action = () => host.querySelector<HTMLSelectElement>('select.build-action')!;
-    const options = [...action().options].map((option) => option.value);
-    expect(options.slice(options.indexOf('pulse'))).toEqual(['pulse', 'pulse:lift', 'jiggle', 'pop']);
+    const emphasis = [...action().querySelectorAll('optgroup')].find((group) => group.label === 'Emphasis')!;
+    expect([...emphasis.querySelectorAll('option')].map((option) => option.value))
+      .toEqual(['pulse', 'pulse:lift', 'jiggle', 'pop']);
     change(host.querySelector<HTMLSelectElement>('select.build-term')!, '2');
     change(host.querySelector<HTMLInputElement>('input.build-scale')!, '2');
 
@@ -127,7 +131,7 @@ describe('equation builds in the Build panel', () => {
     expect(damping().value).toBe('0.8');
     expect(damping().classList.contains('delay-input')).toBe(true);
     // Right after the size, in the same kind of field.
-    const fields = [...host.querySelectorAll('.build-card-what > *')];
+    const fields = [...action().closest('.build-field')!.children];
     expect(fields.indexOf(damping().parentElement!)).toBe(fields.indexOf(host.querySelector('input.build-scale')!.parentElement!) + 2);
     expect(damping().parentElement!.className).toBe(host.querySelector('input.build-scale')!.parentElement!.className);
 
