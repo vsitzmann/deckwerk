@@ -203,6 +203,29 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: scripts/verify-mac-release.sh release
 
+      # Update the AppImage this run is about to ship, the way a person
+      # would: repackage the same build as the next patch version into a
+      # folder that is never uploaded, serve it as the update feed, start the
+      # released AppImage under Xvfb, let its launch check find the update,
+      # press Download and Restart, and check that the new AppImage replaced
+      # it and relaunched (scripts/smoke-test-appimage-update.mjs). macOS
+      # and Windows updates need signed builds and a person; see
+      # docs/RELEASING.md, "Trying an update end to end".
+      - name: Check the AppImage updates itself
+        if: matrix.platform == 'linux'
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q libfuse2 xvfb
+          NEXT=$(node -p "const [a, b, c] = process.env.VERSION.split(/[-+]/)[0].split('.').map(Number); [a, b, c + 1].join('.')")
+          npx electron-builder --linux AppImage --x64 --config electron-builder.config.cjs --publish never \
+            -c.extraMetadata.version="$NEXT" -c.directories.output=update-smoke
+          ls -la update-smoke
+          xvfb-run -a --server-args="-screen 0 1920x1080x24" \
+            node scripts/smoke-test-appimage-update.mjs release/deckwerk-"$VERSION"-linux-*.AppImage update-smoke
+
       - name: Collect installers
         shell: bash
         # electron-builder also leaves unpacked app trees in release/; only the

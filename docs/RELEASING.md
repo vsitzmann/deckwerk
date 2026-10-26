@@ -227,6 +227,14 @@ update can be tried from two dry-run builds without publishing anything.
 5. **DeckWerk menu → Check for Updates…** → Download → Restart. The app
    reopens; **About DeckWerk** shows the new version.
 
+The Linux leg of every release run does this for the AppImage by itself
+(**Check the AppImage updates itself**): it repackages the build as the next
+patch version into `update-smoke/` (never uploaded), serves it as the feed,
+and runs [`scripts/smoke-test-appimage-update.mjs`](../scripts/smoke-test-appimage-update.mjs)
+under Xvfb — launch check, Download, Restart — then checks the new AppImage
+replaced the old one and relaunched as the new version. A release whose
+AppImage cannot update itself fails there.
+
 Squirrel.Mac only installs an update signed by the same Developer ID as the
 running app, so on macOS both dry runs must have had the signing secrets.
 `test/updateCheckDesktopBrowser.test.ts` drives the same feed override against
