@@ -629,14 +629,21 @@ describe.skipIf(!electronBinary)('mid-edit race conditions', () => {
   }, async () => {
     const settled = await typeAtOnce('race-simultaneous', 'sim-box', {
       // Alice at the end of the first line, Bob at the end of the second.
+      // A synthetic key event carries no macOS editing command of its own:
+      // without `commands`, Cmd+Up and End left both carets on the last line.
       alice: async () => {
-        if (process.platform === 'darwin') await a!.chord('ArrowUp', 'ArrowUp', 38, MOD);
-        else await a!.chord('Home', 'Home', 36, MOD);
-        await a!.key('End', 35);
+        if (process.platform === 'darwin') {
+          await a!.chord('ArrowUp', 'ArrowUp', 38, MOD, ['moveToBeginningOfDocument']);
+          await a!.chord('ArrowRight', 'ArrowRight', 39, MOD, ['moveToEndOfLine']);
+        } else {
+          await a!.chord('Home', 'Home', 36, MOD);
+          await a!.key('End', 35);
+        }
       },
       bob: async () => {
-        if (process.platform === 'darwin') await b!.chord('ArrowDown', 'ArrowDown', 40, MOD);
-        else await b!.chord('End', 'End', 35, MOD);
+        if (process.platform === 'darwin') {
+          await b!.chord('ArrowDown', 'ArrowDown', 40, MOD, ['moveToEndOfDocument']);
+        } else await b!.chord('End', 'End', 35, MOD);
       },
     });
     // BUG: one side's characters dropped wholesale, or spliced into the

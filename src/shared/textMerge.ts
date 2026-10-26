@@ -20,7 +20,9 @@
  * are kept even when identical: each is something a person typed. Changes
  * that overlap the same base text resolve to `incoming`'s version of just
  * that region (last writer wins, but only for the contested words). A result
- * whose tags no longer nest falls back to `incoming` whole.
+ * whose tags no longer nest falls back to `incoming` whole. Where a run could
+ * equally have been typed in more than one place, it is placed at a word
+ * seam rather than inside a word (alignToSeams).
  *
  * Deterministic: the server and every client apply the same transactions in
  * the same order through this function (collabApply), so replicas converge.
@@ -43,11 +45,101 @@ export interface Hunk<T> {
 const LCS_CELL_LIMIT = 1_000_000;
 
 /**
+ * How good a place the seam between two neighbouring tokens is for an edit to
+ * start or end: 0 inside a word, higher at punctuation, a tag, a space, or
+ * the edge of the text. `undefined` is the edge.
+ */
+export type SeamScore<T> = (left: T | undefined, right: T | undefined) => number;
+
+function tokenSeparation(token: string | undefined): number {
+  if (token === undefined) return 2;
+  if (/^\s$/u.test(token) || /^&(?:nbsp|#160|#[xX]0*[aA]0);$/.test(token)) return 2;
+  if (token.length > 1 && token[0] === '<') return 2;
+  return /^[\p{L}\p{N}\p{M}]$/u.test(token) ? 0 : 1;
+}
+
+/** Seams for html tokens (htmlTokens) or single characters. */
+export const textSeam: SeamScore<string> = (left, right) => (
+  Math.max(tokenSeparation(left), tokenSeparation(right))
+);
+
+/**
  * Edit hunks turning `a` into `b`, in ascending base order and never
  * overlapping. Common prefix and suffix are trimmed first, so the typical
  * edit (a run typed or deleted at one place) is a single exact hunk.
+ *
+ * With `seam`, each pure insertion or deletion is then moved to the best
+ * place it could equally have been made (see alignToSeams).
  */
-export function diffSequences<T>(a: readonly T[], b: readonly T[]): Array<Hunk<T>> {
+export function diffSequences<T>(
+  a: readonly T[],
+  b: readonly T[],
+  seam?: SeamScore<T>,
+): Array<Hunk<T>> {
+  const hunks = rawDiff(a, b);
+  return seam ? alignToSeams(a, hunks, seam) : hunks;
+}
+
+/**
+ * Where a diff puts an insertion is a guess whenever the run shares tokens
+ * with the text around it: "bro " typed after "aprico " is equally "o br"
+ * typed between "apric" and "o ", and suffix trimming picks the second. That
+ * guess decides where the run lands in a three-way merge, and a run placed
+ * inside a word splits it ("aprico brot" — the other person's "t" then
+ * follows the base's "o"). Every equivalent place for the run is scored by
+ * its two seams, and it moves to the best one; among equals, the rightmost,
+ * which is where the common-prefix trim puts a run typed at the end of the
+ * text. A deletion moves the same way. Neighbouring hunks are never touched.
+ */
+function alignToSeams<T>(a: readonly T[], hunks: Array<Hunk<T>>, seam: SeamScore<T>): Array<Hunk<T>> {
+  return hunks.map((hunk, k) => {
+    const insertion = hunk.start === hunk.end;
+    const deletion = hunk.insert.length === 0;
+    if (insertion === deletion) return hunk;
+    // Keep a token of untouched base between this hunk and its neighbours.
+    const low = k > 0 ? hunks[k - 1].end + 1 : 0;
+    const high = k < hunks.length - 1 ? hunks[k + 1].start - 1 : a.length;
+    if (insertion) {
+      // The edited sequence is the same wherever the run sits: `edited(i)`
+      // reads it, and the run placed at `at` is edited[at, at + n).
+      const n = hunk.insert.length;
+      const edited = (i: number) => (
+        i < hunk.start ? a[i] : i < hunk.start + n ? hunk.insert[i - hunk.start] : a[i - n]
+      );
+      let at = hunk.start;
+      while (at > low && edited(at + n - 1) === a[at - 1]) at -= 1;
+      let best = { at, score: -1 };
+      for (;;) {
+        const score = seam(a[at - 1], edited(at)) + seam(edited(at + n - 1), a[at]);
+        if (score >= best.score) best = { at, score };
+        if (at >= high || edited(at) !== a[at]) break;
+        at += 1;
+      }
+      if (best.at === hunk.start) return hunk;
+      const insert: T[] = [];
+      for (let i = best.at; i < best.at + n; i += 1) insert.push(edited(i));
+      return { start: best.at, end: best.at, insert };
+    }
+    let start = hunk.start;
+    let end = hunk.end;
+    while (start > low && a[start - 1] === a[end - 1]) {
+      start -= 1;
+      end -= 1;
+    }
+    let best = { start, score: -1 };
+    for (;;) {
+      const score = seam(a[start - 1], a[start]) + seam(a[end - 1], a[end]);
+      if (score >= best.score) best = { start, score };
+      if (end >= high || a[start] !== a[end]) break;
+      start += 1;
+      end += 1;
+    }
+    const width = hunk.end - hunk.start;
+    return best.start === hunk.start ? hunk : { start: best.start, end: best.start + width, insert: [] };
+  });
+}
+
+function rawDiff<T>(a: readonly T[], b: readonly T[]): Array<Hunk<T>> {
   let prefix = 0;
   const shorter = Math.min(a.length, b.length);
   while (prefix < shorter && a[prefix] === b[prefix]) prefix += 1;
@@ -115,10 +207,11 @@ export function mergeSequences<T>(
   base: readonly T[],
   current: readonly T[],
   incoming: readonly T[],
+  seam?: SeamScore<T>,
 ): T[] {
   const hunks: Array<Sided<T>> = [
-    ...diffSequences(base, incoming).map((hunk) => ({ ...hunk, side: 'incoming' as const })),
-    ...diffSequences(base, current).map((hunk) => ({ ...hunk, side: 'current' as const })),
+    ...diffSequences(base, incoming, seam).map((hunk) => ({ ...hunk, side: 'incoming' as const })),
+    ...diffSequences(base, current, seam).map((hunk) => ({ ...hunk, side: 'current' as const })),
   ];
   // By start; at one start, pure insertions before replacements, and
   // incoming before current. The sort is stable, so each side keeps its order.
@@ -194,7 +287,7 @@ export function mergeTextHtml(base: string, current: string, incoming: string): 
   // Not short-circuited when current === incoming: two people who both typed
   // a space at the same point typed two spaces, and collapsing them glued
   // their next words together.
-  const merged = mergeSequences(htmlTokens(base), htmlTokens(current), htmlTokens(incoming));
+  const merged = mergeSequences(htmlTokens(base), htmlTokens(current), htmlTokens(incoming), textSeam);
   return tagsBalanced(merged) ? merged.join('') : incoming;
 }
 
@@ -207,7 +300,7 @@ export function mergeTextHtml(base: string, current: string, incoming: string): 
  */
 export function mapTextOffset(before: string, after: string, offset: number): number {
   let delta = 0;
-  for (const hunk of diffSequences(before.split(''), after.split(''))) {
+  for (const hunk of diffSequences(before.split(''), after.split(''), textSeam)) {
     if (hunk.end < offset || (hunk.end === offset && hunk.start < offset)) {
       delta += hunk.insert.length - (hunk.end - hunk.start);
       continue;
