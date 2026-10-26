@@ -1527,8 +1527,10 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
     tlsReload = setInterval(() => {
       void readTlsFiles().then((next) => {
         if (next.stamp === tlsFiles) return;
-        tlsFiles = next.stamp;
+        // A pair caught mid-renewal (new key, old certificate) throws here and
+        // is tried again next hour; only a pair that loaded counts as seen.
         httpsServer?.setSecureContext({ cert: next.cert, key: next.key });
+        tlsFiles = next.stamp;
       }).catch(() => null);
     }, 60 * 60 * 1000);
     tlsReload.unref();
