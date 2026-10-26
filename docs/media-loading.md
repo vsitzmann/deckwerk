@@ -346,13 +346,14 @@ back and forward. None of the tests caught it because every browser tier is
 Chromium.
 
 So the browser presentation (`src/renderer/collab/present.ts`) hands the
-Player a `VideoBlobCache` (`src/renderer/player/videoBlobCache.ts`). It
+Player a `MediaBlobCache` (`src/renderer/player/mediaBlobCache.ts`). It
 downloads each of the talk's clips once, whole, one at a time, and the Player
 renders a clip's `blob:` URL instead of its network URL once the file is in
 memory. Order: the next two slides, then the slide on screen, then the rest of
-the talk ahead, then what lies behind, nearest first. The cache holds (starts
-no new transfer) from each slide change until the visible slide can paint,
-exactly like the lookahead. The lookahead decodes an upcoming clip only once
+the talk ahead, then what lies behind, nearest first, with the talk's pictures
+woven in ahead of the clips they would otherwise wait behind (see "Pictures"
+below). The cache holds (starts no new clip) from each slide change until the
+visible slide can paint, exactly like the lookahead. The lookahead decodes an upcoming clip only once
 its blob has landed, and a slide the presenter reaches while its clip is
 still on its way takes no source until that download ends
 (`awaitClipsOnTheirWayIntoMemory`), so a clip is never downloaded twice.
@@ -383,7 +384,7 @@ the collab editor installs a `VideoMemory` (`src/renderer/collab/
 editorVideoMemory.ts`), and `renderVideo` asks it what each canvas element
 should read:
 
-- **memory**: the whole file, fetched once with `fetch` (a `VideoBlobCache`,
+- **memory**: the whole file, fetched once with `fetch` (a `MediaBlobCache`,
   one file at a time, most recently shown first) and read as a `blob:` URL by
   every element built for it afterwards. Until the file lands the element has
   no source and shows the server-cut still (`/api/video-still`) as its
@@ -403,7 +404,7 @@ should read:
 Elements keep their network URL in `data-network-src` (`videoNetworkSrc`), so
 presentation keys, pooling and the render-invariant checker see the same
 element whatever it reads. The presentation the editor embeds borrows the
-editor's blobs (`VideoBlobCache`'s `borrow`), so presenting downloads nothing
+editor's blobs (`MediaBlobCache`'s `borrow`), so presenting downloads nothing
 the editor already has.
 
 Two smaller rules came out of the same session:
@@ -416,13 +417,64 @@ Two smaller rules came out of the same session:
   still loading is not that case, and giving up on it left the clip frozen
   once its bytes arrived.
 
+### Pictures: downloaded once, then never asked about again
+
+Presenting a hosted talk in Oct 2026, every slide appeared at once and its
+photos seconds later: 6.8 s on one slide, 15.4 s for one 4.7 MB photo. The
+link was not the only reason. The presentation spent it on the wrong things
+first: the blob cache downloaded the next slides' clips (one `fetch` open for
+tens of seconds) while the photos waited behind it; photos were looked for
+only two slides ahead, four at most, and only once the visible slide had
+painted; and every photo the editor had already loaded was served
+`public, no-cache`, so each reshow was a revalidation, a 304 that queued
+behind the clip on the same connection (one took 4 s to say "unchanged").
+
+Three rules now:
+
+- **A picture has one URL, for good.** Images, video posters, web posters and
+  slide backgrounds get a content key like clips (`RenditionStore.variant`
+  answers `o<key>` for a picture), announced in `mediaVariants` with the
+  clips', and clients ask for `/media/o<key>.<ext>`, served immutable and
+  under the same access rule. A deck copy shares it; a reshow, a reload or a
+  new presentation in the same browser asks the server nothing. A picture
+  brought in by an edit is announced before the edit, as a clip is
+  (`bringsMedia`).
+- **The presentation holds the talk's pictures in memory** (the same
+  `MediaBlobCache` that holds its clips), so a slide renders them as `blob:`
+  URLs: no request at all, not even to the HTTP cache. A picture the slide
+  on screen needs that is not in memory yet waits for the cache's transfer
+  (`awaitImagesOnTheirWayIntoMemory`) rather than starting a second one.
+- **One order for the link** (`Player.mediaOrder`): the pictures of the slide
+  on screen and the next four slides; the clips of the next two slides and of
+  the slide on screen; every other picture of the talk, ahead then behind;
+  then the remaining clips. Up to four pictures download at once, and they
+  are not held while the visible slide's clips load. A clip downloads only
+  once every picture ranked above it is in memory, and a clip already
+  downloading when such a picture goes missing (the talk moved on) steps
+  aside: the transfer stops, the bytes it had are kept, and it resumes with a
+  `Range` and `If-Range` request once the pictures are in. What the slide on
+  screen waits for (`prioritize`) goes first and is never set aside.
+
+Measured with `imgbench` against a local server through Chrome's network
+emulation at 30 ms / 10 Mbit/s, on a 12-slide deck of 62 photos and four
+19 MB clips: before, four slides showed their photos late (worst +3.0 s) and
+the presentation sent 61 revalidations; after, one did (a 3.4 MB photo the
+benchmark reached 2.5 s into the show) and the presentation sent nothing to
+the server.
+
 Images are loaded and decoded as `<img>` elements, then the decoded element
 is adopted into the slide when it appears. This distinction
 matters for large JPEGs: cached bytes can still paint as a thin band of decoded
 scanlines, while an adopted decoded bitmap appears atomically. Decodes run
-sequentially and stop after four images or 48 megapixels. Only the active
+sequentially and stop after 40 images or 48 megapixels. Only the active
 lookahead's decoded images remain resident, so a long deck does not retain a
-deck's worth of 4K/6K frames or decode a whole image wall concurrently.
+deck's worth of 4K/6K frames or decode a whole image wall concurrently. With
+the presentation's blob cache, the lookahead decodes pictures already in
+memory as soon as the slide changes (decoding costs the link nothing) and
+again as each lands, rather than after the visible slide paints. The decoded
+pictures of the slides just shown are kept too, under the same 48 megapixel
+bound, most recent first (`shownImages`), so stepping back or jumping home
+shows them in the slide's first frame.
 
 The editor canvas applies the same exact-node rule to still images, with a
 tighter budget: during idle time it decodes images from only the next
@@ -480,7 +532,15 @@ accumulates decoded bitmaps from the rest of the deck.
   adopts, opens one element for a clip two slides share, respects skipped
   slides and the decode budget, and gives up a decode the deck navigated away
   from.
-- `test/presentVideosFromMemory.test.ts` — the blob cache's order, hold,
+- `test/mediaTransferBudgetBrowser.test.ts`, "presenting a talk of photos
+  and clips" — over the throttled link, each slide's photos are on screen in
+  the frame the slide appears once the background fetch has reached it,
+  moving back, jumping home and presenting again included; each photo
+  crosses the wire once under one URL, and nothing is asked about it again.
+- `test/presentVideosFromMemory.test.ts` — pictures before the clips ranked
+  below them, several at once and never held; a clip set aside for a picture
+  and resumed with a range request; a clip the slide waits for never set
+  aside; the Player showing pictures from memory. Also the blob cache's order, hold,
   budget and fallbacks, and the Player with it: a revisited slide fetches
   nothing, an upcoming clip is decoded from memory rather than downloaded
   twice, a slide reached while its clip is still on its way into memory

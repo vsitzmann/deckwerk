@@ -1,4 +1,4 @@
-import { VideoBlobCache } from '../player/videoBlobCache.js';
+import { MediaBlobCache } from '../player/mediaBlobCache.js';
 import {
   fillVideosFromMemory,
   mediaStackReusesBytes,
@@ -38,7 +38,7 @@ declare global {
 }
 
 export class EditorVideoMemory implements VideoMemory {
-  private readonly blobs = new VideoBlobCache({ maxFileBytes: MAX_FILE_BYTES });
+  private readonly blobs = new MediaBlobCache({ maxFileBytes: MAX_FILE_BYTES });
   /** Network URLs most recently shown first: the cache's order, and what it evicts last. */
   private order: string[] = [];
 

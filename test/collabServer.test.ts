@@ -393,6 +393,60 @@ describe('collab server', () => {
     expect(stale.status).toBe(200);
   });
 
+  it('gives a picture one content-keyed URL, served immutable, and announces one an edit brings in', async () => {
+    // Presenting a hosted talk, Oct 2026: every photo the editor already had
+    // was served `no-cache`, so each reshow was a 304 that queued behind a
+    // clip's download. A picture now has a content key like a clip
+    // (docs/media-loading.md, "Pictures").
+    const cacheDir = join(rootDir, 'rendition-cache');
+    await mkdir(join(deckDir, 'assets'), { recursive: true });
+    const photo = join(deckDir, 'assets', 'photo-3.png');
+    const later = join(deckDir, 'assets', 'later.jpg');
+    await writeFile(photo, Buffer.from('not really a png, but bytes all the same'));
+    await writeFile(later, Buffer.from('a picture an edit brings in'));
+    const deck = parseDeck({
+      ...emptyDeck('Pictures'),
+      slides: [{
+        id: 's1', name: 'One', background: { color: null, image: 'assets/photo-3.png' },
+        elements: [{ id: 'p1', type: 'image', x: 0, y: 0, w: 100, h: 50, src: 'assets/photo-3.png' }],
+      }],
+    });
+    await saveDeck(deckDir, deck);
+    await server.close();
+    server = await startCollabServer({ rootDir, port: 0, host: '127.0.0.1', mediaRenditions: { cacheDir } });
+
+    const { client, welcome } = await connect('A');
+    const key = (await contentKeyOfFile(photo)).slice(0, 24);
+    expect(welcome.mediaVariants?.['assets/photo-3.png']).toBe(`o${key}`);
+
+    const url = `http://127.0.0.1:${server.port}/media/o${key}.png`;
+    const served = await fetch(url);
+    expect(served.status).toBe(200);
+    expect(served.headers.get('cache-control')).toBe('public, max-age=31536000, immutable');
+    expect(served.headers.get('content-type')).toBe('image/png');
+    expect(await served.text()).toBe('not really a png, but bytes all the same');
+    // A resumed download names the bytes it has: the rest only if they are still those.
+    const etag = served.headers.get('etag')!;
+    const resumed = await fetch(url, { headers: { range: 'bytes=4-', 'if-range': etag } });
+    expect(resumed.status).toBe(206);
+    expect(await resumed.text()).toBe('really a png, but bytes all the same');
+    const changed = await fetch(url, { headers: { range: 'bytes=4-', 'if-range': '"something-else"' } });
+    expect(changed.status).toBe(200);
+    expect(await changed.text()).toBe('not really a png, but bytes all the same');
+
+    // An edit that brings a picture in is preceded by its variant.
+    client.send({
+      kind: 'txn', txnId: 't1', baseSeq: 0, label: 'Add a picture',
+      ops: [{
+        op: 'insertElements', slideId: 's1',
+        elements: [{ ...deck.slides[0].elements[0], id: 'p2', src: 'assets/later.jpg' }] as never,
+      }],
+    });
+    const media = await client.nextOfKind('media');
+    expect(media.variants['assets/later.jpg']).toBe(`o${(await contentKeyOfFile(later)).slice(0, 24)}`);
+    await client.nextOfKind('txn');
+  });
+
   it('serves the client bundle cacheably: hashed files immutable, shells revalidated', async () => {
     // `no-store` on the bundle once made every click on Present re-download
     // present.html and its ~1 MB of JS over the network — behind the deck's

@@ -50,6 +50,13 @@ const MIN_PLAUSIBLE_BYTES = 1024;
 const MIN_SOURCE_BYTES = 8 * 1024 * 1024;
 
 const VIDEO_EXTENSIONS = new Set(['.mp4', '.mov', '.m4v', '.webm', '.mkv', '.qt', '.avi']);
+/**
+ * Pictures a slide shows as an `<img>` or a background: content-addressed like
+ * clips, so a browser holds each one under one URL for good. (A PDF is shown
+ * through a viewer with a page fragment, and the formats the importer converts
+ * never reach a slide as themselves.)
+ */
+const STILL_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.jfif', '.gif', '.webp', '.svg', '.avif']);
 
 export interface RenditionOptions {
   /** Where renditions are cached. Defaults to the per-user cache directory. */
@@ -279,6 +286,15 @@ export function isVideoAsset(absolute: string): boolean {
   return VIDEO_EXTENSIONS.has(extname(absolute).toLowerCase());
 }
 
+export function isStillAsset(absolute: string): boolean {
+  return STILL_EXTENSIONS.has(extname(absolute).toLowerCase());
+}
+
+/** A file served under its content key (`/media/o<key>.<ext>`): a clip or a picture. */
+export function isContentKeyedAsset(absolute: string): boolean {
+  return isVideoAsset(absolute) || isStillAsset(absolute);
+}
+
 /**
  * The rendition a request should be served, or null to serve the original.
  *
@@ -314,7 +330,7 @@ export class RenditionStore {
    * variants: a big clip whose content is unknown has none to hand out.
    */
   async learn(paths: string[]): Promise<void> {
-    for (const path of paths) if (isVideoAsset(path)) await this.keys.learn(path);
+    for (const path of paths) if (isContentKeyedAsset(path)) await this.keys.learn(path);
   }
 
   /** The content key a file was last learned with, or null. */
@@ -366,7 +382,8 @@ export class RenditionStore {
 
   /**
    * Which bytes this file's URL answers with right now: `o<key>` for the
-   * original, `r<key>` for its rendition, null for a file that is not a video.
+   * original, `r<key>` for its rendition (a picture has only `o`), null for
+   * a file that is neither a clip nor a picture.
    *
    * A <video> reads its source in many range requests and never revalidates
    * between them, so the bytes behind one URL must not change under it. When
@@ -382,6 +399,13 @@ export class RenditionStore {
    * ~10 MB/s. A keyed pin names exact bytes, so it is cached for good.
    */
   variant(absolute: string, size: number, mtimeMs: number): string | null {
+    // A picture has no streaming version: its key names it for good, so a
+    // presentation that has it never asks about it again (no 304 round trip
+    // queued behind a clip's download on every reshow).
+    if (isStillAsset(absolute)) {
+      const key = this.keys.known(absolute, size, mtimeMs);
+      return key ? `o${key}` : null;
+    }
     if (!isVideoAsset(absolute)) return null;
     const key = this.keys.known(absolute, size, mtimeMs);
     if (!key) return null;

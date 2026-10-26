@@ -40,7 +40,7 @@ import {
   releaseDecodedVideo,
 } from './decodedVideoPool.js';
 import { applyStaticSlideState } from './staticState.js';
-import type { VideoBlobCache } from './videoBlobCache.js';
+import type { MediaBlobCache } from './mediaBlobCache.js';
 import {
   essentialMorphPairs,
   explicitMorphPairs,
@@ -73,10 +73,10 @@ export interface PlayerOptions {
   /** Notified on every cursor change, for slide counters and the editor rail. */
   onCursor?: (cursor: Cursor, steps: number) => void;
   /**
-   * Hold the deck's video files in memory and play them from there. The
-   * browser presentation passes one; see videoBlobCache.ts for why.
+   * Hold the deck's clips and pictures in memory and show them from there.
+   * The browser presentation passes one; see mediaBlobCache.ts for why.
    */
-  videoBlobs?: VideoBlobCache;
+  mediaBlobs?: MediaBlobCache;
 }
 
 /**
@@ -92,7 +92,23 @@ const PLAY_RETRY_DELAY_MS = 400;
 const WARM_AHEAD_SLIDES = 2;
 /** Two typical 24 MP images, with a count fallback when dimensions are unavailable. */
 const IMAGE_WARM_PIXEL_LIMIT = 48_000_000;
-const IMAGE_WARM_COUNT_LIMIT = 4;
+/**
+ * Decoded lookahead images, whatever their size. A slide of thirty small
+ * photos has to be decoded whole to appear whole; the pixel limit is what
+ * bounds the memory.
+ */
+const IMAGE_WARM_COUNT_LIMIT = 40;
+/**
+ * Decoded images of the slides shown last, kept for a step back or a jump
+ * home: the same bound as the lookahead, most recently shown kept first.
+ */
+const SHOWN_IMAGE_PIXEL_LIMIT = 48_000_000;
+/**
+ * How many presentable slides ahead have their pictures fetched into memory
+ * before any clip is (with a blob cache). Pictures are what a slide is
+ * missing when it appears, and cheap next to clips.
+ */
+const IMAGE_FIRST_SLIDES = 4;
 /** How many upcoming videos are decoded into ready-to-adopt elements. */
 const VIDEO_WARM_ELEMENT_LIMIT = 4;
 /** How long one lookahead decode may run before its element is given up on. */
@@ -147,12 +163,15 @@ function textLayout(element: Extract<SlideElement, { type: 'text' }>): string {
 export class Player {
   private deck: Deck;
   private container: HTMLElement;
-  /** Deck src → URL, preferring a clip's in-memory copy once there is one. */
+  /** Deck src → URL, preferring a file's in-memory copy once there is one. */
   private resolveSrc: (src: string) => string;
   /** Deck src → URL on the network, whatever the blob cache holds. */
   private networkSrc: (src: string) => string;
-  private videoBlobs: VideoBlobCache | null;
+  private mediaBlobs: MediaBlobCache | null;
+  /** The network URL behind each `blob:` URL `resolveSrc` handed out. */
+  private blobNetwork = new Map<string, string>();
   private offBlobReady: (() => void) | null = null;
+  private imageWarmQueued = false;
   private onCursor?: (cursor: Cursor, steps: number) => void;
 
   private stage: HTMLElement;
@@ -225,8 +244,18 @@ export class Player {
   private videoWarmInFlight: { key: string; video: HTMLVideoElement } | null = null;
   /** Stops a lookahead that is still waiting for the visible slide to paint. */
   private lookaheadHold: (() => void) | null = null;
-  /** Fully decoded images for the next presentable slides, kept alive until use. */
+  /**
+   * Fully decoded images for the next presentable slides, kept alive until
+   * use, by network URL (the node itself may read the file from memory).
+   */
   private warmedImages = new Map<string, HTMLImageElement>();
+  /**
+   * Decoded images of the slides shown last, by network URL, least recently
+   * shown first. Stepping back or jumping home adopts them as the lookahead's
+   * are adopted going forward, so a revisited slide's pictures are on screen
+   * in its first frame rather than a decode later.
+   */
+  private shownImages = new Map<string, HTMLImageElement>();
   private imageWarmGeneration = 0;
 
   constructor(opts: PlayerOptions) {
@@ -234,19 +263,25 @@ export class Player {
     prepareCodeBlocks(opts.deck);
     this.container = opts.container;
     this.networkSrc = opts.resolveSrc;
-    this.videoBlobs = opts.videoBlobs ?? null;
+    this.mediaBlobs = opts.mediaBlobs ?? null;
     // Every URL the player renders, pools or warms goes through here, so a
     // clip's presentation key names the same URL everywhere at any moment.
     this.resolveSrc = (src) => {
       const url = this.networkSrc(src);
-      return this.videoBlobs?.objectUrl(url) ?? url;
+      const objectUrl = this.mediaBlobs?.objectUrl(url);
+      if (objectUrl === undefined) return url;
+      this.blobNetwork.set(objectUrl, url);
+      return objectUrl;
     };
     this.onCursor = opts.onCursor;
-    if (this.videoBlobs) {
-      this.videoBlobs.setInUse((objectUrl) => this.readsUrl(objectUrl));
-      // A clip landing in memory is one the lookahead was waiting for.
-      this.offBlobReady = this.videoBlobs.onReady(() => {
-        if (!this.lookaheadHold) this.warmUpcomingMedia();
+    if (this.mediaBlobs) {
+      this.mediaBlobs.setInUse((objectUrl) => this.readsUrl(objectUrl));
+      this.offBlobReady = this.mediaBlobs.onReady((url) => {
+        // A picture landing in memory can be decoded for the slides ahead at
+        // once: decoding from memory costs the link nothing.
+        if (this.mediaBlobs?.isImage(url)) this.queueImageWarm();
+        // A clip landing in memory is one the lookahead was waiting for.
+        else if (!this.lookaheadHold) this.warmUpcomingMedia();
       });
     }
 
@@ -349,7 +384,8 @@ export class Player {
     this.settleWaiters = [];
     this.offBlobReady?.();
     this.offBlobReady = null;
-    this.videoBlobs?.setInUse(null);
+    this.mediaBlobs?.setInUse(null);
+    this.imageWarmGeneration += 1;
     this.resizeObserver.disconnect();
     if (typeof document !== 'undefined') {
       document.removeEventListener('visibilitychange', this.onVisibilityChange);
@@ -370,6 +406,7 @@ export class Player {
     }
     this.videoPool.clear();
     for (const image of this.warmedImages.values()) image.removeAttribute('src');
+    this.shownImages.clear();
     this.warmedImages.clear();
     this.container.replaceChildren();
   }
@@ -454,8 +491,6 @@ export class Player {
    */
   goTo(cursor: Cursor, opts: { play?: boolean; morph?: boolean } = {}): void {
     this.clearPending();
-    // Released by the lookahead once this slide can paint.
-    this.videoBlobs?.hold();
     const slides = this.deck.slides;
     if (slides.length === 0) {
       this.stage.replaceChildren();
@@ -480,6 +515,9 @@ export class Player {
       slide: slides.indexOf(slide),
       step: Math.min(Math.max(cursor.step, 0), steps - 1),
     };
+    // This slide's pictures first, then the next ones'. Clips are held until
+    // this slide can paint (the lookahead releases them).
+    this.wantMedia({ hold: true });
 
     // A video that appears on consecutive slides (Keynote's "plays across
     // slides") must continue, not restart: keep the playing element itself and
@@ -534,8 +572,10 @@ export class Player {
       }
     }
 
+    this.keepShownImages();
     const rendered = renderSlide(slide, { resolveSrc: this.resolveSrc });
     this.adoptWarmedImages(rendered);
+    const awaited = this.awaitImagesOnTheirWayIntoMemory(rendered);
     revealImagesWhenDecoded(rendered);
     this.stage.replaceChildren(rendered);
     this.notifyWebFrames({ source: WEB_BRIDGE_SOURCE, event: 'active', step: this.cursor.step, steps });
@@ -651,7 +691,12 @@ export class Player {
         releaseDecodedVideo(video);
       }
     }
-    this.awaitClipsOnTheirWayIntoMemory(slide, adopted);
+    awaited.push(...this.awaitClipsOnTheirWayIntoMemory(slide, adopted));
+    // What this slide waits for goes before everything else.
+    this.mediaBlobs?.prioritize(awaited);
+    // Decoding pictures already in memory costs the link nothing, so the
+    // slides ahead need not wait for this one to paint.
+    if (this.mediaBlobs) this.warmUpcomingImages(this.upcomingSlides());
 
     this.rescale();
 
@@ -686,20 +731,25 @@ export class Player {
    * mediaTransferBudgetBrowser). The download is the most urgent transfer
    * there is at that point, and the loading ring shows while it finishes.
    *
+   * A clip the cache set aside part-way (for pictures) counts as on its way:
+   * the slide marks it urgent, so it resumes at once.
+   *
    * Runs in the task that rendered the slide: the element's resource
    * selection waits for a stable state, so taking the source away here means
    * it never opened a connection. Adopted elements keep what they are
-   * already playing.
+   * already playing. Returns the network URLs it waits for.
    */
-  private awaitClipsOnTheirWayIntoMemory(slide: Slide, adopted: Set<HTMLVideoElement>): void {
-    const cache = this.videoBlobs;
-    if (!cache) return;
+  private awaitClipsOnTheirWayIntoMemory(slide: Slide, adopted: Set<HTMLVideoElement>): string[] {
+    const cache = this.mediaBlobs;
+    const awaited: string[] = [];
+    if (!cache) return awaited;
     for (const video of this.stage.querySelectorAll('video')) {
       if (adopted.has(video)) continue;
       const network = video.getAttribute('src');
-      if (!network || !cache.fetching(network)) continue;
+      if (!network || !cache.onItsWay(network)) continue;
       video.removeAttribute('src');
-      void cache.settled(network).then((objectUrl) => {
+      awaited.push(network);
+      void cache.whenHeld(network).then((objectUrl) => {
         // The slide moved on, or the element was handed elsewhere: nothing to load.
         if (!video.isConnected || !this.stage.contains(video) || video.hasAttribute('src')) return;
         const src = objectUrl ?? network;
@@ -717,6 +767,39 @@ export class Player {
         }
       });
     }
+    return awaited;
+  }
+
+  /**
+   * A fresh `<img>` whose picture the blob cache is still to hold takes no
+   * source until it lands, then the picture from memory (or, if it did not
+   * land, from the network), shown once decoded.
+   *
+   * The cache fetches this slide's pictures before anything else, so the
+   * wait is the transfer itself. Letting the element fetch beside the cache
+   * would send the picture twice wherever the HTTP cache does not join the
+   * two (Safari), and a picture asked for from the network is one the next
+   * reshow asks about again. Returns the network URLs it waits for.
+   */
+  private awaitImagesOnTheirWayIntoMemory(root: HTMLElement): string[] {
+    const cache = this.mediaBlobs;
+    const awaited: string[] = [];
+    if (!cache) return awaited;
+    for (const image of root.querySelectorAll<HTMLImageElement>('img')) {
+      const network = image.getAttribute('src');
+      if (!network || !cache.isImage(network) || cache.objectUrl(network) !== undefined || !cache.covers(network)) continue;
+      image.removeAttribute('src');
+      image.style.visibility = 'hidden';
+      awaited.push(network);
+      void cache.whenHeld(network).then((objectUrl) => {
+        if (!image.isConnected || image.hasAttribute('src')) return;
+        const src = objectUrl ?? network;
+        if (objectUrl) this.blobNetwork.set(objectUrl, network);
+        image.src = src;
+        void decodeImage(image).then(() => image.style.removeProperty('visibility'));
+      });
+    }
+    return awaited;
   }
 
   /**
@@ -778,29 +861,22 @@ export class Player {
   }
 
   private warmUpcomingMedia(): void {
-    this.videoBlobs?.want(this.videoBlobOrder());
+    this.wantMedia();
     const onCurrentSlide = new Set<string>();
     for (const el of this.deck.slides[this.cursor.slide]?.elements ?? []) {
       if (el.type === 'video' && !isPendingSrc(el.src)) onCurrentSlide.add(this.resolveSrc(el.src));
     }
     this.warmQueue = [];
-    const upcomingSlides: Slide[] = [];
+    const upcomingSlides = this.upcomingSlides();
     const videoTargets: VideoWarmTarget[] = [];
-    let slidesAhead = 0;
-    for (let i = this.cursor.slide + 1;
-      i < this.deck.slides.length && slidesAhead < WARM_AHEAD_SLIDES;
-      i += 1) {
-      const upcoming = this.deck.slides[i];
-      if (upcoming.skipped) continue;
-      slidesAhead += 1;
-      upcomingSlides.push(upcoming);
+    for (const upcoming of upcomingSlides) {
       for (const el of upcoming.elements) {
         if (el.type !== 'video' || isPendingSrc(el.src)) continue;
         // A clip on its way into memory is decoded once it lands (the cache's
         // ready listener calls back here); warming it from the network now
         // would download it twice.
         const network = this.networkSrc(el.src);
-        if (this.videoBlobs?.covers(network) && !this.videoBlobs.objectUrl(network)) continue;
+        if (this.mediaBlobs?.covers(network) && !this.mediaBlobs.objectUrl(network)) continue;
         const src = this.resolveSrc(el.src);
         if (onCurrentSlide.has(src)) continue;
         // A decoded element is strictly better than cached bytes, so the
@@ -823,38 +899,82 @@ export class Player {
     this.pumpWarmQueue();
   }
 
+  /** The next presentable slides, as far as the lookahead reaches. */
+  private upcomingSlides(): Slide[] {
+    const upcoming: Slide[] = [];
+    for (let i = this.cursor.slide + 1; i < this.deck.slides.length && upcoming.length < WARM_AHEAD_SLIDES; i += 1) {
+      if (!this.deck.slides[i].skipped) upcoming.push(this.deck.slides[i]);
+    }
+    return upcoming;
+  }
+
+  /** Hand the blob cache the deck's media in the order the talk needs it (`mediaOrder`). */
+  private wantMedia(options: { hold?: boolean } = {}): void {
+    if (!this.mediaBlobs) return;
+    const { urls, images } = this.mediaOrder();
+    this.mediaBlobs.want(urls, { images, hold: options.hold });
+  }
+
   /**
-   * The deck's clips in the order the blob cache should fetch them: the next
-   * two slides first (what the talk reaches soonest), then the slide on
-   * screen, whose elements are already streaming it but whose revisits and
-   * loops should not have to, then the rest of the talk ahead, then what lies
-   * behind, nearest first. Skipped slides are not part of the talk.
+   * The deck's media in the order the blob cache should fetch it, as network
+   * URLs. Pictures before clips wherever both are near:
+   *
+   * 1. the pictures of the slide on screen and of the next few slides, which
+   *    a slide is missing the moment it appears;
+   * 2. the clips of the next two slides (what the talk reaches soonest), then
+   *    the slide on screen's, whose elements are already streaming them but
+   *    whose revisits and loops should not have to;
+   * 3. every other picture of the talk, ahead then behind, nearest first:
+   *    cheap next to clips, and once in memory a slide never waits for one;
+   * 4. the rest of the clips, ahead then behind.
+   *
+   * Skipped slides are not part of the talk.
    */
-  private videoBlobOrder(): string[] {
+  private mediaOrder(): { urls: string[]; images: string[] } {
     const slides = this.deck.slides;
     const here = this.cursor.slide;
     const ahead: number[] = [];
     const behind: number[] = [];
     for (let i = here + 1; i < slides.length; i += 1) if (!slides[i].skipped) ahead.push(i);
     for (let i = here - 1; i >= 0; i -= 1) if (!slides[i].skipped) behind.push(i);
-    const order = [...ahead.slice(0, WARM_AHEAD_SLIDES), here, ...ahead.slice(WARM_AHEAD_SLIDES), ...behind];
-    const urls: string[] = [];
-    for (const index of order) {
-      for (const el of slides[index]?.elements ?? []) {
-        if (el.type === 'video' && !isPendingSrc(el.src)) urls.push(this.networkSrc(el.src));
+    const images: string[] = [];
+    const picturesOf = (indices: number[]): string[] => {
+      const urls: string[] = [];
+      for (const index of indices) {
+        const slide = slides[index];
+        if (!slide) continue;
+        const srcs = [
+          slide.background.image,
+          ...slide.elements.map((el) => (el.type === 'image' && !/\.pdf(?:$|[?#])/i.test(el.src) ? el.src : null)),
+          ...slide.elements.map((el) => (el.type === 'web' || el.type === 'video' ? el.poster : null)),
+        ];
+        for (const src of srcs) if (src && !isPendingSrc(src)) urls.push(this.networkSrc(src));
       }
-    }
-    return urls;
+      images.push(...urls);
+      return urls;
+    };
+    const clipsOf = (indices: number[]): string[] => indices.flatMap((index) => (slides[index]?.elements ?? [])
+      .flatMap((el) => (el.type === 'video' && !isPendingSrc(el.src) ? [this.networkSrc(el.src)] : [])));
+    const urls = [
+      ...picturesOf([here, ...ahead.slice(0, IMAGE_FIRST_SLIDES)]),
+      ...clipsOf([...ahead.slice(0, WARM_AHEAD_SLIDES), here]),
+      ...picturesOf([...ahead.slice(IMAGE_FIRST_SLIDES), ...behind]),
+      ...clipsOf([...ahead.slice(WARM_AHEAD_SLIDES), ...behind]),
+    ];
+    return { urls, images };
   }
 
-  /** Whether any element this player owns, on the stage or parked, reads `url`. */
+  /** Whether any element this player owns, on the stage, parked or warming, reads `url`. */
   private readsUrl(url: string): boolean {
     const videos = [
       ...this.stage.querySelectorAll('video'),
       ...this.videoPool.values(),
       ...(this.videoWarmInFlight ? [this.videoWarmInFlight.video] : []),
     ];
-    return videos.some((video) => video.getAttribute('src') === url);
+    return videos.some((video) => video.getAttribute('src') === url)
+      || [...this.warmedImages.values(), ...this.shownImages.values()].some((image) => image.getAttribute('src') === url)
+      // Pictures, backgrounds and posters anywhere on the slide.
+      || this.stage.innerHTML.includes(url);
   }
 
   /**
@@ -929,45 +1049,87 @@ export class Player {
    */
   private warmUpcomingImages(slides: Slide[]): void {
     const generation = ++this.imageWarmGeneration;
-    const desired = new Set<string>();
+    // Network URL → what the warming node reads: the picture's blob once it
+    // is in memory. A picture the blob cache is still to hold is skipped
+    // here and decoded when it lands (`queueImageWarm`), so a warm never
+    // fetches what the cache is fetching.
+    const desired = new Map<string, string>();
+    const cache = this.mediaBlobs;
     for (const slide of slides) {
-      if (slide.background.image && !isPendingSrc(slide.background.image)) {
-        desired.add(this.resolveSrc(slide.background.image));
-      }
-      for (const el of slide.elements) {
-        if (el.type !== 'image' || isPendingSrc(el.src) || /\.pdf(?:$|[?#])/i.test(el.src)) continue;
-        desired.add(this.resolveSrc(el.src));
+      const srcs = [
+        slide.background.image,
+        ...slide.elements.map((el) => (el.type === 'image' && !/\.pdf(?:$|[?#])/i.test(el.src) ? el.src : null)),
+      ];
+      for (const src of srcs) {
+        if (!src || isPendingSrc(src)) continue;
+        const network = this.networkSrc(src);
+        const objectUrl = cache?.objectUrl(network);
+        if (objectUrl !== undefined) desired.set(network, objectUrl);
+        else if (!cache?.isImage(network) || !cache.covers(network)) desired.set(network, network);
       }
     }
 
-    for (const [src, image] of this.warmedImages) {
-      if (desired.has(src)) continue;
+    for (const [network, image] of this.warmedImages) {
+      if (desired.get(network) === image.getAttribute('src')) continue;
       image.removeAttribute('src');
-      this.warmedImages.delete(src);
+      this.warmedImages.delete(network);
     }
     void this.warmImageSources([...desired], generation);
   }
 
+  /** Decode the slides ahead again once a picture lands in memory; one pass for a burst of them. */
+  private queueImageWarm(): void {
+    if (this.imageWarmQueued) return;
+    this.imageWarmQueued = true;
+    queueMicrotask(() => {
+      this.imageWarmQueued = false;
+      // A destroyed player has let go of its stage.
+      if (this.container.contains(this.stage)) this.warmUpcomingImages(this.upcomingSlides());
+    });
+  }
+
   /** Decode sequentially so two upcoming media-wall slides cannot spike memory. */
-  private async warmImageSources(sources: string[], generation: number): Promise<void> {
+  private async warmImageSources(sources: Array<[string, string]>, generation: number): Promise<void> {
     let retainedPixels = [...this.warmedImages.values()].reduce(
       (sum, image) => sum + image.naturalWidth * image.naturalHeight,
       0,
     );
-    for (const src of sources) {
+    for (const [network, src] of sources) {
       if (
         generation !== this.imageWarmGeneration
         || this.warmedImages.size >= IMAGE_WARM_COUNT_LIMIT
         || retainedPixels >= IMAGE_WARM_PIXEL_LIMIT
       ) return;
-      if (this.warmedImages.has(src)) continue;
+      if (this.warmedImages.has(network)) continue;
       const image = document.createElement('img');
       image.decoding = 'async';
       image.src = src;
-      this.warmedImages.set(src, image);
+      this.warmedImages.set(network, image);
       await decodeImage(image);
       if (generation !== this.imageWarmGeneration) return;
       retainedPixels += image.naturalWidth * image.naturalHeight;
+    }
+  }
+
+  /**
+   * Keep the decoded pictures of the slide leaving the stage, for a revisit
+   * (`shownImages`). Only complete, revealed ones: a node still decoding is
+   * worth nothing over a fresh one.
+   */
+  private keepShownImages(): void {
+    for (const image of this.stage.querySelectorAll<HTMLImageElement>('img')) {
+      const src = image.getAttribute('src');
+      if (!src || !image.complete || image.naturalWidth <= 0 || image.style.visibility === 'hidden') continue;
+      const network = this.blobNetwork.get(src) ?? src;
+      this.shownImages.delete(network);
+      this.shownImages.set(network, image);
+    }
+    let pixels = 0;
+    for (const image of this.shownImages.values()) pixels += image.naturalWidth * image.naturalHeight;
+    for (const [network, image] of this.shownImages) {
+      if (pixels <= SHOWN_IMAGE_PIXEL_LIMIT) break;
+      pixels -= image.naturalWidth * image.naturalHeight;
+      this.shownImages.delete(network);
     }
   }
 
@@ -976,7 +1138,8 @@ export class Player {
     for (const fresh of root.querySelectorAll<HTMLImageElement>('img')) {
       const src = fresh.getAttribute('src');
       if (!src) continue;
-      const warmed = this.warmedImages.get(src);
+      const network = this.blobNetwork.get(src) ?? src;
+      const warmed = this.warmedImages.get(network) ?? this.shownImages.get(network);
       // A still-loading warmer is useful too: move its one in-flight request
       // into the slide and keep it hidden until decode completes, rather than
       // aborting it and starting the same large image again from a fresh node.
@@ -986,7 +1149,8 @@ export class Player {
       warmed.alt = fresh.alt;
       warmed.draggable = fresh.draggable;
       fresh.replaceWith(warmed);
-      this.warmedImages.delete(src);
+      this.warmedImages.delete(network);
+      this.shownImages.delete(network);
     }
   }
 

@@ -2,7 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { emptyDeck, type Deck, type SlideElement } from '../src/shared/deck.js';
 import { Player } from '../src/renderer/player/player.js';
-import { VideoBlobCache } from '../src/renderer/player/videoBlobCache.js';
+import { MediaBlobCache } from '../src/renderer/player/mediaBlobCache.js';
 
 /**
  * Presenting from the server in Safari, Oct 2026 (the TRI site visit): a
@@ -69,7 +69,7 @@ function controlledFetch() {
 function cacheWith(fetchFile: typeof fetch, budgetBytes?: number) {
   const revoked: string[] = [];
   let next = 0;
-  const cache = new VideoBlobCache({
+  const cache = new MediaBlobCache({
     fetch: fetchFile,
     budgetBytes,
     createObjectUrl: () => `blob:test/${next++}`,
@@ -106,7 +106,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe('VideoBlobCache', () => {
+describe('MediaBlobCache', () => {
   it('downloads one file at a time, in the order asked, and serves each from memory', async () => {
     const { requests, fetchFile } = controlledFetch();
     const { cache } = cacheWith(fetchFile);
@@ -174,6 +174,174 @@ describe('VideoBlobCache', () => {
   });
 });
 
+/**
+ * A fetch that answers at once and streams each body as the test pushes it:
+ * every file is 1000 bytes under a strong ETag, and a `Range: bytes=N-` is
+ * answered 206 from N.
+ */
+function streamingFetch() {
+  const SIZE = 1000;
+  const requests: Array<{ url: string; range: string | null; ifRange: string | null; signal: AbortSignal; push: (bytes: number) => void; end: () => void }> = [];
+  const fetchFile = ((input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    const headers = (init?.headers ?? {}) as Record<string, string>;
+    const range = headers.range ?? null;
+    const from = range ? Number(/bytes=(\d+)-/.exec(range)![1]) : 0;
+    let controller!: ReadableStreamDefaultController<Uint8Array>;
+    const body = new ReadableStream<Uint8Array>({ start: (c) => { controller = c; } });
+    const signal = init!.signal!;
+    signal.addEventListener('abort', () => controller.error(new DOMException('aborted', 'AbortError')));
+    requests.push({
+      url, range, ifRange: headers['if-range'] ?? null, signal,
+      push: (bytes) => controller.enqueue(new Uint8Array(bytes)),
+      end: () => controller.close(),
+    });
+    return Promise.resolve(new Response(body, {
+      status: range ? 206 : 200,
+      headers: {
+        'content-length': String(SIZE - from),
+        etag: '"v1"',
+        ...(range ? { 'content-range': `bytes ${from}-${SIZE - 1}/${SIZE}` } : {}),
+      },
+    }));
+  }) as typeof fetch;
+  return { requests, fetchFile };
+}
+
+/** The blobs the cache made, by object URL, to check what a resumed file holds. */
+function blobCacheWith(fetchFile: typeof fetch) {
+  const blobs = new Map<string, Blob>();
+  let next = 0;
+  const cache = new MediaBlobCache({
+    fetch: fetchFile,
+    createObjectUrl: (blob) => {
+      const url = `blob:test/${next++}`;
+      blobs.set(url, blob);
+      return url;
+    },
+    revokeObjectUrl: () => {},
+  });
+  return { cache, blobs };
+}
+
+// Presenting a hosted talk, Oct 2026: a slide's photos showed up seconds
+// after the slide, because the cache was downloading the next slides' clips
+// and the photos waited behind them on the same link.
+describe('MediaBlobCache, with pictures', () => {
+  it('fetches pictures ranked above a clip first, several at once, and the clip only once they are in', async () => {
+    const { requests, fetchFile } = controlledFetch();
+    const { cache } = cacheWith(fetchFile);
+    cache.want(['/a.jpg', '/clip.mp4', '/b.jpg'], { images: ['/a.jpg', '/b.jpg'] });
+    expect(requests.map((r) => r.url)).toEqual(['/a.jpg', '/b.jpg']);
+    requests[0].respond();
+    await flush();
+    // Only the pictures ranked above a clip hold it back; b is further away.
+    expect(requests.map((r) => r.url)).toEqual(['/a.jpg', '/b.jpg', '/clip.mp4']);
+    expect(cache.objectUrl('/a.jpg')).toBeDefined();
+  });
+
+  it('fetches pictures while clips are held', () => {
+    const { requests, fetchFile } = controlledFetch();
+    const { cache } = cacheWith(fetchFile);
+    cache.want(['/clip.mp4', '/a.jpg'], { images: ['/a.jpg'], hold: true });
+    cache.want(['/clip.mp4', '/a.jpg', '/b.jpg'], { images: ['/a.jpg', '/b.jpg'], hold: true });
+    expect(requests.map((r) => r.url)).toEqual(['/a.jpg', '/b.jpg']);
+  });
+
+  it('sets a clip aside for a picture the talk now needs, and resumes it where it stopped', async () => {
+    const { requests, fetchFile } = streamingFetch();
+    const { cache, blobs } = blobCacheWith(fetchFile);
+    cache.want(['/clip.mp4']);
+    await flush();
+    requests[0].push(400);
+    await flush();
+
+    // The talk moved on: a slide whose photo is not in memory is next.
+    cache.want(['/a.jpg', '/clip.mp4'], { images: ['/a.jpg'] });
+    await flush();
+    expect(requests[0].signal.aborted).toBe(true);
+    expect(requests.map((r) => r.url)).toEqual(['/clip.mp4', '/a.jpg']);
+    expect(cache.onItsWay('/clip.mp4')).toBe(true);
+
+    requests[1].push(1000);
+    requests[1].end();
+    await flush();
+    expect(requests.map((r) => r.url)).toEqual(['/clip.mp4', '/a.jpg', '/clip.mp4']);
+    expect(requests[2].range).toBe('bytes=400-');
+    expect(requests[2].ifRange).toBe('"v1"');
+    requests[2].push(600);
+    requests[2].end();
+    await flush();
+    const objectUrl = cache.objectUrl('/clip.mp4');
+    expect(objectUrl).toBeDefined();
+    expect(blobs.get(objectUrl!)!.size).toBe(1000);
+  });
+
+  it('never sets aside a clip the slide on screen waits for, and starts one while held', async () => {
+    const { requests, fetchFile } = streamingFetch();
+    const { cache } = blobCacheWith(fetchFile);
+    cache.want(['/clip.mp4', '/a.jpg'], { images: ['/a.jpg'], hold: true });
+    cache.prioritize(['/clip.mp4']);
+    await flush();
+    expect(requests.map((r) => r.url)).toEqual(['/a.jpg', '/clip.mp4']);
+    cache.want(['/b.jpg', '/clip.mp4', '/a.jpg'], { images: ['/a.jpg', '/b.jpg'] });
+    await flush();
+    expect(requests[1].signal.aborted).toBe(false);
+  });
+
+  it('resolves a waiter when its file lands, and with nothing when it is no longer wanted', async () => {
+    const { requests, fetchFile } = controlledFetch();
+    const { cache } = cacheWith(fetchFile);
+    cache.want(['/a.jpg', '/b.jpg'], { images: ['/a.jpg', '/b.jpg'] });
+    const a = cache.whenHeld('/a.jpg');
+    const b = cache.whenHeld('/b.jpg');
+    requests[0].respond();
+    await flush();
+    await expect(a).resolves.toBe(cache.objectUrl('/a.jpg'));
+    cache.want(['/a.jpg'], { images: ['/a.jpg'] });
+    await expect(b).resolves.toBeUndefined();
+  });
+});
+
+function imageElement(id: string, src: string): SlideElement {
+  return {
+    id, type: 'image', x: 0, y: 0, w: 640, h: 360, rot: 0, z: 1, opacity: 1,
+    class: [], style: {}, src, fit: 'contain', alt: '', sourceBox: null,
+  } as unknown as SlideElement;
+}
+
+describe('the Player with pictures in memory', () => {
+  it("fetches the next slides' pictures before the next slide's clip, and shows them from memory", async () => {
+    const { requests, fetchFile } = controlledFetch();
+    const { cache } = cacheWith(fetchFile);
+    const deck = deckWith([
+      [imageElement('p0', 'assets/zero.jpg')],
+      [videoElement('v', 'assets/clip.05a38d7a.mp4')],
+      [imageElement('p2', 'assets/two.jpg'), imageElement('p3', 'assets/three.jpg')],
+    ]);
+    player = new Player({ deck, container: host, resolveSrc: (src) => `/x/${src}`, mediaBlobs: cache });
+    // The slide on screen waits for its picture, which the cache fetches first.
+    expect(host.querySelector('img')!.getAttribute('src')).toBeNull();
+    expect(requests.map((r) => r.url)).toEqual(['/x/assets/zero.jpg', '/x/assets/two.jpg', '/x/assets/three.jpg']);
+    for (const request of requests) request.respond();
+    await flush();
+    expect(host.querySelector('img')!.getAttribute('src')).toBe(cache.objectUrl('/x/assets/zero.jpg'));
+    expect(requests.at(-1)!.url).toBe('/x/assets/clip.05a38d7a.mp4');
+    requests.at(-1)!.respond();
+    await flush();
+
+    const asked = requests.length;
+    player.goToSlide(2);
+    expect([...host.querySelectorAll('img')].map((image) => image.getAttribute('src')))
+      .toEqual([cache.objectUrl('/x/assets/two.jpg'), cache.objectUrl('/x/assets/three.jpg')]);
+    player.goToSlide(0);
+    player.goToSlide(1);
+    player.goToSlide(2);
+    await flush();
+    expect(requests).toHaveLength(asked);
+  });
+});
+
 describe('the Player with clips in memory', () => {
   it('plays a clip from memory once it is there, so a revisit fetches nothing', async () => {
     const { requests, fetchFile } = controlledFetch();
@@ -183,7 +351,7 @@ describe('the Player with clips in memory', () => {
       [videoElement('v', 'assets/clip.05a38d7a.mp4')],
       [],
     ]);
-    player = new Player({ deck, container: host, resolveSrc: (src) => `/x/${src}`, videoBlobs: cache });
+    player = new Player({ deck, container: host, resolveSrc: (src) => `/x/${src}`, mediaBlobs: cache });
     // The next slide's clip is fetched while this one is on screen.
     expect(requests.map((r) => r.url)).toEqual(['/x/assets/clip.05a38d7a.mp4']);
     requests[0].respond();
@@ -208,7 +376,7 @@ describe('the Player with clips in memory', () => {
     const { requests, fetchFile } = controlledFetch();
     const { cache } = cacheWith(fetchFile);
     const deck = deckWith([[], [videoElement('v', 'assets/clip.05a38d7a.mp4')]]);
-    player = new Player({ deck, container: host, resolveSrc: (src) => `/x/${src}`, videoBlobs: cache });
+    player = new Player({ deck, container: host, resolveSrc: (src) => `/x/${src}`, mediaBlobs: cache });
 
     const warming = () => created.filter((video) => !video.isConnected && video.hasAttribute('src'));
     expect(warming()).toHaveLength(0);
@@ -236,7 +404,7 @@ describe('the Player with clips in memory', () => {
       plays.push(this.getAttribute('src'));
       return Promise.resolve();
     };
-    player = new Player({ deck, container: host, resolveSrc: (src) => `/x/${src}`, videoBlobs: cache });
+    player = new Player({ deck, container: host, resolveSrc: (src) => `/x/${src}`, mediaBlobs: cache });
     expect(requests.map((r) => r.url)).toEqual(['/x/assets/clip.05a38d7a.mp4']);
 
     // The talk arrives before the download has finished.
@@ -258,7 +426,7 @@ describe('the Player with clips in memory', () => {
     const { requests, fetchFile } = controlledFetch();
     const { cache } = cacheWith(fetchFile);
     const deck = deckWith([[], [videoElement('v', 'assets/clip.05a38d7a.mp4')]]);
-    player = new Player({ deck, container: host, resolveSrc: (src) => `/x/${src}`, videoBlobs: cache });
+    player = new Player({ deck, container: host, resolveSrc: (src) => `/x/${src}`, mediaBlobs: cache });
     player.goToSlide(1);
     const video = host.querySelector('video')!;
     expect(video.getAttribute('src')).toBeNull();

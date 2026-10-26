@@ -26,6 +26,7 @@ import { DEFAULT_TAILSCALED_SOCKET, tailnetWhoIs } from './tailscaleIdentity.js'
 import {
   RenditionStore,
   defaultRenditionCacheDir,
+  isContentKeyedAsset,
   isVideoAsset,
   pruneRenditions,
   type RenditionOptions,
@@ -205,8 +206,10 @@ const SERVER_SIDECARS: ReadonlySet<string> = new Set(['agent-chats.json', 'acces
 interface Room {
   session: CollabSession;
   peers: Map<string, Peer>;
-  /** The clip variants this room's clients were last told, as JSON (see announceMedia). */
+  /** The clip and picture variants this room's clients were last told, as JSON (see announceMedia). */
   announcedMedia: string;
+  /** The media srcs the deck held when its clients were last told (see `bringsMedia`). */
+  announcedSrcs: Set<string>;
   guestCounter: number;
   /** Synthetic HTTP-agent presence, retained so peers joining later see it. */
   agentPresence: PresenceState | null;
@@ -440,21 +443,21 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
     }
     return [...pending];
   }
-  /** The variant each oversized clip in a deck is served as right now (see RenditionStore.variant). */
+  /**
+   * The variant each clip and picture in a deck is served as right now (see
+   * RenditionStore.variant): the content key its clients ask `/media` for.
+   */
   function deckMediaVariants(deckDir: string, deck: Deck): Record<string, string> {
     const variants: Record<string, string> = {};
     if (!renditions) return variants;
-    for (const slide of deck.slides) {
-      for (const element of slide.elements) {
-        if (element.type !== 'video' || element.src in variants) continue;
-        try {
-          const absolute = resolveAsset(deckDir, element.src);
-          const info = statSync(absolute);
-          const variant = renditions.variant(absolute, info.size, info.mtimeMs);
-          if (variant) variants[element.src] = variant;
-        } catch {
-          // A pending or missing src has no variant to pin.
-        }
+    for (const src of deckMediaSrcs(deck)) {
+      try {
+        const absolute = resolveAsset(deckDir, src);
+        const info = statSync(absolute);
+        const variant = renditions.variant(absolute, info.size, info.mtimeMs);
+        if (variant) variants[src] = variant;
+      } catch {
+        // A pending or missing src has no variant to pin.
       }
     }
     return variants;
@@ -547,7 +550,7 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
     if (!renditions) return imported;
     try {
       const absolute = resolveAsset(deckDir, imported.src);
-      if (!isVideoAsset(absolute)) return imported;
+      if (!isContentKeyedAsset(absolute)) return imported;
       await renditions.learn([absolute]);
       const info = await stat(absolute);
       const variant = renditions.variant(absolute, info.size, info.mtimeMs);
@@ -1255,6 +1258,7 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
       relocating: false,
       remotes: new Map(),
       announcedMedia: '',
+      announcedSrcs: new Set(),
     };
     session.watch({
       onExternalDeck: (deck, seq) => broadcast(room, {
@@ -1270,14 +1274,16 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
       }),
       onExternalTheme: (css) => broadcast(room, { kind: 'theme', css, byClientId: '' }),
     });
-    // The welcome names each clip's variant, and a variant names content:
-    // learn it (hashing only files never seen) before anyone is welcomed.
+    // The welcome names each clip's and picture's variant, and a variant
+    // names content: learn it (hashing only files never seen) before anyone
+    // is welcomed.
     if (renditions) {
-      await renditions.learn(deckVideoAssets(session.dir, session.deck));
+      await renditions.learn(deckKeyedAssets(session.dir, session.deck));
       room.announcedMedia = JSON.stringify({
         variants: deckMediaVariants(session.dir, session.deck),
         pending: deckPendingMedia(session.dir, session.deck),
       });
+      room.announcedSrcs = new Set(deckMediaSrcs(session.deck));
     }
     rooms.set(deckId, room);
     // Opening a deck is the earliest honest signal that someone intends to
@@ -1311,9 +1317,9 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
    * offers no way to share — but that runs on zlib's thread pool.)
    */
   const broadcast = (room: Room, message: ServerMessage, except?: string) => {
-    // A change that brings a clip in is preceded by the clip's variant, so
-    // every client builds its element on the URL it will keep.
-    if (message.kind === 'deck' || (message.kind === 'txn' && JSON.stringify(message.ops).includes('"type":"video"'))) {
+    // A change that brings a clip or a picture in is preceded by its
+    // variant, so every client builds its element on the URL it will keep.
+    if (message.kind === 'deck' || (message.kind === 'txn' && bringsMedia(room, JSON.stringify(message.ops)))) {
       announceMedia(room);
     }
     let data: Buffer | null = null;
@@ -1341,14 +1347,15 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
     const variants = deckMediaVariants(room.session.dir, room.session.deck);
     const pending = deckPendingMedia(room.session.dir, room.session.deck);
     const encoded = JSON.stringify({ variants, pending });
+    room.announcedSrcs = new Set(deckMediaSrcs(room.session.deck));
     if (encoded !== room.announcedMedia) {
       room.announcedMedia = encoded;
       broadcast(room, { kind: 'media', variants, pending });
     }
     if (!learn) return;
-    const assets = deckVideoAssets(room.session.dir, room.session.deck);
+    const assets = deckKeyedAssets(room.session.dir, room.session.deck);
     // A clip brought in by an edit is a clip someone means to show.
-    renditions.warm(assets);
+    renditions.warm(assets.filter(isVideoAsset));
     if (assets.every((asset) => renditions.keyOf(asset))) return;
     void renditions.learn(assets).then(() => announceMedia(room, false)).catch(() => null);
   }
@@ -1792,9 +1799,10 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
       return redirectToViewer(response, url);
     }
 
-    // Content-addressed video: /media/<o|r><key>.<ext>, the one URL every
-    // deck holding the same bytes sends its keyed pins to (see the asset route
-    // below). Served immutable: the key names exact bytes.
+    // Content-addressed clips and pictures: /media/<o|r><key>.<ext>, the one
+    // URL every deck holding the same bytes sends its keyed pins to (see the
+    // asset route below). Served immutable: the key names exact bytes, so a
+    // browser that has them never asks again, not even to revalidate.
     const mediaMatch = /^\/media\/([or][0-9a-f]{24})(?:\.[a-z0-9]+)?$/.exec(path);
     if (mediaMatch && renditions) {
       const found = renditions.contentFile(mediaMatch[1]);
@@ -5324,23 +5332,56 @@ async function collectDeckFiles(deckDir: string): Promise<ZipFile[]> {
 const CONTENT_HASHED_NAME = /\.[0-9a-f]{8}\.(?:[a-z0-9]+\.)?[a-z0-9]+$/i;
 const VITE_HASHED_NAME = /-[a-z0-9_-]{8}\.[a-z0-9]+$/i;
 
-/** Stream a file honouring HTTP Range requests, so <video> can seek. */
 /** Every video file a deck's slides reference, in the order a talk reaches them. */
 function deckVideoAssets(deckDir: string, deck: Deck): string[] {
-  const seen = new Set<string>();
+  return deckKeyedAssets(deckDir, deck).filter(isVideoAsset);
+}
+
+/**
+ * Whether a transaction may bring media the room's clients have not been told
+ * the variant of (see `announceMedia`): a clip, as always (its file may have
+ * changed under the same src), or a picture src the deck did not hold. Moving
+ * or restyling a picture asks nothing of the disk.
+ */
+function bringsMedia(room: Room, ops: string): boolean {
+  if (ops.includes('"type":"video"')) return true;
+  for (const match of ops.matchAll(MEDIA_SRC)) if (!room.announcedSrcs.has(match[1])) return true;
+  return false;
+}
+const MEDIA_SRC = /"(?:src|image|poster)":"([^"\\]+)"/g;
+
+/**
+ * Every deck src a slide shows as a clip or a picture, in slide order: clips,
+ * images, video and web posters, slide backgrounds. These are the srcs that
+ * get a content-keyed URL (`/media/o<key>.<ext>`).
+ */
+function deckMediaSrcs(deck: Deck): string[] {
+  const srcs = new Set<string>();
   for (const slide of deck.slides) {
+    if (slide.background.image) srcs.add(slide.background.image);
     for (const element of slide.elements) {
-      if (element.type !== 'video') continue;
-      try {
-        const absolute = resolveAsset(deckDir, element.src);
-        if (isVideoAsset(absolute) && existsSync(absolute)) seen.add(absolute);
-      } catch {
-        // A pending or malformed src is not an asset to prepare.
-      }
+      if (element.type === 'video' || element.type === 'image') srcs.add(element.src);
+      if ((element.type === 'video' || element.type === 'web') && element.poster) srcs.add(element.poster);
+    }
+  }
+  return [...srcs];
+}
+
+/** The files behind `deckMediaSrcs` that are served by content key, in slide order. */
+function deckKeyedAssets(deckDir: string, deck: Deck): string[] {
+  const seen = new Set<string>();
+  for (const src of deckMediaSrcs(deck)) {
+    try {
+      const absolute = resolveAsset(deckDir, src);
+      if (isContentKeyedAsset(absolute) && existsSync(absolute)) seen.add(absolute);
+    } catch {
+      // A pending or malformed src is not an asset to prepare.
     }
   }
   return [...seen];
 }
+
+/** Stream a file honouring HTTP Range requests, so <video> can seek. */
 
 interface ServeVariant {
   /** Force revalidation: what this URL answers with may change. */
@@ -5401,7 +5442,6 @@ async function serveFileWithRanges(
   }
 
   const type = MIME[extname(absolute).toLowerCase()] ?? 'application/octet-stream';
-  const range = request.headers.range;
   // Assets must be cacheable. `no-store` here once made every <video> element
   // refetch its whole file on every mount: a deck reusing one 27 MB clip
   // across N elements issued N full downloads at open, which saturated the
@@ -5410,6 +5450,11 @@ async function serveFileWithRanges(
   // assets carry a content hash in the filename, so those are immutable; for
   // anything else the validator makes revalidation a 304, not a re-download.
   const etag = `"${variant.etagSalt ? `${variant.etagSalt}-` : ''}${info.size}-${Math.round(info.mtimeMs)}"`;
+  // A range asked `If-Range` is only for the bytes it names: a client resuming
+  // a download it set aside (mediaBlobCache.ts) gets the whole file again if
+  // the file has changed since, never the rest of a different one.
+  const ifRange = request.headers['if-range'];
+  const range = ifRange && ifRange !== etag ? undefined : request.headers.range;
   const name = basename(absolute);
   const cacheControl = variant.immutable
     || (!variant.revalidate && hashedNames.some((pattern) => pattern.test(name)))

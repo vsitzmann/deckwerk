@@ -2,7 +2,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import type { SlideElement } from '../src/shared/deck.js';
 import { renderElement, startVideoSource, videoNetworkSrc } from '../src/renderer/player/render.js';
-import { VideoBlobCache } from '../src/renderer/player/videoBlobCache.js';
+import { MediaBlobCache } from '../src/renderer/player/mediaBlobCache.js';
 import {
   fillVideosFromMemory,
   mediaStackReusesBytes,
@@ -160,7 +160,7 @@ describe('VideoBlobCache, for the editor', () => {
   it('gives up a file over its size limit for good, and says so', async () => {
     const { asked, fetchFile } = fetchOf({ big: 5_000 });
     let next = 0;
-    const cache = new VideoBlobCache({ fetch: fetchFile, maxFileBytes: 1_000, createObjectUrl: () => `blob:${next++}` });
+    const cache = new MediaBlobCache({ fetch: fetchFile, maxFileBytes: 1_000, createObjectUrl: () => `blob:${next++}` });
     const gaveUp: string[] = [];
     cache.onGiveUp((url) => gaveUp.push(url));
     cache.want(['big', 'small']);
@@ -175,7 +175,7 @@ describe('VideoBlobCache, for the editor', () => {
 
   it('hands out a lender’s blob instead of downloading the file', async () => {
     const { asked, fetchFile } = fetchOf({});
-    const cache = new VideoBlobCache({ fetch: fetchFile, borrow: (url) => (url === 'lent' ? 'blob:lent' : undefined) });
+    const cache = new MediaBlobCache({ fetch: fetchFile, borrow: (url) => (url === 'lent' ? 'blob:lent' : undefined) });
     cache.want(['lent']);
     await flush();
     expect(asked).toEqual([]);
