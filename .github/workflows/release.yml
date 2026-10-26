@@ -206,8 +206,8 @@ jobs:
       # Update the AppImage this run is about to ship, the way a person
       # would: repackage the same build as the next patch version into a
       # folder that is never uploaded, serve it as the update feed, start the
-      # released AppImage under Xvfb, let its launch check find the update,
-      # press Download and Restart, and check that the new AppImage replaced
+      # released AppImage under Xvfb, choose Check for Updates…, confirm
+      # Update and Restart Now, and check that the new AppImage replaced
       # it and relaunched (scripts/smoke-test-appimage-update.mjs). macOS
       # and Windows updates need signed builds and a person; see
       # docs/RELEASING.md, "Trying an update end to end".

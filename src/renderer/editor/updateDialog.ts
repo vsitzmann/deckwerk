@@ -1,27 +1,17 @@
-import {
-  shouldCheckAtLaunch,
-  type UpdateCheckResult,
-  type UpdateRelease,
-} from '@shared/updates.js';
+import type { UpdateCheckResult, UpdateRelease } from '@shared/updates.js';
 import { showConfirmDialog } from './confirmDialog.js';
 import type { ToolbarPickerEntry } from './exportPicker.js';
 import type { OperationHandle } from './operationProgress.js';
 
 /**
- * "Check for Updates…" in the DeckWerk menu, the quiet daily check at launch,
- * and the dialogs between finding a release and restarting into it. The main
+ * "Check for Updates…" in the DeckWerk menu and the dialogs between finding a
+ * release and restarting into it. Nothing here runs unasked: the app never
+ * checks by itself, and an update is downloaded only after the person
+ * confirms it and installed only when they choose to restart. The main
  * process does the checking and installing (src/main/updates.ts); this side
  * decides what to show. Only the desktop app has `window.api.updates`, so
  * the browser editor's DeckWerk menu never offers any of it.
- *
- * Whether to check automatically is a per-machine preference in localStorage,
- * like Appearance and Interface size beside it in the same menu.
  */
-
-const AUTOMATIC_KEY = 'deckwerk.updates.automatic';
-const LAST_CHECK_KEY = 'deckwerk.updates.lastCheck';
-/** Let the deck open first: the launch check is never what someone is waiting for. */
-const LAUNCH_DELAY_MS = 8000;
 
 export interface UpdateHost {
   /** The shared status-bar activity indicator (DelayedOperationProgress). */
@@ -38,50 +28,16 @@ function updatesApi(): UpdatesApi | null {
   return (window as { api?: { updates?: UpdatesApi } }).api?.updates ?? null;
 }
 
-function readStorage(key: string): string | null {
-  try {
-    return localStorage.getItem(key);
-  } catch {
-    return null;
-  }
-}
-
-function writeStorage(key: string, value: string | null): void {
-  try {
-    if (value === null) localStorage.removeItem(key);
-    else localStorage.setItem(key, value);
-  } catch {
-    // A locked-down profile keeps the choice for this window only.
-  }
-}
-
-export function automaticUpdateChecks(): boolean {
-  return readStorage(AUTOMATIC_KEY) !== 'off';
-}
-
-function setAutomaticUpdateChecks(enabled: boolean): void {
-  writeStorage(AUTOMATIC_KEY, enabled ? null : 'off');
-}
-
-/** The DeckWerk menu's update entries: empty outside the desktop app. */
-export function updateMenuEntries(): { check: ToolbarPickerEntry[]; settings: ToolbarPickerEntry[] } {
-  if (!updatesApi()) return { check: [], settings: [] };
-  return {
-    check: [{ label: 'Check for Updates…', action: () => void checkForUpdates() }],
-    settings: [{
-      label: 'Update checks',
-      options: [
-        { label: 'Daily at launch', action: () => setAutomaticUpdateChecks(true), checked: () => automaticUpdateChecks() },
-        { label: 'Only when asked', action: () => setAutomaticUpdateChecks(false), checked: () => !automaticUpdateChecks() },
-      ],
-    }],
-  };
+/** The DeckWerk menu's update entry: none outside the desktop app. */
+export function updateMenuEntries(): ToolbarPickerEntry[] {
+  if (!updatesApi()) return [];
+  return [{ label: 'Check for Updates…', action: () => void checkForUpdates() }];
 }
 
 /**
- * Hook this window up: the native app menu's item, the save-before-restart
- * request, and the quiet launch check. `flush` saves everything the window
- * holds and says whether it is clean afterwards.
+ * Hook this window up: the native app menu's item and the save-before-restart
+ * request. `flush` saves everything the window holds and says whether it is
+ * clean afterwards.
  */
 export function installUpdates(options: UpdateHost & {
   flush: () => Promise<{ clean: boolean; deckName?: string }>;
@@ -91,29 +47,6 @@ export function installUpdates(options: UpdateHost & {
   host = { beginOperation: options.beginOperation, setStatus: options.setStatus };
   api.onMenuCheck(() => void checkForUpdates());
   api.onFlushRequest(options.flush);
-  setTimeout(() => void launchCheck(), LAUNCH_DELAY_MS);
-}
-
-async function launchCheck(): Promise<void> {
-  const api = updatesApi();
-  if (!api) return;
-  const previous = readStorage(LAST_CHECK_KEY);
-  const lastCheckedAt = previous === null ? null : Number(previous);
-  if (!shouldCheckAtLaunch({ enabled: automaticUpdateChecks(), lastCheckedAt, now: Date.now() })) return;
-  const state = await api.state();
-  // Only an install that updates itself checks unasked; a .deb or a Flatpak
-  // has its own channel, and a development run has none.
-  if (state.mode.kind !== 'auto') return;
-  // Claim today's check before asking, so a second window opening at the
-  // same moment does not ask too — and give the claim back if the check
-  // failed, so being offline at launch does not skip a day.
-  writeStorage(LAST_CHECK_KEY, String(Date.now()));
-  const result = await api.check();
-  if (result.kind === 'error') {
-    writeStorage(LAST_CHECK_KEY, previous);
-    return;
-  }
-  if (result.kind === 'available') await offerRelease(result.release);
 }
 
 /** The menu item: ask, and say what came back — including "nothing new". */
@@ -135,11 +68,9 @@ async function showCheckResult(result: UpdateCheckResult): Promise<void> {
   if (!api) return;
   switch (result.kind) {
     case 'available':
-      writeStorage(LAST_CHECK_KEY, String(Date.now()));
       await offerRelease(result.release);
       return;
     case 'latest':
-      writeStorage(LAST_CHECK_KEY, String(Date.now()));
       await showMessage('No update available', `DeckWerk ${result.currentVersion} is the latest version.`);
       return;
     case 'release-page':
@@ -171,7 +102,7 @@ function showMessage(title: string, description: string): Promise<boolean> {
   return showConfirmDialog({ title, description, confirmLabel: 'OK', cancelLabel: null });
 }
 
-/** A newer release: its notes, then Download (or Restart, if already downloaded). */
+/** A newer release: its notes, and the person's go-ahead before anything is downloaded. */
 async function offerRelease(release: UpdateRelease): Promise<void> {
   const api = updatesApi();
   if (!api) return;
@@ -184,15 +115,15 @@ async function offerRelease(release: UpdateRelease): Promise<void> {
     host?.setStatus(`DeckWerk ${release.version} is downloading`);
     return;
   }
-  const download = await showConfirmDialog({
+  const update = await showConfirmDialog({
     title: 'Update available',
-    description: `DeckWerk ${release.version} is available. You have ${state.currentVersion}.`,
+    description: `DeckWerk ${release.version} is available. You have ${state.currentVersion}. Update now?`,
     body: releaseNotesElement(release.notes),
     className: 'update-dialog',
-    confirmLabel: 'Download',
-    cancelLabel: 'Later',
+    confirmLabel: 'Update',
+    cancelLabel: 'Not Now',
   });
-  if (!download) return;
+  if (!update) return;
 
   const label = `Downloading DeckWerk ${release.version}`;
   const operation = host?.beginOperation(label);
@@ -216,17 +147,22 @@ async function offerRelease(release: UpdateRelease): Promise<void> {
   await offerRestart(release);
 }
 
+/**
+ * The download is done; restarting is still the person's call, since it
+ * closes every window. Later installs nothing — the next Check for Updates
+ * offers the restart again.
+ */
 async function offerRestart(release: UpdateRelease): Promise<void> {
   const api = updatesApi();
   if (!api) return;
   const restart = await showConfirmDialog({
     title: 'Ready to install',
-    description: `DeckWerk ${release.version} is downloaded. Restart now to install it, or it installs the next time you quit DeckWerk. Your decks are saved before restarting.`,
-    confirmLabel: 'Restart',
+    description: `DeckWerk ${release.version} is downloaded. Restart DeckWerk to install it? Your decks are saved first.`,
+    confirmLabel: 'Restart Now',
     cancelLabel: 'Later',
   });
   if (!restart) {
-    host?.setStatus(`DeckWerk ${release.version} installs when you quit`);
+    host?.setStatus(`DeckWerk ${release.version} is ready: choose Check for Updates… to install it`);
     return;
   }
   const operation = host?.beginOperation('Saving open decks before restarting');

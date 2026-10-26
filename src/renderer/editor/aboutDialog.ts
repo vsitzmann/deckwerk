@@ -20,10 +20,9 @@ export function createDeckWerkButton(): HTMLElement {
   const updates = updateMenuEntries();
   return createToolbarPicker('DeckWerk', [
     { label: 'About DeckWerk', action: showAboutDialog },
-    ...updates.check,
+    ...updates,
     appearanceMenuSection(),
     interfaceSizeMenuSection(),
-    ...updates.settings,
   ], { trigger: button });
 }
 

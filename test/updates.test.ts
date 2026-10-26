@@ -1,19 +1,16 @@
 import { describe, expect, it } from 'vitest';
 import {
-  DAY_MS,
   compareVersions,
   isNewerVersion,
   releaseNotesText,
   releasePageUrl,
   restartBlocker,
-  shouldCheckAtLaunch,
   updateMode,
 } from '../src/shared/updates.js';
 
 /**
  * The decisions behind "Check for Updates…" (src/shared/updates.ts): which
- * way an install updates, what counts as newer, when the launch check runs,
- * and when a restart must wait.
+ * way an install updates, what counts as newer, and when a restart must wait.
  */
 
 describe('how an install updates', () => {
@@ -86,27 +83,6 @@ describe('what counts as a newer release', () => {
     expect(isNewerVersion('', '0.3.0')).toBe(false);
     expect(isNewerVersion('1.0', '0.3.0')).toBe(false);
     expect(compareVersions('0.3.0', 'garbage')).toBeNull();
-  });
-});
-
-describe('the quiet check at launch', () => {
-  const now = Date.UTC(2026, 9, 26, 12);
-
-  it('runs on first launch, and again once a day has passed', () => {
-    expect(shouldCheckAtLaunch({ enabled: true, lastCheckedAt: null, now })).toBe(true);
-    expect(shouldCheckAtLaunch({ enabled: true, lastCheckedAt: now - DAY_MS, now })).toBe(true);
-    expect(shouldCheckAtLaunch({ enabled: true, lastCheckedAt: now - DAY_MS + 60_000, now })).toBe(false);
-    expect(shouldCheckAtLaunch({ enabled: true, lastCheckedAt: now - 5_000, now })).toBe(false);
-  });
-
-  it('never runs when automatic checks are off', () => {
-    expect(shouldCheckAtLaunch({ enabled: false, lastCheckedAt: null, now })).toBe(false);
-    expect(shouldCheckAtLaunch({ enabled: false, lastCheckedAt: now - 10 * DAY_MS, now })).toBe(false);
-  });
-
-  it('is not silenced by a timestamp from the future or a corrupt one', () => {
-    expect(shouldCheckAtLaunch({ enabled: true, lastCheckedAt: now + DAY_MS, now })).toBe(true);
-    expect(shouldCheckAtLaunch({ enabled: true, lastCheckedAt: Number.NaN, now })).toBe(true);
   });
 });
 

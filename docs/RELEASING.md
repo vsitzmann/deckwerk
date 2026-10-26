@@ -176,13 +176,13 @@ channel.
 
 The desktop app updates itself from GitHub Releases with `electron-updater`
 ([`src/main/updates.ts`](../src/main/updates.ts)). **DeckWerk menu → Check for
-Updates…** (also under About in the macOS app menu) asks the feed; a quiet
-check runs at launch at most once a day unless **DeckWerk menu → Update checks
-→ Only when asked** is chosen. A newer release is offered with its notes;
-Download reports progress in the status bar, and Restart first has every
-window save its deck, refusing while anything is unsaved, a presentation is
-on screen, or people are connected to a shared deck. A downloaded update that
-is not restarted into installs when the app quits.
+Updates…** (also under About in the macOS app menu) asks the feed; the app
+never checks by itself. A newer release is offered with its notes, and is
+downloaded only after **Update** is confirmed, with progress in the status
+bar. **Restart Now** first has every window save its deck, refusing while
+anything is unsaved, a presentation is on screen, or people are connected to
+a shared deck. **Later** installs nothing — not even on quit; the next Check
+for Updates offers the restart again.
 
 | Install | How it updates | What the app reads from the release |
 | --- | --- | --- |
@@ -224,14 +224,14 @@ update can be tried from two dry-run builds without publishing anything.
    - macOS: `DECKWERK_UPDATE_FEED=http://127.0.0.1:8000/ /Applications/DeckWerk.app/Contents/MacOS/DeckWerk`
    - Linux: `DECKWERK_UPDATE_FEED=http://127.0.0.1:8000/ ./deckwerk-<N>-linux-x86_64.AppImage`
    - Windows (PowerShell): `$env:DECKWERK_UPDATE_FEED='http://127.0.0.1:8000/'; & "$env:LOCALAPPDATA\Programs\deckwerk\DeckWerk.exe"`
-5. **DeckWerk menu → Check for Updates…** → Download → Restart. The app
+5. **DeckWerk menu → Check for Updates…** → Update → Restart Now. The app
    reopens; **About DeckWerk** shows the new version.
 
 The Linux leg of every release run does this for the AppImage by itself
 (**Check the AppImage updates itself**): it repackages the build as the next
 patch version into `update-smoke/` (never uploaded), serves it as the feed,
 and runs [`scripts/smoke-test-appimage-update.mjs`](../scripts/smoke-test-appimage-update.mjs)
-under Xvfb — launch check, Download, Restart — then checks the new AppImage
+under Xvfb — Check for Updates…, Update, Restart Now — then checks the new AppImage
 replaced the old one and relaunched as the new version. A release whose
 AppImage cannot update itself fails there.
 

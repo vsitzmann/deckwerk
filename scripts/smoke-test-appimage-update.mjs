@@ -8,9 +8,10 @@
  *      workflow repackages this release under the next patch version into a
  *      folder that is never uploaded). It is served on localhost and the
  *      released AppImage is started with DECKWERK_UPDATE_FEED pointing at it.
- *   2. Nobody asks: the launch check finds the newer version by itself and
- *      offers it. The script presses Download, waits for "Ready to install",
- *      and presses Restart — through the dialogs, over DevTools.
+ *   2. The script chooses DeckWerk menu → Check for Updates…, confirms the
+ *      offered version with Update, waits for "Ready to install", and
+ *      presses Restart Now — through the real menu and dialogs, over
+ *      DevTools.
  *   3. electron-updater relaunches the new AppImage with no arguments, so the
  *      relaunched app cannot be driven; it is checked from outside instead.
  *      The new file must be where the updater puts it with the sha512 the
@@ -203,14 +204,27 @@ async function main() {
     }
     if (state.currentVersion === newVersion) throw new Error('the feed offers the version that is already running');
 
-    // The quiet launch check, unasked.
-    const offer = await until('the launch check to offer the update', async () => {
+    // The app never checks by itself: ask, as a person does.
+    const chose = await until('Check for Updates… in the DeckWerk menu', () => page.evaluate(`(() => {
+      document.querySelector('.brand-button')?.click();
+      const item = [...document.querySelectorAll('.shape-menu .shape-menu-item')]
+        .find((candidate) => candidate.textContent === 'Check for Updates…');
+      if (!item) {
+        document.querySelector('.brand-button')?.click();
+        return false;
+      }
+      item.click();
+      return true;
+    })()`), 30_000);
+    if (!chose) throw new Error('no Check for Updates… item');
+    const offer = await until('the update to be offered', async () => {
       const dialog = await page.evaluate(READ_DIALOG);
+      if (dialog?.title === 'Could not check for updates') throw new Error(`check failed: ${dialog.description}`);
       return dialog?.title === 'Update available' ? dialog : null;
     }, 90_000);
     log(`offered: ${offer.description}`);
     if (!offer.description.includes(newVersion)) throw new Error(`the offer does not name ${newVersion}`);
-    if (!(await page.evaluate(press('Download')))) throw new Error('no Download button');
+    if (!(await page.evaluate(press('Update')))) throw new Error('no Update button');
 
     const ready = await until('the download to finish', async () => {
       const dialog = await page.evaluate(READ_DIALOG);
@@ -219,7 +233,7 @@ async function main() {
     }, 300_000);
     log(`ready: ${ready.description}`);
     if (!requests.includes(newName)) throw new Error(`the update was not downloaded from the feed (requests: ${requests.join(', ')})`);
-    if (!(await page.evaluate(press('Restart')))) throw new Error('no Restart button');
+    if (!(await page.evaluate(press('Restart Now')))) throw new Error('no Restart Now button');
     page.close();
     page = null;
 

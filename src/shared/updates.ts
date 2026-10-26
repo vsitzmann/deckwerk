@@ -1,7 +1,6 @@
 /**
- * Updating the desktop app: which way a given install updates, whether a
- * release is newer than the running one, and when the quiet launch check
- * runs. Pure, so the decisions are unit-tested without Electron; the main
+ * Updating the desktop app: which way a given install updates, and whether
+ * a release is newer than the running one. Pure, so the decisions are unit-tested without Electron; the main
  * process (src/main/updates.ts) wires them to electron-updater and the
  * renderer (src/renderer/editor/updateDialog.ts) to the DeckWerk menu.
  */
@@ -120,22 +119,6 @@ export function isNewerVersion(candidate: string, current: string): boolean {
   return order !== null && order > 0;
 }
 
-export const DAY_MS = 24 * 60 * 60 * 1000;
-
-/** The quiet launch check: on, and not already run within the last day. */
-export function shouldCheckAtLaunch(options: {
-  enabled: boolean;
-  lastCheckedAt: number | null;
-  now: number;
-}): boolean {
-  if (!options.enabled) return false;
-  if (options.lastCheckedAt === null || !Number.isFinite(options.lastCheckedAt)) return true;
-  // A clock that went backwards (or a timestamp from the future) must not
-  // silence the check until the clock catches up again.
-  if (options.lastCheckedAt > options.now) return true;
-  return options.now - options.lastCheckedAt >= DAY_MS;
-}
-
 export interface UpdateRelease {
   version: string;
   /** Release notes as the feed gave them: HTML from GitHub, or plain text. */
@@ -150,7 +133,7 @@ export interface UpdateState {
   /** The newer release a check found, if any. */
   available: UpdateRelease | null;
   downloading: boolean;
-  /** The found release is downloaded and installs on restart (or on quit). */
+  /** The found release is downloaded and installs when the person restarts into it. */
   downloaded: boolean;
 }
 

@@ -15,12 +15,13 @@ import { isEditorTarget, launchDesktopApp, materializeDesktopApp } from './suppo
  * `DECKWERK_UPDATE_FEED` points electron-updater's generic provider at a
  * folder served on localhost — the same latest*.yml a GitHub release
  * carries — and lets this unpackaged run check against it. The suite walks
- * the paths a person sees: the quiet launch check that finds nothing (or
- * fails) and says nothing, the menu item answering "x.y.z is the latest
- * version", a newer release offered with its notes, and the launch check
- * offering one on its own. Nothing is downloaded or installed here; the
- * end-to-end install is a manual step on a dry-run release
- * (docs/RELEASING.md, "Trying an update").
+ * the paths a person sees: an app that never asks the feed by itself, even
+ * with a newer release there; the menu item answering "x.y.z is the latest
+ * version"; and a newer release offered with its notes, downloading nothing
+ * until the person says Update. The download and install are exercised on
+ * a real AppImage by the release workflow
+ * (scripts/smoke-test-appimage-update.mjs) and by hand on macOS
+ * (docs/RELEASING.md, "Trying an update end to end").
  */
 
 const CHANNEL_FILE = process.platform === 'darwin'
@@ -98,7 +99,7 @@ const chooseMenuItem = (label: string): string => `(() => {
 })()`;
 
 describe.skipIf(!electronBinary)('checking for updates in the desktop app', () => {
-  it('stays quiet at launch, says when it is the latest, and offers a newer release with its notes', async () => {
+  it('never checks unasked, says when it is the latest, and offers a newer release only when asked', async () => {
     workDir = await mkdtemp(join(tmpdir(), 'deckwerk-update-check-'));
     const feedDir = join(workDir, 'feed');
     const profileDir = join(workDir, 'electron-profile');
@@ -137,20 +138,12 @@ describe.skipIf(!electronBinary)('checking for updates in the desktop app', () =
     expect(state.mode.kind).toBe('auto');
     const current = state.currentVersion;
 
-    // The quiet launch check runs on its own; the feed has no manifest yet,
-    // so it fails — and a failure at launch shows nothing, and does not use
-    // up the day's check.
-    try {
-      await eventually(async () => requests.includes(CHANNEL_FILE), 'the launch check never asked the feed', Boolean, 40_000);
-    } catch (error) {
-      // Say why: what an explicit check answers, what the feed was asked,
-      // and the tail of the app's own output (electron-updater logs there).
-      const explicit = await cdp.evaluate('window.api.updates.check()').catch((e) => String(e));
-      throw new Error(`${(error as Error).message}\nexplicit check: ${JSON.stringify(explicit)}\nfeed requests: ${JSON.stringify(requests)}\napp log:\n${app.log().slice(-4000)}`);
-    }
-    await new Promise((resolve) => setTimeout(resolve, 500));
+    // A newer release is on the feed from the start, and nobody asks: the
+    // app must not go looking, nor offer anything.
+    await writeFile(join(feedDir, CHANNEL_FILE), manifest('99.0.0', 'Unasked.'));
+    await new Promise((resolve) => setTimeout(resolve, 12_000));
+    expect(requests).toEqual([]);
     expect(await cdp.evaluate(readDialog)).toBeNull();
-    expect(await cdp.evaluate(`localStorage.getItem('deckwerk.updates.lastCheck')`)).toBeNull();
 
     // The menu, with nothing newer on the feed.
     await writeFile(join(feedDir, CHANNEL_FILE), manifest(current, 'The same release.'));
@@ -159,6 +152,11 @@ describe.skipIf(!electronBinary)('checking for updates in the desktop app', () =
       () => cdp.evaluate<DialogState | null>(readDialog),
       'no answer to Check for Updates',
     );
+    if (latest?.title !== 'No update available') {
+      // Say why: what the feed was asked and the tail of the app's own
+      // output (electron-updater logs there).
+      throw new Error(`Check for Updates answered ${JSON.stringify(latest)}\nfeed requests: ${JSON.stringify(requests)}\napp log:\n${app.log().slice(-4000)}`);
+    }
     expect(latest).toEqual({
       title: 'No update available',
       description: `DeckWerk ${current} is the latest version.`,
@@ -180,26 +178,19 @@ describe.skipIf(!electronBinary)('checking for updates in the desktop app', () =
     );
     expect(offer).toEqual({
       title: 'Update available',
-      description: `DeckWerk 99.0.0 is available. You have ${current}.`,
+      description: `DeckWerk 99.0.0 is available. You have ${current}. Update now?`,
       notes: '<h3>New</h3><p>Faster <strong>video</strong></p>',
-      buttons: ['Later', 'Download'],
+      buttons: ['Not Now', 'Update'],
     });
     expect(await cdp.evaluate('window.pwned')).toBeUndefined();
-    expect(await cdp.evaluate(pressDialogButton('Later'))).toBe(true);
-    expect(await cdp.evaluate(readDialog)).toBeNull();
 
-    // The launch check, finding the newer release by itself after a restart
-    // of the window: offered without anyone asking, and the day's check used.
-    await cdp.evaluate(`localStorage.removeItem('deckwerk.updates.lastCheck'); location.reload(); true`);
-    const unasked = await eventually(
-      () => cdp.evaluate<DialogState | null>(readDialog),
-      'the launch check did not offer the newer release',
-      (dialog) => dialog?.title === 'Update available',
-      40_000,
-    );
-    expect(unasked?.description).toBe(`DeckWerk 99.0.0 is available. You have ${current}.`);
-    expect(Number(await cdp.evaluate<string>(`localStorage.getItem('deckwerk.updates.lastCheck')`))).toBeGreaterThan(0);
-    expect(await cdp.evaluate(pressDialogButton('Later'))).toBe(true);
+    // Not Now downloads nothing: only the manifest was ever fetched.
+    expect(await cdp.evaluate(pressDialogButton('Not Now'))).toBe(true);
+    expect(await cdp.evaluate(readDialog)).toBeNull();
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+    expect(new Set(requests)).toEqual(new Set([CHANNEL_FILE]));
+    expect(await cdp.evaluate<{ downloading: boolean; downloaded: boolean }>('window.api.updates.state()'))
+      .toMatchObject({ downloading: false, downloaded: false });
   }, 120_000);
 
   it('is a no-op in a development run, and says so when asked', async () => {

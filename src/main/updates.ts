@@ -21,12 +21,14 @@ import {
 /**
  * Updating the installed app from GitHub Releases through electron-updater.
  *
- * The renderer drives every step — check, download, restart — so the dialog
- * that shows the release notes is the one that owns the buttons, and the
- * quiet daily check at launch is just a check whose "no update" answer is not
- * shown (see updateDialog.ts). This module holds the one updater for the
- * app, answers those requests, and before restarting asks every editor window
- * to save, refusing while anything is unsaved, presenting or shared.
+ * Nothing happens unasked. The app never checks by itself; the person
+ * chooses Check for Updates…, confirms a newer release before it downloads,
+ * and chooses when to restart into it (updateDialog.ts drives every step, so
+ * the dialog that shows the release notes owns the buttons). A download that
+ * is never restarted into is never installed. This module holds the one
+ * updater for the app, answers those requests, and before restarting asks
+ * every editor window to save, refusing while anything is unsaved,
+ * presenting or shared.
  *
  * electron-updater is imported only once a check is asked for on an install
  * that updates itself, so a development run, an unpackaged checkout and the
@@ -74,10 +76,11 @@ async function loadUpdater(): Promise<AppUpdater> {
     // through the module object rather than a named ESM import.
     const module = await import('electron-updater');
     const instance = (module.default ?? module).autoUpdater;
-    // The dialog asks before downloading. A download that finished but was
-    // not restarted into still installs when the app quits.
+    // The dialog asks before downloading, and installing waits for Restart:
+    // quitting the app does not install a downloaded update. (On macOS this
+    // also keeps Squirrel from fetching it until Restart is chosen.)
     instance.autoDownload = false;
-    instance.autoInstallOnAppQuit = true;
+    instance.autoInstallOnAppQuit = false;
     instance.allowDowngrade = false;
     // The promise each call returns carries the failure to the dialog; the
     // event would otherwise reach EventEmitter's unhandled-error throw.
