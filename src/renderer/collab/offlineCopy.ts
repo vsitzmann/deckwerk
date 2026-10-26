@@ -611,8 +611,16 @@ export class OfflineCopy {
     }));
   }
 
+  /** Index writes, one after another: two at once each read the index the other was replacing. */
+  private recording: Promise<void> = Promise.resolve();
+
+  private recordDeck(): Promise<void> {
+    this.recording = this.recording.then(() => this.recordDeckNow());
+    return this.recording;
+  }
+
   /** Record what this deck holds, drop the decks past keeping, delete what nothing holds. */
-  private async recordDeck(): Promise<void> {
+  private async recordDeckNow(): Promise<void> {
     try {
       const index = await this.readIndex();
       index.decks[this.options.deckId] = { openedAt: this.now(), files: this.plan.map((url) => mediaKey(url)) };

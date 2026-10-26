@@ -269,23 +269,33 @@ export async function waitForOfflineReady(page: DrivenPage, timeoutMs = 240_000)
     (state) => state.offline === 'ready', timeoutMs);
 }
 
-/** Click Present; resolves with whether a presentation mounted, and the status line. */
-export async function pressPresent(page: DrivenPage): Promise<{ mounted: boolean; status: string }> {
+/**
+ * Click Present; resolves with whether a presentation mounted, the status
+ * line, and what the editor said of its offline copy the instant before
+ * the click (read in the same task, so nothing changed in between).
+ */
+export async function pressPresent(page: DrivenPage): Promise<{ mounted: boolean; status: string; offlineAtClick: string; connectedAtClick: boolean }> {
   // The toolbar is built once the server's config (or the one remembered) is in.
   await eventually(() => page.evaluate<boolean>(`[...document.querySelectorAll('#toolbar button')]
     .some((button) => button.textContent?.trim() === 'Present' && button.getClientRects().length > 0)`),
   'the toolbar never offered Present', Boolean, 30_000);
-  await page.evaluate(`(() => {
+  const atClick = await page.evaluate<{ offline: string; connected: boolean }>(`(() => {
     const present = [...document.querySelectorAll('#toolbar button')]
       .filter((button) => button.textContent?.trim() === 'Present')
       .find((button) => button.getClientRects().length > 0);
+    const root = document.documentElement;
+    const at = { offline: window.deckwerkOffline?.status().state ?? root.dataset.offline ?? '', connected: root.dataset.collabReady === 'true' };
     present.click();
-    return true;
+    return at;
   })()`);
-  return page.evaluate(`({
-    mounted: Boolean(document.querySelector('iframe[src*="present.html"]')),
-    status: document.getElementById('status')?.textContent ?? '',
-  })`);
+  return {
+    ...await page.evaluate<{ mounted: boolean; status: string }>(`({
+      mounted: Boolean(document.querySelector('iframe[src*="present.html"]')),
+      status: document.getElementById('status')?.textContent ?? '',
+    })`),
+    offlineAtClick: atClick.offline,
+    connectedAtClick: atClick.connected,
+  };
 }
 
 export async function exitPresentation(page: DrivenPage): Promise<void> {

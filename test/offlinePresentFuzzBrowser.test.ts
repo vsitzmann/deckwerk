@@ -368,10 +368,10 @@ class Walk {
     const id = m.open!;
     const before = await this.state();
     if (!before?.deckShown) return 'present (no deck on screen)';
-    const online = before.collabReady;
     const pressed = await pressPresent(this.page);
+    const online = pressed.connectedAtClick;
     if (!online) {
-      const ready = before.offline === 'ready';
+      const ready = pressed.offlineAtClick === 'ready';
       if (pressed.mounted && !ready) this.fail('Present mounted a presentation without the server or a complete copy');
       if (!pressed.mounted && ready) this.fail(`Present was refused with a complete copy: ${pressed.status}`);
       if (!pressed.mounted && !pressed.status.includes('Presenting needs the server')) this.fail(`Present refused without the reason: ${pressed.status}`);
@@ -383,8 +383,8 @@ class Walk {
     if (!pressed.mounted) return `present refused (${pressed.status.slice(-60)})`;
     m.presenting = true;
     this.seen.clear();
-    m.presentationCovered = online || before.offline === 'ready';
-    m.presentationLocal = before.offline === 'ready';
+    m.presentationCovered = online || pressed.offlineAtClick === 'ready';
+    m.presentationLocal = pressed.offlineAtClick === 'ready';
     m.showLostLink = !online;
     await watchPresentation(this.page).catch((error) => this.fail(`the presentation never built its stage: ${error}`));
     this.seen.add((await stageState(this.page).catch(() => ({ slideId: '' }))).slideId);
