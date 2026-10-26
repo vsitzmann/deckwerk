@@ -1,5 +1,6 @@
 import {
   answerFromKept,
+  KEPT_HEADER,
   isImmutableMedia,
   isMediaPath,
   MEDIA_CACHE,
@@ -60,7 +61,7 @@ const PAGES = new Set(['index.html', 'present.html', 'mobile.html', 'print.html'
  * copy is shown. A stopped server refuses at once; one behind a dropped
  * tailnet link can leave the connection hanging for a minute.
  */
-const PAGE_TIMEOUT_MS = 5_000;
+const PAGE_TIMEOUT_MS = 3_000;
 /** Older shells kept beside the current one, for a page still running an older build. */
 const SHELL_GENERATIONS = 2;
 
@@ -190,20 +191,17 @@ worker.addEventListener('fetch', (event) => {
 
 /** A kept file: from the cache if its URL names its bytes, else from the server while it answers. */
 async function media(request: Request, path: string, key: string): Promise<Response> {
-  if (!isImmutableMedia(path)) {
-    try {
-      const response = await fetch(request);
-      if (response.ok || response.status === 304) return response;
-    } catch {
-      // The server is gone: the kept copy answers.
-    }
-  }
-  const found = await (await caches.open(MEDIA_CACHE)).match(key);
+  const cache = await caches.open(MEDIA_CACHE);
+  const found = await cache.match(key);
   if (!found) {
     kept?.delete(key);
     return network(request);
   }
-  return answerFromKept(request, found);
+  // A URL that names its bytes needs no server; anything else is the
+  // server's to answer while it can.
+  if (isImmutableMedia(path)) return answerFromKept(request, found);
+  const answer = await freshOrKept(request, PAGE_TIMEOUT_MS, (response) => response.ok || response.status === 304);
+  return answer ?? answerFromKept(request, found);
 }
 
 async function network(request: Request): Promise<Response> {
@@ -215,31 +213,98 @@ async function network(request: Request): Promise<Response> {
   }
 }
 
+/*
+ * Whether the server answers. A server behind a dropped route never refuses:
+ * each request waits out its timeout. Once one has, the next ones (the page,
+ * then its config, then its files) are answered from what is kept at once,
+ * while the request still goes out and, the moment one comes back, the
+ * server is believed again.
+ */
+let unansweredAt = 0;
+let answeredAt = 0;
+const SERVER_DOWN_MEMORY_MS = 15_000;
+
+function serverSeemsDown(): boolean {
+  return unansweredAt > answeredAt && Date.now() - unansweredAt < SERVER_DOWN_MEMORY_MS;
+}
+
+/**
+ * The server's answer to `request`, or null if it fails, does not answer
+ * within `timeoutMs`, gives an answer `acceptable` rejects, or seems down
+ * (then without waiting). `onFresh` sees every answer that does come, late
+ * ones included, to keep it.
+ */
+async function freshOrKept(
+  request: Request,
+  timeoutMs: number,
+  acceptable: (response: Response) => boolean,
+  onFresh?: (response: Response) => Promise<void>,
+): Promise<Response | null> {
+  let settled = false;
+  const fresh = fetch(request).then(async (response) => {
+    answeredAt = Date.now();
+    await onFresh?.(response.clone()).catch(() => undefined);
+    return response;
+  }, () => {
+    unansweredAt = Date.now();
+    return null;
+  });
+  if (serverSeemsDown()) return null;
+  let timer = 0;
+  const timedOut = new Promise<null>((resolve) => {
+    timer = setTimeout(() => {
+      if (!settled) unansweredAt = Date.now();
+      resolve(null);
+    }, timeoutMs) as unknown as number;
+  });
+  try {
+    const answer = await Promise.race([fresh, timedOut]);
+    settled = true;
+    return answer && acceptable(answer) ? answer : null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** A kept answer, marked so the page can tell it did not come from the server. */
+function markedKept(response: Response): Response {
+  const headers = new Headers(response.headers);
+  headers.set(KEPT_HEADER, '1');
+  return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
+}
+
 /** A page: the server's current one while it answers, the kept one when it cannot. */
 async function page(request: Request, file: string): Promise<Response> {
   const cache = await caches.open(SHELL_CACHE);
   const key = `${BASE}${file}`;
-  const fresh = fetch(request).then(async (response) => {
+  const keep = async (response: Response) => {
     // A redirect (a view-only participant sent to the viewer) or an error
     // page is this request's answer, never the page to keep.
     if (response.ok && !response.redirected && response.type === 'basic'
       && (response.headers.get('content-type') ?? '').includes('text/html')) {
-      await cache.put(key, response.clone());
+      await cache.put(key, response);
     }
-    return response;
-  });
+  };
   const keptPage = await cache.match(key) ?? await caches.match(key);
-  if (!keptPage) return fresh.catch((error) => fail(request, error));
-  let timer = 0;
-  const timedOut = new Promise<null>((resolve) => {
-    timer = setTimeout(() => resolve(null), PAGE_TIMEOUT_MS) as unknown as number;
-  });
-  try {
-    const answered = await Promise.race([fresh.catch(() => null), timedOut]);
-    return answered ?? keptPage;
-  } finally {
-    clearTimeout(timer);
+  if (!keptPage) {
+    try {
+      const response = await fetch(request);
+      await keep(response.clone());
+      return response;
+    } catch (error) {
+      return fail(request, error);
+    }
   }
+  // The presentation is opened by an editor already running this build, and
+  // the shell kept is that build's: no reason to wait on the server for it,
+  // which over a route that dropped silently is a black screen for as long
+  // as the timeout. The fetch still refreshes the kept copy.
+  if (file === 'present.html') {
+    void fetch(request).then(keep).catch(() => undefined);
+    return keptPage;
+  }
+  // Any answer the server gives is this request's: a redirect, an error page.
+  return (await freshOrKept(request, PAGE_TIMEOUT_MS, () => true, keep)) ?? keptPage;
 }
 
 /** A hashed bundle file: kept for good once fetched. */
@@ -255,16 +320,26 @@ async function appFile(request: Request): Promise<Response> {
   }
 }
 
-/** The server's answer while it gives one, the kept answer when it does not. */
+/**
+ * The server's answer while it gives one, the kept answer (marked) when it
+ * does not: when it fails, does not answer within the timeout, or seems down.
+ */
 async function networkFirst(request: Request, cacheName: string, key: string): Promise<Response> {
   const cache = await caches.open(cacheName);
-  try {
-    const response = await fetch(request);
-    if (response.ok) await cache.put(key, response.clone());
-    return response;
-  } catch (error) {
-    return (await cache.match(key)) ?? fail(request, error);
+  const keep = async (response: Response) => {
+    if (response.ok) await cache.put(key, response);
+  };
+  const keptAnswer = await cache.match(key);
+  if (!keptAnswer) {
+    try {
+      const response = await fetch(request);
+      await keep(response.clone());
+      return response;
+    } catch (error) {
+      return fail(request, error);
+    }
   }
+  return (await freshOrKept(request, PAGE_TIMEOUT_MS, () => true, keep)) ?? markedKept(keptAnswer);
 }
 
 function fail(request: Request, error: unknown): Response {

@@ -54,6 +54,7 @@ import { downloadOriginalAsset, installNetApi } from './netApi.js';
 import { installWindowApiPosterProvider } from '../player/previewPosterProvider.js';
 import { installEditorVideoMemory } from './editorVideoMemory.js';
 import { OfflineCopy } from './offlineCopy.js';
+import { KEPT_HEADER } from './offlineShared.js';
 import { offlineWorker, registerOfflineShell } from './offlineShell.js';
 import {
   isMediaPending,
@@ -177,17 +178,47 @@ interface ServerConfig {
   access?: null | { user: string; name: string; admin: boolean; deckRole?: 'owner' | 'edit' | 'view' | null };
 }
 
+const CONFIG_TIMEOUT_MS = 5_000;
+/** The server did not answer for the config: the deck opens from the offline copy without waiting for the socket. */
+let serverUnanswered = false;
+
 let serverConfig: ServerConfig = { hosted: false, deckId: null, urls: [], agentPanel: null, access: null };
 
 async function fetchServerConfig(deck?: string | null): Promise<ServerConfig> {
+  const remembered = `deckwerk-config:${deck ?? ''}`;
   try {
-    const response = await fetch(deck ? `/api/config?deck=${encodeURIComponent(deck)}` : '/api/config');
-    if (response.ok) return await response.json() as ServerConfig;
+    // A server behind a dropped route never answers: the editor must still
+    // connect (and fail), so that it can open its offline copy.
+    const response = await fetch(deck ? `/api/config?deck=${encodeURIComponent(deck)}` : '/api/config', {
+      signal: AbortSignal.timeout(CONFIG_TIMEOUT_MS),
+    });
+    if (response.ok) {
+      const config = await response.json() as ServerConfig;
+      // The service worker's kept answer: the server did not answer it.
+      if (response.headers.get(KEPT_HEADER)) {
+        serverUnanswered = true;
+        return config;
+      }
+      try {
+        localStorage.setItem(remembered, JSON.stringify(config));
+      } catch {
+        // Storage refused: the next offline open asks as a stranger would.
+      }
+      return config;
+    }
     // Refused for this deck (no access): the server-wide answer still says
     // what kind of server this is; the socket will say the rest.
     if (deck) return await fetchServerConfig(null);
   } catch {
-    // Older server without /api/config; behave like the multi-deck server.
+    // No server (the offline copy opens with what it said last time), or an
+    // older one without /api/config: behave like the multi-deck server.
+    serverUnanswered = true;
+    try {
+      const last = localStorage.getItem(remembered);
+      if (last) return JSON.parse(last) as ServerConfig;
+    } catch {
+      // Nothing remembered.
+    }
   }
   return { hosted: false, deckId: null, urls: [], agentPanel: null, access: null };
 }
@@ -374,7 +405,12 @@ function startOffline(): void {
   if (!offline || offlineStarted) return;
   offlineStarted = true;
   offline.start();
-  void registerOfflineShell(editorFetching).then((ready) => offline?.setShellReady(ready));
+  // A worker already controls this page (it loaded the page, perhaps without
+  // a server): the shell is there now, and registering again only updates it.
+  if (navigator.serviceWorker?.controller) offline.setShellReady(true);
+  void registerOfflineShell(editorFetching).then((ready) => {
+    if (ready || !navigator.serviceWorker?.controller) offline?.setShellReady(ready);
+  });
 }
 
 /**
@@ -382,6 +418,16 @@ function startOffline(): void {
  * made now are kept on screen and dropped when the server answers, exactly
  * as edits made during any disconnection are (collabBridge.ts).
  */
+/**
+ * A server that has not even accepted the connection by now is as good as
+ * gone for opening the deck: show the offline copy rather than "Connecting…"
+ * for as long as an unanswered handshake takes. At once without a network.
+ */
+const OFFLINE_OPEN_DELAY_MS = 4_000;
+setTimeout(() => {
+  if (!welcomed && !bridge.open) void openOfflineCopy();
+}, navigator.onLine === false ? 0 : OFFLINE_OPEN_DELAY_MS);
+
 async function openOfflineCopy(): Promise<void> {
   if (!offline || welcomed || shownOffline) return;
   const snapshot = await OfflineCopy.loadSnapshot(deckId!);
@@ -1305,6 +1351,7 @@ function renderStatus(): void {
 // before first paint of the buttons keeps New/Open/Import from flashing in.
 void fetchServerConfig(deckId).then((config) => {
   serverConfig = config;
+  if (serverUnanswered) void openOfflineCopy();
   if (config.agentPanel?.enabled && !agentPanel) {
     agentPanelBrowserApi = createAgentPanelApi(deckId!);
     const local = config.agentPanel.mode === 'local';

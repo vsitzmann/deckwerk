@@ -186,6 +186,9 @@ export class OfflineCopy {
     this.caches = options.caches ?? globalThis.caches;
     this.fetchFile = options.fetch ?? ((input, init) => fetch(input, init));
     this.now = options.now ?? (() => Date.now());
+    // Read what is kept now: whether the copy is complete must be known the
+    // moment the deck is on screen, which is when somebody presses Present.
+    void this.loadKept().catch(() => undefined);
   }
 
   /** Whether this browser can keep anything offline here (Cache Storage needs a secure context). */
@@ -336,11 +339,16 @@ export class OfflineCopy {
 
   /* --- downloading -------------------------------------------------------- */
 
-  private async loadKept(): Promise<Set<string>> {
-    if (this.kept) return this.kept;
-    const requests = await (await this.caches.open(MEDIA_CACHE)).keys();
-    this.kept ??= new Set(requests.map((request) => mediaKey(request.url)));
-    return this.kept;
+  private keptLoading: Promise<Set<string>> | null = null;
+
+  private loadKept(): Promise<Set<string>> {
+    this.keptLoading ??= (async () => {
+      const requests = await (await this.caches.open(MEDIA_CACHE)).keys();
+      this.kept ??= new Set(requests.map((request) => mediaKey(request.url)));
+      this.options.onChange();
+      return this.kept;
+    })();
+    return this.keptLoading;
   }
 
   private next(kept: Set<string>): string | undefined {

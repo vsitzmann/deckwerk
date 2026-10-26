@@ -370,7 +370,7 @@ class Walk {
   private async endShow(): Promise<string> {
     const m = this.model;
     if (!m.presenting) return 'end show (none)';
-    const { frames, errors } = await takeFirstFrames(this.page).catch(() => ({ frames: [], errors: [] }));
+    const { frames, errors } = await takeFirstFrames(this.page).catch(() => ({ frames: [], errors: [], ticks: 0 }));
     if (m.presentationCovered) {
       for (const frame of frames) {
         if (frame.missing.length > 0) this.fail(`${frame.slide} appeared without ${frame.missing.join(', ')}`);

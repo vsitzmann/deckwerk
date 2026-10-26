@@ -249,6 +249,10 @@ export async function waitForOfflineReady(page: DrivenPage, timeoutMs = 240_000)
 
 /** Click Present; resolves with whether a presentation mounted, and the status line. */
 export async function pressPresent(page: DrivenPage): Promise<{ mounted: boolean; status: string }> {
+  // The toolbar is built once the server's config (or the one remembered) is in.
+  await eventually(() => page.evaluate<boolean>(`[...document.querySelectorAll('#toolbar button')]
+    .some((button) => button.textContent?.trim() === 'Present' && button.getClientRects().length > 0)`),
+  'the toolbar never offered Present', Boolean, 30_000);
   await page.evaluate(`(() => {
     const present = [...document.querySelectorAll('#toolbar button')]
       .filter((button) => button.textContent?.trim() === 'Present')
@@ -291,37 +295,58 @@ export interface FirstFrame {
   slide: string;
   images: number;
   missing: string[];
+  /** For a slide that appeared incomplete: its pictures over the next frames. */
+  frames?: string[];
 }
 
 /**
  * Record, for every slide the Player puts on its stage, which images were not
- * on screen with it, and every media element that fails. A MutationObserver
- * runs before the browser next renders, so this is the frame the slide is
- * first painted in.
+ * on screen in the first frame painted with it, and every media element that
+ * fails. Sampled in requestAnimationFrame, which runs right before the
+ * browser paints: a MutationObserver runs before the Player's own follow-up
+ * work in the same task (revealing a decoded picture) and reports pictures
+ * missing that no frame ever showed missing. `ticks` counts the frames seen,
+ * so a page that paints nothing cannot pass for one that paints everything.
  */
 export async function watchPresentation(page: DrivenPage): Promise<void> {
-  await eventually(() => page.evaluate<boolean>(`Boolean(${PRESENT_FRAME}?.document?.getElementById('stage'))`),
-    'the presentation never built its stage', Boolean, 30_000);
+  // The opening slide paints over a black overlay as its pictures decode; a
+  // frame of that is not a slide appearing without them, so the watch starts
+  // once it is there (as mediaTransferBudgetBrowser's does).
+  await eventually(() => page.evaluate<boolean>(`Boolean(${PRESENT_FRAME}?.document?.querySelector('#stage .stage > .slide'))`),
+    'the presentation never put a slide on its stage', Boolean, 30_000);
   await page.evaluate(`(() => {
     const win = ${PRESENT_FRAME};
     const doc = win.document;
     win.__firstFrames = [];
     win.__mediaErrors = [];
-    win.__firstFrameWatch?.disconnect();
+    win.__frameTicks = 0;
     const stage = doc.getElementById('stage');
-    let last = null;
-    const look = () => {
+    // The slide already on stage is not a first frame any more.
+    let last = stage.querySelector('.stage > .slide');
+    const generation = (win.__watchGeneration = (win.__watchGeneration ?? 0) + 1);
+    const tick = () => {
+      if (win.__watchGeneration !== generation) return;
+      win.__frameTicks += 1;
       const root = stage.querySelector('.stage > .slide');
-      if (!root || root === last) return;
-      last = root;
-      const images = [...root.querySelectorAll('img')];
-      const missing = images.filter((i) => !(i.complete && i.naturalWidth > 0 && win.getComputedStyle(i).visibility !== 'hidden'))
-        .map((i) => (i.dataset.networkSrc || i.getAttribute('src') || 'no src').split('/').pop());
-      win.__firstFrames.push({ slide: root.dataset.slideId, images: images.length, missing });
+      const describe = (i) => [
+        (i.dataset.networkSrc || i.getAttribute('src') || 'no src').split('/').pop().slice(0, 12),
+        i.complete ? 'complete' : 'loading', i.naturalWidth, win.getComputedStyle(i).visibility,
+      ].join(' ');
+      if (root && root !== last) {
+        last = root;
+        const images = [...root.querySelectorAll('img')];
+        const missing = images.filter((i) => !(i.complete && i.naturalWidth > 0 && win.getComputedStyle(i).visibility !== 'hidden'))
+          .map((i) => (i.dataset.networkSrc || i.getAttribute('src') || 'no src').split('/').pop());
+        // A slide that appears incomplete: how it went over the next frames, to say why.
+        const frames = missing.length > 0 ? [images.map(describe).join(' | ')] : undefined;
+        win.__firstFrames.push({ slide: root.dataset.slideId, images: images.length, missing, ...(frames ? { frames } : {}) });
+      } else if (root) {
+        const entry = win.__firstFrames[win.__firstFrames.length - 1];
+        if (entry?.frames && entry.frames.length < 8) entry.frames.push([...root.querySelectorAll('img')].map(describe).join(' | '));
+      }
+      win.requestAnimationFrame(tick);
     };
-    win.__firstFrameWatch = new win.MutationObserver(look);
-    win.__firstFrameWatch.observe(stage, { childList: true, subtree: true });
-    look();
+    win.requestAnimationFrame(tick);
     doc.addEventListener('error', (event) => {
       const target = event.target;
       if (target && (target.tagName === 'IMG' || target.tagName === 'VIDEO')) {
@@ -332,10 +357,10 @@ export async function watchPresentation(page: DrivenPage): Promise<void> {
   })()`);
 }
 
-export async function takeFirstFrames(page: DrivenPage): Promise<{ frames: FirstFrame[]; errors: string[] }> {
+export async function takeFirstFrames(page: DrivenPage): Promise<{ frames: FirstFrame[]; errors: string[]; ticks: number }> {
   return page.evaluate(`(() => {
     const win = ${PRESENT_FRAME};
-    const taken = { frames: win.__firstFrames ?? [], errors: win.__mediaErrors ?? [] };
+    const taken = { frames: win.__firstFrames ?? [], errors: win.__mediaErrors ?? [], ticks: win.__frameTicks ?? 0 };
     win.__firstFrames = [];
     win.__mediaErrors = [];
     return taken;

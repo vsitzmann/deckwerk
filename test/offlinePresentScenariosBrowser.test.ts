@@ -55,13 +55,18 @@ import {
  * slides, a few hundred MB) with OFFLINE_LARGE=1; real decks with
  * OFFLINE_REAL_DECKS=<folder>,<folder> (copied, never touched). Browsers:
  * OFFLINE_BROWSERS=chromium,chrome,safari (default: chromium, plus safari
- * with RUN_SAFARI_MEDIA_BUDGET=1).
+ * with RUN_SAFARI_MEDIA_BUDGET=1). A real deck's clips are encoded into
+ * streaming versions before its copy can complete; OFFLINE_RENDITIONS_DIR
+ * keeps those between runs.
  */
 
 const BROWSERS = browsersFromEnv('OFFLINE_BROWSERS', [
   'chromium',
   ...(process.env.RUN_SAFARI_MEDIA_BUDGET === '1' ? ['safari' as const] : []),
 ]);
+
+/** How long the walk stays on each slide once it is complete. */
+const DWELL_MS = 1_000;
 
 /** A fast link: the subject is losing it, not its speed. The large deck still takes a while. */
 const LINK = { bytesPerSecond: 40_000_000, latencyMs: 10 };
@@ -98,7 +103,8 @@ async function startServer(): Promise<void> {
     clientDir: await collabClientDir(),
     host: '127.0.0.1',
     port: serverPort,
-    mediaRenditions: { cacheDir: join(workDir, 'renditions') },
+    // A real deck's clips are encoded once; OFFLINE_RENDITIONS_DIR keeps them between runs.
+    mediaRenditions: { cacheDir: process.env.OFFLINE_RENDITIONS_DIR ?? join(workDir, 'renditions') },
     printStillCacheDir: join(workDir, 'print-stills'),
   });
   serverPort = server.port;
@@ -173,6 +179,8 @@ async function giveTalk(driven: DrivenPage, deck: TalkDeck, label: string, durin
   const look = async (step: string) => {
     const { state, problems: wrong } = await stageComplete(driven);
     for (const problem of wrong) problems.push(`${label}, ${step} (${state.slideId}): ${problem}`);
+    // A presenter talks over each slide: a second is a brisk one.
+    await new Promise((resolve) => setTimeout(resolve, DWELL_MS));
   };
   await look('open');
   const forward = Math.min(deck.slides - 1, 60);
@@ -191,10 +199,14 @@ async function giveTalk(driven: DrivenPage, deck: TalkDeck, label: string, durin
     await eventually(() => editorStateOfStage(driven), `${label}: jump to ${target + 1}`, (id) => id !== '', 10_000);
     await look(`jump to ${target + 1}`);
   }
-  const { frames, errors } = await takeFirstFrames(driven);
-  for (const frame of frames) {
-    if (frame.missing.length > 0) problems.push(`${label}: ${frame.slide} appeared without ${frame.missing.join(', ')}`);
-  }
+  const { frames, errors, ticks } = await takeFirstFrames(driven);
+  if (ticks < 10) problems.push(`${label}: the presentation painted ${ticks} frames: nothing to judge first frames by`);
+  frames.forEach((frame, i) => {
+    if (frame.missing.length > 0) {
+      problems.push(`${label}: ${frame.slide} appeared without ${frame.missing.join(', ')} (slide change ${i + 1}: `
+        + `${frames.map((f) => f.slide).join(' ')}); frames: ${(frame.frames ?? []).join(' / ')}`);
+    }
+  });
   for (const error of errors) problems.push(`${label}: media element failed: ${error}`);
   await exitPresentation(driven);
   return problems;

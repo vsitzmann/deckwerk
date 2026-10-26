@@ -696,7 +696,7 @@ export class Player {
     this.mediaBlobs?.prioritize(awaited);
     // Decoding pictures already in memory costs the link nothing, so the
     // slides ahead need not wait for this one to paint.
-    if (this.mediaBlobs) this.warmUpcomingImages(this.upcomingSlides());
+    if (this.mediaBlobs) this.warmUpcomingImages(this.imageWarmSlides());
 
     this.rescale();
 
@@ -903,8 +903,26 @@ export class Player {
       }
     }
     this.warmUpcomingVideoElements(videoTargets);
-    this.warmUpcomingImages(upcomingSlides);
+    this.warmUpcomingImages(this.imageWarmSlides());
     this.pumpWarmQueue();
+  }
+
+  /**
+   * The slides whose pictures are decoded ahead of time: the next ones, then
+   * the one before. A presentation opened in the middle of a talk (where the
+   * last one ended, or a rail selection) is often stepped back through, and
+   * a slide reached that way for the first time painted its pictures a frame
+   * or two late: neither ahead nor shown before. Last in the list, so the
+   * decode budget goes to the slides ahead first.
+   */
+  private imageWarmSlides(): Slide[] {
+    const slides = this.upcomingSlides();
+    for (let i = this.cursor.slide - 1; i >= 0; i -= 1) {
+      if (this.deck.slides[i].skipped) continue;
+      slides.push(this.deck.slides[i]);
+      break;
+    }
+    return slides;
   }
 
   /** The next presentable slides, as far as the lookahead reaches. */
@@ -1048,7 +1066,7 @@ export class Player {
     queueMicrotask(() => {
       this.imageWarmQueued = false;
       // A destroyed player has let go of its stage.
-      if (this.container.contains(this.stage)) this.warmUpcomingImages(this.upcomingSlides());
+      if (this.container.contains(this.stage)) this.warmUpcomingImages(this.imageWarmSlides());
     });
   }
 

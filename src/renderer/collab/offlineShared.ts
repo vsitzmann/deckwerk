@@ -22,6 +22,9 @@ export function snapshotKey(deckId: string): string {
   return `/__offline__/deck?deck=${encodeURIComponent(deckId)}`;
 }
 
+/** On an answer the worker gave from its cache because the server did not answer. */
+export const KEPT_HEADER = 'x-deckwerk-kept';
+
 /** Where the index of offline decks is kept in DECKS_CACHE. */
 export const INDEX_KEY = '/__offline__/index';
 
