@@ -72,8 +72,11 @@ const SPECS: Record<string, FixtureSpec> = {
   medium: { slides: 14, photosPerSlide: [4, 0, 8, 1, 6], clipEvery: 3, photoFiles: 30, clipFiles: 3, clipSeconds: 20 },
   ...(process.env.OFFLINE_LARGE === '1' ? {
     large: {
+      // Volume, not the Player's decode budget (48 MP ahead and behind,
+      // player.ts): eight 2400 × 1500 photos a slide are past it, and a step
+      // back then paints one a frame late, online as much as offline.
       slides: 120, photosPerSlide: [3, 0, 6, 2, 8, 1], clipEvery: 5, photoFiles: 300, clipFiles: 24,
-      photoSize: '2400x1500', clipSeconds: 40,
+      photoSize: '1600x1000', clipSeconds: 40,
     } satisfies FixtureSpec,
   } : {}),
 };

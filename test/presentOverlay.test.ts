@@ -227,6 +227,32 @@ describe('starting a browser presentation', () => {
     expect(ended).toEqual(['slide-5']);
   });
 
+  it('takes the overlay down, and says why, when the presentation never loads', () => {
+    vi.useFakeTimers();
+    try {
+      startPresenting('talk', 0, seed, { onStatus: (text) => statuses.push(text) });
+      vi.advanceTimersByTime(11_000);
+      expect(overlayFrame()).not.toBeNull();
+      vi.advanceTimersByTime(2_000);
+      expect(overlayFrame()).toBeNull();
+      expect(statuses.at(-1)).toContain('The presentation did not load');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps a presentation that said hello, however long it runs', () => {
+    vi.useFakeTimers();
+    try {
+      startPresenting('talk', 0, seed, { onStatus: (text) => statuses.push(text) });
+      window.dispatchEvent(new MessageEvent('message', { origin: location.origin, data: { type: 'present-hello' } }));
+      vi.advanceTimersByTime(60_000);
+      expect(overlayFrame()).not.toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('keeps a new show up when the last one finishes leaving fullscreen after Present is pressed again', () => {
     startPresenting('talk', 0, seed);
     setFullscreenElement(overlayFrame());

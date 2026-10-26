@@ -38,6 +38,16 @@ export interface PresentOptions {
 let overlay: HTMLIFrameElement | null = null;
 /** Whether the current overlay has been fullscreen: only then does leaving fullscreen end it. */
 let overlayFullscreen = false;
+/**
+ * A presentation that has not said hello by now never loaded: the editor
+ * thought the server was there (a browser takes a moment to notice a dead
+ * connection) and nothing could answer for present.html. Without this the
+ * overlay stayed up, black, until Escape.
+ */
+const PRESENT_LOAD_TIMEOUT_MS = 12_000;
+let helloTimer = 0;
+export const PRESENT_DID_NOT_LOAD = 'The presentation did not load: the server is not answering. '
+  + 'Present again once it is back, or once this browser holds the talk (the status line says "Available offline").';
 let seedProvider: (() => PresentSeed) | null = null;
 /** The audience window opened for Speaker View, so ending here ends it too. */
 let audienceWindow: Window | null = null;
@@ -52,6 +62,7 @@ function teardown(): void {
   // the direct route, and closing twice is harmless.
   if (audienceWindow && !audienceWindow.closed) audienceWindow.close();
   audienceWindow = null;
+  clearTimeout(helloTimer);
   if (!overlay) return;
   overlay.remove();
   overlay = null;
@@ -73,6 +84,7 @@ function onMessage(event: MessageEvent): void {
   // own WebSocket takes about a second to hand over a welcome, and until this
   // existed that second was a black screen.
   if (type === 'present-hello') {
+    clearTimeout(helloTimer);
     const seed = seedProvider?.();
     if (seed && overlay?.contentWindow) {
       overlay.contentWindow.postMessage(
@@ -186,4 +198,10 @@ export function startPresenting(
     // and the viewer can hit F for fullscreen once they interact.
   });
   frame.focus();
+  helloTimer = window.setTimeout(() => {
+    if (overlay !== frame) return;
+    if (document.fullscreenElement) void document.exitFullscreen().catch(() => undefined);
+    teardown();
+    options.onStatus?.(PRESENT_DID_NOT_LOAD);
+  }, PRESENT_LOAD_TIMEOUT_MS);
 }

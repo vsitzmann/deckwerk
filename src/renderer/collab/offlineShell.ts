@@ -24,9 +24,10 @@ export async function registerOfflineShell(busy: () => boolean): Promise<'ready'
   document.documentElement.dataset.offlineShell = 'waiting';
   try {
     await quiet(busy);
-    await navigator.serviceWorker.register(new URL('sw.js', location.href), { scope: './' });
-    const registration = await navigator.serviceWorker.ready;
-    active = registration.active;
+    const registration = await navigator.serviceWorker.register(new URL('sw.js', location.href), { scope: './' });
+    // `ready` waits for an active worker forever, and an install that fails
+    // (the shell did not arrive) never makes one: watch the install itself.
+    active = await installed(registration);
     document.documentElement.dataset.offlineShell = active ? 'ready' : 'failed';
     return active ? 'ready' : 'failed';
   } catch (error) {
@@ -50,6 +51,31 @@ export function offlineWorker(): { postMessage(message: OfflineWorkerMessage): v
 
 /** Never wait longer than this: a page that is always fetching something still gets its worker. */
 const QUIET_WAIT_LIMIT_MS = 30_000;
+
+/** The registration's worker once it is active, or null if installing it failed or took too long. */
+function installed(registration: ServiceWorkerRegistration, timeoutMs = 120_000): Promise<ServiceWorker | null> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => resolve(registration.active), timeoutMs);
+    const settle = (worker: ServiceWorker | null) => {
+      clearTimeout(timer);
+      resolve(worker);
+    };
+    const watch = (worker: ServiceWorker | null): boolean => {
+      if (!worker) return false;
+      const check = () => {
+        if (worker.state === 'activated') settle(worker);
+        // A new version that failed leaves the one already in charge, if any.
+        else if (worker.state === 'redundant') settle(registration.active);
+      };
+      worker.addEventListener('statechange', check);
+      check();
+      return true;
+    };
+    if (watch(registration.installing ?? registration.waiting)) return;
+    if (registration.active) settle(registration.active);
+    else registration.addEventListener('updatefound', () => watch(registration.installing), { once: true });
+  });
+}
 
 async function quiet(busy: () => boolean): Promise<void> {
   let since = busy() ? 0 : performance.now();

@@ -135,20 +135,29 @@ worker.addEventListener('message', (event) => {
 
 /**
  * One file at a time: this runs while the editor loads its first slide, and
- * the shell is a few megabytes. A file that fails is fetched when it is first
- * used instead, so one bad response never leaves the worker uninstalled.
+ * the shell is a few megabytes. Every file must arrive, or the install fails
+ * and the editor tries again once it reconnects (offlineShell.ts): a worker
+ * that took charge without the presentation's page would let Present start
+ * without a server and then show nothing. A second pass gives a file that
+ * failed once (a blip) another chance first.
  */
 async function precache(): Promise<void> {
   const cache = await caches.open(SHELL_CACHE);
-  for (const file of DECKWERK_SHELL.files) {
-    const url = `${BASE}${file}`;
-    if (await cache.match(url)) continue;
-    try {
-      const response = await fetch(url, { cache: PAGES.has(file) ? 'no-cache' : 'default' });
-      if (response.ok) await cache.put(url, response);
-    } catch {
-      // Fetched on first use instead.
+  for (let pass = 0; pass < 2; pass++) {
+    const missing: string[] = [];
+    for (const file of DECKWERK_SHELL.files) {
+      const url = `${BASE}${file}`;
+      if (await cache.match(url)) continue;
+      try {
+        const response = await fetch(url, { cache: PAGES.has(file) ? 'no-cache' : 'default' });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        await cache.put(url, response);
+      } catch {
+        missing.push(file);
+      }
     }
+    if (missing.length === 0) return;
+    if (pass === 1) throw new Error(`the shell did not arrive: ${missing.join(', ')}`);
   }
 }
 
