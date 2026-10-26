@@ -189,7 +189,33 @@ open to anyone who can reach the port. For a standing multi-user deployment
 npm run collab -- path/to/decks --host 127.0.0.1 --access you@example.com
 ```
 
-and front it with `tailscale serve` (e.g. `tailscale serve --bg --https=443
+and publish it on the tailnet in one of two ways.
+
+**Recommended: DeckWerk terminates TLS itself on the tailnet address.**
+
+```bash
+sudo tailscale cert --cert-file /srv/deckwerk/tls/cert.pem \
+  --key-file /srv/deckwerk/tls/key.pem <machine>.<tailnet>.ts.net
+npm run collab -- path/to/decks --host 127.0.0.1 --access you@example.com \
+  --tls-host <machine's 100.x.y.z> --tls-port 9443 \
+  --tls-cert /srv/deckwerk/tls/cert.pem --tls-key /srv/deckwerk/tls/key.pem
+```
+
+Each HTTPS connection's identity is tailscaled's `whois` for the peer
+address, asked over its LocalAPI socket (`--tailscale-socket`, default
+`/run/tailscale/tailscaled.sock`), which needs no privileges. It comes from
+the WireGuard key the connection arrived under, so identity headers a peer
+sends on this listener are ignored. Renew the certificate with the same
+`tailscale cert` command on a timer; the server re-reads the files within the
+hour. The loopback listener keeps working for the machine itself.
+
+Why not `tailscale serve`: it accepts connections in tailscaled's userspace
+TCP stack, which over a real round trip moves a fraction of what the tunnel
+carries. Measured on one lab server, the same laptop pulled 0.5–2 MB/s
+through serve and 14–17 MB/s over the kernel's TCP on the tailnet address;
+a deck's images and clips crossed the wire ten times slower than they had to.
+
+**Or** front it with `tailscale serve` (e.g. `tailscale serve --bg --https=443
 http://127.0.0.1:5800`). Identity comes from the `Tailscale-User-Login` /
 `Tailscale-User-Name` headers serve injects, trusted **only** on loopback
 sockets — so bind `127.0.0.1`; any other interface refuses all requests. A

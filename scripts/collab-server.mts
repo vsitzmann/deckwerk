@@ -8,6 +8,8 @@ import { headlessBrowserProblem } from '../src/cli/compileHtml.js';
  *   npm run collab -- <decksRootDir> [--port 5800] [--host 0.0.0.0]
  *     [--no-local-agents] [--agent-name <name>] [--access <adminLogin>]
  *     [--keep-uploads-days <n>]
+ *     [--tls-host <tailnet address> --tls-cert <cert.pem> --tls-key <key.pem>
+ *      [--tls-port 9443] [--tailscale-socket <path>]]
  *
  * Every Keynote and PowerPoint upload is kept for --keep-uploads-days (30 by
  * default, 0 turns it off) under <decksRootDir>/.uploads/, so an import that
@@ -18,7 +20,14 @@ import { headlessBrowserProblem } from '../src/cli/compileHtml.js';
  * onto their machine. They then use whichever filesystem-based agent they
  * already have. --no-local-agents turns that onboarding off.
  *
+ * --tls-host/--tls-cert/--tls-key add an HTTPS listener on the tailnet
+ * address, with a certificate from `tailscale cert`, in place of `tailscale
+ * serve`: serve accepts connections in tailscaled's userspace TCP stack,
+ * which over a real round trip moved a tenth of what the tunnel carries. The
+ * certificate is re-read when renewal replaces it.
+ *
  * --access <adminLogin> turns on multi-user access control: identity comes
+ * from tailscaled's `whois` for each connection to the --tls-* listener, or
  * from tailscale serve's Tailscale-User-Login headers (trusted on loopback
  * only — pair the flag with --host 127.0.0.1), decks get public/private/
  * shared permissions — each grant either edit or view-only — in an
@@ -45,6 +54,11 @@ let localAgentsEnabled = true;
 let agentName = 'Your agent';
 let accessAdmin: string | null = null;
 let keepUploadsDays = 30;
+let tlsCert: string | null = null;
+let tlsKey: string | null = null;
+let tlsHost: string | null = null;
+let tlsPort = 9443;
+let tailscaleSocket: string | undefined;
 for (let i = 0; i < args.length; i++) {
   if (args[i] === '--port') port = Number(args[++i]);
   else if (args[i] === '--host') host = args[++i];
@@ -52,13 +66,22 @@ for (let i = 0; i < args.length; i++) {
   else if (args[i] === '--agent-name') agentName = args[++i];
   else if (args[i] === '--access') accessAdmin = args[++i];
   else if (args[i] === '--keep-uploads-days') keepUploadsDays = Number(args[++i]);
+  else if (args[i] === '--tls-cert') tlsCert = args[++i];
+  else if (args[i] === '--tls-key') tlsKey = args[++i];
+  else if (args[i] === '--tls-host') tlsHost = args[++i];
+  else if (args[i] === '--tls-port') tlsPort = Number(args[++i]);
+  else if (args[i] === '--tailscale-socket') tailscaleSocket = args[++i];
   else if (!args[i].startsWith('-') && !rootDir) rootDir = args[i];
 }
-if (!rootDir || Number.isNaN(port) || !(keepUploadsDays >= 0) || (accessAdmin !== null && !accessAdmin?.trim())) {
+const tlsFlags = [tlsCert, tlsKey, tlsHost].filter((value) => value !== null).length;
+if (!rootDir || Number.isNaN(port) || !(keepUploadsDays >= 0) || (accessAdmin !== null && !accessAdmin?.trim())
+  || (tlsFlags !== 0 && tlsFlags !== 3) || Number.isNaN(tlsPort)) {
   process.stderr.write(
     'usage: npm run collab -- <decksRootDir> [--port 5800] [--host 0.0.0.0] '
     + '[--no-local-agents] [--agent-name <name>] '
-    + '[--access <adminLogin>] [--keep-uploads-days <n>]\n',
+    + '[--access <adminLogin>] [--keep-uploads-days <n>] '
+    + '[--tls-host <tailnet address> --tls-cert <cert.pem> --tls-key <key.pem> [--tls-port 9443] '
+    + '[--tailscale-socket <path>]]\n',
   );
   process.exit(2);
 }
@@ -96,6 +119,9 @@ const server = await startCollabServer({
   localAgents,
   accessControl: accessAdmin ? { admin: accessAdmin } : undefined,
   keepUploadsDays,
+  tls: tlsHost && tlsCert && tlsKey
+    ? { host: tlsHost, port: tlsPort, certFile: tlsCert, keyFile: tlsKey, tailscaleSocket }
+    : undefined,
 });
 
 process.stdout.write(`${JSON.stringify({

@@ -1,6 +1,8 @@
 import { renameRetiredFields } from '@shared/fieldAliases.js';
 import { spawn } from 'node:child_process';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
+import { createServer as createHttpsServer, type Server as HttpsServer } from 'node:https';
+import type { Duplex } from 'node:stream';
 import { lookup } from 'node:dns/promises';
 import { createReadStream, createWriteStream, existsSync, statSync } from 'node:fs';
 import { pipeline } from 'node:stream/promises';
@@ -20,6 +22,7 @@ import { capabilities } from '../shared/capabilities.js';
 import { extractStillFrame, getFfmpegPath, getFfprobePath, probeMedia } from '../main/ffmpeg.js';
 import { createFrameCache } from '../main/frameCache.js';
 import { DeckWire } from './deckWire.js';
+import { DEFAULT_TAILSCALED_SOCKET, tailnetWhoIs } from './tailscaleIdentity.js';
 import {
   RenditionStore,
   defaultRenditionCacheDir,
@@ -97,6 +100,7 @@ import {
   readDeckAccess,
   readFolderOwner,
   resolveIdentity,
+  tailnetIdentities,
   roleMayComment,
   UserDirectory,
   writeDeckAccess,
@@ -349,11 +353,32 @@ export interface CollabServerOptions {
    * Defaults to a folder beside the rendition cache; tests pass their own.
    */
   printStillCacheDir?: string;
+  /**
+   * Also serve HTTPS on the tailnet address, terminating TLS here instead of
+   * behind `tailscale serve`, whose userspace TCP stack moved a tenth of what
+   * the tunnel carries (tailscaleIdentity.ts). With access control on, each
+   * connection's identity is tailscaled's `whois` for its peer. The loopback
+   * listener (`host`/`port`) stays as it is, for the machine itself.
+   */
+  tls?: CollabTlsOptions;
+}
+
+export interface CollabTlsOptions {
+  /** The tailnet address to bind, e.g. the machine's 100.x.y.z. */
+  host: string;
+  port: number;
+  /** PEM files from `tailscale cert`; re-read when renewal replaces them. */
+  certFile: string;
+  keyFile: string;
+  /** tailscaled's LocalAPI socket; defaults to /run/tailscale/tailscaled.sock. */
+  tailscaleSocket?: string;
 }
 
 export interface RunningCollabServer {
   urls: string[];
   port: number;
+  /** The tailnet HTTPS listener's port, when `tls` was given. */
+  tlsPort?: number;
   /** Persist every room immediately instead of waiting for its save debounce. */
   flush: () => Promise<void>;
   /** Tell connected peers this was an intentional host end, not a network loss. */
@@ -1449,7 +1474,7 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
   // not leak a duplicate listener into the shared Agent runtime.
   let unsubscribeSharedAgent: (() => void) | undefined;
 
-  const httpServer = createServer((request, response) => {
+  const serveRequest = (request: IncomingMessage, response: ServerResponse): void => {
     void handleHttp(request, response).catch((error) => {
       const text = `server error: ${error instanceof Error ? error.message : String(error)}`;
       // Every API client reads `{ error }`; a plain-text body was dropped by
@@ -1461,7 +1486,53 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
       if (!response.headersSent) response.writeHead(500, { 'content-type': 'text/plain' });
       response.end(text);
     });
-  });
+  };
+  const httpServer = createServer(serveRequest);
+
+  // The tailnet listener: TLS here, over the kernel's TCP, rather than in
+  // `tailscale serve`'s userspace stack. Each connection's identity is asked
+  // of tailscaled once, as the handshake completes, and every request and
+  // upgrade on it waits for that answer (accessControl.resolveIdentity).
+  const tls = options.tls;
+  const identityLookups = new WeakMap<object, Promise<void>>();
+  const afterIdentity = (socket: object): Promise<void> => identityLookups.get(socket) ?? Promise.resolve();
+  let httpsServer: HttpsServer | null = null;
+  let tlsFiles = '';
+  const readTlsFiles = async (): Promise<{ cert: Buffer; key: Buffer; stamp: string }> => {
+    const [cert, key, certInfo, keyInfo] = await Promise.all([
+      readFile(tls!.certFile), readFile(tls!.keyFile), stat(tls!.certFile), stat(tls!.keyFile),
+    ]);
+    return { cert, key, stamp: `${certInfo.mtimeMs}:${certInfo.size}:${keyInfo.mtimeMs}:${keyInfo.size}` };
+  };
+  let tlsReload: ReturnType<typeof setInterval> | null = null;
+  if (tls) {
+    const files = await readTlsFiles();
+    tlsFiles = files.stamp;
+    httpsServer = createHttpsServer({ cert: files.cert, key: files.key }, (request, response) => {
+      void afterIdentity(request.socket).then(() => serveRequest(request, response));
+    });
+    httpsServer.on('secureConnection', (socket) => {
+      if (!accessControl) return;
+      identityLookups.set(socket, tailnetWhoIs(
+        socket.remoteAddress ?? '',
+        socket.remotePort ?? 0,
+        tls.tailscaleSocket ?? DEFAULT_TAILSCALED_SOCKET,
+      ).then((identity) => {
+        tailnetIdentities.set(socket, identity);
+      }));
+    });
+    // `tailscale cert` renews in place a few weeks before expiry; pick the
+    // new pair up without a restart. New connections get it, open ones keep
+    // the context they were made with.
+    tlsReload = setInterval(() => {
+      void readTlsFiles().then((next) => {
+        if (next.stamp === tlsFiles) return;
+        tlsFiles = next.stamp;
+        httpsServer?.setSecureContext({ cert: next.cert, key: next.key });
+      }).catch(() => null);
+    }, 60 * 60 * 1000);
+    tlsReload.unref();
+  }
 
   /**
    * Whether this server's headless browser starts, probed once and kept. An
@@ -3969,7 +4040,7 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
   // is a megabyte or more of JSON. Uncompressed, that one frame was most of
   // the wait before a presentation could paint its first slide.
   const wss = new WebSocketServer({ noServer: true, perMessageDeflate: { threshold: 1024 } });
-  httpServer.on('upgrade', (request, socket, head) => {
+  const onUpgrade = (request: IncomingMessage, socket: Duplex, head: Buffer): void => {
     const url = new URL(request.url ?? '/', 'http://localhost');
     if (url.pathname !== '/ws') {
       socket.destroy();
@@ -3978,6 +4049,10 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
     wss.handleUpgrade(request, socket, head, (ws) => {
       wss.emit('connection', ws, request);
     });
+  };
+  httpServer.on('upgrade', onUpgrade);
+  httpsServer?.on('upgrade', (request, socket, head) => {
+    void afterIdentity(request.socket).then(() => onUpgrade(request, socket, head));
   });
 
   wss.on('connection', (socket, request) => {
@@ -4275,12 +4350,27 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
     });
   });
   boundPort = port;
+  let tlsPort: number | undefined;
+  if (httpsServer && tls) {
+    const server = httpsServer;
+    tlsPort = await new Promise<number>((resolvePromise, reject) => {
+      server.once('error', reject);
+      server.listen(tls.port, tls.host, () => {
+        const address = server.address();
+        resolvePromise(typeof address === 'object' && address ? address.port : tls.port);
+      });
+    });
+  }
   unsubscribeSharedAgent = sharedAgent?.subscribe(emitSharedAgentState);
   void sweepMedia().catch(() => null);
 
   return {
     port,
-    urls: reachableUrls(host, port),
+    urls: [
+      ...reachableUrls(host, port),
+      ...(tls ? [`https://${tls.host.includes(':') ? `[${tls.host}]` : tls.host}:${tlsPort}`] : []),
+    ],
+    tlsPort,
     flush: async () => {
       await Promise.all([...rooms.values()].map((room) => room.session.flush()));
     },
@@ -4323,10 +4413,13 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
       // keeps that response open indefinitely — so the await never returned
       // and "End collaboration" hung with the shell still on screen. Ending
       // the session means disconnecting everyone, so tear the sockets down.
-      await new Promise<void>((resolvePromise) => {
-        httpServer.close(() => resolvePromise());
-        httpServer.closeAllConnections();
-      });
+      if (tlsReload) clearInterval(tlsReload);
+      await Promise.all([httpServer, ...(httpsServer ? [httpsServer] : [])].map((server) => (
+        new Promise<void>((resolvePromise) => {
+          server.close(() => resolvePromise());
+          server.closeAllConnections();
+        })
+      )));
       for (const room of rooms.values()) await room.session.close();
       sharedAgent?.close();
       await userDirectory?.flush();
