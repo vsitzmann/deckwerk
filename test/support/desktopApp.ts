@@ -1,5 +1,5 @@
 import { spawn, type ChildProcess } from 'node:child_process';
-import { mkdir, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { build } from 'electron-vite';
 import { collectProcessOutput, electronBinary, reportedPorts, type DevToolsTarget } from './browserSession.js';
@@ -82,8 +82,12 @@ export async function materializeDesktopApp(appDir: string, name: string): Promi
   await symlink(join(buildDir, 'out'), join(appDir, 'out'), 'dir');
   await symlink(join(process.cwd(), 'node_modules'), join(appDir, 'node_modules'), 'dir');
   await symlink(clientDir, join(appDir, 'dist', 'collab'), 'dir');
+  // The app's real version: without one Electron reports its own on macOS
+  // and "0.0" on Linux, which the updater refuses as not semver.
+  const { version } = JSON.parse(await readFile(join(process.cwd(), 'package.json'), 'utf8')) as { version: string };
   await writeFile(join(appDir, 'package.json'), JSON.stringify({
     name,
+    version,
     private: true,
     type: 'module',
     main: 'out/main/index.js',
