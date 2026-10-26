@@ -197,6 +197,11 @@ pre.cmd {
 }
 pre.cmd .p { color: var(--accent); user-select: none; }
 .pkg .alt { font-size: 13.5px; color: var(--muted); }
+.pkg .dl { display: flex; flex-wrap: wrap; gap: 10px; margin-top: auto; padding-top: 4px; }
+.pkg .dl .btn { padding: 10px 16px; }
+.release-line { margin: 18px 0 0; font-family: var(--mono); font-size: 13px; color: var(--muted); }
+.release-line a { color: var(--ink-2); text-decoration: underline; text-underline-offset: 3px; }
+.release-line a:hover { color: var(--accent); }
 .source { margin-top: 20px; background: transparent; border: 1px dashed #cfcbc0; }
 .source pre.cmd { max-width: 100%; }
 

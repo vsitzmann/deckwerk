@@ -97,18 +97,35 @@
         <h2>Linux, macOS and Windows.</h2>
         <p class="lede">DeckWerk is in alpha and under active development. It already authors and delivers real talks, but interfaces and the file format may still change.</p>
       </div>
-      <div class="pkg">
-        <h3>macOS</h3>
-        <p>Via <a href="https://brew.sh">Homebrew</a>, Apple Silicon and Intel.</p>
-        <pre class="cmd"><span class="p">$ </span>brew install --cask vsitzmann/tap/deckwerk</pre>
-        <p class="alt">The app is not yet signed, so macOS blocks it at first. Clear the quarantine flag once:</p>
-        <pre class="cmd"><span class="p">$ </span>xattr -dr com.apple.quarantine /Applications/DeckWerk.app</pre>
+      <div class="grid downloads">
+        <div class="pkg">
+          <h3>macOS</h3>
+          <p>Open the disk image and drag DeckWerk into Applications.</p>
+          <div class="dl">
+            <a class="btn primary" data-asset="mac-arm64" href="https://github.com/vsitzmann/deckwerk/releases/latest">Apple Silicon</a>
+            <a class="btn ghost" data-asset="mac-x64" href="https://github.com/vsitzmann/deckwerk/releases/latest">Intel</a>
+          </div>
+          <p class="alt">Not sure which? Apple menu → About This Mac: an M-series chip is Apple Silicon.</p>
+        </div>
+        <div class="pkg">
+          <h3>Windows</h3>
+          <p>Run the installer. DeckWerk starts when it is done.</p>
+          <div class="dl">
+            <a class="btn primary" data-asset="win" href="https://github.com/vsitzmann/deckwerk/releases/latest">Windows installer</a>
+          </div>
+          <p class="alt">The installer is not signed yet, so Windows may stop it at first: choose More info, then Run anyway.</p>
+        </div>
+        <div class="pkg">
+          <h3>Linux</h3>
+          <p>An AppImage runs on any x64 distribution; the .deb installs on Debian and Ubuntu.</p>
+          <div class="dl">
+            <a class="btn primary" data-asset="appimage" href="https://github.com/vsitzmann/deckwerk/releases/latest">AppImage</a>
+            <a class="btn ghost" data-asset="deb" href="https://github.com/vsitzmann/deckwerk/releases/latest">.deb</a>
+          </div>
+          <p class="alt">Allow the AppImage to run as a program in its file properties, then double-click it. A .deb opens in your software installer.</p>
+        </div>
       </div>
-      <div class="pkg">
-        <h3>Linux and Windows</h3>
-        <p>Download from the <a href="https://github.com/vsitzmann/deckwerk/releases/latest">latest release</a>: an <code>.AppImage</code>, <code>.deb</code> or <code>.tar.gz</code> for x64 Linux, or the Windows <code>setup.exe</code>. On Debian and Ubuntu:</p>
-        <pre class="cmd"><span class="p">$ </span>sudo apt install ./deckwerk_*_amd64.deb</pre>
-      </div>
+      <p class="release-line"><span data-release-version>The latest release</span> · <a data-release-page href="https://github.com/vsitzmann/deckwerk/releases/latest">release notes and all files</a></p>
       <div class="pkg source">
         <h3>Or build it yourself</h3>
         <p>Three commands, no cross-compilation tricks. Prerequisites are in <a href="https://github.com/vsitzmann/deckwerk/blob/main/docs/BUILDING.md">docs/BUILDING.md</a>.</p>
@@ -164,5 +181,37 @@
   </div>
 </footer>
 
+<script>
+  // Point each download button at its file in the latest release. The file
+  // names carry the version, so they are looked up rather than written in;
+  // without this (no script, API unreachable) every button still opens the
+  // latest release's page.
+  (function () {
+    var patterns = {
+      'mac-arm64': /-mac-arm64\.dmg$/,
+      'mac-x64': /-mac-x64\.dmg$/,
+      'win': /-win-x64-setup\.exe$/,
+      'appimage': /\.AppImage$/,
+      'deb': /_amd64\.deb$/
+    };
+    fetch('https://api.github.com/repos/vsitzmann/deckwerk/releases/latest', { headers: { Accept: 'application/vnd.github+json' } })
+      .then(function (r) { return r.ok ? r.json() : Promise.reject(r.status); })
+      .then(function (release) {
+        document.querySelectorAll('[data-asset]').forEach(function (link) {
+          var pattern = patterns[link.getAttribute('data-asset')];
+          var asset = (release.assets || []).filter(function (a) { return pattern.test(a.name); })[0];
+          if (asset) {
+            link.href = asset.browser_download_url;
+            link.title = asset.name + ' (' + Math.round(asset.size / 1048576) + ' MB)';
+          }
+        });
+        var version = document.querySelector('[data-release-version]');
+        if (version && release.tag_name) version.textContent = 'DeckWerk ' + release.tag_name.replace(/^v/, '');
+        var page = document.querySelector('[data-release-page]');
+        if (page && release.html_url) page.href = release.html_url;
+      })
+      .catch(function () {});
+  })();
+</script>
 </body>
 </html>
