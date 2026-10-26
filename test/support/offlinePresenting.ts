@@ -37,6 +37,8 @@ export interface DrivenPage {
   evaluate<T>(expression: string): Promise<T>;
   goto(url: string): Promise<void>;
   reload(): Promise<void>;
+  /** Give up on a navigation that hangs (a dead route, nothing to answer from): what the browser's stop button does. */
+  stop?(): Promise<void>;
   close(): Promise<void>;
 }
 
@@ -81,6 +83,7 @@ export async function openPage(kind: OfflineBrowserKind, profileDir: string): Pr
     evaluate: (expression) => cdp.evaluate(expression),
     goto: async (url) => { await cdp.evaluate(`(location.href = ${JSON.stringify(url)}, true)`); },
     reload: async () => { await cdp.evaluate('(location.reload(), true)'); },
+    stop: async () => { await cdp.call('Page.stopLoading'); },
     close: async () => {
       cdp.close();
       await stopBrowser(child);

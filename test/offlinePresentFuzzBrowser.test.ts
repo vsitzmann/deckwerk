@@ -127,6 +127,14 @@ interface Model {
   presenting: boolean;
   /** The presentation may be checked slide by slide: the copy or the link covers it. */
   presentationCovered: boolean;
+  /**
+   * The show began from a complete copy: every picture is local, so each
+   * slide shows its pictures in its first frame. A show begun cold over the
+   * network may paint a slide it reaches before the pictures arrive.
+   */
+  presentationLocal: boolean;
+  /** The link went down at some point during this show. */
+  showLostLink: boolean;
   /** Per deck: the editor said the copy was complete, and nothing was added since. */
   complete: Record<DeckId, boolean>;
   /** Per deck: a snapshot was kept (the deck was open online for a moment). */
@@ -143,7 +151,7 @@ class Walk {
   readonly trail: string[] = [];
   readonly problems: string[] = [];
   readonly model: Model = {
-    link: 'up', open: null, presenting: false, presentationCovered: false,
+    link: 'up', open: null, presenting: false, presentationCovered: false, presentationLocal: false, showLostLink: false,
     complete: { 'talk-a': false, 'talk-b': false }, snapshot: { 'talk-a': false, 'talk-b': false },
     shell: false, offlineEdits: 0, connected: false,
   };
@@ -172,9 +180,14 @@ class Walk {
   /** The moves that make sense now, weighted by repetition. */
   private moves(): Array<() => Promise<string>> {
     const m = this.model;
-    const moves: Array<() => Promise<string>> = [() => this.open(this.pick(DECKS))];
-    if (m.open === null) return moves;
-    moves.push(() => this.wait(), () => this.reload());
+    // Nothing answers a page in a black hole before the worker is installed:
+    // the browser spins until it is stopped. A WebDriver navigation cannot
+    // be stopped, so Safari leaves that dead end alone.
+    const deadEnd = m.link === 'blackhole' && !m.shell && !this.page.stop;
+    const moves: Array<() => Promise<string>> = deadEnd ? [] : [() => this.open(this.pick(DECKS))];
+    if (m.open === null) return moves.length > 0 ? moves : [() => this.restore()];
+    moves.push(() => this.wait());
+    if (!deadEnd) moves.push(() => this.reload());
     if (m.presenting) {
       moves.push(() => this.step(), () => this.step(), () => this.step(), () => this.step(), () => this.endShow());
     } else {
@@ -190,8 +203,11 @@ class Walk {
   }
 
   async move(): Promise<void> {
+    const started = Date.now();
     const label = await this.pick(this.moves())();
     this.trail.push(label);
+    // As it happens: a walk that hangs says where.
+    if (process.env.OFFLINE_FUZZ_VERBOSE !== '0') console.log(`offline fuzz step ${this.trail.length}: ${label} (${Date.now() - started} ms)`);
     await this.noteShell();
   }
 
@@ -208,6 +224,7 @@ class Walk {
     await this.page.goto(`${origin}/?deck=${id}&name=Fuzz`).catch(() => undefined);
     m.open = id;
     m.presenting = false;
+    await this.giveUpOnDeadEnd();
     await this.expectDeck(`open ${id}`);
     return `open ${id} (link ${m.link})`;
   }
@@ -216,8 +233,20 @@ class Walk {
     const m = this.model;
     await this.page.reload().catch(() => undefined);
     m.presenting = false;
+    await this.giveUpOnDeadEnd();
     await this.expectDeck('reload');
     return `reload (link ${m.link})`;
+  }
+
+  /** A page that nothing can answer (a black hole, no worker yet) spins: stop it, as a person would. */
+  private async giveUpOnDeadEnd(): Promise<void> {
+    if (this.model.link !== 'blackhole' || this.model.shell) return;
+    await new Promise((resolve) => setTimeout(resolve, 4_000));
+    await this.page.stop?.();
+    // The tab stays on the page it had: that is the deck on screen.
+    const href = await this.page.evaluate<string>('location.href').catch(() => '');
+    const shown = href ? new URL(href).searchParams.get('deck') : null;
+    if (shown === 'talk-a' || shown === 'talk-b') this.model.open = shown;
   }
 
   /** After an open or a reload: what the editor must show. */
@@ -279,6 +308,7 @@ class Walk {
     const how = this.pick(['refused', 'blackhole'] as const);
     await link!.down(how);
     this.model.link = how;
+    if (this.model.presenting) this.model.showLostLink = true;
     this.model.connected = false;
     return `link ${how}`;
   }
@@ -332,6 +362,8 @@ class Walk {
     if (!pressed.mounted) return `present refused (${pressed.status.slice(-60)})`;
     m.presenting = true;
     m.presentationCovered = online || before.offline === 'ready';
+    m.presentationLocal = before.offline === 'ready';
+    m.showLostLink = !online;
     await watchPresentation(this.page).catch((error) => this.fail(`the presentation never built its stage: ${error}`));
     await this.checkStage('present');
     return `present (${online ? 'online' : 'offline'})`;
@@ -359,8 +391,9 @@ class Walk {
 
   private async checkStage(label: string): Promise<void> {
     const m = this.model;
-    // Covered while the link is up, or when the show began from a complete copy.
-    if (!m.presentationCovered && m.link !== 'up') return;
+    // Judged when the show began from a complete copy, or online without
+    // losing the link since: a show that lost it may miss what it had not reached.
+    if (!m.presentationLocal && !(m.presentationCovered && m.link === 'up' && !m.showLostLink)) return;
     const { state, problems } = await stageComplete(this.page, 20_000);
     for (const problem of problems) this.fail(`${label} (${state.slideId}, link ${m.link}): ${problem}`);
   }
@@ -370,10 +403,13 @@ class Walk {
     if (!m.presenting) return 'end show (none)';
     const { frames, errors } = await takeFirstFrames(this.page).catch(() => ({ frames: [], errors: [], ticks: 0 }));
     // A Safari window behind others paints no frames: nothing to judge (stageComplete still held every slide).
-    if (m.presentationCovered) {
+    if (m.presentationLocal) {
       for (const frame of frames) {
         if (frame.missing.length > 0) this.fail(`${frame.slide} appeared without ${frame.missing.join(', ')}`);
       }
+    }
+    // A show begun online that lost the link may fail to load what it had not reached.
+    if (m.presentationLocal || (m.presentationCovered && !m.showLostLink)) {
       for (const error of errors) this.fail(`media element failed: ${error}`);
     }
     await exitPresentation(this.page).catch((error) => this.fail(`the show would not end: ${error}`));
