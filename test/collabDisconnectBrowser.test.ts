@@ -26,8 +26,12 @@ import { collabClientDir } from './support/collabClient.js';
  *  - the editor shows a banner that names the save contract — synced edits
  *    are on the host, new ones will be discarded — and offers a client-side
  *    deck backup, the only save that works without a server;
- *  - clicking Present while disconnected is refused with the reason, instead
- *    of mounting an iframe that can never load.
+ *  - clicking Present while disconnected, with no offline copy of the talk
+ *    in this browser yet (the editor presented at once, so its copy never
+ *    started), is refused with the reason, instead of mounting an iframe
+ *    that can never load. Presenting from a complete copy is
+ *    mediaTransferBudgetBrowser.test.ts's "presenting after the server has
+ *    gone".
  */
 
 const DECK_ID = 'disconnect-deck';

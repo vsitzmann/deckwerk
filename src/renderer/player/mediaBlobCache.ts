@@ -296,6 +296,11 @@ export class MediaBlobCache {
     this.givenUpListeners.clear();
   }
 
+  /** Whether any download is running. */
+  get transferring(): boolean {
+    return this.flights.size > 0;
+  }
+
   /** Bytes currently held (exposed for tests). */
   get heldBytes(): number {
     return this.bytes;

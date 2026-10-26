@@ -1,0 +1,273 @@
+import {
+  answerFromKept,
+  isImmutableMedia,
+  isMediaPath,
+  MEDIA_CACHE,
+  mediaKey,
+  SHELL_CACHE_PREFIX,
+  type OfflineWorkerMessage,
+} from './offlineShared.js';
+
+/**
+ * The browser editor's service worker: the app keeps working when the server
+ * goes away, for a talk the editor has already downloaded (offlineCopy.ts).
+ *
+ * - **The shell** (pages, hashed bundles, fonts) is precached when the worker
+ *   installs, from the list the build writes into it (vite.collab.config.ts).
+ *   Pages are asked of the network first and answered from the cache when it
+ *   cannot answer, so a server that is up always serves its current build;
+ *   hashed files never change, so the cache answers them first.
+ * - **Media** the page has put into MEDIA_CACHE is answered from there:
+ *   content-keyed `/media/` URLs always (they name exact bytes), other deck
+ *   files only once the server cannot answer. A file not in the cache is not
+ *   touched at all: the request goes to the network exactly as it would
+ *   with no worker, so nothing here changes how a media stack streams.
+ *
+ * Bundled on its own by the build, so it imports nothing but pure helpers.
+ */
+
+interface ExtendableEvent extends Event {
+  waitUntil(promise: Promise<unknown>): void;
+}
+interface FetchEvent extends ExtendableEvent {
+  readonly request: Request;
+  respondWith(response: Response | Promise<Response>): void;
+}
+interface ExtendableMessageEvent extends ExtendableEvent {
+  readonly data: unknown;
+  readonly source: { postMessage(message: unknown): void } | null;
+}
+interface WorkerScope {
+  readonly registration: { readonly scope: string };
+  readonly location: Location;
+  skipWaiting(): Promise<void>;
+  readonly clients: { claim(): Promise<void> };
+  addEventListener(type: 'install' | 'activate', listener: (event: ExtendableEvent) => void): void;
+  addEventListener(type: 'fetch', listener: (event: FetchEvent) => void): void;
+  addEventListener(type: 'message', listener: (event: ExtendableMessageEvent) => void): void;
+}
+
+declare const DECKWERK_SHELL: { version: string; files: string[] };
+
+const worker = self as unknown as WorkerScope;
+const SHELL_CACHE = `${SHELL_CACHE_PREFIX}${DECKWERK_SHELL.version}`;
+/** The app's root, where the pages and `app/` live: the worker's own scope. */
+const BASE = new URL(worker.registration.scope).pathname;
+/** Pages kept under one key each, whatever query they were opened with. */
+const PAGES = new Set(['index.html', 'present.html', 'mobile.html', 'print.html']);
+/**
+ * How long a page waits for a server that does not answer before the kept
+ * copy is shown. A stopped server refuses at once; one behind a dropped
+ * tailnet link can leave the connection hanging for a minute.
+ */
+const PAGE_TIMEOUT_MS = 5_000;
+/** Older shells kept beside the current one, for a page still running an older build. */
+const SHELL_GENERATIONS = 2;
+
+/** Keys of MEDIA_CACHE, or null until read (the worker can be restarted at any moment). */
+let kept: Set<string> | null = null;
+let keptLoading: Promise<Set<string>> | null = null;
+let keptReadAt = 0;
+/**
+ * The page says what it adds (`offline-media`), but a message can miss a
+ * worker that was starting; a request for a file not known to be kept reads
+ * the keys again, at most this often, so the next one is answered.
+ */
+const KEPT_REREAD_MS = 5_000;
+/** Requests this worker could not answer, for the page to ask about (tests, diagnostics). */
+const failures: Array<{ url: string; at: number; reason: string }> = [];
+
+function loadKept(): Promise<Set<string>> {
+  keptReadAt = Date.now();
+  keptLoading ??= caches.open(MEDIA_CACHE)
+    .then((cache) => cache.keys())
+    .then((requests) => {
+      const keys = new Set(requests.map((request) => mediaKey(request.url)));
+      // Messages that arrived while the keys were read.
+      for (const key of kept ?? []) keys.add(key);
+      kept = keys;
+      return keys;
+    })
+    .catch(() => {
+      kept ??= new Set();
+      return kept;
+    });
+  return keptLoading;
+}
+
+worker.addEventListener('install', (event) => {
+  event.waitUntil(precache().then(() => worker.skipWaiting()));
+});
+
+worker.addEventListener('activate', (event) => {
+  event.waitUntil((async () => {
+    const shells = (await caches.keys()).filter((name) => name.startsWith(SHELL_CACHE_PREFIX) && name !== SHELL_CACHE);
+    // caches.keys() lists in creation order: keep the newest few.
+    for (const name of shells.slice(0, Math.max(0, shells.length - SHELL_GENERATIONS))) await caches.delete(name);
+    await loadKept();
+    await worker.clients.claim();
+  })());
+});
+
+worker.addEventListener('message', (event) => {
+  const message = event.data as OfflineWorkerMessage | null;
+  if (message?.type === 'offline-media') {
+    const keys = kept ?? new Set<string>();
+    for (const url of message.added ?? []) keys.add(mediaKey(url));
+    for (const url of message.removed ?? []) keys.delete(mediaKey(url));
+    if (!kept) {
+      kept = keys;
+      void loadKept();
+    }
+  } else if (message?.type === 'offline-failures') {
+    event.source?.postMessage({ type: 'offline-failures', failures });
+  }
+});
+
+/**
+ * One file at a time: this runs while the editor loads its first slide, and
+ * the shell is a few megabytes. A file that fails is fetched when it is first
+ * used instead, so one bad response never leaves the worker uninstalled.
+ */
+async function precache(): Promise<void> {
+  const cache = await caches.open(SHELL_CACHE);
+  for (const file of DECKWERK_SHELL.files) {
+    const url = `${BASE}${file}`;
+    if (await cache.match(url)) continue;
+    try {
+      const response = await fetch(url, { cache: PAGES.has(file) ? 'no-cache' : 'default' });
+      if (response.ok) await cache.put(url, response);
+    } catch {
+      // Fetched on first use instead.
+    }
+  }
+}
+
+worker.addEventListener('fetch', (event) => {
+  const request = event.request;
+  if (request.method !== 'GET') return;
+  const url = new URL(request.url);
+  if (url.origin !== worker.location.origin || !url.pathname.startsWith(BASE)) return;
+  const path = url.pathname;
+  const relative = path.slice(BASE.length);
+  if (relative === 'sw.js') return;
+  // The app's pages only: a download or an export opened in a tab is the
+  // server's business, and passes straight through.
+  if (relative === '' || PAGES.has(relative)) {
+    event.respondWith(page(request, relative === '' ? 'index.html' : relative));
+    return;
+  }
+  if (relative.startsWith('app/')) {
+    event.respondWith(appFile(request));
+    return;
+  }
+  if (relative === 'api/config') {
+    event.respondWith(networkFirst(request, SHELL_CACHE, mediaKey(url)));
+    return;
+  }
+  if (relative === 'api/video-still') {
+    // Small, and what a slide's thumbnail shows: kept as they are fetched.
+    event.respondWith(networkFirst(request, MEDIA_CACHE, mediaKey(url)));
+    return;
+  }
+  if (!isMediaPath(path)) return;
+  const key = mediaKey(url);
+  if (kept === null) {
+    // Restarted: the decision needs the cache's keys.
+    event.respondWith(loadKept().then((keys) => (keys.has(key) ? media(request, path, key) : network(request))));
+    return;
+  }
+  // Not kept: the network, untouched.
+  if (!kept.has(key)) {
+    if (Date.now() - keptReadAt > KEPT_REREAD_MS) {
+      keptLoading = null;
+      void loadKept();
+    }
+    return;
+  }
+  event.respondWith(media(request, path, key));
+});
+
+/** A kept file: from the cache if its URL names its bytes, else from the server while it answers. */
+async function media(request: Request, path: string, key: string): Promise<Response> {
+  if (!isImmutableMedia(path)) {
+    try {
+      const response = await fetch(request);
+      if (response.ok || response.status === 304) return response;
+    } catch {
+      // The server is gone: the kept copy answers.
+    }
+  }
+  const found = await (await caches.open(MEDIA_CACHE)).match(key);
+  if (!found) {
+    kept?.delete(key);
+    return network(request);
+  }
+  return answerFromKept(request, found);
+}
+
+async function network(request: Request): Promise<Response> {
+  try {
+    return await fetch(request);
+  } catch (error) {
+    failures.push({ url: mediaKey(request.url), at: Date.now(), reason: String(error) });
+    throw error;
+  }
+}
+
+/** A page: the server's current one while it answers, the kept one when it cannot. */
+async function page(request: Request, file: string): Promise<Response> {
+  const cache = await caches.open(SHELL_CACHE);
+  const key = `${BASE}${file}`;
+  const fresh = fetch(request).then(async (response) => {
+    // A redirect (a view-only participant sent to the viewer) or an error
+    // page is this request's answer, never the page to keep.
+    if (response.ok && !response.redirected && response.type === 'basic'
+      && (response.headers.get('content-type') ?? '').includes('text/html')) {
+      await cache.put(key, response.clone());
+    }
+    return response;
+  });
+  const keptPage = await cache.match(key) ?? await caches.match(key);
+  if (!keptPage) return fresh.catch((error) => fail(request, error));
+  let timer = 0;
+  const timedOut = new Promise<null>((resolve) => {
+    timer = setTimeout(() => resolve(null), PAGE_TIMEOUT_MS) as unknown as number;
+  });
+  try {
+    const answered = await Promise.race([fresh.catch(() => null), timedOut]);
+    return answered ?? keptPage;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** A hashed bundle file: kept for good once fetched. */
+async function appFile(request: Request): Promise<Response> {
+  const found = await caches.match(request);
+  if (found) return found;
+  try {
+    const response = await fetch(request);
+    if (response.ok) await (await caches.open(SHELL_CACHE)).put(request, response.clone());
+    return response;
+  } catch (error) {
+    return fail(request, error);
+  }
+}
+
+/** The server's answer while it gives one, the kept answer when it does not. */
+async function networkFirst(request: Request, cacheName: string, key: string): Promise<Response> {
+  const cache = await caches.open(cacheName);
+  try {
+    const response = await fetch(request);
+    if (response.ok) await cache.put(key, response.clone());
+    return response;
+  } catch (error) {
+    return (await cache.match(key)) ?? fail(request, error);
+  }
+}
+
+function fail(request: Request, error: unknown): Response {
+  failures.push({ url: mediaKey(request.url), at: Date.now(), reason: String(error) });
+  return Response.error();
+}

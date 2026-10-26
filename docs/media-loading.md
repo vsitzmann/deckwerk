@@ -498,6 +498,69 @@ than starting a second decode on the keypress path. Changing direction drops
 stale lookahead nodes immediately, so an image-heavy editing session never
 accumulates decoded bitmaps from the rest of the deck.
 
+### Offline: the talk goes on when the server goes away
+
+A talk is given in a lecture hall whose wifi fails, from a laptop whose
+server (the lab machine, over the tailnet) is suddenly out of reach. The
+browser editor therefore keeps an offline copy of the deck it has open, and
+presenting works from it, even pressing Present after the connection has
+dropped, and so does reloading the editor.
+
+- **The shell.** A service worker (`src/renderer/collab/sw.ts`, emitted as
+  `sw.js` at the root of the client build) precaches the pages, the hashed
+  bundles and the woff2 fonts, from a list the build writes into it
+  (`vite.collab.config.ts`). Pages are network-first (a server that answers
+  serves its current build; one that does not answer within five seconds
+  is taken for gone); hashed files are cache-first. The worker is registered
+  only once the editor has gone quiet after opening a deck, so a first visit
+  spends the link on the slide being shown, and only in a secure context
+  (https, or localhost): a LAN joiner on plain http gets no copy.
+- **The files.** `OfflineCopy` (`src/renderer/collab/offlineCopy.ts`)
+  downloads every file the deck shows into Cache Storage, which persists
+  where the HTTP cache need not, in the presentation's order
+  (`talkMediaOrder`, the same function the Player's blob cache follows)
+  counted outward from the slide the editor is on, then skipped slides, web
+  pages and layout masters. One file at a time in the whole browser (a Web
+  Lock), and only once the editor has been quiet for a second: a canvas
+  video or picture still loading, a rail thumbnail in the load gate, the
+  Safari video memory fetching, or a presentation running all hold it. A
+  clip already downloading stops reading between chunks while the editor is
+  busy. Whatever wants a file the copy is downloading waits for it
+  (`settled`, wired into the presentation's and the video memory's blob
+  caches) instead of downloading it beside it. Chromium's HTTP cache keeps
+  what a `<video>` read in pieces, so clips are asked for as `bytes=0-`,
+  which it assembles from those pieces; in Safari a clip the editor holds
+  in memory is copied from there.
+- **What the worker answers.** Only files in the copy: a `/media/` URL from
+  the copy always (it names exact bytes), any other deck file only once the
+  server cannot answer, both honouring `Range` (`answerFromKept`). A file
+  not in the copy is not touched: the request reaches the network as if
+  there were no worker, so nothing above changes for a file the copy has
+  not reached.
+- **The deck** is kept as a snapshot (deck, theme, media variants, pending
+  clips), rewritten a couple of seconds after each change. An editor opened
+  while the server is unreachable shows it, and the first welcome replaces
+  it as any reconnect would (edits made meanwhile are discarded, as during
+  any disconnection, and the banner says so).
+- **Bounded.** A file goes in only while it fits 80% of the origin's quota
+  (`navigator.storage.estimate`), and the copy asks for persistent storage
+  (`navigator.storage.persist`). An index records each deck opened and its
+  files; past eight decks, or ninety days unopened, a deck's snapshot goes,
+  and any file no deck in the index holds is deleted. A deck the server
+  refuses this person (close 4003) or no longer has is forgotten at once.
+  `/media` is the same access-controlled route either way: the copy holds
+  only what this person was served.
+- **Pending clips wait.** A clip whose streaming version is still being
+  prepared is not downloaded (its original may be many times the size); it
+  counts as a file left until the version exists.
+
+The status line says "Downloading for offline: n files left", then
+"Available offline" (or why not: no room, files that kept failing). Present
+without a server is allowed once the copy is complete (shell, deck, every
+file), and refused with the reason otherwise. In the presentation, the
+disconnect pill fades after a few seconds rather than staying on the
+projector for the rest of the talk.
+
 ## Regression guards
 
 - `test/mediaLoading.test.ts` — poster-frame seek and preload behaviour of
@@ -556,6 +619,18 @@ accumulates decoded bitmaps from the rest of the deck.
   throttled link: open connections dropped, new ones never answered) leaves
   every slide's photos in its first frame and every clip playing, with no
   media request attempted.
+- `test/mediaTransferBudgetBrowser.test.ts`, "presenting after the server
+  has gone" — the editor opens the talk of photos and clips, says it is
+  available offline, the server and the link in front of it stop, and
+  Present still works: forward, back and jumps (a Speaker View's `goTo`),
+  every photo in its slide's first frame, every clip playing, no media
+  element failing and nothing the worker could not answer; then a reload
+  of the editor shows the deck. Chromium in CI, Safari with
+  `RUN_SAFARI_MEDIA_BUDGET=1`.
+- `test/offlineCopy.test.ts` — the copy's order, its quiet periods, clips
+  pausing for the editor and going at once for a waiter, pending clips,
+  quota and failures in the status line, whole files kept from ranges, the
+  snapshot, eviction by deck; and the worker's range answers.
 - `test/presentVideosFromMemory.test.ts` — pictures before the clips ranked
   below them, several at once and never held; a clip set aside for a picture
   and resumed with a range request; a clip the slide waits for never set

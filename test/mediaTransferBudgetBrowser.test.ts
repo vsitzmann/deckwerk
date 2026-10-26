@@ -1200,6 +1200,183 @@ async function presentingPhotos(kind: BrowserKind): Promise<{
   return { log, photos, frames, offline };
 }
 
+/** Every clip on the presentation's stage: what it is doing, for the message when one is not playing. */
+interface ClipState {
+  src: string;
+  readyState: number;
+  paused: boolean;
+  time: number;
+  error: number | null;
+}
+
+const stageClips = (target: string) => `(() => [...${target}.document.querySelectorAll('#stage .stage > .slide video')].map((v) => ({
+  src: (v.dataset.networkSrc || v.getAttribute('src') || 'no src').split('/').pop().slice(0, 40),
+  readyState: v.readyState, paused: v.paused, time: v.currentTime, error: v.error ? v.error.code : null,
+})))()`;
+
+const playing = (clip: ClipState) => clip.readyState >= 2 && !clip.paused && clip.time > 0 && clip.error === null;
+
+/** What presenting after the server went away showed, step by step. */
+interface OfflineTalk {
+  /** What the status line said once the copy was complete. */
+  status: string;
+  frames: FirstFrame[];
+  /** Steps whose clips did not all play. */
+  stalledClips: string[];
+  /** Media elements that failed to load, and requests the service worker could not answer. */
+  failures: string[];
+  /** What the presentation showed: one entry per step. */
+  shown: string[];
+  /** Whether the Present button was refused, and what the status line said then. */
+  refused: string | null;
+  reload: { offlineDeck: string | null; slides: number };
+}
+
+/**
+ * Open the talk of photos and clips in the editor, wait until it says the
+ * talk is available offline, take the server away (the link and the server
+ * behind it: the browser's origin no longer answers at all), press Present
+ * and give the talk: forward to the end, back to the start, and jumps, as
+ * a Speaker View sends them. Then end the show and reload the editor, still
+ * without a server.
+ */
+async function presentingOffline(kind: BrowserKind): Promise<OfflineTalk> {
+  const { decksRoot, profileDir } = await freshWorkDir('offline');
+  const deckDir = join(decksRoot, PHOTOS_DECK);
+  await mkdir(join(deckDir, 'assets'), { recursive: true });
+  const photos = Array.from({ length: 17 }, (_, i) => `assets/photo-${i + 1}.jpg`);
+  const clips = ['assets/talk-clip-1.mp4', 'assets/talk-clip-2.mp4'];
+  await Promise.all([
+    ...photos.map((photo, i) => makePhoto(join(deckDir, photo), '1600x1000', i + 1)),
+    makeClip(join(deckDir, clips[0]), PHOTOS_CLIP_SECONDS, true),
+    makeClip(join(deckDir, clips[1]), PHOTOS_CLIP_SECONDS, true, 'mandelbrot'),
+  ]);
+  const deck = photosDeck(photos, clips);
+  // Clips that play as their slide appears: a clip that cannot is plain to see.
+  for (const slide of deck.slides) {
+    for (const el of slide.elements) if (el.type === 'video') el.autoplay = true;
+  }
+  await saveDeck(deckDir, deck);
+  await writeFile(join(deckDir, 'theme.css'), '.slide { background: #fff; color: #111; }\n', 'utf8');
+  const slides = deck.slides.length;
+
+  const { page, origin } = await startSession(kind, decksRoot, profileDir);
+  await page.goto(`${origin}/?deck=${PHOTOS_DECK}&name=Budget`);
+  await waitForEditor(page, slides);
+  const status = await eventually(
+    () => page.evaluate<{ state: string; text: string }>(`({
+      state: document.documentElement.dataset.offline ?? '',
+      text: document.getElementById('status')?.textContent ?? '',
+    })`),
+    'the editor never said the talk was available offline',
+    (answer) => answer.state === 'ready',
+    240_000,
+  );
+
+  // The server goes away: nothing answers at the editor's origin any more.
+  await link!.close();
+  link = null;
+  await server!.close();
+  server = null;
+  await eventually(
+    () => page.evaluate<boolean>(`document.documentElement.dataset.collabReady !== 'true'`),
+    'the editor never noticed the server had gone', Boolean, 30_000,
+  );
+
+  await page.evaluate(`(() => {
+    const present = [...document.querySelectorAll('#toolbar button')]
+      .filter((button) => button.textContent?.trim() === 'Present')
+      .find((button) => button.getClientRects().length > 0);
+    present.click();
+    return true;
+  })()`);
+  const opened = await eventually(
+    () => page.evaluate<{ painted: boolean; status: string }>(`({
+      painted: Boolean(document.querySelector('iframe')?.contentDocument?.querySelector('#stage .slide')),
+      status: document.getElementById('status')?.textContent ?? '',
+    })`),
+    'the presentation stayed blank', (answer) => answer.painted || answer.status.includes('Presenting needs the server'), 60_000,
+  );
+  if (!opened.painted) {
+    return { status: status.text, frames: [], stalledClips: [], failures: [], shown: [], refused: opened.status, reload: { offlineDeck: null, slides: 0 } };
+  }
+  await page.evaluate(watchFirstFrames(PRESENT_FRAME));
+  await page.evaluate(`(() => {
+    const win = ${PRESENT_FRAME};
+    win.__mediaErrors = [];
+    win.document.addEventListener('error', (event) => {
+      const target = event.target;
+      if (target && (target.tagName === 'IMG' || target.tagName === 'VIDEO')) {
+        win.__mediaErrors.push(target.tagName + ' ' + (target.dataset.networkSrc || target.getAttribute('src') || '').slice(0, 80));
+      }
+    }, true);
+    return true;
+  })()`);
+
+  const stalledClips: string[] = [];
+  const shown: string[] = [];
+  const step = async (label: string, act: () => Promise<void>) => {
+    await act();
+    const at = await eventually(
+      () => page.evaluate<string>(`${PRESENT_FRAME}.document.querySelector('#stage .stage > .slide')?.dataset.slideId ?? ''`),
+      `${label}: no slide on the stage`, Boolean,
+    );
+    shown.push(`${label} → ${at}`);
+    const clipsNow = await eventually(
+      () => page.evaluate<ClipState[]>(stageClips(PRESENT_FRAME)),
+      `${label}: clips`,
+      (states) => states.every(playing),
+      15_000,
+    ).catch(async () => page.evaluate<ClipState[]>(stageClips(PRESENT_FRAME)));
+    if (!clipsNow.every(playing)) stalledClips.push(`${label} (${at}): ${JSON.stringify(clipsNow.filter((clip) => !playing(clip)))}`);
+    await new Promise((resolve) => setTimeout(resolve, 600));
+  };
+  const key = (name: string) => () => presentKey(page, PRESENT_FRAME, name);
+  // A Speaker View's jump: the presentation bus is this origin's BroadcastChannel.
+  const jump = (slide: number) => async () => {
+    await page.evaluate(`(() => {
+      const bus = new BroadcastChannel('deckwerk-present:${PHOTOS_DECK}');
+      bus.postMessage({ kind: 'command', command: { type: 'goTo', slide: ${slide} } });
+      bus.close();
+      return true;
+    })()`);
+  };
+  await step('open', async () => {});
+  for (let i = 1; i < slides; i++) await step(`forward ${i}`, key('ArrowRight'));
+  for (let i = 1; i < slides; i++) await step(`back ${i}`, key('ArrowLeft'));
+  for (const target of [3, 0, 4, 1, 5, 2]) await step(`jump to ${target + 1}`, jump(target));
+  await step('home', key('Home'));
+
+  const frames = await page.evaluate<FirstFrame[]>(`${PRESENT_FRAME}.__firstFrames`);
+  const failures = [
+    ...await page.evaluate<string[]>(`${PRESENT_FRAME}.__mediaErrors`),
+    ...(await page.evaluate<Array<{ url: string; reason: string }>>(`new Promise((resolve) => {
+      const worker = navigator.serviceWorker.controller;
+      if (!worker) return resolve([{ url: '(no service worker controls the editor)', reason: '' }]);
+      navigator.serviceWorker.addEventListener('message', (event) => {
+        if (event.data?.type === 'offline-failures') resolve(event.data.failures);
+      });
+      worker.postMessage({ type: 'offline-failures' });
+    })`)).map((failure) => `worker could not answer ${failure.url}: ${failure.reason}`),
+  ];
+
+  await page.evaluate(`(window.postMessage({ type: 'present-exit' }, location.origin), true)`);
+  await eventually(
+    () => page.evaluate<boolean>(`!document.querySelector('iframe')`),
+    'the presentation overlay never closed', Boolean, 30_000,
+  );
+  await page.reload();
+  await waitForEditor(page, slides);
+  const reload = await page.evaluate<{ offlineDeck: string | null; slides: number }>(`({
+    offlineDeck: document.documentElement.dataset.offlineDeck ?? null,
+    slides: document.querySelectorAll('.rail-item').length,
+  })`);
+  await browseAll(page, slides);
+
+  console.log(`media transfer budget (${kind}, presenting offline):\n${shown.join('\n')}\nfirst frames: ${JSON.stringify(frames)}`);
+  return { status: status.text, frames, stalledClips, failures, shown, refused: null, reload };
+}
+
 /** Slides that appeared without all of their images. */
 function lateImages(frames: FirstFrame[]): string[] {
   return frames.filter((frame) => frame.missing.length > 0)
@@ -1360,6 +1537,44 @@ for (const kind of ffmpeg ? BROWSERS : []) describe(`media transfer budget (${ki
 
     it('asks the server nothing about a photo once it has arrived: moving about, the editor, presenting again', () => {
       expect(anyTransfer(photoRequests(['present-again', 'editor', 'editor-present', 'editor-present-again']))).toEqual([]);
+    });
+  });
+
+  // The talk has to go on when the connection drops: in a lecture hall whose
+  // wifi fails, or with the server's machine asleep. Oct 2026: Present was
+  // refused outright without the server, and a page reloaded without it was
+  // the browser's error page.
+  describe('presenting after the server has gone', () => {
+    let result: OfflineTalk;
+    beforeAll(async () => {
+      result = await presentingOffline(kind);
+    }, 600_000);
+    afterAll(teardown);
+
+    it('says the talk is available offline once it has downloaded', () => {
+      expect(result.status).toContain('Available offline');
+    });
+
+    it('presents without the server', () => {
+      expect(result.refused).toBeNull();
+      expect(result.shown.length).toBe(18);
+    });
+
+    it('shows every photo in the frame its slide appears', () => {
+      expect(result.frames.length).toBeGreaterThanOrEqual(10);
+      expect(lateImages(result.frames)).toEqual([]);
+    });
+
+    it('plays every clip, forward, back and after a jump', () => {
+      expect(result.stalledClips).toEqual([]);
+    });
+
+    it('fails no request', () => {
+      expect(result.failures).toEqual([]);
+    });
+
+    it('opens the deck again on a reload without the server', () => {
+      expect(result.reload).toEqual({ offlineDeck: 'true', slides: 6 });
     });
   });
 

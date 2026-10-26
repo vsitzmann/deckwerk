@@ -31,6 +31,8 @@ export interface ConnectionNoticeOptions {
   blocking?: () => boolean;
   /** Editor: the current deck serialized for a local download while the server is gone. */
   backup?: () => { fileName: string; text: string };
+  /** Editor: whether this browser holds the whole talk, so presenting works without the server. */
+  presentsOffline?: () => boolean;
 }
 
 const BANNER_CSS = 'position:fixed;top:12px;left:50%;transform:translateX(-50%);'
@@ -43,6 +45,9 @@ const BANNER_CSS = 'position:fixed;top:12px;left:50%;transform:translateX(-50%);
 const PILL_CSS = 'position:fixed;left:50%;bottom:64px;transform:translateX(-50%);'
   + 'z-index:20;padding:8px 16px;border-radius:999px;background:rgba(0,0,0,.7);'
   + 'color:#fff;font:14px system-ui,sans-serif;pointer-events:none;';
+
+/** How long the present view's disconnect pill stays over a live slide. */
+const PILL_FADE_MS = 6_000;
 
 const BLOCKING_CSS = 'position:fixed;inset:0;z-index:20;display:flex;flex-direction:column;'
   + 'align-items:center;justify-content:center;gap:12px;background:#101014;color:#fff;'
@@ -85,8 +90,11 @@ export function createConnectionNotice(options: ConnectionNoticeOptions): Connec
           'New edits can’t be saved while the server is unreachable — they’ll be '
             + 'discarded when the session reconnects. Everything synced before the '
             + 'disconnect is already saved on the host.',
-          'You can still browse the slides and download a backup of the current deck. '
-            + 'Presenting and exporting need the server.',
+          options.presentsOffline?.()
+            ? 'You can still browse the slides, present them from the copy kept in this browser, '
+              + 'and download a backup of the current deck. Exporting needs the server.'
+            : 'You can still browse the slides and download a backup of the current deck. '
+              + 'Presenting and exporting need the server.',
         ]
       : [message ?? '']) {
       if (!text) continue;
@@ -127,6 +135,15 @@ export function createConnectionNotice(options: ConnectionNoticeOptions): Connec
     node.textContent = state === 'disconnected'
       ? 'Session disconnected — reconnecting…'
       : message ?? 'Session ended.';
+    // Over a live slide the pill has said its piece after a few seconds: a
+    // talk given without the server would otherwise carry it to the end, on
+    // the projector.
+    if (state === 'disconnected') {
+      setTimeout(() => {
+        node.style.transition = 'opacity .6s';
+        node.style.opacity = '0';
+      }, PILL_FADE_MS);
+    }
   };
 
   return {

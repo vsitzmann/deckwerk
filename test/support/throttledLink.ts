@@ -79,15 +79,25 @@ interface Pipe {
 const HIGH_WATER = 64 * 1024;
 const TICK_MS = 5;
 
+/**
+ * How the link is doing: carrying traffic, refusing every connection (the
+ * server process is gone, or an SSH forward was killed), or a black hole
+ * that accepts connections and never answers (a tailnet route that dropped:
+ * nothing refuses, everything hangs).
+ */
+export type LinkState = 'up' | 'refused' | 'blackhole';
+
 export class ThrottledLink {
   readonly responses: LinkResponse[] = [];
   /** Requests the browser tried after `cut`, none of which reached the server. */
   readonly attempts: Array<{ at: number; method: string; url: string }> = [];
   private server: Server | null = null;
+  private port = 0;
+  private host = '127.0.0.1';
+  private state: LinkState = 'up';
   private pipes = new Set<Pipe>();
-  /** Connections accepted after `cut`, held open and never answered. */
+  /** Connections accepted while a black hole (after `cut`), held open and never answered. */
   private dead = new Set<Socket>();
-  private lost = false;
   private timer: ReturnType<typeof setInterval> | null = null;
   private tokens = 0;
   private lastTick = Date.now();
@@ -95,11 +105,16 @@ export class ThrottledLink {
 
   constructor(private readonly targetPort: number, private readonly options: LinkOptions) {}
 
-  async listen(host = '127.0.0.1'): Promise<number> {
+  async listen(host = '127.0.0.1', port = 0): Promise<number> {
+    this.host = host;
     this.server = createServer((client) => this.accept(client));
-    await new Promise<void>((resolve) => this.server!.listen(0, host, resolve));
-    this.timer = setInterval(() => this.pump(), TICK_MS);
-    return (this.server.address() as { port: number }).port;
+    await new Promise<void>((resolve, reject) => {
+      this.server!.once('error', reject);
+      this.server!.listen(port, host, resolve);
+    });
+    this.timer ??= setInterval(() => this.pump(), TICK_MS);
+    this.port = (this.server.address() as { port: number }).port;
+    return this.port;
   }
 
   /**
@@ -109,7 +124,7 @@ export class ThrottledLink {
    * as it would on a dead route. What it tries is recorded in `attempts`.
    */
   cut(): void {
-    this.lost = true;
+    this.state = 'blackhole';
     for (const pipe of [...this.pipes]) {
       pipe.client.destroy();
       pipe.upstream.destroy();
@@ -118,16 +133,64 @@ export class ThrottledLink {
 
   async close(): Promise<void> {
     if (this.timer) clearInterval(this.timer);
+    this.timer = null;
+    this.dropAll();
+    await this.stopListening();
+  }
+
+  /** What the link is doing now. */
+  get linkState(): LinkState {
+    return this.state;
+  }
+
+  /**
+   * Take the link down: every connection is cut, and `refused` turns new
+   * ones away while `blackhole` accepts them and never answers.
+   */
+  async down(mode: Exclude<LinkState, 'up'> = 'refused'): Promise<void> {
+    this.dropAll();
+    if (mode === 'refused') await this.stopListening();
+    else if (!this.server) await this.listen(this.host, this.port);
+    this.state = mode;
+  }
+
+  /** Bring the link back on the same port, so the browser's origin is unchanged. */
+  async up(): Promise<void> {
     for (const socket of this.dead) socket.destroy();
+    this.dead.clear();
+    this.state = 'up';
+    if (!this.server) await this.listen(this.host, this.port);
+  }
+
+  /** Cut only the WebSockets: the page's session drops, its HTTP requests still go through. */
+  dropWebSockets(): number {
+    let dropped = 0;
+    for (const pipe of [...this.pipes]) {
+      if (!pipe.upgraded) continue;
+      pipe.client.destroy();
+      pipe.upstream.destroy();
+      dropped++;
+    }
+    return dropped;
+  }
+
+  private dropAll(): void {
     for (const pipe of this.pipes) {
       pipe.client.destroy();
       pipe.upstream.destroy();
     }
-    await new Promise<void>((resolve) => (this.server ? this.server.close(() => resolve()) : resolve()));
+    for (const socket of this.dead) socket.destroy();
+    this.dead.clear();
+  }
+
+  private async stopListening(): Promise<void> {
+    const server = this.server;
+    this.server = null;
+    await new Promise<void>((resolve) => (server ? server.close(() => resolve()) : resolve()));
   }
 
   private accept(client: Socket): void {
-    if (this.lost) {
+    if (this.state === 'blackhole') {
       this.dead.add(client);
       let pending = '';
       client.on('data', (chunk) => {

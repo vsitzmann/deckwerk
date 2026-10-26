@@ -21,6 +21,7 @@ import { createPresentationBus, type PresentationRole } from './presentationBus.
 import { mediaVariantsSnapshot, pinMediaVariant, setMediaVariants } from './mediaVariants.js';
 import { trackVideoLoading } from '../player/videoLoadingProgress.js';
 import { MediaBlobCache } from '../player/mediaBlobCache.js';
+import { fetchAfterOfflineCopy } from './offlineCopy.js';
 import { eventOnInteractiveWeb, slideLinkFromEvent } from '../player/links.js';
 import { selectionPreventsAdvance } from '../player/presentationPointer.js';
 import type { PresenceState, RemoteCommand, RemoteState } from '@shared/collab.js';
@@ -128,7 +129,12 @@ const bus = agentViewer ? null : createPresentationBus(deckId);
  * hands the audience over with its media. An agent viewer takes
  * screenshots, not a talk, and streams as before.
  */
-const mediaBlobs = agentViewer ? undefined : new MediaBlobCache({ borrow: borrowFromEditor() });
+const mediaBlobs = agentViewer ? undefined : new MediaBlobCache({
+  borrow: borrowFromEditor(),
+  // A file the editor's offline copy is downloading is waited for and then
+  // read from that copy (the service worker answers), not fetched again.
+  ...(embedded ? { fetch: fetchAfterOfflineCopy(() => window.parent) } : {}),
+});
 
 declare global {
   interface Window {

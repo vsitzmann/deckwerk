@@ -7,6 +7,7 @@ import {
   type VideoMemoryMode,
 } from '../player/videoMemory.js';
 import { isMediaPending } from './mediaVariants.js';
+import { fetchAfterOfflineCopy } from './offlineCopy.js';
 
 /**
  * The collab editor's clips, held whole in memory in a browser whose media
@@ -38,7 +39,8 @@ declare global {
 }
 
 export class EditorVideoMemory implements VideoMemory {
-  private readonly blobs = new MediaBlobCache({ maxFileBytes: MAX_FILE_BYTES });
+  // A clip the offline copy is downloading is waited for, then read from it.
+  private readonly blobs = new MediaBlobCache({ maxFileBytes: MAX_FILE_BYTES, fetch: fetchAfterOfflineCopy(() => window) });
   /** Network URLs most recently shown first: the cache's order, and what it evicts last. */
   private order: string[] = [];
 
@@ -58,6 +60,11 @@ export class EditorVideoMemory implements VideoMemory {
 
   objectUrl(url: string): string | undefined {
     return this.blobs.objectUrl(url);
+  }
+
+  /** Whether a clip is downloading into memory. */
+  transferring(): boolean {
+    return this.blobs.transferring;
   }
 
   request(url: string): void {

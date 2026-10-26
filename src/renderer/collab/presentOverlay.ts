@@ -102,6 +102,11 @@ function onFullscreenChange(): void {
   if (!document.fullscreenElement) teardown();
 }
 
+/** Whether a presentation is running over this tab. */
+export function isPresenting(): boolean {
+  return overlay !== null;
+}
+
 /** `present.html` query for one surface of a presentation. */
 export function presentUrl(
   deckId: string,

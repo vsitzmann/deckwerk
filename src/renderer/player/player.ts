@@ -52,6 +52,7 @@ import { morphTransforms, type Rect, type TextLayout } from './morphTransform.js
 import { prepareEquationEffect } from './equationBuilds.js';
 import { morphEquationGlyphs } from './equationMorph.js';
 import { isPendingSrc } from '@shared/media.js';
+import { talkMediaOrder, WARM_AHEAD_SLIDES } from './talkMediaOrder.js';
 import { WEB_BRIDGE_SOURCE, isWebBridgeAction, type WebBridgeEvent } from '@shared/webBridge.js';
 import { formatVideoRate, nextVideoRate, type VideoRateChange } from './videoRate.js';
 import { prepareCodeBlocks } from './codeRender.js';
@@ -88,8 +89,6 @@ export interface PlayerOptions {
 const PLAY_RETRY_LIMIT = 12;
 const PLAY_RETRY_DELAY_MS = 400;
 
-/** How many presentable slides ahead get their media cache-warmed. */
-const WARM_AHEAD_SLIDES = 2;
 /** Two typical 24 MP images, with a count fallback when dimensions are unavailable. */
 const IMAGE_WARM_PIXEL_LIMIT = 48_000_000;
 /**
@@ -110,12 +109,6 @@ const WARM_DECODE_PATIENCE_MS = 250;
  * home: the same bound as the lookahead, most recently shown kept first.
  */
 const SHOWN_IMAGE_PIXEL_LIMIT = 48_000_000;
-/**
- * How many presentable slides ahead have their pictures fetched into memory
- * before any clip is (with a blob cache). Pictures are what a slide is
- * missing when it appears, and cheap next to clips.
- */
-const IMAGE_FIRST_SLIDES = 4;
 /** How many upcoming videos are decoded into ready-to-adopt elements. */
 const VIDEO_WARM_ELEMENT_LIMIT = 4;
 /** How long one lookahead decode may run before its element is given up on. */
@@ -930,53 +923,9 @@ export class Player {
     this.mediaBlobs.want(urls, { images, hold: options.hold });
   }
 
-  /**
-   * The deck's media in the order the blob cache should fetch it, as network
-   * URLs. Pictures before clips wherever both are near:
-   *
-   * 1. the pictures of the slide on screen and of the next few slides, which
-   *    a slide is missing the moment it appears;
-   * 2. the clips of the next two slides (what the talk reaches soonest), then
-   *    the slide on screen's, whose elements are already streaming them but
-   *    whose revisits and loops should not have to;
-   * 3. every other picture of the talk, ahead then behind, nearest first:
-   *    cheap next to clips, and once in memory a slide never waits for one;
-   * 4. the rest of the clips, ahead then behind.
-   *
-   * Skipped slides are not part of the talk.
-   */
+  /** The deck's media in the order the blob cache should fetch it (talkMediaOrder.ts). */
   private mediaOrder(): { urls: string[]; images: string[] } {
-    const slides = this.deck.slides;
-    const here = this.cursor.slide;
-    const ahead: number[] = [];
-    const behind: number[] = [];
-    for (let i = here + 1; i < slides.length; i += 1) if (!slides[i].skipped) ahead.push(i);
-    for (let i = here - 1; i >= 0; i -= 1) if (!slides[i].skipped) behind.push(i);
-    const images: string[] = [];
-    const picturesOf = (indices: number[]): string[] => {
-      const urls: string[] = [];
-      for (const index of indices) {
-        const slide = slides[index];
-        if (!slide) continue;
-        const srcs = [
-          slide.background.image,
-          ...slide.elements.map((el) => (el.type === 'image' && !/\.pdf(?:$|[?#])/i.test(el.src) ? el.src : null)),
-          ...slide.elements.map((el) => (el.type === 'web' || el.type === 'video' ? el.poster : null)),
-        ];
-        for (const src of srcs) if (src && !isPendingSrc(src)) urls.push(this.networkSrc(src));
-      }
-      images.push(...urls);
-      return urls;
-    };
-    const clipsOf = (indices: number[]): string[] => indices.flatMap((index) => (slides[index]?.elements ?? [])
-      .flatMap((el) => (el.type === 'video' && !isPendingSrc(el.src) ? [this.networkSrc(el.src)] : [])));
-    const urls = [
-      ...picturesOf([here, ...ahead.slice(0, IMAGE_FIRST_SLIDES)]),
-      ...clipsOf([...ahead.slice(0, WARM_AHEAD_SLIDES), here]),
-      ...picturesOf([...ahead.slice(IMAGE_FIRST_SLIDES), ...behind]),
-      ...clipsOf([...ahead.slice(WARM_AHEAD_SLIDES), ...behind]),
-    ];
-    return { urls, images };
+    return talkMediaOrder(this.deck.slides, this.cursor.slide, this.networkSrc);
   }
 
   /** Whether any element this player owns, on the stage, parked or warming, reads `url`. */

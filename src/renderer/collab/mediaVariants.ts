@@ -44,6 +44,10 @@ export function isMediaPending(src: string): boolean {
   return pending.has(src);
 }
 
+export function pendingMediaSnapshot(): string[] {
+  return [...pending];
+}
+
 export function mediaVariantsSnapshot(): Record<string, string> {
   return Object.fromEntries(variants);
 }
