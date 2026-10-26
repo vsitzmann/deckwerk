@@ -2123,7 +2123,8 @@ export class EditorCanvas {
 
   private bindViewportGestures(): void {
     this.host.addEventListener('wheel', (event) => {
-      if ((event.target as HTMLElement).closest('.zoom-controls, .notes-drawer')) return;
+      // Panels floating over the canvas scroll themselves; the slide stays put.
+      if ((event.target as HTMLElement).closest('.zoom-controls, .notes-drawer, .objects-drawer, .light-table')) return;
 
       // Chromium represents a macOS trackpad pinch as a wheel event with the
       // control modifier set, and a mouse wheel with Ctrl/Cmd held arrives

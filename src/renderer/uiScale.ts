@@ -1,7 +1,9 @@
 /**
  * The interface size: how large the editor's chrome is drawn, from the
- * DeckWerk menu. It is the window's zoom factor, so the canvas's pointer
- * maths stay exact; slides keep fitting the canvas as before.
+ * DeckWerk menu. In the desktop app it is the window's zoom factor; a browser
+ * tab cannot set its own, so the browser editor zooms its chrome — toolbar,
+ * rail, side panel, menus and the controls over the canvas — leaving the
+ * slide canvas itself unzoomed. Either way slides keep fitting the canvas.
  */
 const SCALE_KEY = 'deckwerk.ui.scale';
 
@@ -27,9 +29,26 @@ export function storedUiScale(): number {
   }
 }
 
+function applyFactor(factor: number): void {
+  const api = scaleApi();
+  if (api?.setUiScale) api.setUiScale(factor);
+  else {
+    // CSS zoom on the canvas would throw off its pointer maths, so the
+    // browser editor zooms its chrome around the slide instead (editor.css).
+    const root = document.documentElement;
+    if (factor === 1) {
+      delete root.dataset.uiZoom;
+      root.style.removeProperty('--ui-zoom');
+    } else {
+      root.dataset.uiZoom = '';
+      root.style.setProperty('--ui-zoom', String(factor));
+    }
+  }
+}
+
 /** Apply the stored size to this window; call once at startup. */
 export function applyUiScale(): void {
-  scaleApi()?.setUiScale?.(storedUiScale());
+  applyFactor(storedUiScale());
 }
 
 function setUiScale(factor: number): void {
@@ -38,15 +57,14 @@ function setUiScale(factor: number): void {
   } catch {
     // Private mode: the size lasts for this window only.
   }
-  scaleApi()?.setUiScale?.(factor);
+  applyFactor(factor);
 }
 
-/** The DeckWerk menu's Interface size section, or null where a window cannot zoom itself. */
+/** The DeckWerk menu's Interface size section. */
 export function interfaceSizeMenuSection(): {
   label: string;
   options: { label: string; action: () => void; checked: () => boolean }[];
-} | null {
-  if (!scaleApi()?.setUiScale) return null;
+} {
   return {
     label: 'Interface size',
     options: SIZES.map(({ label, factor }) => ({

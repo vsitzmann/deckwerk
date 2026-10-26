@@ -2,6 +2,7 @@ import type { AssetImportProgress, ImportedAsset, MediaInfo } from '@shared/ipc.
 import type { ClipboardWriteRequest } from '@shared/clipboard.js';
 import { clipboardImageName, type ClipboardImageSource } from '@shared/clipboardImages.js';
 import { pinMediaVariant, setMediaVariants } from './mediaVariants.js';
+import type { DeckAssetListing, DeckAssetTrashResult } from '@shared/mediaIndex.js';
 
 /**
  * The browser collab client's stand-in for the Electron preload bridge.
@@ -224,6 +225,23 @@ export function installNetApi(options: NetApiOptions): void {
       const response = await fetch(`/api/probe?deck=${deck}&src=${encodeURIComponent(src)}`);
       if (!response.ok) return { width: null, height: null, duration: null };
       return response.json() as Promise<MediaInfo>;
+    },
+
+    /** The Media panel: the deck's assets/ folder, as the server sees it. */
+    listDeckAssets: async (): Promise<DeckAssetListing> => {
+      const response = await fetch(`/api/deck-assets?deck=${deck}`, { cache: 'no-store' });
+      if (!response.ok) throw new Error((await response.json().catch(() => ({}))).error ?? `HTTP ${response.status}`);
+      return await response.json() as DeckAssetListing;
+    },
+    /** Move unused files into the server's Trash; the server rechecks against the live deck. */
+    trashDeckAssets: async (files: string[]): Promise<DeckAssetTrashResult> => {
+      const response = await fetch(`/api/deck-assets/trash?deck=${deck}`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ files }),
+      });
+      if (!response.ok) throw new Error((await response.json().catch(() => ({}))).error ?? `HTTP ${response.status}`);
+      return await response.json() as DeckAssetTrashResult;
     },
 
     loadTheme: async (): Promise<string> => {

@@ -83,6 +83,7 @@ import { trackAssetResponse } from './assetRequestLog.js';
 import { MirrorThemeRequestSchema, mirrorThemeAction, type MirrorThemeRequest } from './mirrorTheme.js';
 import { htmlDraftWorkflow, type HtmlDraftWorkflow } from './htmlDraftWorkflow.js';
 import { injectWebBridgeRuntime } from '../shared/webBridge.js';
+import { deckAssetListing, restoreTrashedAssets, trashDeckAssets } from './assetTrash.js';
 import { CLIPBOARD_ID, ClipboardStash } from './clipboardStash.js';
 import { checkWebPage } from '../cli/renderSlides.js';
 import {
@@ -1091,9 +1092,12 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
 
   interface TrashMeta {
     originalPath: string;
-    kind: 'deck' | 'folder';
+    /** 'assets': unused files the Media panel moved out of the deck at originalPath. */
+    kind: 'deck' | 'folder' | 'assets';
     name: string;
     title?: string;
+    /** For 'assets', the deck-relative paths kept under item/. */
+    files?: string[];
     deletedAt: string;
     deletedBy: string;
   }
@@ -1134,10 +1138,16 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
     return { visible, editable };
   }
 
+  /** Who may see and restore a trash entry of unused media: whoever may see and edit its deck. */
+  async function assetTrashAccess(identity: Identity | null, deckId: string): Promise<{ visible: boolean; editable: boolean }> {
+    if (!splitDeckPath(deckId)) return { visible: false, editable: false };
+    return { visible: await deckAllowed(identity, deckId), editable: await deckWritable(identity, deckId) };
+  }
+
   async function readTrashMeta(entryDir: string): Promise<TrashMeta | null> {
     try {
       const raw = JSON.parse(await readFile(join(entryDir, 'trash.json'), 'utf8')) as Partial<TrashMeta>;
-      if (typeof raw.originalPath !== 'string' || (raw.kind !== 'deck' && raw.kind !== 'folder')) return null;
+      if (typeof raw.originalPath !== 'string' || (raw.kind !== 'deck' && raw.kind !== 'folder' && raw.kind !== 'assets')) return null;
       return {
         originalPath: raw.originalPath,
         kind: raw.kind,
@@ -1145,6 +1155,7 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
         title: typeof raw.title === 'string' ? raw.title : undefined,
         deletedAt: typeof raw.deletedAt === 'string' ? raw.deletedAt : '',
         deletedBy: typeof raw.deletedBy === 'string' ? raw.deletedBy : '',
+        ...(Array.isArray(raw.files) ? { files: raw.files.filter((file): file is string => typeof file === 'string') } : {}),
       };
     } catch {
       return null;
@@ -2125,7 +2136,9 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
         const entryDir = join(TRASH_DIR, id);
         const meta = await readTrashMeta(entryDir);
         if (!meta || !existsSync(join(entryDir, 'item'))) continue;
-        const access = await treeAccess(join(entryDir, 'item'), identity);
+        const access = meta.kind === 'assets'
+          ? await assetTrashAccess(identity, meta.originalPath)
+          : await treeAccess(join(entryDir, 'item'), identity);
         if (!access.visible) continue;
         listed.push({ id, ...meta, canRestore: access.editable });
       }
@@ -2199,9 +2212,20 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
       const meta = await readTrashMeta(entryDir);
       const item = join(entryDir, 'item');
       if (!meta || !existsSync(item)) return respondJson(response, 404, { error: 'no such item in the trash' });
-      const access = await treeAccess(item, identity);
+      const access = meta.kind === 'assets' ? await assetTrashAccess(identity, meta.originalPath) : await treeAccess(item, identity);
       if (!access.visible) return respondJson(response, 404, { error: 'no such item in the trash' });
       if (!access.editable) return respondJson(response, 403, { error: 'you cannot restore this item' });
+      // Unused media files go back into the deck they came from.
+      if (meta.kind === 'assets') {
+        try {
+          const deckDir = deckDirOf(meta.originalPath);
+          if (!isDeckDir(deckDir)) return respondJson(response, 409, { error: `"${meta.originalPath}" is no longer a presentation` });
+          await restoreTrashedAssets(entryDir, deckDir, meta.files ?? []);
+        } catch (error) {
+          return respondJson(response, 409, { error: error instanceof Error ? error.message : String(error) });
+        }
+        return respondJson(response, 200, { path: meta.originalPath, kind: meta.kind });
+      }
       const segments = splitDeckPath(meta.originalPath);
       if (!segments) return respondJson(response, 400, { error: 'the original path is invalid' });
       const to = folderDirOf(meta.originalPath);
@@ -2645,6 +2669,36 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
         'cache-control': 'private, max-age=300',
       });
       createReadStream(still).pipe(response);
+      return;
+    }
+    // The Media panel: the deck's assets/ folder and what refers to what in it,
+    // and moving files nothing uses into the trash (assetTrash.ts).
+    if (path === '/api/deck-assets' && request.method === 'GET') {
+      if (!deckParam) return respondJson(response, 400, { error: 'missing deck' });
+      const room = await getRoom(deckParam);
+      respondJson(response, 200, await deckAssetListing(
+        deckDirOf(deckParam), room.session.deck, room.session.themeCss, !hostedDeckId,
+      ));
+      return;
+    }
+    if (path === '/api/deck-assets/trash' && request.method === 'POST') {
+      if (!deckParam) return respondJson(response, 400, { error: 'missing deck' });
+      // A hosted session has no Trash dialog to restore from.
+      if (hostedDeckId) return respondJson(response, 403, { error: 'this shared session has no Trash' });
+      const payload = JSON.parse((await readBody(request)).toString('utf8') || '{}') as { files?: unknown };
+      const files = Array.isArray(payload.files) ? payload.files.filter((file): file is string => typeof file === 'string') : [];
+      const room = await getRoom(deckParam);
+      const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+      respondJson(response, 200, await trashDeckAssets({
+        trashDir: TRASH_DIR,
+        entryId: `${stamp}-${randomUUID().slice(0, 8)}`,
+        deckId: deckParam,
+        deckDir: deckDirOf(deckParam),
+        deck: room.session.deck,
+        themeCss: room.session.themeCss,
+        files,
+        deletedBy: identity?.login ?? 'local',
+      }));
       return;
     }
 

@@ -68,29 +68,18 @@ body.mac-titlebar #toolbar { padding-left: 84px; }
   align-self: center;
 }
 .bar-deck-name {
-  display: flex;
   align-self: center;
-  align-items: baseline;
-  gap: 8px;
-  max-width: 300px;
-  padding: 4px 8px;
-  border: 1px solid transparent;
-  border-radius: 6px;
-  background: transparent;
+  max-width: 220px;
+  overflow: hidden;
   color: var(--text);
   font: inherit;
-  cursor: pointer;
-}
-.bar-deck-name:hover,
-.bar-deck-name[aria-expanded="true"] { border-color: var(--line); background: var(--panel-2); }
-.bar-deck-name[hidden] { display: none; }
-.bar-deck-name-text {
-  overflow: hidden;
   font-weight: 600;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.bar-deck-name-hint { flex: none; color: var(--muted); font-size: 11px; }
+.bar-deck-name[hidden] { display: none; }
+.bar-history-button[aria-expanded="true"],
+.bar-icon-button[aria-expanded="true"] { background: var(--panel-2); }
 
 /* Panels opened from the toolbar: the deck's history under its name (it was
    a sidebar tab) and the media library under Media (#99's tab). */
@@ -4907,6 +4896,62 @@ button.ghost:hover:not(:disabled) { color: var(--text); background: transparent;
 /* Equation builds: the highlight colour spans the card; the pulse size is a small number. */
 .build-card-what > .build-term-color { grid-column: 1 / -1; }
 .build-scale-wrap { width: 72px; }
+
+/* Build order: one compact row per build under the click that starts it, so
+   the slide's choreography reads at a glance (timelinePanel.ts). */
+.build-overview { display: flex; flex-direction: column; gap: 2px; max-height: 340px; overflow-y: auto; }
+.build-overview-step {
+  margin: 8px 0 3px;
+  color: var(--muted);
+  font: 9.5px var(--mono);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.build-overview-step:first-child { margin-top: 0; }
+.build-overview-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-areas: "num name effect" "num when when";
+  column-gap: 8px;
+  row-gap: 1px;
+  align-items: center;
+  padding: 5px 6px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.build-overview-row:hover { background: rgb(255 255 255 / 5%); }
+.build-overview-row.selected { border-color: var(--accent); background: var(--accent-soft); }
+.build-overview-row:focus-visible { outline: 1px solid var(--accent); outline-offset: -1px; }
+.build-overview-row.dragging { opacity: 0.4; }
+.build-overview-row[data-drop-mode="before"] { box-shadow: inset 0 2px 0 var(--accent); }
+.build-overview-row[data-drop-mode="after"] { box-shadow: inset 0 -2px 0 var(--accent); }
+.build-overview-row[data-drop-mode="fuse"] { outline: 2px solid var(--accent); background: var(--accent-soft); }
+.build-overview-row > .build-num { grid-area: num; }
+.build-overview-row > .build-target-name { grid-area: name; overflow: hidden; font-size: 11px; color: var(--text); text-overflow: ellipsis; white-space: nowrap; }
+.build-overview-effect { grid-area: effect; color: var(--text); font: 10.5px var(--mono); white-space: nowrap; }
+.build-overview-when { grid-area: when; color: var(--muted); font: 10px var(--mono); }
+/* A build that runs on its own (after or with the one before) sits under it. */
+.build-overview-row:not([data-trigger="click"]) { margin-left: 14px; }
+
+/* The picked build's settings: a label column and the control beside it. */
+.build-detail-section .timeline-row { padding: 2px 0 0; }
+.build-detail-section .build-card-body.build-field {
+  display: grid;
+  grid-template-columns: 72px minmax(0, 1fr);
+  align-items: center;
+  padding-left: 0;
+}
+.build-field > .build-trigger-strip,
+.build-field > .build-action,
+.build-field > select:not(.build-trigger) { grid-column: 2; min-width: 0; }
+.build-field > .build-action ~ * { grid-column: 2; }
+.build-field > .build-trigger-strip { display: grid; grid-auto-flow: row; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.build-field .build-trigger-strip .segment-button { height: 26px; padding: 0 4px; font-size: 10.5px; white-space: nowrap; }
+.build-field > .build-delay-wrap,
+.build-field > .build-duration-wrap,
+.build-field > .pop-size { justify-self: start; }
+.build-timing-sentence { margin: 2px 0 0; }
 .build-scale-wrap > input { padding: 3px 20px 3px 6px; height: 24px; width: 100%; }
 /* A shadow's direction: the knob, then Angle and Distance. */
 .shadow-direction-row { grid-template-columns: 40px repeat(2, minmax(0, 1fr)); }
@@ -5115,24 +5160,13 @@ button.ghost:hover:not(:disabled) { color: var(--text); background: transparent;
 
 .object-list-header {
   display: flex;
-  flex-wrap: wrap;
   align-items: center;
   gap: 6px;
   padding: 10px 12px 4px;
 }
 .object-list-header .insp-title { flex: 1; margin: 0; }
 .object-list-count { color: var(--muted); font: 10.5px var(--mono); }
-.object-list-order { flex-basis: 100%; }
 .object-list-hint { margin: 0; padding: 4px 12px 8px; }
-.object-list-badge {
-  flex: none;
-  margin-left: auto;
-  padding: 1px 6px;
-  border-radius: 9px;
-  background: var(--accent);
-  color: var(--on-accent, #fff);
-  font: 600 10.5px var(--mono);
-}
 
 .object-list-rows {
   flex: 1;
@@ -5177,3 +5211,9 @@ button.ghost:hover:not(:disabled) { color: var(--text); background: transparent;
   box-shadow: inset 0 0 0 1px var(--line);
 }
 .object-list-row.selected .object-list-thumb::after { box-shadow: inset 0 0 0 1px var(--accent); }
+
+/* Interface size in the browser editor (uiScale.ts): the chrome is zoomed and
+   the slide canvas is not, so pointer maths on the canvas stay exact. */
+:root[data-ui-zoom] :is(#toolbar, #rail, #side, #status, .ui-menu, .ui-help-popover, .panel-popover,
+  .color-picker-popover, .workflow-dialog, .canvas-host > .zoom-controls, .canvas-host > .notes-toggle,
+  .canvas-host > .objects-toggle, .canvas-host > .objects-drawer) { zoom: var(--ui-zoom); }

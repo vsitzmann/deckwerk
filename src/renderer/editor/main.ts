@@ -52,7 +52,7 @@ import {
   type ShellDeps,
 } from './shellWiring.js';
 import { SlideRail } from './slideRail.js';
-import { closePopover, openAnchoredPopover } from './ui.js';
+import { createHistoryButton, createMediaButton, popoverPanelHost } from './toolbarPanels.js';
 import { installWindowApiPosterProvider } from '../player/previewPosterProvider.js';
 import { EditorStore } from './store.js';
 import { statusBarText } from './statusBar.js';
@@ -173,16 +173,11 @@ const inspector = new Inspector(el('inspector'), store);
 new TimelinePanel(el('timeline'), store, new BuildPreview(canvas, store));
 // History is the deck's past, not the selection's: it opens from the deck
 // name in the toolbar rather than from a sidebar tab.
-const historyHost = el('history');
-historyHost.remove();
-historyHost.hidden = true;
-historyHost.classList.remove('side-panel');
+const historyHost = popoverPanelHost('history');
 new HistoryPanel(historyHost, store);
 // The deck's media library opens from Media on the Insert bar: reusing a file
 // is inserting it, so it sits with Text, Shape and Table rather than in a tab.
-const mediaHost = document.createElement('div');
-mediaHost.id = 'media';
-mediaHost.hidden = true;
+const mediaHost = popoverPanelHost('media');
 const mediaPanel = new MediaPanel(mediaHost, store, {
   setStatusMessage,
   beginOperation: (message) => operationProgress.begin(message),
@@ -499,44 +494,8 @@ async function placeSyncedSlides(
 
 /* --- toolbar --- */
 
-const MEDIA_ICON =
-  '<svg class="bar-icon" viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">' +
-  '<rect x="2" y="3" width="12" height="10" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.4"/>' +
-  '<path d="M3.5 11.5 6.5 8l2 2.2L10 8.8l2.5 2.7" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/>' +
-  '<circle cx="10.5" cy="5.8" r="1" fill="currentColor"/></svg>';
 
 let deckNameLabel: HTMLElement | null = null;
-let deckNameButton: HTMLButtonElement | null = null;
-
-/**
- * A panel that lives in a popover under a toolbar control: the deck's history
- * under its name, the media library under Media. The panel stays `hidden`
- * while the popover is closed, however it was dismissed, so edits made
- * meanwhile do not redraw it.
- */
-function togglePanelPopover(anchor: HTMLElement, host: HTMLElement, className: string, label: string): void {
-  if (host.isConnected) {
-    closePopover();
-    return;
-  }
-  const popover = document.createElement('div');
-  popover.className = `panel-popover ${className}`;
-  popover.setAttribute('role', 'dialog');
-  popover.setAttribute('aria-label', label);
-  host.hidden = false;
-  popover.appendChild(host);
-  openAnchoredPopover(anchor, popover, { focus: false });
-  const watch = new MutationObserver(() => {
-    if (popover.isConnected) return;
-    host.hidden = true;
-    watch.disconnect();
-  });
-  watch.observe(document.body, { childList: true });
-}
-
-function toggleHistoryPopover(): void {
-  if (deckNameButton) togglePanelPopover(deckNameButton, historyHost, 'history-popover', 'Deck history');
-}
 
 function barDivider(): HTMLElement {
   const divider = document.createElement('span');
@@ -552,10 +511,8 @@ function syncDeckNameLabel(): void {
   const folder = dir ? dir.replace(/[\\/]+$/, '').split(/[\\/]/).pop() ?? '' : '';
   const name = folder || deck.title || '';
   deckNameLabel.textContent = name;
-  if (deckNameButton) {
-    deckNameButton.hidden = name === '';
-    deckNameButton.title = dir ? `${dir}\nClick for the deck's history` : "The deck's history";
-  }
+  deckNameLabel.hidden = name === '';
+  deckNameLabel.title = dir ?? '';
 }
 
 function buildToolbar(): void {
@@ -564,18 +521,8 @@ function buildToolbar(): void {
 
   const left = document.createElement('div');
   left.className = 'bar-group';
-  deckNameButton = document.createElement('button');
-  deckNameButton.type = 'button';
-  deckNameButton.className = 'bar-deck-name deck-only';
-  deckNameButton.setAttribute('aria-haspopup', 'dialog');
-  deckNameButton.setAttribute('aria-expanded', 'false');
-  deckNameButton.addEventListener('click', toggleHistoryPopover);
   deckNameLabel = document.createElement('span');
-  deckNameLabel.className = 'bar-deck-name-text';
-  const historyHint = document.createElement('span');
-  historyHint.className = 'bar-deck-name-hint';
-  historyHint.textContent = 'History';
-  deckNameButton.append(deckNameLabel, historyHint);
+  deckNameLabel.className = 'bar-deck-name';
   const fileActions = document.createElement('span');
   fileActions.className = 'toolbar-expanded-file-actions';
   const importEntries = [
@@ -619,24 +566,20 @@ function buildToolbar(): void {
   compactFile.classList.add('toolbar-compact-file-action');
   left.append(
     createDeckWerkButton(),
-    deckNameButton,
+    deckNameLabel,
+    createHistoryButton(historyHost),
     barDivider(),
     fileActions,
     compactFile,
   );
 
-  const mediaButton = barIconButton('Media', MEDIA_ICON, () => {
-    togglePanelPopover(mediaButton, mediaHost, 'media-popover', 'Media library');
-  });
-  mediaButton.setAttribute('aria-haspopup', 'dialog');
-  mediaButton.setAttribute('aria-expanded', 'false');
   const mid = document.createElement('div');
   mid.className = 'bar-group deck-only bar-center';
   mid.append(
     barIconButton('Text', TEXT_ICON, () => addText()),
     createShapeInsertPicker(store),
     createTableInsertPicker(store),
-    mediaButton,
+    createMediaButton(mediaHost),
   );
 
   const right = document.createElement('div');

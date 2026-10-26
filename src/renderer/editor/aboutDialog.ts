@@ -15,11 +15,10 @@ export function createDeckWerkButton(): HTMLElement {
   button.textContent = 'DeckWerk';
   button.setAttribute('aria-label', 'DeckWerk menu');
   button.title = 'DeckWerk';
-  const size = interfaceSizeMenuSection();
   return createToolbarPicker('DeckWerk', [
     { label: 'About DeckWerk', action: showAboutDialog },
     appearanceMenuSection(),
-    ...(size ? [size] : []),
+    interfaceSizeMenuSection(),
   ], { trigger: button });
 }
 
