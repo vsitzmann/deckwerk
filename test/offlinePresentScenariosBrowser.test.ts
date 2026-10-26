@@ -8,20 +8,19 @@ import { collabClientDir } from './support/collabClient.js';
 import { ThrottledLink, type LinkState } from './support/throttledLink.js';
 import {
   browsersFromEnv,
+  giveTalk,
+  reconnects,
+  reloadOffline,
+  type TalkDeck,
   editorState,
   exitPresentation,
   haveFfmpeg,
   heapBytes,
   openPage,
   pressPresent,
-  presentJump,
-  presentKey,
-  stageComplete,
   storageEstimate,
-  takeFirstFrames,
   waitForEditorPainted,
   waitForOfflineReady,
-  watchPresentation,
   workerFailures,
   writeFixtureDeck,
   type DrivenPage,
@@ -65,16 +64,8 @@ const BROWSERS = browsersFromEnv('OFFLINE_BROWSERS', [
   ...(process.env.RUN_SAFARI_MEDIA_BUDGET === '1' ? ['safari' as const] : []),
 ]);
 
-/** How long the walk stays on each slide once it is complete. */
-const DWELL_MS = 1_000;
-
 /** A fast link: the subject is losing it, not its speed. The large deck still takes a while. */
 const LINK = { bytesPerSecond: 40_000_000, latencyMs: 10 };
-
-interface TalkDeck {
-  id: string;
-  slides: number;
-}
 
 const SPECS: Record<string, FixtureSpec> = {
   small: { slides: 3, photosPerSlide: [2, 0, 1], clipEvery: 2, photoFiles: 3, clipFiles: 1 },
@@ -165,77 +156,6 @@ async function cut(how: LinkState | 'websocket' | 'server'): Promise<void> {
 async function openDeck(driven: DrivenPage, deck: TalkDeck): Promise<void> {
   await driven.goto(`${origin}/?deck=${encodeURIComponent(deck.id)}&name=Offline`);
   await waitForEditorPainted(driven, deck.slides, 120_000);
-}
-
-/**
- * Present from the editor and walk the whole talk: forward to the end, back
- * to the start, a handful of jumps. Resolves with every problem seen.
- */
-async function giveTalk(driven: DrivenPage, deck: TalkDeck, label: string, during?: () => Promise<void>): Promise<string[]> {
-  const problems: string[] = [];
-  const pressed = await pressPresent(driven);
-  if (!pressed.mounted) return [`${label}: Present was refused: ${pressed.status}`];
-  await watchPresentation(driven);
-  const look = async (step: string) => {
-    const { state, problems: wrong } = await stageComplete(driven);
-    for (const problem of wrong) problems.push(`${label}, ${step} (${state.slideId}): ${problem}`);
-    // A presenter talks over each slide: a second is a brisk one.
-    await new Promise((resolve) => setTimeout(resolve, DWELL_MS));
-  };
-  await look('open');
-  const forward = Math.min(deck.slides - 1, 60);
-  for (let i = 1; i <= forward; i++) {
-    await presentKey(driven, 'ArrowRight');
-    if (i === Math.ceil(forward / 2)) await during?.();
-    await look(`forward ${i}`);
-  }
-  for (let i = 1; i <= forward; i++) {
-    await presentKey(driven, 'ArrowLeft');
-    await look(`back ${i}`);
-  }
-  for (const fraction of [0.75, 0, 0.5, 1, 0.25]) {
-    const target = Math.round(fraction * (deck.slides - 1));
-    await presentJump(driven, deck.id, target);
-    await eventually(() => editorStateOfStage(driven), `${label}: jump to ${target + 1}`, (id) => id !== '', 10_000);
-    await look(`jump to ${target + 1}`);
-  }
-  const { frames, errors, ticks } = await takeFirstFrames(driven);
-  // Safari driven by WebDriver behind other windows paints nothing at all;
-  // there the first frame is mediaTransferBudgetBrowser's to judge, and this
-  // walk holds it to every slide being complete.
-  if (ticks < 10 && driven.kind !== 'safari') problems.push(`${label}: the presentation painted ${ticks} frames: nothing to judge first frames by`);
-  if (ticks < 10 && driven.kind === 'safari') console.log(`${label}: Safari painted no frames (window not visible); first frames not judged`);
-  frames.forEach((frame, i) => {
-    if (frame.missing.length > 0) {
-      problems.push(`${label}: ${frame.slide} appeared without ${frame.missing.join(', ')} (slide change ${i + 1}: `
-        + `${frames.map((f) => f.slide).join(' ')}); frames: ${(frame.frames ?? []).join(' / ')}`);
-    }
-  });
-  for (const error of errors) problems.push(`${label}: media element failed: ${error}`);
-  await exitPresentation(driven);
-  return problems;
-}
-
-const editorStateOfStage = (driven: DrivenPage) => driven.evaluate<string>(
-  `document.querySelector('iframe')?.contentWindow?.document?.querySelector('#stage .stage > .slide')?.dataset.slideId ?? ''`,
-);
-
-async function reloadOffline(driven: DrivenPage, deck: TalkDeck): Promise<string[]> {
-  await driven.reload();
-  const state = await waitForEditorPainted(driven, deck.slides, 60_000).catch(() => editorState(driven));
-  const problems: string[] = [];
-  if (state.slides !== deck.slides) problems.push(`reload without the server showed ${state.slides} of ${deck.slides} slides (${state.status})`);
-  if (state.unpainted.length > 0) problems.push(`reload without the server left unpainted: ${state.unpainted.join(', ')}`);
-  if (!state.offlineDeck) problems.push('reload without the server did not say it showed the offline copy');
-  return problems;
-}
-
-async function reconnects(driven: DrivenPage, deck: TalkDeck): Promise<string[]> {
-  const state = await eventually(() => editorState(driven), 'reconnect', (s) => s.collabReady, 60_000)
-    .catch(() => editorState(driven));
-  if (!state.collabReady) return [`never reconnected once the server was back (${state.status})`];
-  if (state.slides !== deck.slides) return [`after reconnecting the editor shows ${state.slides} of ${deck.slides} slides`];
-  return [];
 }
 
 async function report(driven: DrivenPage, deck: TalkDeck, label: string): Promise<void> {

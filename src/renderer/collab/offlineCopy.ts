@@ -186,6 +186,8 @@ export class OfflineCopy {
   private unreachable = false;
   private retryTimer: ReturnType<typeof setTimeout> | null = null;
   private wake: (() => void) | null = null;
+  /** When the editor was last seen busy: the copy waits IDLE_MS past it. */
+  private busyAt = Number.NEGATIVE_INFINITY;
   persisted: boolean | null = null;
 
   constructor(private readonly options: OfflineCopyOptions) {
@@ -422,15 +424,15 @@ export class OfflineCopy {
     await locks.request('deckwerk-offline-download', work);
   }
 
-  /** Resolves once the editor has not been busy for IDLE_MS. */
+  /**
+   * Resolves once the editor has not been busy for IDLE_MS. Quiet since the
+   * last look, it goes on at once: waiting a second before each of a talk's
+   * hundred-odd files was most of the time a copy took.
+   */
   private async quiet(urgent?: () => boolean): Promise<void> {
-    let since = this.options.busy() ? null : this.now();
     while (!this.disposed && !urgent?.()) {
-      if (this.options.busy()) since = null;
-      else {
-        since ??= this.now();
-        if (this.now() - since >= IDLE_MS) return;
-      }
+      if (this.options.busy()) this.busyAt = this.now();
+      else if (this.now() - this.busyAt >= IDLE_MS) return;
       await new Promise<void>((resolve) => {
         const timer = setTimeout(() => {
           this.wake = null;

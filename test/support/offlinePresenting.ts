@@ -197,7 +197,8 @@ export async function writeFixtureDeck(deckDir: string, title: string, spec: Fix
 /* Reading and driving the editor                                            */
 /* ------------------------------------------------------------------------ */
 
-export const PRESENT_FRAME = `document.querySelector('iframe').contentWindow`;
+/** The presentation's window (the editor may hold other frames: the Agent panel's). */
+export const PRESENT_FRAME = `document.querySelector('iframe[src*="present.html"]').contentWindow`;
 
 export interface EditorState {
   offline: string;
@@ -439,3 +440,88 @@ export function storageEstimate(page: DrivenPage): Promise<{ usage: number; quot
 export function heapBytes(page: DrivenPage): Promise<number | null> {
   return page.evaluate(`performance.memory ? performance.memory.usedJSHeapSize : null`);
 }
+
+/* ------------------------------------------------------------------------ */
+/* A whole talk                                                              */
+/* ------------------------------------------------------------------------ */
+
+/** A deck as the walks know it: its id and how many slides it has. */
+export interface TalkDeck {
+  id: string;
+  slides: number;
+}
+
+/** How long the walk stays on each slide once it is complete: a brisk presenter. */
+export const DWELL_MS = 1_000;
+
+/**
+ * Present from the editor and walk the whole talk: forward to the end, back
+ * to the start, a handful of jumps. Resolves with every problem seen.
+ */
+export async function giveTalk(driven: DrivenPage, deck: TalkDeck, label: string, during?: () => Promise<void>): Promise<string[]> {
+  const problems: string[] = [];
+  const pressed = await pressPresent(driven);
+  if (!pressed.mounted) return [`${label}: Present was refused: ${pressed.status}`];
+  await watchPresentation(driven);
+  const look = async (step: string) => {
+    const { state, problems: wrong } = await stageComplete(driven);
+    for (const problem of wrong) problems.push(`${label}, ${step} (${state.slideId}): ${problem}`);
+    // A presenter talks over each slide: a second is a brisk one.
+    await new Promise((resolve) => setTimeout(resolve, DWELL_MS));
+  };
+  await look('open');
+  const forward = Math.min(deck.slides - 1, 60);
+  for (let i = 1; i <= forward; i++) {
+    await presentKey(driven, 'ArrowRight');
+    if (i === Math.ceil(forward / 2)) await during?.();
+    await look(`forward ${i}`);
+  }
+  for (let i = 1; i <= forward; i++) {
+    await presentKey(driven, 'ArrowLeft');
+    await look(`back ${i}`);
+  }
+  for (const fraction of [0.75, 0, 0.5, 1, 0.25]) {
+    const target = Math.round(fraction * (deck.slides - 1));
+    await presentJump(driven, deck.id, target);
+    await eventually(() => editorStateOfStage(driven), `${label}: jump to ${target + 1}`, (id) => id !== '', 10_000);
+    await look(`jump to ${target + 1}`);
+  }
+  const { frames, errors, ticks } = await takeFirstFrames(driven);
+  // Safari driven by WebDriver behind other windows paints nothing at all;
+  // there the first frame is mediaTransferBudgetBrowser's to judge, and this
+  // walk holds it to every slide being complete.
+  if (ticks < 10 && driven.kind !== 'safari') problems.push(`${label}: the presentation painted ${ticks} frames: nothing to judge first frames by`);
+  if (ticks < 10 && driven.kind === 'safari') console.log(`${label}: Safari painted no frames (window not visible); first frames not judged`);
+  frames.forEach((frame, i) => {
+    if (frame.missing.length > 0) {
+      problems.push(`${label}: ${frame.slide} appeared without ${frame.missing.join(', ')} (slide change ${i + 1}: `
+        + `${frames.map((f) => f.slide).join(' ')}); frames: ${(frame.frames ?? []).join(' / ')}`);
+    }
+  });
+  for (const error of errors) problems.push(`${label}: media element failed: ${error}`);
+  await exitPresentation(driven);
+  return problems;
+}
+
+export const editorStateOfStage = (driven: DrivenPage) => driven.evaluate<string>(
+  `document.querySelector('iframe[src*="present.html"]')?.contentWindow?.document?.querySelector('#stage .stage > .slide')?.dataset.slideId ?? ''`,
+);
+
+export async function reloadOffline(driven: DrivenPage, deck: TalkDeck): Promise<string[]> {
+  await driven.reload();
+  const state = await waitForEditorPainted(driven, deck.slides, 60_000).catch(() => editorState(driven));
+  const problems: string[] = [];
+  if (state.slides !== deck.slides) problems.push(`reload without the server showed ${state.slides} of ${deck.slides} slides (${state.status})`);
+  if (state.unpainted.length > 0) problems.push(`reload without the server left unpainted: ${state.unpainted.join(', ')}`);
+  if (!state.offlineDeck) problems.push('reload without the server did not say it showed the offline copy');
+  return problems;
+}
+
+export async function reconnects(driven: DrivenPage, deck: TalkDeck): Promise<string[]> {
+  const state = await eventually(() => editorState(driven), 'reconnect', (s) => s.collabReady, 60_000)
+    .catch(() => editorState(driven));
+  if (!state.collabReady) return [`never reconnected once the server was back (${state.status})`];
+  if (state.slides !== deck.slides) return [`after reconnecting the editor shows ${state.slides} of ${deck.slides} slides`];
+  return [];
+}
+
