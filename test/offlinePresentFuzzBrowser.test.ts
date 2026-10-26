@@ -19,11 +19,14 @@ import {
   presentJump,
   presentKey,
   stageComplete,
+  stageState,
   takeFirstFrames,
   watchPresentation,
   writeFixtureDeck,
   type DrivenPage,
+  DWELL_MS,
   type EditorState,
+  type FirstFrame,
   type OfflineBrowserKind,
 } from './support/offlinePresenting.js';
 
@@ -156,6 +159,8 @@ class Walk {
     shell: false, offlineEdits: 0, connected: false,
   };
   private spareUsed = 0;
+  /** Slides this show has had on stage (their pictures may be kept decoded). */
+  private seen = new Set<string>();
 
   constructor(private readonly page: DrivenPage, private readonly rand: () => number) {}
 
@@ -293,6 +298,8 @@ class Walk {
 
   private async awaitCopy(): Promise<string> {
     const m = this.model;
+    // The browser's error page, from a load the link refused: a person reloads it.
+    if (!(await this.state())?.deckShown) await this.reload();
     if (m.presenting) {
       // The copy downloads only while nothing is presented.
       await this.endShow();
@@ -314,11 +321,14 @@ class Walk {
   }
 
   private async dropSocket(): Promise<string> {
+    const before = await this.state();
     link!.dropWebSockets();
-    // The session comes straight back; an edit made in between is discarded
-    // on reconnect (collabBridge.ts), which is not this walk's subject.
-    if (this.model.connected) {
-      await eventually(() => editorState(this.page), 'reconnect after the WebSocket dropped', (s) => s.collabReady, 30_000)
+    // The session comes straight back: a new welcome, not a flag a browser
+    // has not cleared yet. An edit made in between is discarded on
+    // reconnect (collabBridge.ts), which is not this walk's subject.
+    if (before?.collabReady) {
+      await eventually(() => editorState(this.page), 'reconnect after the WebSocket dropped',
+        (s) => s.collabReady && s.welcomes > before.welcomes, 30_000)
         .catch(() => this.fail('never reconnected after the WebSocket dropped'));
     }
     return 'drop the WebSocket';
@@ -334,15 +344,20 @@ class Walk {
     // A tab that never had its page cannot reconnect by itself.
     if (!state?.deckShown) return 'link up (no editor to reconnect)';
     const server = await this.serverDeck(id);
+    // A fresh welcome: a browser that never noticed the link went still says connected.
     const after = await eventually(() => editorState(this.page), 'reconnect',
-      (s) => s.collabReady && s.slides === server.slides.length, 60_000).catch(() => this.state());
-    if (!after?.collabReady) this.fail(`never reconnected once the link was back: ${after?.status}`);
+      (s) => s.collabReady && s.welcomes > state.welcomes && s.slides === server.slides.length, 60_000).catch(() => this.state());
+    if (!after?.collabReady || after.welcomes <= state.welcomes) this.fail(`never reconnected once the link was back: ${after?.status}`);
     m.connected = Boolean(after?.collabReady);
     if (m.connected) {
       m.snapshot[id] = true;
-      const images = await this.page.evaluate<number>(`window.store.get().deck.slides.flatMap((s) => s.elements).filter((e) => e.type === 'image').length`);
+      // Edits made while the link was down are gone; the server's deck is what shows.
       const expected = server.slides.flatMap((s) => s.elements).filter((e) => e.type === 'image').length;
-      if (images !== expected) this.fail(`after reconnecting the editor holds ${images} images, the server ${expected}`);
+      const images = await eventually(
+        () => this.page.evaluate<number>(`window.store.get().deck.slides.flatMap((s) => s.elements).filter((e) => e.type === 'image').length`),
+        'the editor showing the server\'s deck', (count) => count === expected, 15_000,
+      ).catch(() => -1);
+      if (images !== expected) this.fail(`after reconnecting the editor holds a different number of images from the server's ${expected}`);
       m.offlineEdits = 0;
     }
     return 'link up';
@@ -367,10 +382,12 @@ class Walk {
     }
     if (!pressed.mounted) return `present refused (${pressed.status.slice(-60)})`;
     m.presenting = true;
+    this.seen.clear();
     m.presentationCovered = online || before.offline === 'ready';
     m.presentationLocal = before.offline === 'ready';
     m.showLostLink = !online;
     await watchPresentation(this.page).catch((error) => this.fail(`the presentation never built its stage: ${error}`));
+    this.seen.add((await stageState(this.page).catch(() => ({ slideId: '' }))).slideId);
     await this.checkStage('present');
     return `present (${online ? 'online' : 'offline'})`;
   }
@@ -380,6 +397,7 @@ class Walk {
     const slides = (await this.serverDeck(m.open!)).slides.length;
     const roll = this.rand();
     let label: string;
+    let jumpedToUnseen = false;
     if (roll < 0.45) {
       await presentKey(this.page, 'ArrowRight');
       label = 'next';
@@ -388,11 +406,36 @@ class Walk {
       label = 'previous';
     } else {
       const target = Math.floor(this.rand() * slides);
+      const deck = await this.serverDeck(m.open!);
+      jumpedToUnseen = !this.seen.has(deck.slides[target]?.id ?? '');
       await presentJump(this.page, m.open!, target);
       label = `jump to ${target + 1}`;
     }
     await this.checkStage(label);
+    await this.judgeFirstFrames(jumpedToUnseen);
+    // A presenter says something about each slide (DWELL_MS, as the scenario walks).
+    await new Promise((resolve) => setTimeout(resolve, DWELL_MS));
     return label;
+  }
+
+  /**
+   * The first frame of every slide the last move put on stage. A jump to a
+   * slide this show has not been near is excused: the Player decodes the
+   * pictures of the slides around the one shown, and of slides shown
+   * before, and nothing else (player.ts, `imageWarmSlides`, `shownImages`).
+   */
+  private async judgeFirstFrames(excused: boolean): Promise<void> {
+    const m = this.model;
+    const { frames, errors } = await takeFirstFrames(this.page).catch(() => ({ frames: [] as FirstFrame[], errors: [] as string[], ticks: 0 }));
+    for (const frame of frames) {
+      if (m.presentationLocal && !excused && frame.missing.length > 0) {
+        this.fail(`${frame.slide} appeared without ${frame.missing.join(', ')}`);
+      }
+      this.seen.add(frame.slide);
+    }
+    if (m.presentationLocal || (m.presentationCovered && !m.showLostLink)) {
+      for (const error of errors) this.fail(`media element failed: ${error}`);
+    }
   }
 
   private async checkStage(label: string): Promise<void> {
@@ -407,17 +450,7 @@ class Walk {
   private async endShow(): Promise<string> {
     const m = this.model;
     if (!m.presenting) return 'end show (none)';
-    const { frames, errors } = await takeFirstFrames(this.page).catch(() => ({ frames: [], errors: [], ticks: 0 }));
-    // A Safari window behind others paints no frames: nothing to judge (stageComplete still held every slide).
-    if (m.presentationLocal) {
-      for (const frame of frames) {
-        if (frame.missing.length > 0) this.fail(`${frame.slide} appeared without ${frame.missing.join(', ')}`);
-      }
-    }
-    // A show begun online that lost the link may fail to load what it had not reached.
-    if (m.presentationLocal || (m.presentationCovered && !m.showLostLink)) {
-      for (const error of errors) this.fail(`media element failed: ${error}`);
-    }
+    await this.judgeFirstFrames(false);
     await exitPresentation(this.page).catch((error) => this.fail(`the show would not end: ${error}`));
     m.presenting = false;
     return 'end show';

@@ -407,6 +407,8 @@ document.addEventListener('visibilitychange', () => {
 });
 
 let offlineStarted = false;
+/** 'pending' while the worker is being installed, 'retry' once an attempt failed. */
+let shellInstall: 'idle' | 'pending' | 'retry' | 'done' = 'idle';
 /** The deck is open: keep a copy of it, and install the worker that answers from it. */
 function startOffline(): void {
   if (!offline || offlineStarted) return;
@@ -415,8 +417,21 @@ function startOffline(): void {
   // A worker already controls this page (it loaded the page, perhaps without
   // a server): the shell is there now, and registering again only updates it.
   if (navigator.serviceWorker?.controller) offline.setShellReady(true);
-  void registerOfflineShell(editorFetching).then((ready) => {
-    if (ready || !navigator.serviceWorker?.controller) offline?.setShellReady(ready);
+  installShell();
+}
+
+/**
+ * Install (or update) the worker. An attempt the connection cut short is
+ * tried again when the editor reconnects: without it, a deck opened just
+ * before the link dropped could never be presented offline that session.
+ */
+function installShell(): void {
+  if (!offline || shellInstall === 'pending' || shellInstall === 'done') return;
+  shellInstall = 'pending';
+  void registerOfflineShell(editorFetching).then((result) => {
+    shellInstall = result === 'failed' ? 'retry' : 'done';
+    if (result === 'failed') return;
+    if (result === 'ready' || !navigator.serviceWorker?.controller) offline?.setShellReady(result === 'ready');
   });
 }
 
@@ -655,6 +670,8 @@ const bridge = new CollabBridge(wsUrl, undefined, {
     rail.refreshPresence();
     renderStatus();
     document.documentElement.dataset.collabReady = 'true';
+    // Counted, so a test can tell a fresh welcome from a flag never cleared.
+    document.documentElement.dataset.collabWelcomes = String(Number(document.documentElement.dataset.collabWelcomes ?? 0) + 1);
     startOffline();
     offline?.deckChanged();
   },
@@ -691,6 +708,7 @@ const bridge = new CollabBridge(wsUrl, undefined, {
     if (isConnected) {
       connectionNotice.hide();
       offline?.resume();
+      if (shellInstall === 'retry') installShell();
       // The refusal is moot once the server is back; don't leave it lingering.
       if (statusMessage === PRESENT_NEEDS_SERVER) setStatusMessage('');
     } else {

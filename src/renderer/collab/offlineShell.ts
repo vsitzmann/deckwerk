@@ -5,21 +5,21 @@ let active: ServiceWorker | null = null;
 
 /**
  * Install the service worker that keeps the browser editor working without
- * its server (sw.ts). Resolves true once a worker is active for this origin,
- * false where none can be: an insecure origin (plain http on a LAN address),
- * a browser without workers, or a development server, which builds no
- * worker.
+ * its server (sw.ts). Resolves 'ready' once a worker is active for this
+ * origin; 'unavailable' where none can be: an insecure origin (plain http on
+ * a LAN address), a browser without workers, or a development server, which
+ * builds no worker; 'failed' when installing it did not work this time.
  *
  * The worker precaches the app shell when it installs, a few megabytes, so
  * registering waits until the editor has gone quiet (`busy`): a first visit
  * spends the link on the slide being shown, not on a page it may need later.
  */
-export async function registerOfflineShell(busy: () => boolean): Promise<boolean> {
+export async function registerOfflineShell(busy: () => boolean): Promise<'ready' | 'unavailable' | 'failed'> {
   // The vite dev server builds no worker. (Not `PROD`: that follows
   // NODE_ENV, which the test runner sets to 'test' for a production build.)
   if (import.meta.env.MODE === 'development' || !('serviceWorker' in navigator) || !window.isSecureContext) {
     document.documentElement.dataset.offlineShell = 'unavailable';
-    return false;
+    return 'unavailable';
   }
   document.documentElement.dataset.offlineShell = 'waiting';
   try {
@@ -27,12 +27,13 @@ export async function registerOfflineShell(busy: () => boolean): Promise<boolean
     await navigator.serviceWorker.register(new URL('sw.js', location.href), { scope: './' });
     const registration = await navigator.serviceWorker.ready;
     active = registration.active;
-    document.documentElement.dataset.offlineShell = active ? 'ready' : 'unavailable';
-    return Boolean(active);
+    document.documentElement.dataset.offlineShell = active ? 'ready' : 'failed';
+    return active ? 'ready' : 'failed';
   } catch (error) {
+    // Most often the connection went as the worker was fetched: worth another try.
     console.warn('offline: the service worker could not be installed', error);
     document.documentElement.dataset.offlineShell = 'failed';
-    return false;
+    return 'failed';
   }
 }
 

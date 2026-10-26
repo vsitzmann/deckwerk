@@ -217,6 +217,8 @@ export interface EditorState {
   shell: string;
   status: string;
   collabReady: boolean;
+  /** Welcomes this page has had: grows on every (re)connection. */
+  welcomes: number;
   offlineDeck: boolean;
   /** A deck is on screen: welcomed by the server, opened from the copy, or kept from before the link went. */
   deckShown: boolean;
@@ -237,6 +239,7 @@ export function editorState(page: DrivenPage): Promise<EditorState> {
       shell: root.dataset.offlineShell ?? '',
       status: document.getElementById('status')?.textContent ?? '',
       collabReady: root.dataset.collabReady === 'true',
+      welcomes: Number(root.dataset.collabWelcomes ?? 0),
       offlineDeck: root.dataset.offlineDeck === 'true',
       deckShown: Boolean(store) && store.get().deck.title !== 'Connecting…',
       slides: store ? store.get().deck.slides.length : 0,
