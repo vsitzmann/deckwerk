@@ -399,6 +399,13 @@ if (OfflineCopy.supported()) {
   window.deckwerkOffline = offline;
 }
 
+// A snapshot due in a moment is written now if the page goes away: a deck
+// closed right after an edit still opens without the server as it was.
+window.addEventListener('pagehide', () => offline?.flushSnapshot());
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden') offline?.flushSnapshot();
+});
+
 let offlineStarted = false;
 /** The deck is open: keep a copy of it, and install the worker that answers from it. */
 function startOffline(): void {
@@ -683,6 +690,7 @@ const bridge = new CollabBridge(wsUrl, undefined, {
     connected = isConnected;
     if (isConnected) {
       connectionNotice.hide();
+      offline?.resume();
       // The refusal is moot once the server is back; don't leave it lingering.
       if (statusMessage === PRESENT_NEEDS_SERVER) setStatusMessage('');
     } else {

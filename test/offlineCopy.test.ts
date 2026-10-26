@@ -297,6 +297,62 @@ describe('the offline copy', () => {
     expect(pulled.get(clip)).toBe(CHUNKS);
   });
 
+  it('waits for the server, rather than giving files up, while the connection is gone', async () => {
+    let online = false;
+    const base = harness().options.fetch!;
+    const { copy } = harness({
+      fetch: (async (input: RequestInfo | URL, init?: RequestInit) => {
+        if (!online) throw new TypeError('Failed to fetch');
+        return base(input, init);
+      }) as typeof fetch,
+    });
+    copy.start();
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(copy.status()).toMatchObject({ state: 'downloading', failed: 0 });
+    expect(copy.statusText()).toBe('Offline copy waits for the server: 6 files left');
+    online = true;
+    copy.resume();
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(copy.statusText()).toBe('Available offline');
+  });
+
+  it('tries again by itself once the server is back', async () => {
+    let online = false;
+    const base = harness().options.fetch!;
+    const { copy } = harness({
+      fetch: (async (input: RequestInfo | URL, init?: RequestInit) => {
+        if (!online) throw new TypeError('Failed to fetch');
+        return base(input, init);
+      }) as typeof fetch,
+    });
+    copy.start();
+    await vi.advanceTimersByTimeAsync(5_000);
+    online = true;
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(copy.ready()).toBe(true);
+  });
+
+  it('writes the snapshot as the deck opens, however steadily it is edited after', async () => {
+    const { copy, storage } = harness();
+    copy.start();
+    for (let i = 0; i < 10; i++) {
+      copy.deckChanged();
+      await vi.advanceTimersByTimeAsync(500);
+    }
+    expect(await OfflineCopy.loadSnapshot('talk', storage as unknown as CacheStorage)).not.toBeNull();
+  });
+
+  it('counts an edit at once, before its coalescing timer fires', async () => {
+    const deck = talk();
+    const { copy } = harness({}, deck);
+    copy.start();
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(copy.ready()).toBe(true);
+    deck.slides[0].elements.push(el('new', 'image', 'assets/new.jpg'));
+    copy.deckChanged();
+    expect(copy.ready()).toBe(false);
+  });
+
   it('keeps the deck to open without the server', async () => {
     const { copy, storage } = harness();
     copy.start();

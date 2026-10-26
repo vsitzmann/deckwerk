@@ -86,6 +86,8 @@ const POLL_MS = 250;
 const FAILURE_LIMIT = 2;
 /** Snapshot writes are coalesced: a deck can be a megabyte of JSON. */
 const SNAPSHOT_DELAY_MS = 2_000;
+/** Without a server, downloading tries again this often (and at once when the editor reconnects). */
+const RETRY_MS = 15_000;
 /** Re-planning follows slide changes and edits, coalesced. */
 const PLAN_DELAY_MS = 300;
 
@@ -179,6 +181,10 @@ export class OfflineCopy {
   private shell: 'pending' | 'ready' | 'unavailable' = 'pending';
   private planTimer: ReturnType<typeof setTimeout> | null = null;
   private snapshotTimer: ReturnType<typeof setTimeout> | null = null;
+  private snapshotDue = 0;
+  /** The last download found no server: downloading waits for `resume` (or a retry). */
+  private unreachable = false;
+  private retryTimer: ReturnType<typeof setTimeout> | null = null;
   private wake: (() => void) | null = null;
   persisted: boolean | null = null;
 
@@ -189,6 +195,22 @@ export class OfflineCopy {
     // Read what is kept now: whether the copy is complete must be known the
     // moment the deck is on screen, which is when somebody presses Present.
     void this.loadKept().catch(() => undefined);
+  }
+
+  /** The server is back: download what is left. */
+  resume(): void {
+    if (this.retryTimer) clearTimeout(this.retryTimer);
+    this.retryTimer = null;
+    this.unreachable = false;
+    void this.pump();
+  }
+
+  private retrySoon(): void {
+    if (this.retryTimer || this.disposed) return;
+    this.retryTimer = setTimeout(() => {
+      this.retryTimer = null;
+      this.resume();
+    }, RETRY_MS);
   }
 
   /** Whether this browser can keep anything offline here (Cache Storage needs a secure context). */
@@ -260,6 +282,13 @@ export class OfflineCopy {
   }
 
   status(): OfflineStatus {
+    // An edit just made counts now, not once the coalescing timer fires:
+    // somebody may press Present in between.
+    if (this.planTimer) {
+      clearTimeout(this.planTimer);
+      this.planTimer = null;
+      this.replan();
+    }
     const kept = this.kept ?? new Set<string>();
     const left = this.plan.filter((url) => !kept.has(mediaKey(url)));
     const noRoom = left.filter((url) => this.noRoom.has(url)).length;
@@ -284,7 +313,9 @@ export class OfflineCopy {
     if (status.state === 'ready') return 'Available offline';
     if (status.state === 'downloading') {
       if (status.remaining === 0) return 'Preparing for offline…';
-      return `Downloading for offline: ${status.remaining} ${status.remaining === 1 ? 'file' : 'files'} left`;
+      const left = `${status.remaining} ${status.remaining === 1 ? 'file' : 'files'} left`;
+      if (this.unreachable) return `Offline copy waits for the server: ${left}`;
+      return `Downloading for offline: ${left}`;
     }
     if (status.state === 'incomplete') {
       if (status.noRoom > 0) return `Not enough storage to keep ${status.noRoom} ${status.noRoom === 1 ? 'file' : 'files'} offline`;
@@ -309,6 +340,7 @@ export class OfflineCopy {
 
   dispose(): void {
     this.disposed = true;
+    if (this.retryTimer) clearTimeout(this.retryTimer);
     if (this.planTimer) clearTimeout(this.planTimer);
     if (this.snapshotTimer) clearTimeout(this.snapshotTimer);
     this.wake?.();
@@ -363,6 +395,10 @@ export class OfflineCopy {
       const kept = await this.loadKept();
       for (;;) {
         if (this.disposed) return;
+        if (this.unreachable) {
+          this.retrySoon();
+          break;
+        }
         if (!this.next(kept)) break;
         await this.quiet();
         // The plan may have moved on while the editor was busy.
@@ -430,7 +466,7 @@ export class OfflineCopy {
       });
       const range = /^bytes (\d+)-\d+\/(\d+)$/.exec(response.headers.get('content-range') ?? '');
       if (!(response.status === 200 || (response.status === 206 && range?.[1] === '0')) || !response.body) {
-        throw new Error(`HTTP ${response.status}`);
+        throw new ServerRefused(response.status);
       }
       const declared = Number(range?.[2] ?? response.headers.get('content-length'));
       const size = declared > 0 ? declared : null;
@@ -457,7 +493,13 @@ export class OfflineCopy {
       this.options.worker?.()?.postMessage({ type: 'offline-media', added: [url] });
     } catch (error) {
       if ((error as { name?: string }).name === 'QuotaExceededError') this.noRoom.add(url);
-      else if (!this.disposed) this.failures.set(url, (this.failures.get(url) ?? 0) + 1);
+      else if (error instanceof ServerRefused) {
+        // The server answered, and not with the file: that is the file's failure.
+        if (!this.disposed) this.failures.set(url, (this.failures.get(url) ?? 0) + 1);
+      } else if (!this.disposed && !abort.signal.aborted) {
+        // No answer at all: the connection, not the file. Wait for the server.
+        this.unreachable = true;
+      }
     } finally {
       if (this.flight === flight) this.flight = null;
       finish();
@@ -477,12 +519,29 @@ export class OfflineCopy {
 
   /* --- the deck, the index, eviction --------------------------------------- */
 
+  /**
+   * Save within `delay`. A save already due sooner stands: it reads the deck
+   * as it is when it runs, and pushing it back on every edit meant a deck
+   * edited steadily, or left within a couple of seconds of opening, never
+   * had a snapshot at all.
+   */
   private saveSnapshotSoon(delay: number): void {
+    const due = this.now() + delay;
+    if (this.snapshotTimer && this.snapshotDue <= due) return;
     if (this.snapshotTimer) clearTimeout(this.snapshotTimer);
+    this.snapshotDue = due;
     this.snapshotTimer = setTimeout(() => {
       this.snapshotTimer = null;
       void this.saveSnapshot();
     }, delay);
+  }
+
+  /** The page is going away or out of sight: save a pending snapshot now. */
+  flushSnapshot(): void {
+    if (!this.snapshotTimer) return;
+    clearTimeout(this.snapshotTimer);
+    this.snapshotTimer = null;
+    void this.saveSnapshot();
   }
 
   private async saveSnapshot(): Promise<void> {
@@ -559,6 +618,13 @@ export class OfflineCopy {
       removed.push(key);
     }
     if (removed.length > 0) this.options.worker?.()?.postMessage({ type: 'offline-media', removed });
+  }
+}
+
+/** The server answered a download with something other than the file. */
+class ServerRefused extends Error {
+  constructor(readonly status: number) {
+    super(`HTTP ${status}`);
   }
 }
 

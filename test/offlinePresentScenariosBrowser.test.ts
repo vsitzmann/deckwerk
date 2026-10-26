@@ -200,7 +200,11 @@ async function giveTalk(driven: DrivenPage, deck: TalkDeck, label: string, durin
     await look(`jump to ${target + 1}`);
   }
   const { frames, errors, ticks } = await takeFirstFrames(driven);
-  if (ticks < 10) problems.push(`${label}: the presentation painted ${ticks} frames: nothing to judge first frames by`);
+  // Safari driven by WebDriver behind other windows paints nothing at all;
+  // there the first frame is mediaTransferBudgetBrowser's to judge, and this
+  // walk holds it to every slide being complete.
+  if (ticks < 10 && driven.kind !== 'safari') problems.push(`${label}: the presentation painted ${ticks} frames: nothing to judge first frames by`);
+  if (ticks < 10 && driven.kind === 'safari') console.log(`${label}: Safari painted no frames (window not visible); first frames not judged`);
   frames.forEach((frame, i) => {
     if (frame.missing.length > 0) {
       problems.push(`${label}: ${frame.slide} appeared without ${frame.missing.join(', ')} (slide change ${i + 1}: `
@@ -314,7 +318,10 @@ for (const kind of haveFfmpeg ? BROWSERS : []) {
           await cut('refused');
           const problems: string[] = [];
           if (at.offline !== 'ready') {
-            // Present is refused with the reason, never a doomed overlay.
+            // Present is refused with the reason, never a doomed overlay: once
+            // the editor knows the server is gone. (A browser can take a
+            // moment to notice its socket died, and until then presents as usual.)
+            await eventually(() => editorState(driven), 'the editor never noticed the server had gone', (state) => !state.collabReady, 30_000);
             const pressed = await pressPresent(driven);
             if (pressed.mounted && (await editorState(driven)).offline !== 'ready') {
               problems.push('Present mounted a presentation without a complete copy');

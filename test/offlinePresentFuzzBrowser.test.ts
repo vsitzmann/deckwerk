@@ -369,6 +369,7 @@ class Walk {
     const m = this.model;
     if (!m.presenting) return 'end show (none)';
     const { frames, errors } = await takeFirstFrames(this.page).catch(() => ({ frames: [], errors: [], ticks: 0 }));
+    // A Safari window behind others paints no frames: nothing to judge (stageComplete still held every slide).
     if (m.presentationCovered) {
       for (const frame of frames) {
         if (frame.missing.length > 0) this.fail(`${frame.slide} appeared without ${frame.missing.join(', ')}`);
@@ -386,7 +387,11 @@ class Walk {
     const id = m.open!;
     const state = await this.state();
     if (!state?.deckShown) return 'add an image (no deck)';
-    const src = spares[id][this.spareUsed++ % spares[id].length];
+    // Online, a picture nobody has (an upload). Offline nothing can be
+    // uploaded: a person duplicates a picture the deck already shows.
+    const shown = (await this.serverDeck(id)).slides.flatMap((slide) => slide.elements)
+      .filter((el) => el.type === 'image').map((el) => (el as { src: string }).src);
+    const src = state.collabReady ? spares[id][this.spareUsed++ % spares[id].length] : this.pick(shown);
     const element = imageElement(`added-${this.spareUsed}-${Math.floor(this.rand() * 1e6)}`, src, 80 + Math.floor(this.rand() * 1200), 640, 320, 200);
     await this.page.evaluate(`(() => {
       const element = ${JSON.stringify(element)};
@@ -432,6 +437,16 @@ for (const kind of haveFfmpeg ? BROWSERS : []) {
             walk.problems.push(`step ${step} threw: ${(error as Error).stack ?? error}`);
           }
           if (walk.problems.length > 0) {
+            const storage = await page.evaluate<string>(`(async () => {
+              try {
+                const decks = await caches.open('deckwerk-decks');
+                const keys = (await decks.keys()).map((r) => new URL(r.url).pathname + new URL(r.url).search);
+                const index = await (await decks.match('/__offline__/index'))?.text();
+                const media = (await (await caches.open('deckwerk-media')).keys()).length;
+                return JSON.stringify({ keys, index, media, caches: await caches.keys(), controlled: Boolean(navigator.serviceWorker?.controller), url: location.href });
+              } catch (error) { return String(error); }
+            })()`).catch((error) => String(error));
+            walk.problems.push(`browser storage: ${storage}`);
             throw new Error(`${walk.problems.join('\n')}\n\ntrail:\n${walk.trail.map((move, i) => `  ${i + 1}. ${move}`).join('\n')}`
               + `\n\nreplay: OFFLINE_FUZZ_SEEDS=${seed} OFFLINE_FUZZ_BROWSERS=${kind} OFFLINE_FUZZ_STEPS=${step}`);
           }
