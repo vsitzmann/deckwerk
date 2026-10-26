@@ -1,0 +1,452 @@
+import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
+import { mkdir, mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import type { Deck } from '../src/shared/deck.js';
+import { loadDeck } from '../src/main/deckStore.js';
+import { startCollabServer, type RunningCollabServer } from '../src/server/collabServer.js';
+import { eventually } from './support/browserSession.js';
+import { collabClientDir } from './support/collabClient.js';
+import { ThrottledLink } from './support/throttledLink.js';
+import {
+  browsersFromEnv,
+  editorState,
+  exitPresentation,
+  haveFfmpeg,
+  imageElement,
+  openPage,
+  pressPresent,
+  presentJump,
+  presentKey,
+  stageComplete,
+  takeFirstFrames,
+  watchPresentation,
+  writeFixtureDeck,
+  type DrivenPage,
+  type EditorState,
+  type OfflineBrowserKind,
+} from './support/offlinePresenting.js';
+
+/**
+ * A seeded walk of a person using the browser editor while its server comes
+ * and goes, checked after every move against a model of what must be on
+ * screen.
+ *
+ * Moves: open a deck, wait a while, wait for the offline copy, lose the link
+ * (refused, a black hole, the WebSocket alone), get it back, press Present,
+ * step forward and back and jump, end the show, reload, add an image to a
+ * slide (online, and offline, where the edit is discarded on reconnect), and
+ * switch to the other deck.
+ *
+ * The model knows, per deck, whether this browser has a complete offline
+ * copy (the editor said so, and nothing was added since), whether it has a
+ * snapshot to open without a server, and what the server holds. It demands:
+ *
+ * - a deck opened or reloaded with the link up shows the server's deck, its
+ *   slide painted; with the link down, the snapshot if there is one, painted
+ *   if the copy is complete;
+ * - Present without the server presents exactly when the copy is complete,
+ *   and otherwise says why, never mounting an overlay that cannot load;
+ * - every slide of a presentation that the copy covers (or that the link
+ *   serves) shows every picture in its first frame and plays every clip,
+ *   and no media element fails;
+ * - once the link is back the editor reconnects and shows the server's
+ *   deck, an edit made offline gone.
+ *
+ * Knobs, after the repo's other fuzzers: OFFLINE_FUZZ_SEEDS (comma-
+ * separated; FUZZ_SEED, the nightly's rotated seed, is added), OFFLINE_FUZZ_STEPS,
+ * OFFLINE_FUZZ_BROWSERS (chromium, chrome, safari; safari is added by
+ * RUN_SAFARI_MEDIA_BUDGET=1). A failure prints the trail and the line to
+ * replay it.
+ */
+
+const STEPS = Number.parseInt(process.env.OFFLINE_FUZZ_STEPS ?? '', 10) || 16;
+const SEEDS = [
+  ...(process.env.OFFLINE_FUZZ_SEEDS?.split(',').map((value) => Number.parseInt(value, 10)).filter(Number.isFinite) ?? [1]),
+  ...(process.env.FUZZ_SEED ? [Number.parseInt(process.env.FUZZ_SEED, 10)].filter(Number.isFinite) : []),
+];
+const BROWSERS = browsersFromEnv('OFFLINE_FUZZ_BROWSERS', [
+  'chromium',
+  ...(process.env.RUN_SAFARI_MEDIA_BUDGET === '1' ? ['safari' as const] : []),
+]);
+const LINK = { bytesPerSecond: 12_000_000, latencyMs: 20 };
+const DECKS = ['talk-a', 'talk-b'] as const;
+type DeckId = typeof DECKS[number];
+
+/** mulberry32: small, seedable, good enough to choose moves. */
+function random(seed: number): () => number {
+  let state = seed >>> 0;
+  return () => {
+    state = (state + 0x6d2b79f5) >>> 0;
+    let t = state;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+let workDir = '';
+let decksRoot = '';
+let server: RunningCollabServer | null = null;
+let link: ThrottledLink | null = null;
+let origin = '';
+let page: DrivenPage | null = null;
+const spares: Record<DeckId, string[]> = { 'talk-a': [], 'talk-b': [] };
+
+beforeAll(async () => {
+  if (!haveFfmpeg || BROWSERS.length === 0) return;
+  workDir = await mkdtemp(join(tmpdir(), 'offline-fuzz-'));
+  decksRoot = join(workDir, 'decks');
+  await mkdir(decksRoot, { recursive: true });
+  spares['talk-a'] = (await writeFixtureDeck(join(decksRoot, 'talk-a'), 'Talk A', {
+    slides: 6, photosPerSlide: [3, 0, 5, 1], clipEvery: 2, photoFiles: 10, clipFiles: 2, clipSeconds: 10, sparePhotos: 24,
+  })).spares;
+  spares['talk-b'] = (await writeFixtureDeck(join(decksRoot, 'talk-b'), 'Talk B', {
+    slides: 4, photosPerSlide: [2, 4], clipEvery: 3, photoFiles: 6, clipFiles: 1, clipSeconds: 8, sparePhotos: 24,
+  })).spares;
+}, 600_000);
+
+afterAll(async () => {
+  if (workDir) await rm(workDir, { recursive: true, force: true });
+});
+
+afterEach(async () => {
+  await page?.close();
+  page = null;
+  await link?.close();
+  link = null;
+  await server?.close();
+  server = null;
+});
+
+/** What the walk believes; checked against the browser after every move. */
+interface Model {
+  link: 'up' | 'refused' | 'blackhole';
+  /** The deck the editor tab is on, or null before the first open. */
+  open: DeckId | null;
+  presenting: boolean;
+  /** The presentation may be checked slide by slide: the copy or the link covers it. */
+  presentationCovered: boolean;
+  /** Per deck: the editor said the copy was complete, and nothing was added since. */
+  complete: Record<DeckId, boolean>;
+  /** Per deck: a snapshot was kept (the deck was open online for a moment). */
+  snapshot: Record<DeckId, boolean>;
+  /** The worker is installed in this browser. */
+  shell: boolean;
+  /** Images added offline, which the reconnect must discard. */
+  offlineEdits: number;
+  /** The tab shows a deck from the server (welcomed) right now. */
+  connected: boolean;
+}
+
+class Walk {
+  readonly trail: string[] = [];
+  readonly problems: string[] = [];
+  readonly model: Model = {
+    link: 'up', open: null, presenting: false, presentationCovered: false,
+    complete: { 'talk-a': false, 'talk-b': false }, snapshot: { 'talk-a': false, 'talk-b': false },
+    shell: false, offlineEdits: 0, connected: false,
+  };
+  private spareUsed = 0;
+
+  constructor(private readonly page: DrivenPage, private readonly rand: () => number) {}
+
+  private pick<T>(items: readonly T[]): T {
+    return items[Math.floor(this.rand() * items.length)];
+  }
+
+  private fail(problem: string): void {
+    this.problems.push(`step ${this.trail.length}: ${problem}`);
+  }
+
+  private async state(): Promise<EditorState | null> {
+    return editorState(this.page).catch(() => null);
+  }
+
+  /** The server's deck, as it has saved it. */
+  private async serverDeck(id: DeckId): Promise<Deck> {
+    await server!.flush();
+    return loadDeck(join(decksRoot, id));
+  }
+
+  /** The moves that make sense now, weighted by repetition. */
+  private moves(): Array<() => Promise<string>> {
+    const m = this.model;
+    const moves: Array<() => Promise<string>> = [() => this.open(this.pick(DECKS))];
+    if (m.open === null) return moves;
+    moves.push(() => this.wait(), () => this.reload());
+    if (m.presenting) {
+      moves.push(() => this.step(), () => this.step(), () => this.step(), () => this.step(), () => this.endShow());
+    } else {
+      moves.push(() => this.present(), () => this.present(), () => this.addImage());
+      moves.push(() => this.open(m.open === 'talk-a' ? 'talk-b' : 'talk-a'));
+    }
+    if (m.link === 'up') {
+      moves.push(() => this.awaitCopy(), () => this.awaitCopy(), () => this.lose(), () => this.lose(), () => this.dropSocket());
+    } else {
+      moves.push(() => this.restore(), () => this.restore());
+    }
+    return moves;
+  }
+
+  async move(): Promise<void> {
+    const label = await this.pick(this.moves())();
+    this.trail.push(label);
+    await this.noteShell();
+  }
+
+  private async noteShell(): Promise<void> {
+    if (this.model.shell || this.model.link !== 'up') return;
+    this.model.shell = (await this.state())?.shell === 'ready';
+  }
+
+  /* --- moves ---------------------------------------------------------------- */
+
+  private async open(id: DeckId): Promise<string> {
+    const m = this.model;
+    if (m.presenting) await this.endShow();
+    await this.page.goto(`${origin}/?deck=${id}&name=Fuzz`).catch(() => undefined);
+    m.open = id;
+    m.presenting = false;
+    await this.expectDeck(`open ${id}`);
+    return `open ${id} (link ${m.link})`;
+  }
+
+  private async reload(): Promise<string> {
+    const m = this.model;
+    await this.page.reload().catch(() => undefined);
+    m.presenting = false;
+    await this.expectDeck('reload');
+    return `reload (link ${m.link})`;
+  }
+
+  /** After an open or a reload: what the editor must show. */
+  private async expectDeck(what: string): Promise<void> {
+    const m = this.model;
+    const id = m.open!;
+    m.connected = false;
+    if (m.link === 'up') {
+      const server = await this.serverDeck(id);
+      const state = await eventually(() => editorState(this.page), `${what}: the editor`,
+        (s) => s.collabReady && s.slides === server.slides.length && s.unpainted.length === 0, 90_000)
+        .catch(() => this.state());
+      if (!state?.collabReady || state.slides !== server.slides.length) {
+        this.fail(`${what} online: showed ${state?.slides} slides (server ${server.slides.length}), ${state?.status}`);
+      } else if (state.unpainted.length > 0) {
+        this.fail(`${what} online: unpainted ${state.unpainted.join(', ')}`);
+      }
+      m.connected = true;
+      // The snapshot is written as the deck opens.
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      m.snapshot[id] = true;
+      return;
+    }
+    if (!m.shell || !m.snapshot[id]) {
+      // Nothing to open it from: the page may be the browser's error page or an editor waiting for its server.
+      return;
+    }
+    const expected = (await this.serverDeck(id)).slides.length;
+    const state = await eventually(() => editorState(this.page), `${what}: the offline copy`,
+      (s) => s.offlineDeck && s.slides === expected && (!m.complete[id] || s.unpainted.length === 0), 60_000)
+      .catch(() => this.state());
+    if (!state?.offlineDeck || state.slides !== expected) {
+      this.fail(`${what} without the server: showed ${state?.slides} slides of ${expected}, offlineDeck ${state?.offlineDeck}, ${state?.status}`);
+    } else if (m.complete[id] && state.unpainted.length > 0) {
+      this.fail(`${what} without the server, copy complete: unpainted ${state.unpainted.join(', ')}`);
+    }
+  }
+
+  private async wait(): Promise<string> {
+    const ms = Math.round(500 + this.rand() * 7_500);
+    await new Promise((resolve) => setTimeout(resolve, ms));
+    return `wait ${ms} ms`;
+  }
+
+  private async awaitCopy(): Promise<string> {
+    const m = this.model;
+    if (m.presenting) {
+      // The copy downloads only while nothing is presented.
+      await this.endShow();
+    }
+    const state = await eventually(() => editorState(this.page), 'the copy', (s) => s.offline === 'ready', 180_000)
+      .catch(() => this.state());
+    if (state?.offline !== 'ready') this.fail(`the copy of ${m.open} never completed: ${state?.offline}, ${state?.status}`);
+    else m.complete[m.open!] = true;
+    return `await the copy of ${m.open}`;
+  }
+
+  private async lose(): Promise<string> {
+    const how = this.pick(['refused', 'blackhole'] as const);
+    await link!.down(how);
+    this.model.link = how;
+    this.model.connected = false;
+    return `link ${how}`;
+  }
+
+  private async dropSocket(): Promise<string> {
+    link!.dropWebSockets();
+    return 'drop the WebSocket';
+  }
+
+  private async restore(): Promise<string> {
+    const m = this.model;
+    await link!.up();
+    m.link = 'up';
+    const id = m.open;
+    if (!id) return 'link up';
+    const state = await this.state();
+    // A tab that never had its page cannot reconnect by itself.
+    if (!state || state.slides === 0) return 'link up (no editor to reconnect)';
+    const server = await this.serverDeck(id);
+    const after = await eventually(() => editorState(this.page), 'reconnect',
+      (s) => s.collabReady && s.slides === server.slides.length, 60_000).catch(() => this.state());
+    if (!after?.collabReady) this.fail(`never reconnected once the link was back: ${after?.status}`);
+    m.connected = Boolean(after?.collabReady);
+    if (m.connected) {
+      m.snapshot[id] = true;
+      const images = await this.page.evaluate<number>(`window.store.get().deck.slides.flatMap((s) => s.elements).filter((e) => e.type === 'image').length`);
+      const expected = server.slides.flatMap((s) => s.elements).filter((e) => e.type === 'image').length;
+      if (images !== expected) this.fail(`after reconnecting the editor holds ${images} images, the server ${expected}`);
+      m.offlineEdits = 0;
+    }
+    return 'link up';
+  }
+
+  private async present(): Promise<string> {
+    const m = this.model;
+    const id = m.open!;
+    const before = await this.state();
+    if (!before || before.slides === 0 || (!before.collabReady && !before.offlineDeck && !m.connected)) {
+      return 'present (no deck on screen)';
+    }
+    const online = before.collabReady;
+    const pressed = await pressPresent(this.page);
+    if (!online) {
+      const ready = before.offline === 'ready';
+      if (pressed.mounted && !ready) this.fail('Present mounted a presentation without the server or a complete copy');
+      if (!pressed.mounted && ready) this.fail(`Present was refused with a complete copy: ${pressed.status}`);
+      if (!pressed.mounted && !pressed.status.includes('Presenting needs the server')) this.fail(`Present refused without the reason: ${pressed.status}`);
+      if (!pressed.mounted && m.complete[id]) {
+        // The editor said the copy was complete and nothing was added since.
+        this.fail(`the copy of ${id} was complete, yet Present was refused (${before.offline}): ${pressed.status}`);
+      }
+    }
+    if (!pressed.mounted) return `present refused (${pressed.status.slice(-60)})`;
+    m.presenting = true;
+    m.presentationCovered = online || before.offline === 'ready';
+    await watchPresentation(this.page).catch((error) => this.fail(`the presentation never built its stage: ${error}`));
+    await this.checkStage('present');
+    return `present (${online ? 'online' : 'offline'})`;
+  }
+
+  private async step(): Promise<string> {
+    const m = this.model;
+    const slides = (await this.serverDeck(m.open!)).slides.length;
+    const roll = this.rand();
+    let label: string;
+    if (roll < 0.45) {
+      await presentKey(this.page, 'ArrowRight');
+      label = 'next';
+    } else if (roll < 0.8) {
+      await presentKey(this.page, 'ArrowLeft');
+      label = 'previous';
+    } else {
+      const target = Math.floor(this.rand() * slides);
+      await presentJump(this.page, m.open!, target);
+      label = `jump to ${target + 1}`;
+    }
+    await this.checkStage(label);
+    return label;
+  }
+
+  private async checkStage(label: string): Promise<void> {
+    const m = this.model;
+    // Covered while the link is up, or when the show began from a complete copy.
+    if (!m.presentationCovered && m.link !== 'up') return;
+    const { state, problems } = await stageComplete(this.page, 20_000);
+    for (const problem of problems) this.fail(`${label} (${state.slideId}, link ${m.link}): ${problem}`);
+  }
+
+  private async endShow(): Promise<string> {
+    const m = this.model;
+    if (!m.presenting) return 'end show (none)';
+    const { frames, errors } = await takeFirstFrames(this.page).catch(() => ({ frames: [], errors: [] }));
+    if (m.presentationCovered) {
+      for (const frame of frames) {
+        if (frame.missing.length > 0) this.fail(`${frame.slide} appeared without ${frame.missing.join(', ')}`);
+      }
+      for (const error of errors) this.fail(`media element failed: ${error}`);
+    }
+    await exitPresentation(this.page).catch((error) => this.fail(`the show would not end: ${error}`));
+    m.presenting = false;
+    return 'end show';
+  }
+
+  /** Add one of the deck's unused photos to the slide shown, as a person dropping it there would. */
+  private async addImage(): Promise<string> {
+    const m = this.model;
+    const id = m.open!;
+    const state = await this.state();
+    if (!state || state.slides === 0 || (!state.collabReady && !state.offlineDeck)) return 'add an image (no deck)';
+    const src = spares[id][this.spareUsed++ % spares[id].length];
+    const element = imageElement(`added-${this.spareUsed}-${Math.floor(this.rand() * 1e6)}`, src, 80 + Math.floor(this.rand() * 1200), 640, 320, 200);
+    await this.page.evaluate(`(() => {
+      const element = ${JSON.stringify(element)};
+      window.store.commit((deck) => { deck.slides[window.store.get().slideIndex].elements.push(element); }, { label: 'Fuzz: add an image' });
+      return true;
+    })()`);
+    if (state.collabReady) {
+      m.complete[id] = false;
+      // The edit reaches the server; the picture is the editor's to paint.
+      await eventually(() => this.serverDeck(id), 'the edit reached the server',
+        (deck) => deck.slides.some((slide) => slide.elements.some((el) => el.id === element.id)), 30_000)
+        .catch(() => this.fail(`an image added online never reached the server`));
+      const painted = await eventually(() => editorState(this.page), 'the added image painted', (s) => s.unpainted.length === 0, 30_000)
+        .catch(() => this.state());
+      if (painted && painted.unpainted.length > 0) this.fail(`an image added online stayed unpainted: ${painted.unpainted.join(', ')}`);
+      return `add ${src} to ${id} (online)`;
+    }
+    m.offlineEdits++;
+    return `add ${src} to ${id} (offline, to be discarded)`;
+  }
+}
+
+for (const kind of haveFfmpeg ? BROWSERS : []) {
+  describe(`the editor losing its server, a seeded walk (${kind})`, () => {
+    for (const seed of SEEDS) {
+      it(`survives a ${STEPS}-step walk, seed ${seed}`, async () => {
+        server = await startCollabServer({
+          rootDir: decksRoot,
+          clientDir: await collabClientDir(),
+          host: '127.0.0.1',
+          port: 0,
+          mediaRenditions: { cacheDir: join(workDir, `renditions-${kind}-${seed}`) },
+          printStillCacheDir: join(workDir, 'print-stills'),
+        });
+        link = new ThrottledLink(server.port, LINK);
+        origin = `http://127.0.0.1:${await link.listen()}`;
+        page = await openPage(kind as OfflineBrowserKind, join(workDir, `profile-${kind}-${seed}`));
+        const walk = new Walk(page, random(seed));
+        for (let step = 1; step <= STEPS; step++) {
+          try {
+            await walk.move();
+          } catch (error) {
+            walk.problems.push(`step ${step} threw: ${(error as Error).stack ?? error}`);
+          }
+          if (walk.problems.length > 0) {
+            throw new Error(`${walk.problems.join('\n')}\n\ntrail:\n${walk.trail.map((move, i) => `  ${i + 1}. ${move}`).join('\n')}`
+              + `\n\nreplay: OFFLINE_FUZZ_SEEDS=${seed} OFFLINE_FUZZ_BROWSERS=${kind} OFFLINE_FUZZ_STEPS=${step}`);
+          }
+        }
+        console.log(`offline fuzz (${kind}, seed ${seed}):\n${walk.trail.map((move, i) => `  ${i + 1}. ${move}`).join('\n')}`);
+        expect(walk.trail.length).toBe(STEPS);
+      }, 120_000 + STEPS * 90_000);
+    }
+  });
+}
+
+describe.skipIf(haveFfmpeg && BROWSERS.length > 0)('the editor losing its server, a seeded walk (skipped)', () => {
+  it('needs ffmpeg and a browser (OFFLINE_FUZZ_BROWSERS)', () => {
+    expect(haveFfmpeg && BROWSERS.length > 0).toBe(false);
+  });
+});
