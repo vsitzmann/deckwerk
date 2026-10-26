@@ -5,7 +5,6 @@ import { lineSpacingValue } from '@shared/lineHeight.js';
 import { canHoldText, shapeToTextBox } from '@shared/shapeText.js';
 import { flipped, moveCorner, polygonPoints } from '@shared/polygonShape.js';
 import { flipsOf } from '@shared/flip.js';
-import { moveCorner, polygonPoints } from '@shared/polygonShape.js';
 import {
   constrainAngle,
   drawnAtPixelScale,
