@@ -55,7 +55,7 @@ const TRIGGER_CHOICES: Array<{
   { value: 'click', label: 'On click', title: 'Waits for a click', sentence: 'Waits for your click', short: 'on click' },
   { value: 'afterPrev', label: 'After previous', title: 'Starts when the build before it has finished', sentence: 'Starts when the build before it has finished', short: 'after previous' },
   { value: 'withPrev', label: 'With previous', title: 'Starts at the same moment as the build before it', sentence: 'Starts together with the build before it', short: 'with previous' },
-  { value: 'mediaEnd', label: 'Video ends', title: 'Starts when the video it follows has ended', sentence: 'Starts when the video before it ends', short: 'when video ends' },
+  { value: 'mediaEnd', label: 'After video ends', title: 'Starts when the video the build before it plays has ended', sentence: 'Starts when the video before it has played to its end', short: 'after video ends' },
 ];
 
 /** Every effect the menu can offer, under the heading it is grouped by and saying what it does. */
@@ -582,10 +582,19 @@ export class TimelinePanel {
     // The trigger is a strip because there are four choices and they are
     // compared, not browsed. A hidden <select> carries the value for keyboard
     // users and the tests; the buttons are its face.
+    // "After video ends" only means something when the build before this
+    // one plays a video; anywhere else it is not offered.
+    const index = slide.timeline.findIndex((e) => e.id === entry.id);
+    const previous = index > 0 ? slide.timeline[index - 1] : undefined;
+    const previousPlaysVideo = previous !== undefined
+      && (previous.action.type === 'play' || previous.action.type === 'appear')
+      && elements.find((el) => el.id === previous.action.target)?.type === 'video';
+    const choices = TRIGGER_CHOICES.filter((choice) =>
+      choice.value !== 'mediaEnd' || previousPlaysVideo || entry.trigger.on === 'mediaEnd');
     const trigger = document.createElement('select');
     trigger.className = 'build-trigger segmented-select';
     trigger.setAttribute('aria-label', 'Trigger');
-    for (const choice of TRIGGER_CHOICES) {
+    for (const choice of choices) {
       const opt = document.createElement('option');
       opt.value = choice.value;
       opt.textContent = choice.title;
@@ -594,6 +603,7 @@ export class TimelinePanel {
     trigger.value = entry.trigger.on;
     const triggerStrip = document.createElement('div');
     triggerStrip.className = 'segmented-buttons build-trigger-strip';
+    triggerStrip.dataset.count = String(choices.length);
     const triggerButtons: HTMLButtonElement[] = [];
     const reflectTrigger = () => {
       for (const b of triggerButtons) {
@@ -602,7 +612,7 @@ export class TimelinePanel {
         b.setAttribute('aria-pressed', String(on));
       }
     };
-    for (const choice of TRIGGER_CHOICES) {
+    for (const choice of choices) {
       const b = document.createElement('button');
       b.type = 'button';
       b.className = 'segment-button';
@@ -626,26 +636,28 @@ export class TimelinePanel {
     });
     reflectTrigger();
 
-    const delay = document.createElement('input');
-    delay.type = 'number';
-    delay.className = 'delay-input build-delay';
-    delay.step = '50';
-    delay.min = '0';
-    delay.value = String(entry.trigger.delay);
-    delay.title = 'How long to wait before this build starts, in milliseconds';
-    delay.setAttribute('aria-label', 'Delay before it starts, in milliseconds');
-    delay.addEventListener('change', () =>
-      this.mutate(entry.id, (e) => {
-        e.trigger.delay = Math.max(0, Number(delay.value) || 0);
-      }),
-    );
+    // A wait only applies to a build that starts on its own (after or with
+    // the one before it): a stepper in quarter seconds beside that choice,
+    // rather than a millisecond field on every build.
     const delayWrap = document.createElement('span');
-    delayWrap.className = 'field-unit-wrap build-delay-wrap';
-    const unit = document.createElement('span');
-    unit.className = 'field-unit';
-    unit.textContent = 'ms';
-    unit.setAttribute('aria-hidden', 'true');
-    delayWrap.append(delay, unit);
+    delayWrap.className = 'build-wait';
+    const waitLabel = document.createElement('span');
+    waitLabel.className = 'build-wait-label';
+    waitLabel.textContent = entry.trigger.delay > 0 ? `then waits ${seconds(entry.trigger.delay)}` : 'no wait';
+    const step = (delta: number): HTMLButtonElement => {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'build-wait-step';
+      b.textContent = delta < 0 ? '−' : '+';
+      b.title = delta < 0 ? 'Wait a quarter second less' : 'Wait a quarter second more';
+      b.setAttribute('aria-label', b.title);
+      b.disabled = delta < 0 && entry.trigger.delay <= 0;
+      b.addEventListener('click', () => this.mutate(entry.id, (e) => {
+        e.trigger.delay = Math.max(0, Math.round((e.trigger.delay + delta) / 250) * 250);
+      }));
+      return b;
+    };
+    delayWrap.append(step(-250), waitLabel, step(250));
 
     const remove = document.createElement('button');
     remove.className = 'icon-button';
@@ -685,7 +697,8 @@ export class TimelinePanel {
     const fields: HTMLElement[] = [what];
     if (effect) fields.push(field('Duration', durationWrap));
     if (effect === 'pop') fields.push(field('Starts at', popFrom), field('Overshoot', popPeak));
-    fields.push(field('Starts', trigger, triggerStrip), field('Delay', delayWrap));
+    fields.push(field('Starts', trigger, triggerStrip));
+    if (entry.trigger.on !== 'click' || entry.trigger.delay > 0) fields.push(field('', delayWrap));
     const choice = TRIGGER_CHOICES.find((c) => c.value === entry.trigger.on);
     const sentence = document.createElement('p');
     sentence.className = 'insp-hint build-timing-sentence';

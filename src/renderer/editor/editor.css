@@ -4946,8 +4946,21 @@ button.ghost:hover:not(:disabled) { color: var(--text); background: transparent;
 .build-field > .build-action,
 .build-field > select:not(.build-trigger) { grid-column: 2; min-width: 0; }
 .build-field > .build-action ~ * { grid-column: 2; }
-.build-field > .build-trigger-strip { display: grid; grid-auto-flow: row; grid-template-columns: repeat(2, minmax(0, 1fr)); }
-.build-field .build-trigger-strip .segment-button { height: 26px; padding: 0 4px; font-size: 10.5px; white-space: nowrap; }
+.build-field > .build-trigger-strip { display: grid; grid-auto-flow: row; grid-template-columns: minmax(0, 1fr); }
+.build-field > .build-trigger-strip .segment-button { justify-content: flex-start; text-align: left; padding: 0 10px; }
+.build-wait { display: inline-flex; align-items: center; gap: 6px; }
+.build-wait-label { min-width: 104px; color: var(--muted); font: 10.5px var(--mono); text-align: center; }
+.build-wait-step {
+  width: 24px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: var(--panel-2);
+  color: var(--text);
+}
+.build-wait-step:disabled { opacity: 0.4; }
+.build-field .build-trigger-strip .segment-button { height: 26px; font-size: 10.5px; white-space: nowrap; }
 .build-field > .build-delay-wrap,
 .build-field > .build-duration-wrap,
 .build-field > .pop-size { justify-self: start; }
