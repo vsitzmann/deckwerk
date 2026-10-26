@@ -248,7 +248,11 @@ describe.skipIf(!runnable)('clipboard screenshot paste in the headless-server We
         status: document.getElementById('status')?.textContent ?? ''
       };
     })()`), 'Web UI clipboard image did not upload and render', (value) => (
-      value.width === 800 && value.height === 600 && value.src?.includes('/assets/Screenshot.') === true
+      // Shown under its content key once the server has announced it
+      // (/media/o<key>.png, docs/media-loading.md "Pictures"), under the deck
+      // asset's own URL before that.
+      value.width === 800 && value.height === 600
+        && (value.src?.includes('/assets/Screenshot.') === true || /^\/media\/o[0-9a-f]{24}\.png$/.test(value.src ?? ''))
     ), 20_000);
 
     expect(pasted.selected).toBe(true);
