@@ -20,7 +20,12 @@ const YEAR = new Date().getFullYear();
  * neither is useful: a signed-but-unnotarized app is refused by Gatekeeper
  * exactly like an unsigned one, so there is no partial mode worth supporting.
  */
-const macSigned = Boolean(process.env.CSC_LINK && process.env.APPLE_ID && process.env.APPLE_TEAM_ID);
+const macSigned = Boolean(
+  process.env.CSC_LINK &&
+    process.env.APPLE_ID &&
+    process.env.APPLE_APP_SPECIFIC_PASSWORD &&
+    process.env.APPLE_TEAM_ID,
+);
 
 /**
  * Azure Trusted Signing. electron-builder drives it through the TrustedSigning
@@ -80,8 +85,18 @@ module.exports = {
     target: ['dmg', 'zip'],
     hardenedRuntime: macSigned,
     gatekeeperAssess: false,
+    // The signer walks the whole bundle and signs every Mach-O it finds with
+    // `entitlementsInherit`: Electron's helpers, but also the frozen importers
+    // in Resources/importers and ffmpeg/ffprobe in app.asar.unpacked. Each
+    // gets the hardened runtime and a secure timestamp, which notarization
+    // demands of every executable in the app, not just the main one.
     entitlements: 'packaging/entitlements.mac.plist',
     entitlementsInherit: 'packaging/entitlements.mac.plist',
+    // notarytool, reading APPLE_ID, APPLE_APP_SPECIFIC_PASSWORD and
+    // APPLE_TEAM_ID from the environment. It notarizes the signed .app and
+    // staples the ticket to it before the dmg and zip are made, so both carry
+    // an app Gatekeeper accepts offline. scripts/verify-mac-release.sh checks
+    // the shipped artifacts afterwards.
     notarize: macSigned,
     // `null` means "do not sign at all". Without it electron-builder hunts the
     // keychain for any Developer ID and fails the build when it finds none.

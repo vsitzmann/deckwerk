@@ -64,7 +64,32 @@ base64 -i DeveloperID.p12 | pbcopy    # -> CSC_LINK
 | `APPLE_TEAM_ID` | 10-character team ID |
 
 `electron-builder.config.cjs` turns signing *and* notarization off together
-when these are absent, so pull requests and forks still produce a build.
+when any of these is absent, so pull requests, forks and dry runs without the
+secrets still produce a (unsigned, ad-hoc) build. A tag push or a non-dry-run
+dispatch is different: the **Check Apple signing credentials** step fails the
+release rather than publish a macOS build people cannot open.
+
+With the secrets present, each macOS runner:
+
+1. signs every executable in the bundle with the Developer ID, the hardened
+   runtime and a secure timestamp — Electron and its helpers, but also the
+   frozen importers and ffmpeg/ffprobe, which notarization checks just as
+   strictly ([`packaging/entitlements.mac.plist`](../packaging/entitlements.mac.plist)
+   says why each entitlement is there);
+2. submits the app to Apple with `notarytool`, waits for the verdict, and
+   staples the ticket to the app, so it opens offline;
+3. builds the dmg and zip around that stapled app;
+4. runs [`scripts/verify-mac-release.sh`](../scripts/verify-mac-release.sh),
+   which opens the dmg and the zip and checks the app in each with
+   `codesign --verify --deep --strict`, `spctl` (must say *Notarized Developer
+   ID*), `xcrun stapler validate`, a per-file check of every nested Mach-O,
+   and by actually running the importers, ffmpeg and Electron under the
+   hardened runtime. Any failure stops the job before anything is published.
+
+The dmg itself is not signed: Gatekeeper judges the app inside it, which is
+notarized and stapled. When notarization fails, the Package step's error
+carries Apple's per-file diagnostics; `xcrun notarytool log <submission id>
+--apple-id … --team-id … --password …` fetches them again.
 
 ### 2. Azure Trusted Signing (Windows)
 

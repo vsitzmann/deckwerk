@@ -3,7 +3,10 @@
 <!--
   Hardened-runtime entitlements. Notarization requires the hardened runtime,
   and the hardened runtime forbids by default several things Electron and the
-  bundled sidecars genuinely need. Each exception below is load-bearing:
+  bundled sidecars genuinely need. electron-builder signs the app with this
+  file and, as `entitlementsInherit`, every other executable in the bundle
+  too: Electron's helpers, the frozen importers and ffmpeg/ffprobe. Each
+  exception below is load-bearing:
 
   - allow-jit / allow-unsigned-executable-memory: V8 compiles JavaScript at
     runtime; without these the renderer crashes on launch.
@@ -11,7 +14,13 @@
     helper processes.
   - disable-library-validation: the app loads code not signed by us —
     libheif-js's native module and the ffmpeg/ffprobe binaries unpacked from
-    the asar, plus the frozen PyInstaller Keynote importer.
+    the asar. The frozen PyInstaller importers need it most: a one-file
+    freeze unpacks its own Python.framework (ad-hoc signed by PyInstaller) to
+    a temp directory and dlopens it, which library validation refuses
+    ("different Team IDs") and the importer dies before running a line.
+    scripts/verify-mac-release.sh runs each one from the signed app to prove
+    it still starts. (No double hyphens in this comment: XML forbids them,
+    and codesign's entitlement parser, unlike plutil, refuses the file.)
 -->
 <plist version="1.0">
   <dict>

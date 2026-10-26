@@ -64,7 +64,9 @@ jobs:
     name: ${{ matrix.label }}
     needs: version
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 60
+    # macOS uploads each app to Apple's notary service and waits for the
+    # verdict, which is usually minutes but can queue for much longer.
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
@@ -122,28 +124,49 @@ jobs:
           KEYNOTE_PACKAGED: '1'
         run: npx vitest run --config vitest.serial.config.ts test/keynoteImport.test.ts -t "packaged sidecar"
 
-      - name: Import Apple signing certificate
+      - name: Check Apple signing credentials
+        id: mac_signing
         if: matrix.platform == 'mac'
         env:
-          CSC_LINK: ${{ secrets.CSC_LINK }}
-        # electron-builder consumes CSC_LINK itself; this only turns its
-        # absence into a legible message instead of a signing failure 20
-        # minutes later.
-        run: |
-          if [ -z "$CSC_LINK" ]; then
-            echo "::warning::CSC_LINK is unset — producing an UNSIGNED macOS build"
-          fi
-
-      - name: Package
-        env:
-          # Apple. electron-builder signs when CSC_LINK is present and
-          # notarizes when the three APPLE_* values are; the config turns both
-          # off together when they are missing, so a fork still builds.
           CSC_LINK: ${{ secrets.CSC_LINK }}
           CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          PUBLISH: ${{ needs.version.outputs.publish }}
+        # electron-builder imports CSC_LINK into a throwaway keychain itself;
+        # this only decides, up front and legibly, whether this build will be
+        # signed. A release that people download must be: an unsigned app is
+        # one macOS refuses to open, so publishing fails here rather than
+        # shipping one. A dry run without the secrets still builds, unsigned.
+        run: |
+          missing=()
+          for name in CSC_LINK CSC_KEY_PASSWORD APPLE_ID APPLE_APP_SPECIFIC_PASSWORD APPLE_TEAM_ID; do
+            [ -n "${!name}" ] || missing+=("$name")
+          done
+          if [ ${#missing[@]} -eq 0 ]; then
+            echo "signed=true" >> "$GITHUB_OUTPUT"
+          elif [ "$PUBLISH" = "true" ]; then
+            echo "::error::Missing secrets ${missing[*]} — refusing to publish an unsigned macOS build (see docs/RELEASING.md §1)"
+            exit 1
+          else
+            echo "::warning::Missing secrets ${missing[*]} — producing an UNSIGNED macOS build"
+            echo "signed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Package
+        env:
+          # Apple. electron-builder signs with CSC_LINK and notarizes with
+          # notarytool using the three APPLE_* values; the config turns both
+          # off together when any is missing, so a fork still builds. Only
+          # the mac legs get them: on Windows electron-builder falls back to
+          # CSC_LINK when WIN_CSC_LINK is unset, and would try to sign the
+          # installer with the Apple certificate.
+          CSC_LINK: ${{ matrix.platform == 'mac' && secrets.CSC_LINK || '' }}
+          CSC_KEY_PASSWORD: ${{ matrix.platform == 'mac' && secrets.CSC_KEY_PASSWORD || '' }}
+          APPLE_ID: ${{ matrix.platform == 'mac' && secrets.APPLE_ID || '' }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ matrix.platform == 'mac' && secrets.APPLE_APP_SPECIFIC_PASSWORD || '' }}
+          APPLE_TEAM_ID: ${{ matrix.platform == 'mac' && secrets.APPLE_TEAM_ID || '' }}
           # Azure Trusted Signing. The three credentials are secrets; the three
           # account identifiers are not, and live in repository variables.
           AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
@@ -156,6 +179,16 @@ jobs:
           # latest*.yml update manifests without actually uploading.
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: npm run dist:${{ matrix.platform }} -- --${{ matrix.arch }}
+
+      # The notary service accepting the app is not the end of it: check the
+      # dmg and zip people actually download — signature, Gatekeeper verdict,
+      # stapled ticket, every nested binary — and that the importers, ffmpeg
+      # and Electron still start under the hardened runtime.
+      - name: Verify macOS signature and notarization
+        if: matrix.platform == 'mac' && steps.mac_signing.outputs.signed == 'true'
+        env:
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: scripts/verify-mac-release.sh release
 
       - name: Collect installers
         shell: bash
