@@ -184,12 +184,16 @@ describe('media delivery from the collab server', () => {
     const { socket, welcome, next } = await welcomeOf(server.port);
     sockets.push(socket);
     expect(welcome.mediaVariants?.['assets/screen.mp4']).toMatch(/^o/);
+    // Until then it is waiting, so a client that would read the original
+    // only to show a paused frame can show the server's still instead.
+    expect(welcome.pendingMedia).toEqual(['assets/screen.mp4']);
     // Opening the deck queued the transcode; its completion is announced.
     const media = await Promise.race([
       next('media'),
       new Promise<never>((_, reject) => setTimeout(() => reject(new Error('no media message')), 60_000)),
     ]) as Extract<ServerMessage, { kind: 'media' }>;
     expect(media.variants['assets/screen.mp4']).toMatch(/^r/);
+    expect(media.pending).toEqual([]);
     const served = await fetch(`${base}/screen.mp4?v=${media.variants['assets/screen.mp4']}`);
     expect(Number(served.headers.get('content-length'))).toBeLessThan((await stat(source)).size);
   }, 90_000);

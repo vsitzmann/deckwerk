@@ -366,6 +366,46 @@ Past it, the cache drops the files the talk reaches last, but never one an
 element still reads. A file it cannot hold, or that fails twice, streams the
 old way.
 
+### Safari: the editor reads clips from memory too
+
+The editor canvas had the same problem, worse, because it rebuilds and
+re-points `<video>` elements all the time: a slide change, an edit, a
+collaborator's edit, coming back from presenting. In Safari each of those
+opened the clip again, a `bytes=0-1` probe and then the whole file from byte
+zero, often twice in parallel and abandoned partway. On the media transfer
+budget suite (Oct 2026) it failed ten of eighteen budgets, and a clip still
+waiting for its streaming version pulled up to its whole 30 MB original to
+show one paused frame.
+
+So in a browser whose media stack keeps no bytes between elements (every
+WebKit one: `mediaStackReusesBytes` in `src/renderer/player/videoMemory.ts`)
+the collab editor installs a `VideoMemory` (`src/renderer/collab/
+editorVideoMemory.ts`), and `renderVideo` asks it what each canvas element
+should read:
+
+- **memory**: the whole file, fetched once with `fetch` (a `VideoBlobCache`,
+  one file at a time, most recently shown first) and read as a `blob:` URL by
+  every element built for it afterwards. Until the file lands the element has
+  no source and shows the server-cut still (`/api/video-still`) as its
+  poster. `fetch` goes through the HTTP cache, which Safari does keep for an
+  immutable `/media` URL, so a reload or a copy of the deck fetches nothing.
+  A file over 64 MB streams instead: holding it would cost the whole file to
+  show a paused frame.
+- **still**: the clip's streaming version is still being prepared. The
+  server says which clips are waiting (`pendingMedia` in the welcome,
+  `pending` in each `media` message, sent again when an encode finishes,
+  is skipped or fails), and such a clip shows its still and reads nothing
+  until the version exists, when the canvas rebuilds it
+  (`refreshMediaSources`). Play or scrub it before then and it streams the
+  original (`startVideoSource`).
+- **network**: everything else, as in Chromium.
+
+Elements keep their network URL in `data-network-src` (`videoNetworkSrc`), so
+presentation keys, pooling and the render-invariant checker see the same
+element whatever it reads. The presentation the editor embeds borrows the
+editor's blobs (`VideoBlobCache`'s `borrow`), so presenting downloads nothing
+the editor already has.
+
 Two smaller rules came out of the same session:
 
 - **A failed element is never reused.** A media element never recovers from
@@ -413,6 +453,11 @@ accumulates decoded bitmaps from the rest of the deck.
   waiting for its streaming version fetches only its frame, and once the
   version exists costs at most one version more. Real Safari runs the same
   budgets on a Mac with `RUN_SAFARI_MEDIA_BUDGET=1`.
+- `test/editorVideoMemory.test.ts` — which browsers read clips from memory,
+  and what a canvas element reads in each mode: a blob, nothing but the
+  still until the file lands, the network once the memory gives a file up;
+  presentation keys that match a network render; the cache's size limit and
+  borrowing; the pending set.
 - `test/mediaIngest.test.ts` — every way a video reaches the server starts its
   streaming encode at once; videos already on disk are swept at startup; one
   encode serves every copy of the same bytes and survives restarts; a version

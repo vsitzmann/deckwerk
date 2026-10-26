@@ -196,6 +196,12 @@ export const ServerWelcomeSchema = z.object({
    * one <video> never sees its bytes swapped (RenditionStore.variant).
    */
   mediaVariants: z.record(z.string(), z.string()).optional(),
+  /**
+   * Deck srcs whose original is served while its streaming version is still
+   * being prepared. A client that would read the original only to show a
+   * paused frame shows the server's still instead (videoMemory.ts).
+   */
+  pendingMedia: z.array(z.string()).optional(),
   peers: z.array(PresenceStateSchema),
   /** The newest chat messages (up to CHAT_HISTORY_LIMIT), oldest first. */
   chat: z.array(ChatMessageSchema).optional(),
@@ -205,6 +211,8 @@ export const ServerWelcomeSchema = z.object({
 export const ServerMediaSchema = z.object({
   kind: z.literal('media'),
   variants: z.record(z.string(), z.string()),
+  /** The deck's clips still waiting for a streaming version, all of them (see `pendingMedia`). */
+  pending: z.array(z.string()).optional(),
 });
 
 export const ServerTxnSchema = z.object({

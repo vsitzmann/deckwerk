@@ -126,7 +126,19 @@ const bus = agentViewer ? null : createPresentationBus(deckId);
  * Player-owned, so a role swap hands the audience over with its clips. An
  * agent viewer takes screenshots, not a talk, and streams as before.
  */
-const videoBlobs = agentViewer ? undefined : new VideoBlobCache();
+const videoBlobs = agentViewer ? undefined : new VideoBlobCache({ borrow: borrowFromEditor() });
+
+/**
+ * The editor tab that embeds this presentation may already hold the talk's
+ * clips in memory (editorVideoMemory.ts, in Safari): its `blob:` URLs are this
+ * origin's too, so the presentation plays those rather than downloading the
+ * clips a second time.
+ */
+function borrowFromEditor(): ((url: string) => string | undefined) | undefined {
+  if (!embedded) return undefined;
+  // Both pages build a clip's URL the same way (pinMediaVariant).
+  return (url) => window.parent.deckwerkVideoMemory?.objectUrl(url);
+}
 
 const stageHost = document.getElementById('stage')!;
 const speakerHost = document.getElementById('speaker')!;

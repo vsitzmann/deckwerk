@@ -53,7 +53,9 @@ import {
   renderElement,
   renderSlide,
   scheduleAutoFit,
+  startVideoSource,
   syncMediaFrame,
+  videoNetworkSrc,
 } from '../player/render.js';
 import { decodeImage } from '../player/imageDecode.js';
 import { DecodedVideoPool, releaseDecodedVideo } from '../player/decodedVideoPool.js';
@@ -1687,6 +1689,10 @@ export class EditorCanvas {
    * fetch, and pooled elements built for the old URL are released. A playing
    * clip keeps its bytes: swapping them under a playing element is the
    * PIPELINE_ERROR_DECODE the variant pins exist to prevent.
+   *
+   * An element that showed only its still while the clip waited for that
+   * version (videoMemory.ts) is rebuilt too, now that there is something to
+   * read.
    */
   refreshMediaSources(srcs: Iterable<string>): void {
     const resolveSrc = (src: string) => window.api.assetUrl(src);
@@ -1695,7 +1701,7 @@ export class EditorCanvas {
     const outdated = (video: HTMLVideoElement) => {
       const src = video.dataset.assetSrc;
       if (!src || !changed.has(src)) return false;
-      return (video.getAttribute('src') ?? video.dataset.gateAbortedSrc ?? '') !== resolveSrc(src);
+      return video.dataset.streamPending === 'true' || videoNetworkSrc(video) !== resolveSrc(src);
     };
     this.videoPool.releaseWhere(outdated);
     for (const el of this.store.slide?.elements ?? []) {
@@ -1933,6 +1939,8 @@ export class EditorCanvas {
     const video = this.videoNode(elementId);
     if (!video) return false;
     if (video.paused) {
+      // An element showing only its still has nothing to play yet.
+      startVideoSource(video);
       // The editor preview honours the trim exactly as the player does:
       // start at the in point, loop back to it at the out point.
       const el = this.store.slide?.elements.find((e) => e.id === elementId);
@@ -1971,6 +1979,7 @@ export class EditorCanvas {
   seekVideo(elementId: string, time: number): void {
     const video = this.videoNode(elementId);
     if (!video) return;
+    startVideoSource(video);
     video.pause();
     const t = Math.max(0, time);
     // Seeking before metadata arrives is silently ignored by the browser, so

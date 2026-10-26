@@ -52,6 +52,7 @@ import { createConnectionNotice } from './connectionNotice.js';
 import { createDeckOnServer, folderOf, importKeynoteToServer, importPowerPointToServer, showDeckPicker, showShareDialog } from './deckPicker.js';
 import { downloadOriginalAsset, installNetApi } from './netApi.js';
 import { installWindowApiPosterProvider } from '../player/previewPosterProvider.js';
+import { installEditorVideoMemory } from './editorVideoMemory.js';
 import { PresenceOverlay } from './presenceOverlay.js';
 import { PresenceBar, isAgentPeer } from './presenceBar.js';
 import { ChatPanel } from './chatPanel.js';
@@ -244,6 +245,9 @@ if (!deckId) {
 installNetApi({ deckId, saveTheme: (css) => bridge.sendTheme(css) });
 // Thumbnails get server-cut stills instead of loading the clips they show.
 installWindowApiPosterProvider();
+// Safari re-downloads a clip for every element that opens it: the canvas
+// reads clips from memory there (editorVideoMemory.ts).
+installEditorVideoMemory(deckId);
 
 const store = new EditorStore(emptyDeck('Connecting…'));
 // The colour picker offers the colours already on the slide being edited.

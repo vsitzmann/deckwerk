@@ -1,5 +1,5 @@
 import { renameRetiredFields } from '@shared/fieldAliases.js';
-import { setMediaVariants } from './mediaVariants.js';
+import { setMediaVariants, setPendingMedia } from './mediaVariants.js';
 import type { AgentOperation } from '@shared/agent.js';
 import { applyOpsLenient } from '@shared/collabApply.js';
 import {
@@ -340,7 +340,10 @@ export class CollabBridge {
     const message = ServerMessageSchema.parse(renameRetiredFields(raw));
     switch (message.kind) {
       case 'welcome': {
-        const changedMedia = setMediaVariants(message.mediaVariants, true);
+        const changedMedia = [...new Set([
+          ...setMediaVariants(message.mediaVariants, true),
+          ...setPendingMedia(message.pendingMedia ?? []),
+        ])];
         if (changedMedia.length > 0) this.hooks.onMediaVariants?.(changedMedia);
         this.clientId = message.clientId;
         this.seq = message.seq;
@@ -434,7 +437,7 @@ export class CollabBridge {
         this.hooks.onThemeCss(message.css);
         return;
       case 'media': {
-        const changed = setMediaVariants(message.variants);
+        const changed = [...new Set([...setMediaVariants(message.variants), ...setPendingMedia(message.pending)])];
         if (changed.length > 0) this.hooks.onMediaVariants?.(changed);
         return;
       }

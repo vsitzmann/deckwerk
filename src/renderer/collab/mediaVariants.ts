@@ -24,6 +24,26 @@ export function setMediaVariants(next: Record<string, string> | undefined, repla
   return [...new Set([...before.keys(), ...variants.keys()])].filter((src) => before.get(src) !== variants.get(src));
 }
 
+/**
+ * Deck srcs whose streaming version the server is still preparing: the
+ * original is all there is, and it may be many times the version's size.
+ */
+const pending = new Set<string>();
+
+/** Replace the pending clips (the server always sends all of them); returns the srcs that changed. */
+export function setPendingMedia(next: string[] | undefined): string[] {
+  if (next === undefined) return [];
+  const after = new Set(next);
+  const changed = [...new Set([...pending, ...after])].filter((src) => pending.has(src) !== after.has(src));
+  pending.clear();
+  for (const src of after) pending.add(src);
+  return changed;
+}
+
+export function isMediaPending(src: string): boolean {
+  return pending.has(src);
+}
+
 export function mediaVariantsSnapshot(): Record<string, string> {
   return Object.fromEntries(variants);
 }

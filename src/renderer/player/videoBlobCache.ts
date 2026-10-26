@@ -28,6 +28,18 @@ const FAILURE_LIMIT = 2;
 
 export interface VideoBlobCacheOptions {
   budgetBytes?: number;
+  /**
+   * Files declared larger than this are never held, however much room there
+   * is: they stream. The editor sets it, because there a clip only has to show
+   * a paused frame until somebody plays it.
+   */
+  maxFileBytes?: number;
+  /**
+   * Another cache's `blob:` URLs this one may hand out as its own (the
+   * editor's, to the presentation it embeds). A file found there is never
+   * downloaded here.
+   */
+  borrow?: (url: string) => string | undefined;
   fetch?: typeof fetch;
   createObjectUrl?: (blob: Blob) => string;
   revokeObjectUrl?: (url: string) => void;
@@ -47,6 +59,8 @@ interface Flight {
 
 export class VideoBlobCache {
   private readonly budget: number;
+  private readonly maxFileBytes: number;
+  private readonly borrow: (url: string) => string | undefined;
   private readonly fetchFile: typeof fetch;
   private readonly createObjectUrl: (blob: Blob) => string;
   private readonly revokeObjectUrl: (url: string) => void;
@@ -61,12 +75,17 @@ export class VideoBlobCache {
   private failures = new Map<string, number>();
   /** Files that did not fit the budget for the current order; retried when it changes. */
   private noRoom = new Set<string>();
+  /** Files over `maxFileBytes`: they stream for good. */
+  private tooLarge = new Set<string>();
   private readyListeners = new Set<(url: string) => void>();
+  private givenUpListeners = new Set<(url: string) => void>();
   private inUse: (objectUrl: string) => boolean = () => false;
   private disposed = false;
 
   constructor(options: VideoBlobCacheOptions = {}) {
     this.budget = options.budgetBytes ?? DEFAULT_BUDGET_BYTES;
+    this.maxFileBytes = options.maxFileBytes ?? Number.POSITIVE_INFINITY;
+    this.borrow = options.borrow ?? (() => undefined);
     this.fetchFile = options.fetch ?? ((input, init) => fetch(input, init));
     this.createObjectUrl = options.createObjectUrl ?? ((blob) => URL.createObjectURL(blob));
     this.revokeObjectUrl = options.revokeObjectUrl ?? ((url) => URL.revokeObjectURL(url));
@@ -74,7 +93,7 @@ export class VideoBlobCache {
 
   /** The `blob:` URL standing in for this network URL, once its file is in memory. */
   objectUrl(url: string): string | undefined {
-    return this.entries.get(url)?.objectUrl;
+    return this.entries.get(url)?.objectUrl ?? this.borrowed(url);
   }
 
   /**
@@ -82,8 +101,8 @@ export class VideoBlobCache {
    * file the cache has given up on is the caller's to fetch.
    */
   covers(url: string): boolean {
-    return this.entries.has(url)
-      || ((this.failures.get(url) ?? 0) < FAILURE_LIMIT && !this.noRoom.has(url));
+    return this.entries.has(url) || this.borrowed(url) !== undefined
+      || ((this.failures.get(url) ?? 0) < FAILURE_LIMIT && !this.noRoom.has(url) && !this.tooLarge.has(url));
   }
 
   /** Whether this file is being downloaded right now. */
@@ -143,6 +162,15 @@ export class VideoBlobCache {
   }
 
   /**
+   * Called with the network URL of a file the cache stopped trying to hold
+   * (too large, or failing), so whoever waited for it can stream it instead.
+   */
+  onGiveUp(listener: (url: string) => void): () => void {
+    this.givenUpListeners.add(listener);
+    return () => this.givenUpListeners.delete(listener);
+  }
+
+  /**
    * Tell the cache which `blob:` URLs an element still reads. Those are never
    * evicted: revoking a URL under a pooled or playing element would break it.
    */
@@ -158,6 +186,7 @@ export class VideoBlobCache {
     this.entries.clear();
     this.bytes = 0;
     this.readyListeners.clear();
+    this.givenUpListeners.clear();
   }
 
   /** Bytes currently held (exposed for tests). */
@@ -167,7 +196,7 @@ export class VideoBlobCache {
 
   private pump(): void {
     if (this.disposed || this.held || this.inFlight) return;
-    const next = this.order.find((url) => !this.entries.has(url) && this.covers(url));
+    const next = this.order.find((url) => !this.entries.has(url) && this.borrowed(url) === undefined && this.covers(url));
     if (next !== undefined) void this.download(next);
   }
 
@@ -179,6 +208,12 @@ export class VideoBlobCache {
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       // Decide on the declared size before spending the bandwidth.
       const declared = Number(response.headers.get('content-length'));
+      if (declared > this.maxFileBytes) {
+        flight.abort.abort();
+        this.tooLarge.add(url);
+        this.gaveUp(url);
+        return;
+      }
       if (declared > 0 && !this.makeRoom(url, declared)) {
         flight.abort.abort();
         this.noRoom.add(url);
@@ -197,7 +232,9 @@ export class VideoBlobCache {
     } catch {
       // An abort is a change of plan, not a failure of the file.
       if (this.inFlight === flight && !flight.abort.signal.aborted) {
-        this.failures.set(url, (this.failures.get(url) ?? 0) + 1);
+        const failures = (this.failures.get(url) ?? 0) + 1;
+        this.failures.set(url, failures);
+        if (failures >= FAILURE_LIMIT) this.gaveUp(url);
       }
     } finally {
       for (const resolve of flight.waiters) resolve(this.objectUrl(url));
@@ -206,6 +243,19 @@ export class VideoBlobCache {
         this.pump();
       }
     }
+  }
+
+  private borrowed(url: string): string | undefined {
+    try {
+      return this.borrow(url);
+    } catch {
+      // The lender's page went away.
+      return undefined;
+    }
+  }
+
+  private gaveUp(url: string): void {
+    for (const listener of [...this.givenUpListeners]) listener(url);
   }
 
   /**

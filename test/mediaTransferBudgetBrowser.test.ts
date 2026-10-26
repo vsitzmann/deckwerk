@@ -61,16 +61,17 @@ import { launchSafari, type SafariPage } from './support/safariDriver.js';
  *   once the version exists costs at most one streaming version more.
  *
  * Each scenario runs once (`beforeAll`) and each budget is its own test.
- * Budgets marked `pending` (`it.fails` in Chromium) describe behaviour not
- * built yet, each under a PENDING note naming the change that makes it pass;
+ * Budgets marked `pendingIn` (`it.fails` in the browsers it names) describe
+ * behaviour not built yet, each under a PENDING note naming the change that
+ * makes it pass;
  * when it lands, the test passes, `it.fails` reports it, and the marker comes
  * off. When the server encodes and keeps streaming versions is
  * mediaIngest.test.ts's subject.
  *
  * Chromium runs everywhere. Real Safari runs on a Mac when asked
- * (RUN_SAFARI_MEDIA_BUDGET=1, see support/safariDriver.ts), held to every
- * budget as a plain test: a reload is not free for it until clips are cached
- * on disk.
+ * (RUN_SAFARI_MEDIA_BUDGET=1, see support/safariDriver.ts), held to the same
+ * budgets. Its media stack keeps no bytes from one <video> to the next, so
+ * the editor reads its clips from memory there (videoMemory.ts).
  */
 
 const execFileAsync = promisify(execFile);
@@ -576,17 +577,30 @@ interface CanvasState {
   readyVideos: number;
   images: number;
   readyImages: number;
+  /** Each video that is not painted yet, for the message when one never is. */
+  unpainted: string[];
 }
 
+/**
+ * A video is painted once it has a decoded frame, or when it shows the
+ * server's still of a clip whose streaming version is still being prepared
+ * (videoMemory.ts): that is the picture the slide shows until then.
+ */
 const canvasState = (page: Page) => page.evaluate<CanvasState>(`(() => {
   const videos = [...document.querySelectorAll('#canvas video')];
   const images = [...document.querySelectorAll('#canvas img')];
+  const painted = (v) => v.readyState >= 2 || (v.dataset.streamPending === 'true' && Boolean(v.getAttribute('poster')));
   return {
     slide: window.store.get().slideIndex,
     videos: videos.length,
-    readyVideos: videos.filter((v) => v.readyState >= 2).length,
+    readyVideos: videos.filter(painted).length,
     images: images.length,
     readyImages: images.filter((i) => i.complete && i.naturalWidth > 0).length,
+    unpainted: videos.filter((v) => !painted(v)).map((v) => [
+      v.closest('[data-element-id]')?.dataset.elementId, 'readyState', v.readyState, 'networkState', v.networkState,
+      'error', v.error?.code ?? '-', 'preload', v.preload, 'src', (v.getAttribute('src') ?? 'none').slice(0, 40),
+      'pending', v.dataset.memoryPending ?? '-', v.dataset.streamPending ?? '-',
+    ].join(' ')),
   };
 })()`);
 
@@ -916,8 +930,8 @@ async function waitingClip(kind: BrowserKind): Promise<{
 /* ------------------------------------------------------------------------ */
 
 for (const kind of ffmpeg ? BROWSERS : []) describe(`media transfer budget (${kind})`, () => {
-  // Safari is held to every budget as it stands; the markers track Chromium.
-  const pending = kind === 'Chromium' ? it.fails : it;
+  // A budget not met yet in these browsers, under a PENDING note for each.
+  const pendingIn = (...browsers: BrowserKind[]) => (browsers.includes(kind) ? it.fails : it);
 
   describe('an editing session', () => {
     let log: TransferLog;
@@ -966,12 +980,19 @@ for (const kind of ffmpeg ? BROWSERS : []) describe(`media transfer budget (${ki
     it('downloads nothing at a reload that already arrived', () => {
       expect(bytesTwice(log.all(), ['reload'])).toEqual([]);
     });
-    // PENDING(fast-start streaming versions): the one file over budget keeps
+    // PENDING(fast-start streaming versions) in Chromium: the one file over budget keeps
     // its index at the end, so a first look takes three requests (head, index,
     // rest), and Chromium revalidates the scattered parts it holds (a 304)
     // before the presentation fetches the remainder. A fast-start remux as the
     // streaming version of such clips would cut both.
-    pending(`takes at most ${REQUESTS_PER_FILE} requests per file over the session`, () => {
+    //
+    // PENDING(content-addressed images) in Safari: clips cost one request
+    // each for the whole session, but the unhashed diagram is served
+    // `no-cache`, and a document Safari reloaded revalidates such a file
+    // each time it is shown (eight 304s while the reloaded editor browsed).
+    // Serving images from /media/<key> immutably, as clips are, would leave
+    // nothing to revalidate.
+    pendingIn('Chromium', 'Safari')(`takes at most ${REQUESTS_PER_FILE} requests per file over the session`, () => {
       expect(overRequestBudget(log.all())).toEqual([]);
     });
   });

@@ -176,6 +176,21 @@ describe('preview frame recovery', () => {
     host.remove();
   });
 
+  it('reloads a clip held in memory at once, without waiting on the gate', () => {
+    const host = mount(1);
+    const [video] = loseFrames(host);
+    // What the editor builds in Safari (videoMemory.ts): local bytes.
+    video.dataset.networkSrc = video.getAttribute('src')!;
+    video.src = 'blob:http://editor/clip';
+    expect(recoverPreviewFrames(host)).toBe(1);
+    expect(isGated(video)).toBe(false);
+    expect(video.preload).toBe('auto');
+    expect(video.getAttribute('src')).toBe('blob:http://editor/clip');
+    video.dispatchEvent(new Event('loadedmetadata'));
+    expect(video.currentTime).toBeCloseTo(0.03);
+    host.remove();
+  });
+
   it('recovers on visibilitychange and stops after dispose', () => {
     const host = mount(1);
     loseFrames(host);

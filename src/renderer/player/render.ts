@@ -6,6 +6,7 @@ import { elementTransform } from '@shared/flip.js';
 import { fitAutoTextElement } from '@shared/autoFit.js';
 import { isPendingSrc, pendingName, pendingToken } from '@shared/media.js';
 import { gateVideoLoad } from './mediaLoadGate.js';
+import { videoMemory } from './videoMemory.js';
 import { previewPosterProvider } from './previewPosterProvider.js';
 import { prepareSlideLinks } from './links.js';
 import { quadraticPath, shapeSvg } from '@shared/shapeSvg.js';
@@ -120,8 +121,36 @@ export function applyVideoPlaybackState(
   // player's runtime loops start -> end instead, so the flag stays off whenever
   // an in- or out-point is set.
   video.loop = el.loop && el.start <= 0 && el.end === null;
-  if (el.poster) video.poster = opts.resolveSrc(el.poster);
+  // An element waiting for its bytes in memory shows the server's still.
+  const poster = el.poster ? opts.resolveSrc(el.poster) : video.dataset.stillPoster;
+  if (poster) video.poster = poster;
   else video.removeAttribute('poster');
+}
+
+/**
+ * The network URL an element shows, whatever it reads right now: a `blob:`
+ * URL standing in for it (videoMemory.ts), nothing yet, or a source the load
+ * gate parked.
+ */
+export function videoNetworkSrc(video: HTMLVideoElement): string {
+  return video.dataset.networkSrc ?? video.getAttribute('src') ?? video.dataset.gateAbortedSrc ?? '';
+}
+
+/**
+ * Give an element that is only showing its still a source now, because
+ * somebody wants to play or scrub it: its bytes in memory if they are there,
+ * else the network. Returns whether the element has a source.
+ */
+export function startVideoSource(video: HTMLVideoElement): boolean {
+  if (video.hasAttribute('src')) return true;
+  const url = video.dataset.networkSrc;
+  if (!url) return false;
+  delete video.dataset.memoryPending;
+  delete video.dataset.streamPending;
+  const held = videoMemory()?.objectUrl(url);
+  video.preload = 'auto';
+  video.src = held ?? url;
+  return true;
 }
 
 /**
@@ -152,7 +181,7 @@ export function applyMediaFitStyles(
   // media patch (the editor's in-place path calls it unconditionally), so it
   // covers a changed box and in-point as well as a changed fit or crop.
   if (el.type === 'video' && tag.tagName.toLowerCase() === 'video') {
-    tag.dataset.mediaKey = videoPresentationKey(el, tag.getAttribute('src') ?? '');
+    tag.dataset.mediaKey = videoPresentationKey(el, videoNetworkSrc(tag as HTMLVideoElement));
     tag.dataset.assetSrc = el.src;
     // The poster-frame stamp is part of that same identity: a recovery pass
     // reads it to re-seek an element whose frame was dropped, and a stale
@@ -1171,7 +1200,25 @@ function renderVideo(
   // Chromium has already put in NETWORK_NO_SOURCE, whose queued 'emptied'
   // the load gate would read as a freed slot.
   const deferSrc = preload === 'metadata' && opts.deferVideoSrc === true && previewPosterProvider() !== null;
-  if (deferSrc) {
+  // A browser whose media stack re-downloads a clip for every element reads
+  // it from memory instead (videoMemory.ts). Preview surfaces have stills.
+  const memory = preload === 'metadata' && opts.deferVideoSrc !== true ? videoMemory() : null;
+  const memoryMode = memory?.mode(src, el.src) ?? 'network';
+  if (memory && memoryMode !== 'network') {
+    video.dataset.networkSrc = src;
+    const still = memory.still(el.src, el.start > 0 ? el.start : 0);
+    if (still) video.dataset.stillPoster = still;
+    const held = memoryMode === 'memory' ? memory.objectUrl(src) : undefined;
+    if (held) {
+      video.preload = 'auto';
+      video.src = held;
+    } else if (memoryMode === 'memory') {
+      video.dataset.memoryPending = 'true';
+      memory.request(src);
+    } else {
+      video.dataset.streamPending = 'true';
+    }
+  } else if (deferSrc) {
     // No src, no fetch, no decoder: the still is cut elsewhere. Stashed where
     // the gate keeps an aborted source, so recovery and capture code that
     // already read that slot need no second path.
@@ -1181,7 +1228,7 @@ function renderVideo(
     video.src = src;
   }
   applyVideoPlaybackState(video, el, opts);
-  if (preload === 'metadata' && !deferSrc) {
+  if (preload === 'metadata' && !deferSrc && memoryMode === 'network') {
     // Preview surfaces mount many videos at once (one per rail thumbnail);
     // letting them all fetch together monopolises the origin's connections.
     // They start as 'none' — src set, nothing fetched — and the gate promotes

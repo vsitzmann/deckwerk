@@ -48,6 +48,19 @@ export function recoverPreviewFrames(root: ParentNode): number {
   let recovered = 0;
   for (const video of root.querySelectorAll('video')) {
     if (!needsRecovery(video)) continue;
+    // Bytes held in memory (videoMemory.ts) cost the network nothing to read
+    // again: no slot to wait for, so no gate.
+    if (video.dataset.networkSrc && video.getAttribute('src')?.startsWith('blob:')) {
+      video.preload = 'auto';
+      try {
+        video.load();
+      } catch {
+        // jsdom stub
+      }
+      armPosterFrameSeek(video);
+      recovered += 1;
+      continue;
+    }
     // Back to 'none' before src/load(): the fetch decision is made when src is
     // assigned and load() reads the hint of that moment; the gate is what
     // promotes the element to 'metadata' when a slot frees.

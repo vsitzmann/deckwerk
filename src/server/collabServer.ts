@@ -380,20 +380,41 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
       if (event.status === 'started') console.log(`  preparing ${name} for streaming…`);
       else if (event.status === 'done') {
         console.log(`  prepared ${name} (${Math.round((event.savedBytes ?? 0) / 1048576)} MB smaller)`);
+      } else if (event.status === 'failed') {
+        console.warn(`  could not prepare ${name}: ${event.detail ?? ''}`);
+      }
+      if (event.status !== 'started') {
         // Tell every deck showing this clip — or a copy of it — that its
-        // rendition now exists, so clients move to the small copy.
+        // rendition now exists, so clients move to the small copy, or that
+        // none is coming, so they stop waiting for one.
         const key = renditions?.keyOf(event.source);
         for (const room of rooms.values()) {
           const assets = deckVideoAssets(room.session.dir, room.session.deck);
           if (!assets.some((asset) => asset === event.source || (key && renditions?.keyOf(asset) === key))) continue;
           announceMedia(room, false);
         }
-      } else if (event.status === 'failed') {
-        console.warn(`  could not prepare ${name}: ${event.detail ?? ''}`);
       }
       if (typeof options.mediaRenditions === 'object') options.mediaRenditions.onProgress?.(event);
     },
   });
+  /** Deck srcs whose streaming version is still to come (see `pendingMedia` in the welcome). */
+  function deckPendingMedia(deckDir: string, deck: Deck): string[] {
+    const pending = new Set<string>();
+    if (!renditions) return [];
+    for (const slide of deck.slides) {
+      for (const element of slide.elements) {
+        if (element.type !== 'video' || pending.has(element.src)) continue;
+        try {
+          const absolute = resolveAsset(deckDir, element.src);
+          const info = statSync(absolute);
+          if (renditions.pending(absolute, info.size, info.mtimeMs)) pending.add(element.src);
+        } catch {
+          // A pending upload or a missing file is not waiting for a version.
+        }
+      }
+    }
+    return [...pending];
+  }
   /** The variant each oversized clip in a deck is served as right now (see RenditionStore.variant). */
   function deckMediaVariants(deckDir: string, deck: Deck): Record<string, string> {
     const variants: Record<string, string> = {};
@@ -1228,7 +1249,10 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
     // learn it (hashing only files never seen) before anyone is welcomed.
     if (renditions) {
       await renditions.learn(deckVideoAssets(session.dir, session.deck));
-      room.announcedMedia = JSON.stringify(deckMediaVariants(session.dir, session.deck));
+      room.announcedMedia = JSON.stringify({
+        variants: deckMediaVariants(session.dir, session.deck),
+        pending: deckPendingMedia(session.dir, session.deck),
+      });
     }
     rooms.set(deckId, room);
     // Opening a deck is the earliest honest signal that someone intends to
@@ -1290,10 +1314,11 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
   function announceMedia(room: Room, learn = true): void {
     if (!renditions) return;
     const variants = deckMediaVariants(room.session.dir, room.session.deck);
-    const encoded = JSON.stringify(variants);
+    const pending = deckPendingMedia(room.session.dir, room.session.deck);
+    const encoded = JSON.stringify({ variants, pending });
     if (encoded !== room.announcedMedia) {
       room.announcedMedia = encoded;
-      broadcast(room, { kind: 'media', variants });
+      broadcast(room, { kind: 'media', variants, pending });
     }
     if (!learn) return;
     const assets = deckVideoAssets(room.session.dir, room.session.deck);
@@ -4108,6 +4133,7 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
           deck: room.session.deck,
           themeCss: room.session.themeCss,
           mediaVariants: deckMediaVariants(room.session.dir, room.session.deck),
+          pendingMedia: deckPendingMedia(room.session.dir, room.session.deck),
           peers: [
             ...[...room.peers.values()]
               .filter((p) => p !== peer && p.greeted)
