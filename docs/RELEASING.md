@@ -190,7 +190,7 @@ is not restarted into installs when the app quits.
 | Windows | NSIS, silent reinstall | `latest.yml`, `deckwerk-<v>-win-x64-setup.exe` (+ `.blockmap`) |
 | Linux AppImage (`$APPIMAGE` set) | replaces the AppImage | `latest-linux.yml`, `deckwerk-<v>-linux-x86_64.AppImage` |
 | Linux `.deb` / tar.gz | no self-update: the menu opens the release page | — |
-| Flatpak (`$FLATPAK_ID` set) | Flathub; the menu says so | — |
+| Flatpak (`$FLATPAK_ID` set) | no self-update: the menu opens the release page (`flatpak update` once on Flathub) | — |
 | `npm run dev`, unpackaged | nothing; the menu says so | — |
 
 The workflow keeps the two macOS runners' manifests apart

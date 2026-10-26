@@ -31,18 +31,18 @@ describe('how an install updates', () => {
     expect(updateMode({ platform: 'win32', isPackaged: true })).toEqual({ kind: 'auto', channel: 'nsis' });
   });
 
-  it('on Linux, updates an AppImage, defers a Flatpak to Flathub, and sends a .deb to the release page', () => {
+  it('on Linux, updates an AppImage, and sends a .deb or a Flatpak to the release page', () => {
     expect(updateMode({ platform: 'linux', isPackaged: true, appImage: '/home/me/DeckWerk.AppImage' }))
       .toEqual({ kind: 'auto', channel: 'appimage' });
     expect(updateMode({ platform: 'linux', isPackaged: true, flatpakId: 'org.deckwerk.DeckWerk' }))
-      .toEqual({ kind: 'store', store: 'Flathub' });
+      .toEqual({ kind: 'release-page' });
     expect(updateMode({ platform: 'linux', isPackaged: true })).toEqual({ kind: 'release-page' });
     expect(updateMode({ platform: 'linux', isPackaged: true, appImage: '' })).toEqual({ kind: 'release-page' });
   });
 
   it('lets Flatpak win over an AppImage variable leaking in from the host', () => {
     expect(updateMode({ platform: 'linux', isPackaged: true, appImage: '/x.AppImage', flatpakId: 'org.deckwerk.DeckWerk' }))
-      .toEqual({ kind: 'store', store: 'Flathub' });
+      .toEqual({ kind: 'release-page' });
   });
 
   it('treats a feed override as a packaged install, so an unpackaged run can be tested against it', () => {

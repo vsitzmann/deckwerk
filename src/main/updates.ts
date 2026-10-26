@@ -110,7 +110,6 @@ function errorMessage(error: unknown): string {
 async function check(): Promise<UpdateCheckResult> {
   if (mode.kind === 'none') return { kind: 'disabled' };
   if (mode.kind === 'release-page') return { kind: 'release-page', url: releasePageUrl(null) };
-  if (mode.kind === 'store') return { kind: 'store', store: mode.store };
   // Asking again while a found release downloads or waits for a restart
   // must not lose it: the dialog shows it again with its current state.
   if (available && (downloading || downloaded)) return { kind: 'available', release: available };

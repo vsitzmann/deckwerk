@@ -143,17 +143,10 @@ async function showCheckResult(result: UpdateCheckResult): Promise<void> {
       await showMessage('No update available', `DeckWerk ${result.currentVersion} is the latest version.`);
       return;
     case 'release-page':
-      // A .deb belongs to the system's package manager, so DeckWerk does not
-      // replace itself; the release page has the newest package.
+      // A .deb or a Flatpak belongs to a package manager, so DeckWerk does
+      // not replace itself; the release page has the newest packages.
       await api.openReleasePage();
       host?.setStatus('Opened the DeckWerk releases page in your browser');
-      return;
-    case 'store':
-      await showMessage(
-        'Updates come from Flathub',
-        'This copy of DeckWerk was installed from Flathub, which delivers its updates. '
-          + 'Update it from your software center, or run: flatpak update org.deckwerk.DeckWerk',
-      );
       return;
     case 'disabled': {
       const state = await api.state();

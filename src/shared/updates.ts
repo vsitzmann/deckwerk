@@ -37,14 +37,13 @@ export function releasePageUrl(version?: string | null): string {
 /**
  * How this install updates.
  * - `auto`: electron-updater downloads and installs (Squirrel.Mac, NSIS, AppImage).
- * - `release-page`: no self-update; the menu opens the release page (.deb, tar.gz).
- * - `store`: a package manager owns the app (Flatpak defers to Flathub).
+ * - `release-page`: no self-update; the menu opens the release page (.deb,
+ *   tar.gz, Flatpak — a package manager owns those files).
  * - `none`: nothing to update — a development run or an unpackaged checkout.
  */
 export type UpdateMode =
   | { kind: 'auto'; channel: 'mac' | 'nsis' | 'appimage' }
   | { kind: 'release-page' }
-  | { kind: 'store'; store: 'Flathub' }
   | { kind: 'none'; reason: 'development' };
 
 export interface InstallFacts {
@@ -63,8 +62,8 @@ export function updateMode(facts: InstallFacts): UpdateMode {
   if (facts.platform === 'darwin') return { kind: 'auto', channel: 'mac' };
   if (facts.platform === 'win32') return { kind: 'auto', channel: 'nsis' };
   // Flatpak first: the sandbox can carry an AppImage-looking environment from
-  // the host, but the files inside it belong to Flathub.
-  if (facts.flatpakId) return { kind: 'store', store: 'Flathub' };
+  // the host, but the files inside it belong to flatpak, which updates them.
+  if (facts.flatpakId) return { kind: 'release-page' };
   if (facts.appImage) return { kind: 'auto', channel: 'appimage' };
   // A .deb (or the tar.gz tree) is owned by the system package manager or
   // by whoever unpacked it; replacing files under /opt would fight dpkg.
@@ -159,7 +158,6 @@ export type UpdateCheckResult =
   | { kind: 'available'; release: UpdateRelease }
   | { kind: 'latest'; currentVersion: string }
   | { kind: 'release-page'; url: string }
-  | { kind: 'store'; store: 'Flathub' }
   | { kind: 'disabled' }
   | { kind: 'error'; message: string };
 
