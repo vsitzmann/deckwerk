@@ -4,6 +4,7 @@ import { talkMediaOrder } from '../player/talkMediaOrder.js';
 import {
   DECKS_CACHE,
   INDEX_KEY,
+  isImmutableMedia,
   MEDIA_CACHE,
   mediaKey,
   snapshotKey,
@@ -478,6 +479,10 @@ export class OfflineCopy {
       const clip = this.clips.has(url);
       const response = await this.fetchFile(borrowed ?? url, {
         signal: abort.signal,
+        // A content-keyed URL names exact bytes: whatever the browser holds
+        // for it is right. Safari otherwise sent the editor's own pictures
+        // again once the worker was in charge of the page.
+        ...(!borrowed && isImmutableMedia(mediaKey(url).split('?')[0]) ? { cache: 'force-cache' as const } : {}),
         ...(!borrowed && clip && this.options.rangeReuse ? { headers: { range: 'bytes=0-' } } : {}),
       });
       const range = /^bytes (\d+)-\d+\/(\d+)$/.exec(response.headers.get('content-range') ?? '');

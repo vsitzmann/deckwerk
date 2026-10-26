@@ -61,7 +61,7 @@ import { launchSafari, type SafariPage } from './support/safariDriver.js';
  *   once the version exists costs at most one streaming version more.
  *
  * Each scenario runs once (`beforeAll`) and each budget is its own test.
- * Budgets marked `pendingIn` (`it.fails` in the browsers it names) describe
+ * Budgets marked pending (`it.fails` in the browsers named) describe
  * behaviour not built yet, each under a PENDING note naming the change that
  * makes it pass;
  * when it lands, the test passes, `it.fails` reports it, and the marker comes
@@ -1388,8 +1388,9 @@ function lateImages(frames: FirstFrame[]): string[] {
 /* ------------------------------------------------------------------------ */
 
 for (const kind of ffmpeg ? BROWSERS : []) describe(`media transfer budget (${kind})`, () => {
-  // A budget not met yet in these browsers, under a PENDING note for each.
-  const pendingIn = (...browsers: BrowserKind[]) => (browsers.includes(kind) ? it.fails : it);
+  // A budget not met yet in some browsers is written
+  // `(['Chromium'].includes(kind) ? it.fails : it)(…)` under a PENDING note.
+  // None is pending today.
 
   describe('an editing session', () => {
     let log: TransferLog;
@@ -1438,16 +1439,15 @@ for (const kind of ffmpeg ? BROWSERS : []) describe(`media transfer budget (${ki
     it('downloads nothing at a reload that already arrived', () => {
       expect(bytesTwice(log.all(), ['reload'])).toEqual([]);
     });
-    // PENDING(fast-start streaming versions) in Chromium: the one file over budget keeps
-    // its index at the end, so a first look takes three requests (head, index,
-    // rest), and Chromium revalidates the scattered parts it holds (a 304)
-    // before the presentation fetches the remainder. A fast-start remux as the
-    // streaming version of such clips would cut both.
-    //
-    // Safari met this budget once pictures were served from /media/<key>
-    // immutably (Oct 2026): before, a document it had reloaded revalidated
-    // the unhashed diagram, served `no-cache`, each time it was shown.
-    pendingIn('Chromium')(`takes at most ${REQUESTS_PER_FILE} requests per file over the session`, () => {
+    // Chromium met this budget with the offline copy (Oct 2026): the one
+    // file with its index at the end still takes three requests for a first
+    // look (head, index, rest), but the presentation then reads it whole
+    // from the copy instead of revalidating the parts the HTTP cache holds
+    // (a 304) and fetching the remainder. Safari met it once pictures were
+    // served from /media/<key> immutably: before, a document it had reloaded
+    // revalidated the unhashed diagram, served `no-cache`, each time it was
+    // shown.
+    it(`takes at most ${REQUESTS_PER_FILE} requests per file over the session`, () => {
       expect(overRequestBudget(log.all())).toEqual([]);
     });
   });
