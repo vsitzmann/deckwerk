@@ -56,10 +56,22 @@ check_app() {
   # stapler compares the stapled ticket with Apple's copy over the network,
   # and a dropped connection fails it with the same exit code as a missing
   # ticket. Retry before calling it a broken release.
-  local attempt
+  # Some runners cannot reach that service at all for minutes on end ("The
+  # network connection was lost" on every try). Then the ticket is checked
+  # offline instead: stapling writes it to Contents/CodeResources, and
+  # Gatekeeper has already called the app notarized above.
+  local attempt output
   for attempt in 1 2 3 4; do
-    xcrun stapler validate "$app" && break
-    [ "$attempt" -lt 4 ] || fail "$app has no valid stapled notarization ticket"
+    output=$(xcrun stapler validate "$app" 2>&1) && { echo "$output"; break; }
+    echo "$output"
+    if [ "$attempt" -eq 4 ]; then
+      grep -q 'NSURLErrorDomain' <<<"$output" ||
+        fail "$app has no valid stapled notarization ticket"
+      [ -s "$app/Contents/CodeResources" ] ||
+        fail "$app has no stapled notarization ticket (no Contents/CodeResources)"
+      echo "::warning::Apple's ticket service was unreachable; $app carries a stapled ticket and Gatekeeper calls it notarized"
+      break
+    fi
     echo "stapler validate failed (attempt $attempt); retrying in $((attempt * 15))s"
     sleep $((attempt * 15))
   done
