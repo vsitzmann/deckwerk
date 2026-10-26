@@ -1113,6 +1113,13 @@ export class EditorCanvas {
    * native event alone left double-click-to-play inert there.
    */
   private pendingMediaToggle: string | null = null;
+  /**
+   * A line or path whose points open when this press is let go without a
+   * drag: the second press of a double-click on it, read from the presses
+   * because the selection chrome drawn by the first lands under the pointer
+   * and Chromium then fires no dblclick at all.
+   */
+  private pendingPathEdit: string | null = null;
   /** When the pointer path last toggled media, so the native dblclick skips. */
   private mediaToggledAt = Number.NEGATIVE_INFINITY;
 
@@ -3109,6 +3116,7 @@ export class EditorCanvas {
         && (hit.type === 'video' || hit.type === 'web' || hit.type === 'image')
         ? hit.id
         : null;
+      this.pendingPathEdit = secondClick && !ev.shiftKey && isLineFamily(hit) ? hit.id : null;
       if (!selection.has(hit.id)) {
         this.store.select([hit.id], ev.shiftKey);
       } else if (ev.shiftKey) {
@@ -3667,6 +3675,8 @@ export class EditorCanvas {
     const textEdit = !this.dragStarted ? this.pendingTextEdit : null;
     const mediaToggle = !this.dragStarted ? this.pendingMediaToggle : null;
     this.pendingMediaToggle = null;
+    const pathEdit = !this.dragStarted ? this.pendingPathEdit : null;
+    this.pendingPathEdit = null;
     if (this.drag.kind === 'marquee' && this.marquee) {
       const slide = this.store.slide;
       if (slide) {
@@ -3685,6 +3695,7 @@ export class EditorCanvas {
       this.mediaToggledAt = ev.timeStamp;
       this.toggleMedia(mediaToggle);
     }
+    if (pathEdit && this.pathEdit?.elementId !== pathEdit) this.beginPathEdit(pathEdit);
   }
 
   /**
@@ -3728,6 +3739,7 @@ export class EditorCanvas {
     this.marquee = null;
     this.pendingTextEdit = null;
     this.pendingMediaToggle = null;
+    this.pendingPathEdit = null;
 
     // Deliberately *not* a full render. Redrawing the slide layer here would
     // replace the node the pointer went down on, and a browser cannot

@@ -18,7 +18,7 @@ import {
 import { collabClientDir } from './support/collabClient.js';
 
 /**
- * Shape → Draw with Pen, driven with real mouse and keyboard input in the
+ * Pen ▾ → Pen, driven with real mouse and keyboard input in the
  * browser editor: corners by clicking, a smooth point by dragging, the shape
  * closed on its first point; then a second, open line finished with Return.
  * Both land in the saved deck as path shapes. Then the points of a path:
@@ -99,10 +99,11 @@ describe.skipIf(!electronBinary)('drawing with the pen', () => {
   it('draws a closed curved shape and an open line', { timeout: 120_000 }, async () => {
     const { cdp, shapes, mouse, click, drag, shot } = await openEditor(emptyDeck('Pen'));
     const openPen = async () => {
-      // The toolbar keeps a compact copy of its controls; open the visible one.
-      await cdp.evaluate(`[...document.querySelectorAll('.shape-menu-trigger')]
-        .find((node) => node.getBoundingClientRect().width > 0 && node.textContent?.trim() === 'Shape')?.click()`);
-      await cdp.clickByText('.shape-menu-item', 'Draw with Pen', 'Draw with Pen');
+      // Pen ▾ → Pen; the toolbar keeps a compact copy of its controls, so
+      // open the visible one.
+      await cdp.evaluate(`[...document.querySelectorAll('.pen-tool-menu')]
+        .find((node) => node.getBoundingClientRect().width > 0)?.click()`);
+      await cdp.click('.pen-tool-popover [data-drawing-tool="pen"]', 'Pen ▾ → Pen');
       await eventually(async () => cdp.evaluate<boolean>(
         `document.querySelector('.canvas-host')?.classList.contains('pen-tool') ?? false`,
       ), 'the pen never started');

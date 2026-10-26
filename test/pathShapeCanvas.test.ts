@@ -453,6 +453,14 @@ describe('lines, arrows and paths as one family', () => {
     expect(host.querySelector('.handle-endpoint')).toBeNull();
   });
 
+  it('opens on two quick presses even when no dblclick arrives, as Chromium sends none over fresh chrome', () => {
+    const { store, canvas, host } = setup([arrow()]);
+    click(host, 400, 400);
+    expect([...store.get().selection]).toEqual(['line-1']);
+    click(host, 400, 400);
+    expect(canvas.pathEditingElement()).toBe('line-1');
+  });
+
   it('moves an end and stays an arrow', () => {
     const { store, host, anchor, line } = editingLine();
     drag(host, { x: 600, y: 400, target: anchor('0:1') }, { x: 650, y: 450 }, { x: 700, y: 500 });
