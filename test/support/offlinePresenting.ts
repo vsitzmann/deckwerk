@@ -198,6 +198,15 @@ export async function writeFixtureDeck(deckDir: string, title: string, spec: Fix
 /* ------------------------------------------------------------------------ */
 
 /** The presentation's window (the editor may hold other frames: the Agent panel's). */
+/**
+ * A page-side predicate: the media element is on screen, not held back by a
+ * build. The Player hides an element waiting for its build by setting
+ * `visibility: hidden` on its wrapper; a picture or clip in there is not
+ * missing and not expected to play.
+ */
+const ON_STAGE = `((el) => { for (let node = el.closest('[data-element-id]'); node; node = node.parentElement?.closest('[data-element-id]')) {
+  if (node.style.visibility === 'hidden') return false; } return true; })`;
+
 export const PRESENT_FRAME = `document.querySelector('iframe[src*="present.html"]').contentWindow`;
 
 export interface EditorState {
@@ -338,7 +347,7 @@ export async function watchPresentation(page: DrivenPage): Promise<void> {
       ].join(' ');
       if (root && root !== last) {
         last = root;
-        const images = [...root.querySelectorAll('img')];
+        const images = [...root.querySelectorAll('img')].filter(${ON_STAGE});
         const missing = images.filter((i) => !(i.complete && i.naturalWidth > 0 && win.getComputedStyle(i).visibility !== 'hidden'))
           .map((i) => (i.dataset.networkSrc || i.getAttribute('src') || 'no src').split('/').pop());
         // A slide that appears incomplete: how it went over the next frames, to say why.
@@ -346,7 +355,7 @@ export async function watchPresentation(page: DrivenPage): Promise<void> {
         win.__firstFrames.push({ slide: root.dataset.slideId, images: images.length, missing, ...(frames ? { frames } : {}) });
       } else if (root) {
         const entry = win.__firstFrames[win.__firstFrames.length - 1];
-        if (entry?.frames && entry.frames.length < 8) entry.frames.push([...root.querySelectorAll('img')].map(describe).join(' | '));
+        if (entry?.frames && entry.frames.length < 8) entry.frames.push([...root.querySelectorAll('img')].filter(${ON_STAGE}).map(describe).join(' | '));
       }
       win.requestAnimationFrame(tick);
     };
@@ -374,7 +383,8 @@ export async function takeFirstFrames(page: DrivenPage): Promise<{ frames: First
 export interface StageState {
   slideId: string;
   images: Array<{ src: string; ok: boolean }>;
-  clips: Array<{ src: string; readyState: number; paused: boolean; time: number; error: number | null }>;
+  /** `shouldPlay`: the deck autoplays the clip and it has not played to its end. */
+  clips: Array<{ src: string; readyState: number; paused: boolean; time: number; error: number | null; shouldPlay: boolean }>;
 }
 
 export function stageState(page: DrivenPage): Promise<StageState> {
@@ -385,15 +395,26 @@ export function stageState(page: DrivenPage): Promise<StageState> {
     const name = (el) => (el.dataset.networkSrc || el.getAttribute('src') || 'no src').split('/').pop().slice(0, 40);
     return {
       slideId: root.dataset.slideId,
-      images: [...root.querySelectorAll('img')].map((i) => ({ src: name(i), ok: i.complete && i.naturalWidth > 0 })),
-      clips: [...root.querySelectorAll('video')].map((v) => ({
-        src: name(v), readyState: v.readyState, paused: v.paused, time: v.currentTime, error: v.error ? v.error.code : null,
-      })),
+      images: [...root.querySelectorAll('img')].filter(${ON_STAGE}).map((i) => ({ src: name(i), ok: i.complete && i.naturalWidth > 0 })),
+      clips: [...root.querySelectorAll('video')].filter(${ON_STAGE}).map((v) => {
+        // What the deck asks of the clip: an editor tab presenting knows the deck.
+        const id = v.closest('[data-element-id]')?.dataset.elementId;
+        const slide = window.store?.get().deck.slides.find((s) => s.id === root.dataset.slideId);
+        const el = slide?.elements.find((e) => e.id === id);
+        const atEnd = v.ended || (Number.isFinite(v.duration) && v.currentTime >= v.duration - 0.25)
+          || (el && el.end !== null && v.currentTime >= el.end - 0.25);
+        return {
+          src: name(v), readyState: v.readyState, paused: v.paused, time: v.currentTime, error: v.error ? v.error.code : null,
+          shouldPlay: !el || (el.autoplay !== false && (el.loop !== false || !atEnd)),
+        };
+      }),
     };
   })()`);
 }
 
-export const clipPlaying = (clip: StageState['clips'][number]) => clip.readyState >= 2 && !clip.paused && clip.time > 0 && clip.error === null;
+/** A clip is fine when it shows a frame without error, and plays if the deck says it should. */
+export const clipPlaying = (clip: StageState['clips'][number]) => clip.readyState >= 2 && clip.error === null
+  && (!clip.shouldPlay || (!clip.paused && clip.time > 0));
 
 /**
  * Wait for the slide on stage to show everything: every picture decoded and
