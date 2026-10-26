@@ -24,6 +24,7 @@ import {
 import { AgentBridge, type HtmlSyncOutcome } from './agentBridge.js';
 import { AgentPanel } from './agentPanel.js';
 import { createDeckWerkButton } from './aboutDialog.js';
+import { installUpdates } from './updateDialog.js';
 import { trackPreviewFrameRecovery } from '../player/previewFrameRecovery.js';
 import { CANVAS_NOTICE_EVENT, EditorCanvas } from './canvas.js';
 import { CssEditor } from './cssEditor.js';
@@ -1246,6 +1247,26 @@ async function runOperation<T>(
     operation.finish();
   }
 }
+
+/**
+ * Before restarting into an update: write the deck, its theme and its edit
+ * history now, and report whether anything is still unsaved, so the main
+ * process can refuse to quit over it (src/main/updates.ts).
+ */
+async function flushForRestart(): Promise<{ clean: boolean; deckName?: string }> {
+  await cssEditor.flush();
+  const { dir } = store.get();
+  // A window with no deck has nothing to lose.
+  if (!dir) return { clean: true };
+  await save();
+  return { clean: !store.get().dirty, deckName: dir.split(/[\\/]/).pop() || dir };
+}
+
+installUpdates({
+  beginOperation: (message) => operationProgress.begin(message),
+  setStatus: (message) => setStatusMessage(message),
+  flush: flushForRestart,
+});
 
 function setStatusMessage(text: string): void {
   statusMessage = text;

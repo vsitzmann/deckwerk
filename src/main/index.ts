@@ -116,6 +116,7 @@ import {
   swappedPresentationDisplays,
 } from './presentationDisplays.js';
 import { registerDeckAssetIpc } from './deckAssetsIpc.js';
+import { registerUpdates } from './updates.js';
 
 /** Pick a loopback URL for the local bridge and a reachable URL for people. */
 function collaborationInviteUrl(urls: string[], deckId: string, agent = false): string | null {
@@ -599,6 +600,12 @@ app.whenReady().then(async () => {
 
   installAssetProtocol();
   registerHandlers();
+  registerUpdates({
+    editorWindows: () => editorStates().map((state) => state.editor),
+    presenting: () => editorStates().some((state) => state.present !== null && !state.present.isDestroyed()),
+    // A background agent session reconnects by itself; people do not.
+    sharing: () => collabServer !== null && collabMode !== 'agent-background',
+  });
 
   const initial = deckDirFromArgv();
   const deck = initial

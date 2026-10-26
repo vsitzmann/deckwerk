@@ -10,7 +10,10 @@ export default defineConfig({
         input: resolve(__dirname, 'src/main/index.ts'),
         // Bundling ws breaks its optional native bufferutil/utf-8-validate
         // loading (bufferUtil.unmask is not a function at runtime).
-        external: ['ws', 'bufferutil', 'utf-8-validate'],
+        // electron-updater picks its platform updater with lazy require()s
+        // and reads its own package data at run time; it ships in
+        // node_modules like any production dependency.
+        external: ['ws', 'bufferutil', 'utf-8-validate', 'electron-updater'],
       },
     },
     resolve: { alias: { '@shared': shared } },

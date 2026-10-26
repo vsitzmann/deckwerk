@@ -5,6 +5,14 @@ import type { ClipboardReadResult, ClipboardWriteRequest } from '@shared/clipboa
 import type { ClipboardImageSource } from '@shared/clipboardImages.js';
 import { IPC } from '@shared/ipc.js';
 import { DECK_ASSET_IPC, type DeckAssetListing, type DeckAssetTrashResult } from '@shared/mediaIndex.js';
+import {
+  UPDATE_IPC,
+  type UpdateCheckResult,
+  type UpdateDownloadResult,
+  type UpdateFlushReply,
+  type UpdateInstallResult,
+  type UpdateState,
+} from '@shared/updates.js';
 import type {
   AgentContextDraft,
   AgentPanelState,
@@ -243,6 +251,35 @@ const api = {
     on(IPC.rasterOpen, fn),
   onRasterDone: (fn: (result: RasterResult) => void): (() => void) =>
     on(IPC.rasterDone, fn),
+
+  /**
+   * Updating the installed app (src/main/updates.ts). Only the desktop app
+   * has this; the browser editor's api leaves it out, and so does its menu.
+   */
+  updates: {
+    state: (): Promise<UpdateState> => ipcRenderer.invoke(UPDATE_IPC.state),
+    check: (): Promise<UpdateCheckResult> => ipcRenderer.invoke(UPDATE_IPC.check),
+    download: (): Promise<UpdateDownloadResult> => ipcRenderer.invoke(UPDATE_IPC.download),
+    install: (): Promise<UpdateInstallResult> => ipcRenderer.invoke(UPDATE_IPC.install),
+    openReleasePage: (version?: string): Promise<void> =>
+      ipcRenderer.invoke(UPDATE_IPC.openReleasePage, version),
+    onProgress: (fn: (ratio: number) => void): (() => void) => on(UPDATE_IPC.progress, fn),
+    /** The native app menu's "Check for Updates…". */
+    onMenuCheck: (fn: () => void): (() => void) => on(UPDATE_IPC.menuCheck, fn),
+    /**
+     * Before restarting into an update, the main process asks every editor
+     * to save; `fn` saves and says whether it is clean now.
+     */
+    onFlushRequest: (fn: () => Promise<{ clean: boolean; deckName?: string }>): (() => void) =>
+      on<string>(UPDATE_IPC.flush, (token) => {
+        void fn()
+          .catch(() => ({ clean: false }))
+          .then((result) => {
+            const reply: UpdateFlushReply = { token, ...result };
+            ipcRenderer.send(UPDATE_IPC.flushed, reply);
+          });
+      }),
+  },
 };
 
 /** Subscribe to a main-process push, returning an unsubscribe function. */

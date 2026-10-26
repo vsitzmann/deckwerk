@@ -194,8 +194,12 @@ jobs:
         shell: bash
         # electron-builder also leaves unpacked app trees in release/; only the
         # distributable files, the update manifests and their blockmaps are
-        # worth carrying between jobs. The blockmaps are what let a future
-        # electron-updater download a delta instead of a whole 250 MB app.
+        # worth carrying between jobs. The blockmaps are what let the app's
+        # updater (src/main/updates.ts) download a delta instead of a whole
+        # 250 MB app. Both mac runners write a latest-mac.yml naming only
+        # their own architecture; each is renamed for its arch so the two
+        # survive being downloaded into one folder, and the release job
+        # merges them into the one file electron-updater asks for.
         run: |
           mkdir -p upload
           find release -maxdepth 1 -type f \
@@ -203,6 +207,9 @@ jobs:
                -o -name '*.AppImage' -o -name '*.deb' -o -name '*.tar.gz' \
                -o -name '*.blockmap' -o -name 'latest*.yml' \) \
             -exec cp {} upload/ \;
+          if [ "${{ matrix.platform }}" = "mac" ]; then
+            mv upload/latest-mac.yml "upload/latest-mac-${{ matrix.arch }}.yml"
+          fi
           ls -la upload
 
       - uses: actions/upload-artifact@v4
@@ -226,6 +233,21 @@ jobs:
           path: artifacts
           pattern: installers-*
           merge-multiple: true
+
+      # One latest-mac.yml naming both architectures' zips, then a check
+      # that latest.yml, latest-mac.yml and latest-linux.yml are all here
+      # and that every file they list is attached with the sha512 they
+      # claim — so a release can never advertise an update it cannot serve.
+      # Runs on dry runs too: that is where a broken manifest should show.
+      - name: Merge and check the update manifests
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          node scripts/update-manifests.mjs merge-mac \
+            artifacts/latest-mac-x64.yml artifacts/latest-mac-arm64.yml > artifacts/latest-mac.yml
+          rm artifacts/latest-mac-x64.yml artifacts/latest-mac-arm64.yml
+          cat artifacts/latest-mac.yml
+          node scripts/update-manifests.mjs check artifacts "$VERSION"
 
       - name: Generate checksums
         run: |

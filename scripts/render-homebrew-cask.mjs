@@ -39,6 +39,11 @@ process.stdout.write(`cask "deckwerk" do
     strategy :github_latest
   end
 
+  # The app updates itself (electron-updater, from the same GitHub release),
+  # so `brew upgrade` leaves an installed copy alone rather than fighting it;
+  # `brew upgrade --greedy` still upgrades it.
+  auto_updates true
+
   depends_on macos: ">= :big_sur"
 
   app "DeckWerk.app"

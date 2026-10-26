@@ -3759,6 +3759,27 @@ button.morph-object-hit.selected-source:hover:not(:disabled) {
 .paste-theme-dialog { width: min(620px, calc(100vw - 48px)); }
 .confirm-dialog { width: min(440px, calc(100vw - 48px)); }
 .confirm-dialog-description { margin: 0; color: var(--text); line-height: 1.5; }
+/* Update available: the release notes scroll inside the dialog, so a long
+   changelog never pushes the Download button off screen. */
+.confirm-dialog.update-dialog { width: min(560px, calc(100vw - 48px)); }
+.update-notes {
+  max-height: min(320px, 45vh);
+  overflow: auto;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  background: var(--bg);
+  color: var(--text);
+  line-height: 1.5;
+}
+.update-notes > :first-child { margin-top: 0; }
+.update-notes > :last-child { margin-bottom: 0; }
+.update-notes h3, .update-notes h4 { margin: 12px 0 6px; font-size: inherit; font-weight: 600; }
+.update-notes ul, .update-notes ol { margin: 6px 0; padding-left: 20px; }
+.update-notes p { margin: 6px 0; }
+.update-notes code, .update-notes pre { font-family: var(--mono); }
+.update-notes pre { white-space: pre-wrap; }
+.update-notes-text { white-space: pre-wrap; }
+.update-notes-empty { color: var(--muted); }
 .paste-theme-description { margin: 0; color: var(--text); }
 .paste-theme-detail { margin: 0; color: var(--muted); line-height: 1.6; }
 .paste-theme-actions { flex-wrap: wrap; }
