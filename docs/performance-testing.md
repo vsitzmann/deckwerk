@@ -51,7 +51,7 @@ All values are positive numbers. Time budgets are milliseconds.
 | `PERF_HEAP_GROWTH_BUDGET_MB` | 128 | Post-GC JS heap growth |
 | `PERF_DOM_GROWTH_BUDGET` | 20000 | Post-GC DOM growth, including Chromium internals for ≤24 live unique-video surfaces |
 | `PERF_HISTORY_UI_HYDRATE_BUDGET_MS` | 5000 | Hydrate 200 rows in-browser |
-| `PERF_HISTORY_UI_OPEN_BUDGET_MS` | 750 | Open and paint the History tab |
+| `PERF_HISTORY_UI_OPEN_BUDGET_MS` | 750 | Open and paint the History popover (beside the deck name) |
 | `PERF_HISTORY_BUILD_BUDGET_MS` | 120000 | Produce 205 complex revisions |
 | `PERF_HISTORY_COMMIT_P95_BUDGET_MS` | 1000 | Complex commit p95 |
 | `PERF_HISTORY_SAVE_BUDGET_MS` | 30000 | Gzip and atomically save history |
