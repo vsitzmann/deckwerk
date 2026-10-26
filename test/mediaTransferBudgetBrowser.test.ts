@@ -26,6 +26,7 @@ import {
 import { collabClientDir } from './support/collabClient.js';
 import { bodyAfter, ThrottledLink, type LinkResponse } from './support/throttledLink.js';
 import { launchSafari, type SafariPage } from './support/safariDriver.js';
+import { readOnlyCopy } from './support/offlinePresenting.js';
 
 /**
  * No byte of a deck's media crosses the wire twice.
@@ -1230,6 +1231,8 @@ interface OfflineTalk {
   /** Whether the Present button was refused, and what the status line said then. */
   refused: string | null;
   reload: { offlineDeck: string | null; slides: number };
+  /** What was wrong with the reloaded editor being read-only (support/offlinePresenting.ts). */
+  readOnly: string[];
 }
 
 /**
@@ -1298,7 +1301,7 @@ async function presentingOffline(kind: BrowserKind): Promise<OfflineTalk> {
     'the presentation stayed blank', (answer) => answer.painted || answer.status.includes('Presenting needs the server'), 60_000,
   );
   if (!opened.painted) {
-    return { status: status.text, frames: [], stalledClips: [], failures: [], shown: [], refused: opened.status, reload: { offlineDeck: null, slides: 0 } };
+    return { status: status.text, frames: [], stalledClips: [], failures: [], shown: [], refused: opened.status, reload: { offlineDeck: null, slides: 0 }, readOnly: [] };
   }
   await page.evaluate(watchFirstFrames(PRESENT_FRAME));
   await page.evaluate(`(() => {
@@ -1371,10 +1374,11 @@ async function presentingOffline(kind: BrowserKind): Promise<OfflineTalk> {
     offlineDeck: document.documentElement.dataset.offlineDeck ?? null,
     slides: document.querySelectorAll('.rail-item').length,
   })`);
+  const readOnly = await readOnlyCopy({ ...page, kind: kind === 'Safari' ? 'safari' : 'chromium', close: async () => undefined });
   await browseAll(page, slides);
 
   console.log(`media transfer budget (${kind}, presenting offline):\n${shown.join('\n')}\nfirst frames: ${JSON.stringify(frames)}`);
-  return { status: status.text, frames, stalledClips, failures, shown, refused: null, reload };
+  return { status: status.text, frames, stalledClips, failures, shown, refused: null, reload, readOnly };
 }
 
 /** Slides that appeared without all of their images. */
@@ -1575,6 +1579,11 @@ for (const kind of ffmpeg ? BROWSERS : []) describe(`media transfer budget (${ki
 
     it('opens the deck again on a reload without the server', () => {
       expect(result.reload).toEqual({ offlineDeck: 'true', slides: 6 });
+    });
+
+    // Anything edited in that copy would be discarded when the server answers.
+    it('keeps that copy read-only, and says why', () => {
+      expect(result.readOnly).toEqual([]);
     });
   });
 

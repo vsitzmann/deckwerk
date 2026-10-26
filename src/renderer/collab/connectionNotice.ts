@@ -33,6 +33,11 @@ export interface ConnectionNoticeOptions {
   backup?: () => { fileName: string; text: string };
   /** Editor: whether this browser holds the whole talk, so presenting works without the server. */
   presentsOffline?: () => boolean;
+  /**
+   * Editor: the deck on screen is the copy kept in this browser, opened
+   * without the server, and editing is off (main.ts).
+   */
+  readOnlyCopy?: () => boolean;
 }
 
 const BANNER_CSS = 'position:fixed;top:12px;left:50%;transform:translateX(-50%);'
@@ -87,9 +92,13 @@ export function createConnectionNotice(options: ConnectionNoticeOptions): Connec
     node.appendChild(headline);
     for (const text of state === 'disconnected'
       ? [
-          'New edits can’t be saved while the server is unreachable — they’ll be '
-            + 'discarded when the session reconnects. Everything synced before the '
-            + 'disconnect is already saved on the host.',
+          options.readOnlyCopy?.()
+            ? 'This is the copy of the presentation kept in this browser, opened without the server, '
+              + 'so editing is off: changes made now could not be saved. Everything synced before is '
+              + 'saved on the host, and editing comes back when the server answers.'
+            : 'New edits can’t be saved while the server is unreachable — they’ll be '
+              + 'discarded when the session reconnects. Everything synced before the '
+              + 'disconnect is already saved on the host.',
           options.presentsOffline?.()
             ? 'You can still browse the slides, present them from the copy kept in this browser, '
               + 'and download a backup of the current deck. Exporting needs the server.'

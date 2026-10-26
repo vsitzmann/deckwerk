@@ -106,6 +106,34 @@ export class EditorStore {
   /** Signals that the independently persisted history needs a later flush. */
   onHistoryChange: (() => void) | null = null;
 
+  /**
+   * Why the deck may not be edited right now, or null. While set, every
+   * local edit (commit, drag, history replace or restore) is refused and
+   * reported through `onEditRefused`; renderer measurements and remote decks
+   * still land. The collab shell sets it while it shows the copy of a deck
+   * kept in the browser, opened without the server: anything edited there
+   * would be discarded when the server answers.
+   */
+  private editLock: string | null = null;
+  onEditRefused: ((reason: string) => void) | null = null;
+
+  setEditLock(reason: string | null): void {
+    this.editLock = reason;
+  }
+
+  get editLocked(): string | null {
+    return this.editLock;
+  }
+
+  /** True (and reported) when the edit about to happen must not. */
+  private refuseEdit(): boolean {
+    if (this.editLock === null) return false;
+    this.onEditRefused?.(this.editLock);
+    // Views that drew the attempt (a dragged box, typed text) draw the deck again.
+    this.emit();
+    return true;
+  }
+
   private state: EditorState;
   private listeners = new Set<Listener>();
   private historyListeners = new Set<() => void>();
@@ -281,6 +309,7 @@ export class EditorStore {
 
   /** Replace the document as one local, dirty, undoable transaction. */
   replaceWithHistory(deck: Deck, label: string): void {
+    if (this.refuseEdit()) return;
     const anchor = this.cursorAnchor();
     const previous = this.state.deck;
     this.state = { ...this.state, deck: parseDeck(deck), dirty: true };
@@ -492,6 +521,8 @@ export class EditorStore {
       return;
     }
 
+    if (this.refuseEdit()) return;
+
     // Transient commits stream work in progress (live typing) to collaborators
     // without consuming undo slots or history entries; the coalesce key lets
     // the collab undo layer fold the stream into one undoable edit.
@@ -538,6 +569,12 @@ export class EditorStore {
     if (!this.txnBase) return;
     const base = this.txnBase;
     this.txnBase = null;
+    // A gesture begun before the lock: put back what it moved.
+    if (this.editLock !== null && base !== this.state.deck) {
+      this.state = { ...this.state, deck: base };
+      this.refuseEdit();
+      return;
+    }
     // A drag that ended where it started shouldn't consume an undo slot.
     if (base !== this.state.deck) {
       const forward = diffDecks(base, this.state.deck);
@@ -625,6 +662,7 @@ export class EditorStore {
   }
 
   restoreHistory(id: number): boolean {
+    if (this.refuseEdit()) return false;
     const historyIndex = this.historyLog.findIndex((item) => item.id === id);
     const snapshot = this.historyLog[historyIndex];
     const materialized = this.materializeHistoryIndex(historyIndex);

@@ -563,9 +563,11 @@ dropped, and so does reloading the editor.
   clips), written as the deck opens and within two seconds of a change (a
   save already due is never pushed back), and at once when the page is
   hidden or closed. An editor opened while the server is unreachable shows
-  it, and the first welcome replaces it as any reconnect would (edits made
-  meanwhile are discarded, as during any disconnection, and the banner says
-  so).
+  it, read-only until the first welcome replaces it: anything edited in it
+  would be discarded when the server answers, as edits made during any
+  disconnection are. The store refuses every local edit and says why
+  (`EditorStore.setEditLock`), the canvas and side panels are `inert`, the
+  rail keeps navigating without its edit buttons, and Present works.
 - **Bounded.** A file goes in only while it fits 80% of the origin's quota
   (`navigator.storage.estimate`), and the copy asks for persistent storage
   (`navigator.storage.persist`). An index records each deck opened and its

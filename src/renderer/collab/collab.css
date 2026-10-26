@@ -429,3 +429,12 @@ button.bar-person:focus-visible { outline: 2px solid var(--accent); outline-offs
   color: var(--on-accent, #fff);
   font-weight: 600;
 }
+
+/*
+ * The copy of a deck kept in this browser, opened without the server: read-only
+ * until the server answers (main.ts, lockOfflineCopy). The side panels take no
+ * input and look it, as a disabled control does; the rail keeps navigating but
+ * offers nothing that edits.
+ */
+html[data-read-only-copy] #side { opacity: .4; }
+html[data-read-only-copy] .rail-actions { display: none; }

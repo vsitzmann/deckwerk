@@ -443,6 +443,29 @@ function installShell(): void {
  * made now are kept on screen and dropped when the server answers, exactly
  * as edits made during any disconnection are (collabBridge.ts).
  */
+const READ_ONLY_COPY = 'Read-only: editing comes back when the server answers, since changes made to this copy could not be saved.';
+
+/**
+ * The deck on screen is the copy kept in this browser: anything edited in it
+ * would be discarded when the server answers (the bridge drops unconfirmed
+ * edits on reconnect). So it is read-only until then: the store refuses
+ * every edit and says why, the canvas and the side panels take no input
+ * (`inert`), and the rail hides its edit buttons. The rail still moves
+ * between slides, and Present still works.
+ */
+function lockOfflineCopy(on: boolean): void {
+  store.setEditLock(on ? READ_ONLY_COPY : null);
+  el('canvas').inert = on;
+  el('side').inert = on;
+  if (on) document.documentElement.dataset.readOnlyCopy = 'true';
+  else delete document.documentElement.dataset.readOnlyCopy;
+  // The banner names what still works; say it again in the new terms.
+  if (connectionNotice.state() === 'disconnected') connectionNotice.showDisconnected();
+}
+store.onEditRefused = (reason) => {
+  if (!statusMessage.endsWith(reason)) setStatusMessage(reason);
+};
+
 /**
  * A server that has not even accepted the connection by now is as good as
  * gone for opening the deck: show the offline copy rather than "Connecting…"
@@ -468,7 +491,8 @@ async function openOfflineCopy(): Promise<void> {
   cssEditor.setValue(snapshot.themeCss);
   themePanel.noteDeckOpened(snapshot.deck);
   document.documentElement.dataset.offlineDeck = 'true';
-  setStatusMessage(`Offline: showing the copy kept in this browser (${new Date(snapshot.savedAt).toLocaleString()}).`);
+  lockOfflineCopy(true);
+  setStatusMessage(`Offline: showing the copy kept in this browser (${new Date(snapshot.savedAt).toLocaleString()}). ${READ_ONLY_COPY}`);
   startOffline();
 }
 // The documented HTML-first surface and visible agent workspace share this
@@ -628,6 +652,7 @@ const connectionNotice = createConnectionNotice({
     ),
   }),
   presentsOffline: () => offline?.ready() ?? false,
+  readOnlyCopy: () => shownOffline,
 });
 
 const wsUrl = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws?deck=${encodeURIComponent(deckId)}`;
@@ -652,6 +677,7 @@ const bridge = new CollabBridge(wsUrl, undefined, {
     if (welcomed || shownOffline) store.resyncRemote(welcome.deck, `(collab) ${deckId}`);
     else store.load(welcome.deck, `(collab) ${deckId}`, { keepView: true });
     welcomed = true;
+    if (shownOffline) lockOfflineCopy(false);
     shownOffline = false;
     delete document.documentElement.dataset.offlineDeck;
     if (initialViewPending) {
@@ -771,8 +797,9 @@ const shellDeps: ShellDeps = {
   currentThemeCss: () => cssEditor.getValue(),
   // The browser's own downloads show progress and where the file went.
   downloadOriginal: { label: 'Download original', run: (element) => downloadOriginalAsset(deckId!, element.src) },
-  undo: () => bridge.undo(store.get().deck),
-  redo: () => bridge.redo(store.get().deck),
+  // Collab undo goes through the bridge, not the store's edit path: refused here.
+  undo: () => (store.editLocked ? setStatusMessage(store.editLocked) : bridge.undo(store.get().deck)),
+  redo: () => (store.editLocked ? setStatusMessage(store.editLocked) : bridge.redo(store.get().deck)),
 };
 const clipboard = createClipboardActions(shellDeps);
 bindEditorKeys(shellDeps, clipboard);

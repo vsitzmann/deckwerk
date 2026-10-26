@@ -571,7 +571,51 @@ export async function reloadOffline(driven: DrivenPage, deck: TalkDeck): Promise
   if (state.slides !== deck.slides) problems.push(`reload without the server showed ${state.slides} of ${deck.slides} slides (${state.status})`);
   if (state.unpainted.length > 0) problems.push(`reload without the server left unpainted: ${state.unpainted.join(', ')}`);
   if (!state.offlineDeck) problems.push('reload without the server did not say it showed the offline copy');
+  problems.push(...await readOnlyCopy(driven));
   return problems;
+}
+
+/**
+ * The copy kept in the browser is read-only: it says so, the canvas and side
+ * panels take no input, and an edit (as a script or a control would make it)
+ * changes nothing.
+ */
+export async function readOnlyCopy(driven: DrivenPage): Promise<string[]> {
+  const found = await driven.evaluate<{ flag: boolean; canvas: boolean; side: boolean; status: string; changed: boolean; railActions: boolean }>(`(() => {
+    const before = window.store.get().deck;
+    window.store.commit((deck) => { deck.title = 'Edited offline'; }, { label: 'Offline edit' });
+    const actions = document.querySelector('#rail .rail-actions');
+    return {
+      flag: document.documentElement.dataset.readOnlyCopy === 'true',
+      canvas: document.getElementById('canvas').inert === true,
+      side: document.getElementById('side').inert === true,
+      status: document.getElementById('status')?.textContent ?? '',
+      changed: window.store.get().deck !== before,
+      railActions: Boolean(actions && actions.getClientRects().length > 0),
+    };
+  })()`);
+  return [
+    ...(found.flag && found.canvas && found.side ? [] : [`the offline copy is not read-only (flag ${found.flag}, canvas inert ${found.canvas}, side inert ${found.side})`]),
+    ...(found.changed ? ['an edit changed the offline copy'] : []),
+    ...(found.railActions ? ['the rail offers edit buttons on the offline copy'] : []),
+    ...(found.status.includes('Read-only') ? [] : [`the status line does not say the copy is read-only: ${found.status}`]),
+  ];
+}
+
+/** Once the server is back, the deck edits again: an edit reaches the store and is not refused. */
+export async function editsAgain(driven: DrivenPage): Promise<string[]> {
+  const found = await driven.evaluate<{ flag: boolean; canvas: boolean; edited: boolean }>(`(() => {
+    const title = window.store.get().deck.title;
+    window.store.commit((deck) => { deck.title = title + ' '; }, { label: 'Edit after reconnect' });
+    const edited = window.store.get().deck.title === title + ' ';
+    if (edited) window.store.commit((deck) => { deck.title = title; }, { label: 'Undo the probe' });
+    return {
+      flag: document.documentElement.dataset.readOnlyCopy === 'true',
+      canvas: document.getElementById('canvas').inert === true,
+      edited,
+    };
+  })()`);
+  return found.edited && !found.flag && !found.canvas ? [] : [`still read-only after reconnecting (${JSON.stringify(found)})`];
 }
 
 export async function reconnects(driven: DrivenPage, deck: TalkDeck): Promise<string[]> {
@@ -579,6 +623,6 @@ export async function reconnects(driven: DrivenPage, deck: TalkDeck): Promise<st
     .catch(() => editorState(driven));
   if (!state.collabReady) return [`never reconnected once the server was back (${state.status})`];
   if (state.slides !== deck.slides) return [`after reconnecting the editor shows ${state.slides} of ${deck.slides} slides`];
-  return [];
+  return editsAgain(driven);
 }
 
