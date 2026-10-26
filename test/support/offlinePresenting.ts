@@ -39,6 +39,8 @@ export interface DrivenPage {
   reload(): Promise<void>;
   /** Give up on a navigation that hangs (a dead route, nothing to answer from): what the browser's stop button does. */
   stop?(): Promise<void>;
+  /** Pretend the origin may store only this much (Chromium's DevTools can). */
+  overrideQuota?(origin: string, bytes: number): Promise<void>;
   close(): Promise<void>;
 }
 
@@ -84,6 +86,7 @@ export async function openPage(kind: OfflineBrowserKind, profileDir: string): Pr
     goto: async (url) => { await cdp.evaluate(`(location.href = ${JSON.stringify(url)}, true)`); },
     reload: async () => { await cdp.evaluate('(location.reload(), true)'); },
     stop: async () => { await cdp.call('Page.stopLoading'); },
+    overrideQuota: async (origin, bytes) => { await cdp.call('Storage.overrideQuotaForOrigin', { origin, quotaSize: bytes }); },
     close: async () => {
       cdp.close();
       await stopBrowser(child);

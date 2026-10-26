@@ -710,7 +710,7 @@ const bridge = new CollabBridge(wsUrl, undefined, {
       offline?.resume();
       if (shellInstall === 'retry') installShell();
       // The refusal is moot once the server is back; don't leave it lingering.
-      if (statusMessage === PRESENT_NEEDS_SERVER) setStatusMessage('');
+      if (statusMessage.startsWith(PRESENT_NEEDS_SERVER)) setStatusMessage('');
     } else {
       delete document.documentElement.dataset.collabReady;
       connectionNotice.showDisconnected();
@@ -930,7 +930,11 @@ function startPresentation(speakerView = false): void {
   // deck's files from there too. Without a complete copy it would show a
   // white overlay, or slides missing their pictures: refuse with the reason.
   if (!connected && !offline?.ready()) {
-    setStatusMessage(PRESENT_NEEDS_SERVER);
+    // Say what is missing when it is the offline copy, not just the server.
+    const copy = offline?.statusText() ?? '';
+    setStatusMessage(copy && copy !== 'Available offline'
+      ? `${PRESENT_NEEDS_SERVER} This browser does not hold the whole talk (${copy.charAt(0).toLowerCase()}${copy.slice(1)}).`
+      : PRESENT_NEEDS_SERVER);
     connectionNotice.showDisconnected();
     return;
   }
