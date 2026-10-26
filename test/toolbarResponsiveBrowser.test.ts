@@ -77,24 +77,40 @@ describe.skipIf(!electronBinary)('responsive desktop toolbar', () => {
 
     // The File menu carries New / Open / Import / Save As at every width, so
     // a medium window keeps Insert centred and simply drops the deck name.
-    // (Medium is 960: with the Pen and its style menu, Insert outgrew 900.)
-    const medium = await toolbarAt(960, (layout) => layout.fileVisible
+    // (Medium is 1200: History beside the deck name, and the Pen and Media
+    // on the Insert bar, made both outer groups and Insert wider.)
+    const insert = ['Text', 'Shape', 'Pen', 'Table', 'Media'];
+    const medium = await toolbarAt(1200, (layout) => layout.fileVisible
       && layout.classes.includes('toolbar-hide-deck-name'));
     expect(medium.height).toBe(44);
+    expect(medium.classes).not.toContain('toolbar-compact-file');
     expect(medium.fileVisible).toBe(true);
     expect(medium.moreVisible).toBe(false);
     expect(medium.leftRight).toBeLessThanOrEqual(medium.centerLeft);
     expect(medium.centerRight).toBeLessThanOrEqual(medium.rightLeft);
-    expect(medium.insertLabels).toEqual(expect.arrayContaining(['Text', 'Shape', 'Pen', 'Table']));
+    expect(medium.insertLabels).toEqual(expect.arrayContaining(insert));
     expect(medium.presentVisible).toBe(true);
 
+    // Narrower, Agent and Collaborate fold into More before Insert gives
+    // up any of its words.
+    const compact = await toolbarAt(1060, (layout) => layout.classes.includes('toolbar-compact-secondary'));
+    expect(compact.height).toBe(44);
+    expect(compact.classes).not.toContain('toolbar-compact-insert');
+    expect(compact.moreVisible).toBe(true);
+    expect(compact.leftRight).toBeLessThanOrEqual(compact.centerLeft);
+    expect(compact.centerRight).toBeLessThanOrEqual(compact.rightLeft);
+    expect(compact.insertLabels).toEqual(expect.arrayContaining(insert));
+    expect(compact.presentVisible).toBe(true);
+
+    // At the narrowest, Insert keeps its icons and drops its words.
     const narrow = await toolbarAt(500, (layout) => layout.classes.includes('toolbar-compact-file')
-      && layout.classes.includes('toolbar-compact-secondary'));
+      && layout.classes.includes('toolbar-compact-secondary')
+      && layout.classes.includes('toolbar-compact-insert'));
     expect(narrow.height).toBe(44);
     expect(narrow.moreVisible).toBe(true);
     expect(narrow.leftRight).toBeLessThanOrEqual(narrow.centerLeft);
     expect(narrow.centerRight).toBeLessThanOrEqual(narrow.rightLeft);
-    expect(narrow.insertLabels).toEqual(expect.arrayContaining(['Text', 'Shape', 'Pen', 'Table']));
+    expect(narrow.insertLabels).toEqual(expect.arrayContaining(insert));
     expect(narrow.presentVisible).toBe(true);
     expect(narrow.fileVisible).toBe(true);
   });
