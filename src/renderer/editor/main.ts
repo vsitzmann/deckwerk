@@ -30,6 +30,7 @@ import { CssEditor } from './cssEditor.js';
 import { Inspector } from './inspector.js';
 import { HistoryPanel } from './historyPanel.js';
 import { ObjectList } from './objectList.js';
+import { MediaPanel, installMediaDrop } from './mediaPanel.js';
 import { authoredHtmlSync, fileName } from './htmlCompile.js';
 import { createShapeInsertPicker, createTableInsertPicker, insertText } from './elementCreation.js';
 import { createToolbarPicker, createToolbarSplitButton } from './exportPicker.js';
@@ -65,6 +66,7 @@ import { setRenderInvariantChecks } from './renderInvariants.js';
 import { setSelectionInvariantChecks } from './selectionInvariants.js';
 import { SpeakerNotesDrawer } from './speakerNotesDrawer.js';
 import { CanvasRulers, isRulersShortcut, toggleRulers } from './rulers.js';
+import { LightTable } from './lightTable.js';
 import { applySpeakerNotes } from '@shared/speakerNotes.js';
 import { installResponsiveToolbar } from './responsiveToolbar.js';
 import { setSlideColorSource } from './colorPicker.js';
@@ -157,6 +159,7 @@ new SpeakerNotesDrawer(el('canvas'), store, {
   onStatus: setStatusMessage,
 });
 new CanvasRulers(el('canvas'), canvas, store, { shortcutHint: 'Cmd/Ctrl+R' });
+new LightTable(el('canvas'), canvas, store);
 // Cmd/Ctrl+R shows and hides the rulers, as in Keynote, wherever focus is --
 // in the capture phase, because a text box being edited keeps its keys to
 // itself. Taking it also keeps Electron's default menu from reloading the
@@ -175,6 +178,16 @@ historyHost.remove();
 historyHost.hidden = true;
 historyHost.classList.remove('side-panel');
 new HistoryPanel(historyHost, store);
+// The deck's media library opens from Media on the Insert bar: reusing a file
+// is inserting it, so it sits with Text, Shape and Table rather than in a tab.
+const mediaHost = document.createElement('div');
+mediaHost.id = 'media';
+mediaHost.hidden = true;
+const mediaPanel = new MediaPanel(mediaHost, store, {
+  setStatusMessage,
+  beginOperation: (message) => operationProgress.begin(message),
+});
+installMediaDrop(el('canvas'), store, mediaPanel);
 const rail = new SlideRail(el('rail'), store);
 rail.onStatus = setStatusMessage;
 // The slide's objects, from a floating icon in the canvas's top-left corner,
@@ -486,31 +499,43 @@ async function placeSyncedSlides(
 
 /* --- toolbar --- */
 
+const MEDIA_ICON =
+  '<svg class="bar-icon" viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">' +
+  '<rect x="2" y="3" width="12" height="10" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.4"/>' +
+  '<path d="M3.5 11.5 6.5 8l2 2.2L10 8.8l2.5 2.7" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/>' +
+  '<circle cx="10.5" cy="5.8" r="1" fill="currentColor"/></svg>';
+
 let deckNameLabel: HTMLElement | null = null;
 let deckNameButton: HTMLButtonElement | null = null;
 
-/** The deck's edit history, in a popover under the deck name. */
-function toggleHistoryPopover(): void {
-  if (!deckNameButton) return;
-  if (historyHost.isConnected) {
+/**
+ * A panel that lives in a popover under a toolbar control: the deck's history
+ * under its name, the media library under Media. The panel stays `hidden`
+ * while the popover is closed, however it was dismissed, so edits made
+ * meanwhile do not redraw it.
+ */
+function togglePanelPopover(anchor: HTMLElement, host: HTMLElement, className: string, label: string): void {
+  if (host.isConnected) {
     closePopover();
     return;
   }
   const popover = document.createElement('div');
-  popover.className = 'ui-popover history-popover';
+  popover.className = `panel-popover ${className}`;
   popover.setAttribute('role', 'dialog');
-  popover.setAttribute('aria-label', 'Deck history');
-  historyHost.hidden = false;
-  popover.appendChild(historyHost);
-  openAnchoredPopover(deckNameButton, popover, { focus: false });
-  // Hidden again once the popover goes, however it was dismissed, so edits
-  // made with it closed do not redraw its rows.
+  popover.setAttribute('aria-label', label);
+  host.hidden = false;
+  popover.appendChild(host);
+  openAnchoredPopover(anchor, popover, { focus: false });
   const watch = new MutationObserver(() => {
     if (popover.isConnected) return;
-    historyHost.hidden = true;
+    host.hidden = true;
     watch.disconnect();
   });
   watch.observe(document.body, { childList: true });
+}
+
+function toggleHistoryPopover(): void {
+  if (deckNameButton) togglePanelPopover(deckNameButton, historyHost, 'history-popover', 'Deck history');
 }
 
 function barDivider(): HTMLElement {
@@ -600,12 +625,18 @@ function buildToolbar(): void {
     compactFile,
   );
 
+  const mediaButton = barIconButton('Media', MEDIA_ICON, () => {
+    togglePanelPopover(mediaButton, mediaHost, 'media-popover', 'Media library');
+  });
+  mediaButton.setAttribute('aria-haspopup', 'dialog');
+  mediaButton.setAttribute('aria-expanded', 'false');
   const mid = document.createElement('div');
   mid.className = 'bar-group deck-only bar-center';
   mid.append(
     barIconButton('Text', TEXT_ICON, () => addText()),
     createShapeInsertPicker(store),
     createTableInsertPicker(store),
+    mediaButton,
   );
 
   const right = document.createElement('div');

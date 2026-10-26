@@ -2208,7 +2208,7 @@ export class EditorCanvas {
   private beginViewportPan(ev: PointerEvent): boolean {
     if (ev.button !== 1 && !(ev.button === 0 && this.spacePan)) return false;
     const target = ev.target instanceof Element ? ev.target : null;
-    if (target?.closest('.welcome-screen, .zoom-controls, .notes-toggle, .notes-drawer, .objects-toggle, .objects-drawer')) return false;
+    if (target?.closest('.welcome-screen, .zoom-controls, .notes-toggle, .notes-drawer, .objects-toggle, .objects-drawer, .light-table')) return false;
     // No selection, no text selection, no focus change: a text box being
     // edited stays in its edit.
     ev.preventDefault();
@@ -2722,7 +2722,7 @@ export class EditorCanvas {
     // are ordinary application controls. Capturing their pointer on the canvas
     // changes the pointer-up target and prevents Chromium from synthesising a
     // click, which made all three welcome actions appear inert.
-    if (target.closest(`.welcome-screen, .zoom-controls, .notes-toggle, .notes-drawer, .objects-toggle, .objects-drawer, .canvas-ruler, .${COMPARE_CHIP_CLASS}`)) return;
+    if (target.closest(`.welcome-screen, .zoom-controls, .notes-toggle, .notes-drawer, .objects-toggle, .objects-drawer, .light-table, .canvas-ruler, .${COMPARE_CHIP_CLASS}`)) return;
     const slide = this.store.slide;
     if (!slide) return;
     // A press that reaches the canvas was not on a live page (the frame keeps
@@ -3450,7 +3450,7 @@ export class EditorCanvas {
     if (
       this.drag.kind === 'none'
       && (ev.target as HTMLElement | null)?.closest?.(
-        '.welcome-screen, .zoom-controls, .notes-toggle, .notes-drawer, .objects-toggle, .objects-drawer, .canvas-ruler',
+        '.welcome-screen, .zoom-controls, .notes-toggle, .notes-drawer, .objects-toggle, .objects-drawer, .light-table, .canvas-ruler',
       )
     ) {
       return;

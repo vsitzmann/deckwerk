@@ -4,6 +4,7 @@ import type { DeckHistoryDocument } from '@shared/deckHistory.js';
 import type { ClipboardReadResult, ClipboardWriteRequest } from '@shared/clipboard.js';
 import type { ClipboardImageSource } from '@shared/clipboardImages.js';
 import { IPC } from '@shared/ipc.js';
+import { DECK_ASSET_IPC, type DeckAssetListing, type DeckAssetTrashResult } from '@shared/mediaIndex.js';
 import type {
   AgentContextDraft,
   AgentPanelState,
@@ -142,6 +143,11 @@ const api = {
    */
   videoPoster: (req: VideoPosterRequest): Promise<VideoPosterResult> =>
     ipcRenderer.invoke(IPC.videoPoster, req),
+  /** The Media panel: every file in the deck's assets/ and what refers to it. */
+  listDeckAssets: (): Promise<DeckAssetListing> => ipcRenderer.invoke(DECK_ASSET_IPC.list),
+  /** Move unused asset files to the system Trash, rechecked against `deck` and the saved deck. */
+  trashDeckAssets: (files: string[], deck: Deck): Promise<DeckAssetTrashResult> =>
+    ipcRenderer.invoke(DECK_ASSET_IPC.trash, files, deck),
 
   /**
    * A dropped File carries no usable path once context isolation is on;

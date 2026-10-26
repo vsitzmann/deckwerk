@@ -1,0 +1,131 @@
+/* The Media tab (mediaPanel.ts). Controls reuse the shared field, strip,
+   checkbox, panel-action and ghost styles; only the rows are its own, drawn
+   from the same tokens as the history list and the rail, in both themes. */
+
+.media-panel .panel-header { margin-bottom: 4px; }
+.media-panel .media-count { flex: none; }
+.media-panel > .insp-hint { margin: 0 0 10px; }
+.media-panel .media-search input { width: 100%; }
+.media-panel .media-on-slide { margin-bottom: 10px; }
+
+.media-list { display: grid; gap: 6px; }
+.media-empty { margin: 4px 0 0; }
+
+.media-item {
+  display: grid;
+  grid-template-columns: 72px minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 9px;
+  padding: 7px 6px 7px 7px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  cursor: grab;
+}
+.media-item:hover { border-color: var(--muted); }
+.media-item.is-dragging { opacity: 0.55; }
+.media-item:active { cursor: grabbing; }
+
+.media-thumb {
+  position: relative;
+  width: 72px;
+  height: 44px;
+  overflow: hidden;
+  background: var(--bg);
+  box-shadow: inset 0 0 0 1px var(--line);
+}
+.media-thumb > img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+/* A video thumbnail is a one-element render (player .element) frozen to a still. */
+.media-thumb > .element { pointer-events: none; }
+.media-thumb .element img,
+.media-thumb .element video { width: 100%; height: 100%; object-fit: cover; }
+.media-thumb-glyph {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--muted);
+  font: 600 10px var(--mono, ui-monospace, monospace);
+  letter-spacing: 0.08em;
+}
+
+.media-body { display: grid; gap: 2px; min-width: 0; }
+.media-name {
+  overflow: hidden;
+  font-size: 11px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.media-meta,
+.media-title {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.media-slides {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 3px;
+  margin-top: 3px;
+}
+.media-slides > span { margin-right: 2px; color: var(--muted); font-size: 10px; }
+button.media-slide-link {
+  min-width: 20px;
+  height: 18px;
+  padding: 0 4px;
+  border-color: var(--line);
+  background: transparent;
+  color: var(--text);
+  font-size: 10px;
+  line-height: 16px;
+}
+button.media-slide-link:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); background: transparent; }
+button.media-slide-link.is-current { border-color: var(--accent); color: var(--accent); }
+button.media-slide-link:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+
+button.media-add {
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  font-size: 14px;
+  line-height: 1;
+}
+
+.media-unused { margin-top: 14px; padding-top: 10px; border-top: 1px solid var(--line); }
+.media-unused-hint { margin: 4px 0 0; }
+.media-unused-list { display: grid; gap: 1px; margin-top: 2px; }
+.media-unused-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  column-gap: 8px;
+  padding: 4px 0;
+  border-bottom: 1px solid var(--line);
+  font-size: 10.5px;
+}
+.media-unused-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.media-unused-size { color: var(--muted); font-variant-numeric: tabular-nums; }
+.media-unused-note { grid-column: 1 / -1; color: var(--muted); font-size: 10px; }
+.media-unused .media-trash { margin: 10px 0 0; }
+
+/* Confirm dialogs that name what they act on (confirmDialog `items`). */
+.confirm-dialog-items {
+  max-height: 180px;
+  margin: 10px 0 0;
+  padding: 6px 8px;
+  overflow-y: auto;
+  border: 1px solid var(--line);
+  background: var(--bg);
+  list-style: none;
+  font: 11px/1.6 var(--mono, ui-monospace, monospace);
+  overflow-wrap: anywhere;
+}

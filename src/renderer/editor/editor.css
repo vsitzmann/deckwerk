@@ -92,8 +92,9 @@ body.mac-titlebar #toolbar { padding-left: 84px; }
 }
 .bar-deck-name-hint { flex: none; color: var(--muted); font-size: 11px; }
 
-/* The deck's history, opened from its name (it was a sidebar tab). */
-.history-popover {
+/* Panels opened from the toolbar: the deck's history under its name (it was
+   a sidebar tab) and the media library under Media (#99's tab). */
+.panel-popover {
   position: fixed;
   z-index: 10020;
   display: flex;
@@ -108,6 +109,9 @@ body.mac-titlebar #toolbar { padding-left: 84px; }
   color: var(--text);
   box-shadow: 0 14px 38px rgb(0 0 0 / 45%);
 }
+.media-popover { width: 400px; max-height: min(640px, calc(100vh - 80px)); padding: 4px 6px 10px; }
+.panel-popover > #history,
+.panel-popover > #media { padding: 8px 12px 4px; }
 .bar-group {
   display: flex;
   align-items: center;
@@ -412,6 +416,69 @@ body.panel-resizing iframe { pointer-events: none; }
   display: grid;
   place-items: center;
 }
+
+.zoom-controls .light-table-toggle { display: grid; place-items: center; }
+.zoom-controls .light-table-toggle.active { background: var(--accent-soft); color: var(--accent); }
+
+/* The light table (lightTable.ts): every slide as a card over the canvas, the
+   editor's side of Speaker View's G grid. */
+.light-table {
+  position: absolute;
+  inset: 0;
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+}
+.light-table-header {
+  display: flex;
+  align-items: baseline;
+  gap: 14px;
+  padding: 14px 20px 10px;
+  border-bottom: 1px solid var(--line);
+}
+.light-table-header .insp-title { margin: 0; }
+.light-table-header .insp-hint { flex: 1; margin: 0; }
+.light-table-close { flex: none; }
+.light-table-grid {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 22px 18px;
+  align-content: start;
+  justify-items: center;
+  padding: 18px 20px 28px;
+}
+.light-table-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font: 11px var(--mono);
+  cursor: pointer;
+}
+.light-table-thumb {
+  position: relative;
+  display: block;
+  overflow: hidden;
+  border-radius: 4px;
+  background: #fff;
+  box-shadow: 0 0 0 1px var(--line), 0 4px 14px rgb(0 0 0 / 30%);
+  pointer-events: none;
+}
+.light-table-card:hover .light-table-thumb { box-shadow: 0 0 0 1px var(--muted), 0 4px 14px rgb(0 0 0 / 30%); }
+.light-table-card.active .light-table-thumb { box-shadow: 0 0 0 2px var(--accent), 0 4px 14px rgb(0 0 0 / 30%); }
+.light-table-card.active { color: var(--accent); }
+.light-table-card.skipped .light-table-thumb { opacity: 0.45; }
+.light-table-card.dragging { opacity: 0.4; }
+.light-table-card.drop-before .light-table-thumb { box-shadow: -4px 0 0 var(--accent), 0 0 0 1px var(--line); }
+.light-table-card.drop-after .light-table-thumb { box-shadow: 4px 0 0 var(--accent), 0 0 0 1px var(--line); }
 
 .zoom-controls .rulers-toggle.active {
   background: var(--accent-soft);

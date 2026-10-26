@@ -22,7 +22,7 @@ import {
   equationBuildControls,
 } from './equationBuildPanel.js';
 import { countParagraphs, paragraphTexts } from '@shared/paragraphs.js';
-import { describeElement, elementKind, renderElementLabel } from './elementLabel.js';
+import { describeElement, renderElementLabel } from './elementLabel.js';
 import type { EditorStore } from './store.js';
 
 /**
@@ -103,7 +103,7 @@ export class TimelinePanel {
 
     const selection = this.store.get().selection;
 
-    const elements = panelSection('Elements', 'build-elements-section');
+    const elements = panelSection('Selection', 'build-elements-section');
     this.host.appendChild(elements.section);
 
     // The same numbers appear as badges on the canvas, so a card can be
@@ -141,31 +141,16 @@ export class TimelinePanel {
       deck.slides[this.store.get().slideIndex].timeline.push(entry);
     }, { label })));
 
-    // The list mirrors the canvas selection: picking an object on the slide
-    // lights up its row here, and picking a row selects it on the slide, so
-    // "add animation" never requires hunting through the list. Each row
-    // carries the numbers of the steps that animate it, so the answer to
-    // "is this built yet" is on the row rather than in the cards below.
-    const list = document.createElement('div');
-    list.className = 'build-element-list';
-    for (const element of slide.elements) {
-      const row = document.createElement('button');
-      row.type = 'button';
-      row.className = 'build-element-row';
-      row.dataset.elementId = element.id;
-      row.dataset.kind = elementKind(element);
-      row.classList.toggle('selected', selection.has(element.id));
-      renderElementLabel(row, element);
-      const steps = numbersByTarget.get(element.id);
-      // Written as the canvas badge writes them, so the two read alike.
-      if (steps) row.dataset.steps = steps.join(',');
-      row.title = steps
-        ? `${describeElement(element)} · step ${steps.join(', ')}`
-        : describeElement(element);
-      row.addEventListener('click', () => this.store.select([element.id]));
-      list.appendChild(row);
-    }
-    elements.section.appendChild(list);
+    // The slide's objects and their step numbers are listed once, in the
+    // Objects drawer at the canvas's top-left (switched to Build order); this
+    // panel only animates what is selected.
+    const pointer = document.createElement('p');
+    pointer.className = 'insp-hint build-objects-pointer';
+    pointer.textContent = selection.size === 0
+      ? 'Select an object on the slide, or in Objects at the canvas’s top-left (Build order lists every step).'
+      : `${selected.length === 1 ? describeElement(selected[0]) : `${selected.length} objects`}${
+        selected.length === 1 && numbersByTarget.get(selected[0].id) ? ` · step ${numbersByTarget.get(selected[0].id)!.join(', ')}` : ''}`;
+    elements.section.appendChild(pointer);
 
     const add = document.createElement('button');
     add.className = 'panel-action';

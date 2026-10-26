@@ -115,6 +115,7 @@ import {
   shouldShowAudienceWindow,
   swappedPresentationDisplays,
 } from './presentationDisplays.js';
+import { registerDeckAssetIpc } from './deckAssetsIpc.js';
 
 /** Pick a loopback URL for the local bridge and a reachable URL for people. */
 function collaborationInviteUrl(urls: string[], deckId: string, agent = false): string | null {
@@ -648,6 +649,8 @@ app.on('before-quit', () => {
 });
 
 function registerHandlers(): void {
+  // The Media library: list the deck's assets, move unused ones to the Trash.
+  registerDeckAssetIpc(requireSession);
   ipcMain.handle(IPC.deckNew, async (event, operationId?: string): Promise<DeckSession | null> => {
     const res = await showSaveDialog({
       title: 'New deck',
