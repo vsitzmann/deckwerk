@@ -28,8 +28,10 @@ describe('stroke styles', () => {
     expect(plain).toMatch(/<path d="M 0 50 L 400 50" stroke-linecap="round"/);
   });
 
-  it('only styles a path with a visible stroke', () => {
-    expect(strokeStyleOf(line({ shape: 'line', strokeStyle: 'brush' }))).toBe('pen');
+  it('styles lines and paths with a visible stroke, and nothing else', () => {
+    expect(strokeStyleOf(line({ shape: 'line', strokeStyle: 'brush' }))).toBe('brush');
+    expect(strokeStyleOf(line({ shape: 'arrow', strokeStyle: 'marker' }))).toBe('marker');
+    expect(strokeStyleOf(line({ shape: 'rect', strokeStyle: 'brush' }))).toBe('pen');
     expect(shapeSvg(line({ stroke: null, fill: '#ff0000', strokeStyle: 'pencil' }))).not.toContain('pencil-');
   });
 
@@ -63,11 +65,15 @@ describe('stroke styles', () => {
     expect(pencil).toContain('<feTurbulence');
     expect(pencil).toMatch(/class="shape-stroke" d="M 0 50 L 400 50" fill="none" stroke="#111111" stroke-width="12" stroke-opacity="0.85"/);
 
+    expect(shapeSvg(line({ strokeStyle: 'marker' }))).toMatch(/stroke-opacity="0.45" stroke-linecap="butt"/);
+    // An arrowhead is drawn as a line's is, in one see-through layer with the
+    // stroke, so the two do not darken where they overlap.
     const marker = shapeSvg(line({ strokeStyle: 'marker', arrowEnd: true }));
-    expect(marker).toMatch(/stroke-opacity="0.45" stroke-linecap="butt"/);
-    expect(marker).toContain('marker-end="url(#arrowhead-stroke)"');
-    // A brush outline is filled, so it takes no arrowhead.
-    expect(shapeSvg(line({ strokeStyle: 'brush', arrowEnd: true }))).not.toContain('marker-end');
+    expect(marker).toMatch(/<g class="stroke-ink" opacity="0.45"><path class="shape-stroke" [^>]*\/><path class="arrowhead" d="M 400 50 [^"]+" fill="#111111" stroke="none"\/><\/g>/);
+    expect(marker).not.toContain('stroke-opacity');
+    expect(marker).not.toContain('marker-end');
+    // A brush's outline is filled, and its head is drawn beside it all the same.
+    expect(shapeSvg(line({ strokeStyle: 'brush', arrowEnd: true }))).toContain('class="arrowhead"');
   });
 
   it('round-trips through the authoring HTML, the pen leaving no trace', () => {

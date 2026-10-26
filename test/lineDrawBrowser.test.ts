@@ -147,46 +147,40 @@ describe.skipIf(!electronBinary)('line draw on an arrow', () => {
     const svg = `[data-element-id="${BOX_ID}"] svg`;
     await eventually(async () => editor!.evaluate<boolean>(`Boolean(document.querySelector('${svg} > path'))`), 'the presentation never came up');
     await wait(500);
-    const state = () => editor!.evaluate<{ marker: string | null; heads: number; transform: string | null }>(`(() => {
-      const paths = [...document.querySelectorAll('${svg} > path:not(.draw-trace)')];
-      return {
-        marker: paths[0].getAttribute('marker-end'),
-        heads: paths.length - 1,
-        transform: paths[1]?.getAttribute('transform') ?? null,
-      };
-    })()`);
+    // The head is drawn as a line's is: a path whose data starts at its tip,
+    // then runs to one corner of its base.
+    type Head = { heads: number; tip: number[] | null; corner: number[] | null };
+    const read = `(() => {
+      const heads = [...document.querySelectorAll('${svg} > path.arrowhead')];
+      const numbers = heads[0]?.getAttribute('d')?.match(/-?[\\d.]+/g)?.map(Number) ?? null;
+      return { heads: heads.length, tip: numbers ? numbers.slice(0, 2) : null, corner: numbers ? numbers.slice(2, 4) : null };
+    })()`;
+    const state = () => editor!.evaluate<Head>(read);
     // Recorded on every frame in the page (see the straight arrow above).
     await editor.evaluate(`(() => {
       window.__heads = [];
-      const read = () => {
-        const paths = [...document.querySelectorAll('${svg} > path:not(.draw-trace)')];
-        window.__heads.push({
-          marker: paths[0].getAttribute('marker-end'),
-          heads: paths.length - 1,
-          transform: paths[1]?.getAttribute('transform') ?? null,
-        });
-        if (window.__heads.length < 600) requestAnimationFrame(read);
+      const sample = () => {
+        window.__heads.push(${read});
+        if (window.__heads.length < 600) requestAnimationFrame(sample);
       };
-      requestAnimationFrame(read);
+      requestAnimationFrame(sample);
     })()`);
     await editor.key('ArrowRight', 39);
-    // Drawn: the ordinary marker is back and the travelling head is gone.
+    // Drawn: one head, its tip on the path's end.
     const done = await eventually(state, 'the path never finished drawing',
-      (now) => now.marker !== null && now.heads === 0);
-    expect(done.marker).toMatch(/^url\(#arrowhead-/);
-    const frames = await editor.evaluate<Array<{ marker: string | null; heads: number; transform: string | null }>>('window.__heads');
-    // On the way: no marker at the far end, a head out on the top edge pointing right.
-    const early = frames.find((frame) => {
-      const match = frame.transform && /translate\(([-\d.]+) ([-\d.]+)\)/.exec(frame.transform);
-      return match && Number(match[1]) > 0 && Number(match[1]) < 400;
-    });
+      (now) => now.heads === 1 && now.tip![0] === 400 && now.tip![1] === 400);
+    expect(done.heads).toBe(1);
+    const frames = await editor.evaluate<Head[]>('window.__heads');
+    // On the way: a single head out on the top edge, pointing right.
+    const early = frames.find((frame) => frame.tip && frame.tip[0] > 0 && frame.tip[0] < 380);
     expect(early).toBeDefined();
-    expect(early!.marker).toBeNull();
     expect(early!.heads).toBe(1);
-    const [x, y, angle] = /translate\(([-\d.]+) ([-\d.]+)\) rotate\(([-\d.]+)\)/.exec(early!.transform!)!.slice(1).map(Number);
-    expect(y).toBeCloseTo(0, 0);
-    expect(x).toBeGreaterThan(0);
-    expect(angle).toBeCloseTo(0, 0);
+    expect(early!.tip![1]).toBeCloseTo(0, 0);
+    expect(early!.corner![0]).toBeLessThan(early!.tip![0]);
+    // Never two heads, never one left behind at the far end while it draws.
+    expect(frames.every((frame) => frame.heads <= 1)).toBe(true);
+    expect(frames.filter((frame) => frame.tip && frame.tip[0] === 400 && frame.tip[1] === 400).length)
+      .toBeLessThan(frames.length);
   });
   it('outlines a filled pen shape first, one run after another, and only then colours it in', { timeout: 120_000 }, async () => {
     workDir = await mkdtemp(join(tmpdir(), 'fill-draw-'));

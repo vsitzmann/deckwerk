@@ -215,6 +215,37 @@ export function penOverlay(pen: PenDraft, scale: number, canvas: { w: number; h:
 /** How close, in screen pixels, a click must be to a point to land on it. */
 export const PEN_POINT_SCREEN_PX = 8;
 
+/** The two drawing tools under the toolbar's Pen ▾: the Bézier pen and the freehand pencil. */
+export type DrawingTool = 'pen' | 'pencil';
+
+/**
+ * How far, in screen pixels, a pencil stroke's samples may stray from the
+ * smooth line laid through it: enough to take out the hand's tremor, not
+ * its intent.
+ */
+export const PENCIL_TOLERANCE_SCREEN_PX = 1.5;
+
+/**
+ * The pencil's stroke while the pointer is down, in the ink and the width a
+ * new line gets, so what is drawn looks like what lands.
+ */
+export function pencilOverlay(points: XY[], ink: string, canvas: { w: number; h: number }): SVGSVGElement {
+  const ns = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(ns, 'svg');
+  svg.classList.add('path-overlay', 'pencil-overlay');
+  svg.setAttribute('width', String(canvas.w));
+  svg.setAttribute('height', String(canvas.h));
+  svg.setAttribute('aria-hidden', 'true');
+  const path = document.createElementNS(ns, 'path');
+  path.setAttribute('class', 'pencil-overlay-stroke');
+  path.setAttribute('d', points.map((p, i) => `${i ? 'L' : 'M'} ${p.x} ${p.y}`).join(' '));
+  // Inline, over the chrome's accent outline: this is ink, not chrome.
+  path.style.stroke = ink;
+  path.style.strokeWidth = '4px';
+  svg.appendChild(path);
+  return svg;
+}
+
 function distance(a: XY, b: XY): number {
   return Math.hypot(a.x - b.x, a.y - b.y);
 }

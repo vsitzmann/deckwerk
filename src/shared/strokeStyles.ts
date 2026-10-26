@@ -1,4 +1,4 @@
-import type { ShapeEl, StrokeStyle } from './deck.js';
+import type { ShapeEl, StrokeDash, StrokeStyle } from './deck.js';
 import { cubicAt, parsePath, segmentCount, segmentOf, type SubPath, type XY } from './pathNodes.js';
 
 /**
@@ -15,10 +15,36 @@ import { cubicAt, parsePath, segmentCount, segmentOf, type SubPath, type XY } fr
  * inside it, and Line Draw can trace one and fade in the other.
  */
 
-/** The stroke style a shape is drawn with; only paths take one. */
+/** The stroke style a shape is drawn with; lines, arrows and paths take one. */
 export function strokeStyleOf(el: Pick<ShapeEl, 'shape' | 'strokeStyle'>): StrokeStyle {
-  return el.shape === 'path' && el.strokeStyle ? el.strokeStyle : 'pen';
+  const takes = el.shape === 'path' || el.shape === 'line' || el.shape === 'arrow';
+  return takes && el.strokeStyle ? el.strokeStyle : 'pen';
 }
+
+/**
+ * A broken stroke's `stroke-dasharray`, in units of its width: dashes three
+ * widths long with gaps of two, or dots (dashes of no length, which only a
+ * round end draws) two widths apart. Empty for a solid stroke.
+ */
+export function strokeDashAttrs(el: Pick<ShapeEl, 'strokeDash' | 'strokeWidth'>): string {
+  const width = el.strokeWidth;
+  if (!el.strokeDash || !(width > 0)) return '';
+  return el.strokeDash === 'dotted'
+    ? ` stroke-dasharray="0 ${round(width * 2)}"`
+    : ` stroke-dasharray="${round(width * 3)} ${round(width * 2)}"`;
+}
+
+/** How each broken stroke is named in the editor; `solid` is no `strokeDash` at all. */
+export const STROKE_DASH_LABELS: Record<'solid' | StrokeDash, string> = {
+  solid: 'Solid', dashed: 'Dashed', dotted: 'Dotted',
+};
+
+/** A small picture of each, in a 14-unit box, for the inspector. */
+export const STROKE_DASH_GLYPHS: Record<'solid' | StrokeDash, string> = {
+  solid: '<path d="M1.5 7h11"/>',
+  dashed: '<path d="M1.5 7h11" style="stroke-dasharray:3 2"/>',
+  dotted: '<path d="M2 7h10" style="stroke-dasharray:0 2.5;stroke-linecap:round;stroke-width:1.6"/>',
+};
 
 /** What the pen gives a new line in each style, in pixels. */
 export const STROKE_STYLE_WIDTHS: Record<StrokeStyle, number> = { pen: 4, brush: 12, pencil: 3, marker: 24 };
@@ -43,18 +69,31 @@ export const STROKE_STYLE_GLYPHS: Record<StrokeStyle, string> = {
 const round = (value: number): number => Math.round(value * 100) / 100 + 0;
 
 /**
- * A styled path's stroke, and the fill under it when there is one. `paint` is
- * the fill paint, `markers` the arrowhead attributes, `id` a document-unique
+ * A styled path's stroke, and the fill under it when there is one. `fill` is
+ * the fill paint, `d` the stroke's path data and `fillD` the fill's (they
+ * differ where an arrowhead cut the stroke short), `id` a document-unique
  * stem for the filter it may need, `view` the path's own coordinate space.
  */
 export function styledPathSvg(
   el: ShapeEl,
-  options: { fill: string; stroke: string; markers: string; id: string; view: { w: number; h: number }; d: string },
+  options: {
+    fill: string; stroke: string; id: string; view: { w: number; h: number }; d: string; fillD?: string;
+    /** Caps (arrowheads, dots, bars) to draw in the same ink as the stroke. */
+    caps?: string;
+  },
 ): { defs: string; node: string } {
-  const { fill, stroke, markers, id, view, d } = options;
+  const { fill, stroke, id, view, d } = options;
+  const caps = options.caps ?? '';
+  // A see-through stroke and its caps are one layer of ink: drawn opaque and
+  // made see-through together, so where a cap overlaps the line it is not
+  // twice as dark.
+  const ink = (path: string, opacity: string): string => caps
+    ? `<g class="stroke-ink" opacity="${opacity}">${path}${caps}</g>`
+    : path.replace(` stroke-width="${width}"`, ` stroke-width="${width}" stroke-opacity="${opacity}"`);
   const style = strokeStyleOf(el);
   const width = el.strokeWidth;
-  const under = fill === 'none' ? '' : `<path class="shape-fill" d="${d}" fill="${fill}" stroke="none"/>`;
+  const dash = strokeDashAttrs(el);
+  const under = fill === 'none' ? '' : `<path class="shape-fill" d="${options.fillD ?? d}" fill="${fill}" stroke="none"/>`;
   // Filters are placed in the path's own units, with room for the stroke and
   // whatever the filter spreads, so a straight line (a box with no height)
   // still has a region to be drawn in.
@@ -64,8 +103,9 @@ export function styledPathSvg(
   if (style === 'marker') {
     return {
       defs: '',
-      node: `${under}<path class="shape-stroke" d="${d}" fill="none" stroke="${stroke}" stroke-width="${width}"`
-        + ` stroke-opacity="0.45" stroke-linecap="butt" stroke-linejoin="round"${markers}/>`,
+      node: under + ink(`<path class="shape-stroke" d="${d}" fill="none" stroke="${stroke}" stroke-width="${width}"`
+        + ` stroke-linecap="${el.strokeDash === 'dotted' ? 'round' : 'butt'}"`
+        + ` stroke-linejoin="round"${dash}/>`, '0.45'),
     };
   }
   if (style === 'pencil') {
@@ -80,8 +120,8 @@ export function styledPathSvg(
         + '<feColorMatrix in="noise" type="matrix" values="0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  3 0 0 0 -0.7" result="grain"/>'
         + '<feComposite in="rough" in2="grain" operator="in"/>'
         + '</filter></defs>',
-      node: `${under}<path class="shape-stroke" d="${d}" fill="none" stroke="${stroke}" stroke-width="${width}"`
-        + ` stroke-opacity="0.85" stroke-linecap="round" stroke-linejoin="round" filter="url(#${filter})"${markers}/>`,
+      node: under + ink(`<path class="shape-stroke" d="${d}" fill="none" stroke="${stroke}" stroke-width="${width}"`
+        + ` stroke-linecap="round" stroke-linejoin="round" filter="url(#${filter})"${dash}/>`, '0.85'),
     };
   }
   // The brush: an outline around the path, swelling and tapering, filled
@@ -90,8 +130,8 @@ export function styledPathSvg(
   return {
     defs: `<defs><filter id="${filter}" ${region}>`
       + `<feGaussianBlur stdDeviation="${round(0.3 + width * 0.03)}"/></filter></defs>`,
-    node: `${under}<path class="shape-stroke brush-stroke" d="${brushOutline(el.path ?? '', width)}"`
-      + ` fill="${stroke}" stroke="none" filter="url(#${filter})"/>`,
+    node: `${under}<path class="shape-stroke brush-stroke" d="${brushOutline(d, width)}"`
+      + ` fill="${stroke}" stroke="none" filter="url(#${filter})"/>${caps}`,
   };
 }
 

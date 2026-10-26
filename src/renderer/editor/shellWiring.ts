@@ -3,6 +3,7 @@ import { openThreadCount } from '@shared/comments.js';
 import { commentHighlightsShown, setCommentHighlightsShown } from './comments.js';
 import { elementFollowsLayout, layoutGeometryFor, realignElementToLayout } from '@shared/layoutMasters.js';
 import { EditorCanvas } from './canvas.js';
+import { isLineFamily } from '@shared/lineFamily.js';
 import { ARRANGE_LABELS, arrangeSelection } from './arrange.js';
 import { setCircularMask } from '@shared/mediaMask.js';
 import { wipeCandidates, wipeOfPair } from '@shared/compare.js';
@@ -490,6 +491,25 @@ export function bindEditorKeys(deps: ShellDeps, clipboard: ClipboardActions): vo
       case 'n':
         if (!mod) rail.addSlide();
         break;
+      // Figma's drawing keys: P takes up the pen, Shift+P the pencil.
+      case 'p':
+      case 'P':
+        if (!mod && !e.altKey) {
+          e.preventDefault();
+          if (e.shiftKey) canvas.startPencil();
+          else canvas.startPen();
+        }
+        break;
+      case 'Enter': {
+        // Return on a selected line, arrow, curve or path opens its points,
+        // as a double-click does; a focused control keeps its own Return.
+        const [only] = store.selectedElements();
+        if (mod || e.altKey || !only || store.get().selection.size !== 1 || !isLineFamily(only)) break;
+        if (t?.closest('button, a, [role="menuitem"], #rail')) break;
+        e.preventDefault();
+        canvas.togglePathEdit(only.id);
+        break;
+      }
     }
   });
 }
@@ -572,7 +592,7 @@ export function makeContextActions(
           items.push({ label: 'Edit w/ ffmpeg…', action: () => openTrim(el) });
         }
       }
-      if (el.type === 'shape' && el.shape === 'path' && sel === 1) {
+      if (isLineFamily(el) && sel === 1) {
         items.push('separator', {
           label: canvas.pathEditingElement() === el.id ? 'Done editing points' : 'Edit points',
           action: () => canvas.togglePathEdit(el.id),

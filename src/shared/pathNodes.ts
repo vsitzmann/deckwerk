@@ -651,7 +651,12 @@ export function pathOnCanvas(el: ShapeEl): SubPath[] | null {
   if (!paths) return null;
   const { sx, sy } = pathScale(el);
   const centre = { x: el.x + el.w / 2, y: el.y + el.h / 2 };
-  return mapPaths(paths, (p) => rotateAbout({ x: el.x + p.x * sx, y: el.y + p.y * sy }, centre, el.rot));
+  // A flipped path is drawn mirrored in its box before it is turned
+  // (flip.ts), so its points are where the mirror puts them.
+  return mapPaths(paths, (p) => rotateAbout({
+    x: el.x + (el.flipX ? el.w - p.x * sx : p.x * sx),
+    y: el.y + (el.flipY ? el.h - p.y * sy : p.y * sy),
+  }, centre, el.rot));
 }
 
 /**
@@ -689,6 +694,10 @@ export function setPathOnCanvas(el: ShapeEl, paths: SubPath[]): void {
   el.h = round(h);
   el.pathSize = { w: round(w / sx), h: round(h / sy) };
   el.path = serializePath(mapPaths(local, (p) => ({ x: (p.x - bounds.x) / sx, y: (p.y - bounds.y) / sy })));
+  // The anchors were given where they show, mirror and all: the path now
+  // draws them there itself.
+  delete el.flipX;
+  delete el.flipY;
 }
 
 /**
@@ -725,4 +734,179 @@ export function redrawPathAtSize(el: ShapeEl, path: string, before: { w: number;
 export function scalePathData(d: string, sx: number, sy: number): string | null {
   const paths = parsePath(d);
   return paths ? serializePath(mapPaths(paths, (p) => ({ x: p.x * sx, y: p.y * sy }))) : null;
+}
+
+/** A run of cubics, end to end, as anchors: each joint takes the handles either side of it. */
+export function runFromCubics(curves: Cubic[]): SubPath {
+  if (curves.length === 0) return { nodes: [], closed: false };
+  const nodes: PathNode[] = [{ x: curves[0][0].x, y: curves[0][0].y, out: { ...curves[0][1] } }];
+  curves.forEach((curve, i) => {
+    const node: PathNode = { x: curve[3].x, y: curve[3].y, in: { ...curve[2] } };
+    const next = curves[i + 1];
+    if (next) node.out = { ...next[1] };
+    nodes.push(node);
+  });
+  return tidy({ nodes, closed: false });
+}
+
+/** Samples per segment when a length is measured along a curve: finer than a drawing needs. */
+const LENGTH_SAMPLES = 32;
+
+/** Distance along a cubic at each of `LENGTH_SAMPLES` even steps of its parameter, from 0. */
+function lengthTable(curve: Cubic): number[] {
+  const table = [0];
+  let previous = curve[0];
+  for (let i = 1; i <= LENGTH_SAMPLES; i += 1) {
+    const point = cubicAt(curve, i / LENGTH_SAMPLES);
+    table.push(table[i - 1] + Math.hypot(point.x - previous.x, point.y - previous.y));
+    previous = point;
+  }
+  return table;
+}
+
+/** The parameter at which a cubic has run `distance` along itself, read off its length table. */
+function paramAtLength(table: number[], distance: number): number {
+  const total = table[table.length - 1];
+  if (distance <= 0 || total <= 0) return 0;
+  if (distance >= total) return 1;
+  let i = 1;
+  while (table[i] < distance) i += 1;
+  const span = table[i] - table[i - 1];
+  const within = span > 0 ? (distance - table[i - 1]) / span : 0;
+  return (i - 1 + within) / LENGTH_SAMPLES;
+}
+
+/** How long the paths are, along their curves. */
+export function pathLength(paths: SubPath[]): number {
+  let total = 0;
+  for (const run of paths) {
+    for (let i = 0; i < segmentCount(run); i += 1) total += lengthTable(segmentOf(run, i)).at(-1)!;
+  }
+  return total;
+}
+
+/**
+ * The first `fraction` of the paths by length, run after run, the way Line
+ * Draw shows them drawing: runs it has passed whole, the run it is in cut
+ * where it has reached (a closed run open there, at its start), and none of
+ * the runs after.
+ */
+export function pathPrefix(paths: SubPath[], fraction: number): SubPath[] {
+  if (fraction >= 1) return paths;
+  const tables = paths.map((run) => Array.from({ length: segmentCount(run) }, (_, i) => lengthTable(segmentOf(run, i))));
+  const total = tables.flat().reduce((sum, table) => sum + table[table.length - 1], 0);
+  let left = Math.max(0, fraction) * total;
+  const drawn: SubPath[] = [];
+  for (let r = 0; r < paths.length && left > 0; r += 1) {
+    const run = paths[r];
+    const curves: Cubic[] = [];
+    let whole = true;
+    for (let i = 0; i < segmentCount(run); i += 1) {
+      const length = tables[r][i][tables[r][i].length - 1];
+      const curve = segmentOf(run, i);
+      if (length <= left) {
+        curves.push(curve);
+        left -= length;
+        continue;
+      }
+      if (left > 0) curves.push(splitCubic(curve, paramAtLength(tables[r][i], left))[0]);
+      left = 0;
+      whole = false;
+      break;
+    }
+    if (whole) drawn.push(run);
+    else if (curves.length > 0) drawn.push(runFromCubics(curves));
+  }
+  return drawn;
+}
+
+/**
+ * Bend segment `index` of a run so that its point at `t` moves by `delta`
+ * (Figma's bend: Cmd/Ctrl-drag the outline). Both controls move the same
+ * way, the nearer one more, by just enough that the grabbed point follows
+ * the pointer exactly; a straight segment becomes a curve.
+ */
+export function bendSegment(sub: SubPath, index: number, t: number, delta: XY): void {
+  const a = sub.nodes[index];
+  const b = sub.nodes[(index + 1) % sub.nodes.length];
+  if (!a || !b) return;
+  const [, c1, c2] = segmentOf(sub, index);
+  const u = Math.min(0.9, Math.max(0.1, t));
+  // Moving c1 by w1·delta and c2 by w2·delta moves B(u) by
+  // 3u(1-u)·((1-u)·w1 + u·w2)·delta; with w1 = k(1-u), w2 = ku that is
+  // delta when k = 1 / (3u(1-u)((1-u)² + u²)).
+  const k = 1 / (3 * u * (1 - u) * ((1 - u) ** 2 + u ** 2));
+  const w1 = k * (1 - u);
+  const w2 = k * u;
+  a.out = { x: c1.x + delta.x * w1, y: c1.y + delta.y * w1 };
+  b.in = { x: c2.x + delta.x * w2, y: c2.y + delta.y * w2 };
+  tidy({ nodes: [a, b], closed: false });
+}
+
+/**
+ * A freehand stroke (the Pencil) as one smooth run. The pointer's samples
+ * are thinned to the ones that shape it (Ramer–Douglas–Peucker, keeping
+ * every point further than `tolerance` from the line its neighbours make),
+ * and a curve is laid through those, each one's handles along the line
+ * between its neighbours (Catmull–Rom), so the stroke keeps its form
+ * without the tremor of the hand that drew it. Null when it is too short
+ * to be a line.
+ */
+export function freehandRun(samples: XY[], tolerance: number): SubPath | null {
+  const points: XY[] = [];
+  for (const sample of samples) {
+    const last = points[points.length - 1];
+    if (!last || Math.hypot(sample.x - last.x, sample.y - last.y) >= Math.min(0.5, tolerance)) {
+      points.push({ x: sample.x, y: sample.y });
+    }
+  }
+  if (points.length < 2) return null;
+  const kept = simplify(points, Math.max(tolerance, 1e-3));
+  const first = kept[0];
+  const last = kept[kept.length - 1];
+  if (kept.length === 2 && Math.hypot(last.x - first.x, last.y - first.y) < tolerance) return null;
+  const nodes: PathNode[] = kept.map((point, i) => {
+    const node: PathNode = { x: point.x, y: point.y };
+    if (kept.length === 2) return node;
+    const before = kept[i - 1] ?? point;
+    const after = kept[i + 1] ?? point;
+    const tangent = { x: (after.x - before.x) / 6, y: (after.y - before.y) / 6 };
+    if (i > 0) node.in = { x: point.x - tangent.x, y: point.y - tangent.y };
+    if (i < kept.length - 1) node.out = { x: point.x + tangent.x, y: point.y + tangent.y };
+    return node;
+  });
+  return tidy({ nodes, closed: false });
+}
+
+/** Ramer–Douglas–Peucker: the points that stay further than `tolerance` from the chord across them. */
+function simplify(points: XY[], tolerance: number): XY[] {
+  const keep = new Array<boolean>(points.length).fill(false);
+  keep[0] = true;
+  keep[points.length - 1] = true;
+  const stack: Array<[number, number]> = [[0, points.length - 1]];
+  while (stack.length > 0) {
+    const [from, to] = stack.pop()!;
+    const a = points[from];
+    const b = points[to];
+    const dx = b.x - a.x;
+    const dy = b.y - a.y;
+    const length = Math.hypot(dx, dy);
+    let worst = -1;
+    let index = -1;
+    for (let i = from + 1; i < to; i += 1) {
+      const p = points[i];
+      const d = length > 0
+        ? Math.abs(dy * p.x - dx * p.y + b.x * a.y - b.y * a.x) / length
+        : Math.hypot(p.x - a.x, p.y - a.y);
+      if (d > worst) {
+        worst = d;
+        index = i;
+      }
+    }
+    if (index >= 0 && worst > tolerance) {
+      keep[index] = true;
+      stack.push([from, index], [index, to]);
+    }
+  }
+  return points.filter((_, i) => keep[i]);
 }

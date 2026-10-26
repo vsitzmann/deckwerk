@@ -171,6 +171,36 @@ describe('drawing an arrow in while presenting', () => {
     expect(svg()).toBe(finished(arrow()));
   });
 
+  it('grows a pen path with an arrowhead the same way, its head riding the tip', () => {
+    const path = arrow({
+      shape: 'path', w: 400, h: 100, path: 'M 0 100 L 200 0 L 400 100', pathSize: { w: 400, h: 100 },
+      arrowEnd: true, startCap: 'dot',
+    });
+    const { player, svg } = present(deckWith(path, draw({ duration: 1000 })));
+    player.next();
+    expect(svg()).toBe('');
+    vi.advanceTimersByTime(500);
+    // Halfway along two equal runs (eased): the head is at the joint, the dot on the start.
+    const tip = headTip(svg())!;
+    expect(tip[0]).toBeCloseTo(200, -1);
+    expect(tip[1]).toBeLessThan(10);
+    expect(svg()).toContain('class="line-cap"');
+    expect(svg()).not.toContain('draw-trace');
+    vi.advanceTimersByTime(600);
+    expect(svg()).toBe(finished(path));
+  });
+
+  it('draws a pencil-styled line partway in its own style', () => {
+    const styled = arrow({ shape: 'line', arrowEnd: false, strokeStyle: 'pencil', strokeDash: 'dashed' });
+    const { player, svg } = present(deckWith(styled, draw({ duration: 1000 })));
+    player.next();
+    vi.advanceTimersByTime(500);
+    expect(svg()).toContain('class="shape-stroke"');
+    expect(svg()).toContain('stroke-dasharray');
+    vi.advanceTimersByTime(600);
+    expect(svg()).toBe(finished(styled));
+  });
+
   it('finishes the stroke at once when the talk moves on mid-draw', () => {
     const deck = deckWith(arrow(), draw({ duration: 2000 }));
     deck.slides[0].elements.push(arrow({ id: 'second', y: 400 }));
@@ -626,7 +656,7 @@ describe('line draw on an outline', () => {
   it('uncovers a brush stroke along its path with a mask, and traces a pencil with copies of it', () => {
     const { player, svg, traces } = presentOutline(arrow({
       shape: 'path', arrowEnd: false, fill: null, w: 400, h: 100, pathSize: { w: 400, h: 100 },
-      path: 'M 0 50 C 100 0 300 100 400 50', strokeStyle: 'brush', strokeWidth: 12,
+      path: 'M 0 50 C 100 0 300 100 400 50 Z', strokeStyle: 'brush', strokeWidth: 12,
     }));
     const brush = () => svg().querySelector<SVGElement>(':scope > .brush-stroke')!;
     player.next();
@@ -634,7 +664,7 @@ describe('line draw on an outline', () => {
     const mask = svg().querySelector('mask')!;
     expect(brush().getAttribute('mask')).toBe(`url(#${mask.id})`);
     const [band] = [...mask.querySelectorAll<SVGElement>('.draw-trace')];
-    expect(band.getAttribute('d')).toBe('M 0 50 C 100 0 300 100 400 50');
+    expect(band.getAttribute('d')).toBe('M 0 50 C 100 0 300 100 400 50 Z');
     expect(band.getAttribute('stroke-width')).toBe('28');
     expect(Number(band.style.strokeDashoffset)).toBeGreaterThan(0);
     vi.advanceTimersByTime(700);
@@ -652,6 +682,42 @@ describe('line draw on an outline', () => {
     expect(copy.getAttribute('filter')).toMatch(/^url\(#pencil-/);
     expect(pencil.svg().querySelector<SVGElement>(':scope > .shape-stroke')!.style.visibility).toBe('hidden');
     expect(pencil.svg().querySelector<SVGElement>(':scope > .shape-fill')!.style.fillOpacity).toBe('0');
+  });
+
+  it('uncovers a dashed outline with a mask, its dashes staying its own', () => {
+    const { player, svg, traces } = presentOutline(arrow({
+      shape: 'rect', fill: '#dbe4ff', h: 200, strokeDash: 'dashed',
+    }));
+    const rect = () => svg().querySelector<SVGElement>(':scope > rect:not(.draw-trace)')!;
+    player.next();
+    vi.advanceTimersByTime(300);
+    const mask = svg().querySelector('mask')!;
+    // A copy of the stroke, dashes and all, shows through the mask; the
+    // shape itself holds only its fill back for now.
+    const copy = svg().querySelector<SVGElement>(':scope > rect.draw-trace')!;
+    expect(copy.getAttribute('mask')).toBe(`url(#${mask.id})`);
+    expect(copy.getAttribute('stroke-dasharray')).toBe('18 12');
+    expect(rect().style.stroke).toBe('none');
+    const [band] = [...mask.querySelectorAll<SVGElement>('.draw-trace')];
+    expect(band.getAttribute('stroke-dasharray')).toBeNull();
+    expect(Number(band.style.strokeDashoffset)).toBeGreaterThan(0);
+    vi.advanceTimersByTime(1000);
+    expect(svg().querySelector('mask')).toBeNull();
+    expect(traces()).toHaveLength(0);
+    expect(rect().style.stroke).toBe('');
+  });
+
+  it('holds a filled path\'s caps back until its outline is drawn', () => {
+    const { player, svg } = presentOutline(arrow({
+      shape: 'path', fill: '#c96442', w: 400, h: 100, pathSize: { w: 400, h: 100 },
+      path: 'M 0 100 C 0 0 400 0 400 100', arrowEnd: true,
+    }));
+    const head = () => svg().querySelector<SVGElement>(':scope > .arrowhead')!;
+    player.next();
+    vi.advanceTimersByTime(200);
+    expect(head().style.visibility).toBe('hidden');
+    vi.advanceTimersByTime(1000);
+    expect(head().style.visibility).toBe('');
   });
 
   it('draws a path\'s runs one after another, not all at once', () => {
