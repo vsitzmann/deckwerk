@@ -21,6 +21,15 @@ describe('element labels', () => {
     expect(describeElement(shape({}))).toBe('rectangle');
   });
 
+  it('names lines as one family: an arrowhead makes an arrow, an open path is a line', () => {
+    expect(describeElement(shape({ shape: 'line', arrowEnd: true, stroke: '#000' }))).toBe('arrow, black');
+    expect(describeElement(shape({ shape: 'arrow', endCap: 'dot', arrowStart: true }))).toBe('arrow');
+    const pen = { shape: 'path' as const, path: 'M 0 0 L 10 10', pathSize: { w: 10, h: 10 }, stroke: '#000' };
+    expect(describeElement(shape(pen))).toBe('line, black');
+    expect(describeElement(shape({ ...pen, arrowEnd: true }))).toBe('arrow, black');
+    expect(describeElement(shape({ ...pen, path: 'M 0 0 L 10 10 L 0 10 Z', fill: '#f00' }))).toBe('shape, red');
+  });
+
   it('parses hex, shorthand, rgb and keyword colours', () => {
     expect(colorName('#f00')).toBe('red');
     expect(colorName('rgb(20, 160, 60)')).toBe('green');

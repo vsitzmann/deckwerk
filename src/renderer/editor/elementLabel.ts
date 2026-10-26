@@ -1,4 +1,5 @@
 import type { SlideElement } from '../../shared/deck';
+import { capOf, isClosedOutline, isLineFamily } from '../../shared/lineFamily.js';
 
 /**
  * Human names for objects in the build and Morph lists. A slide can hold a
@@ -132,7 +133,12 @@ export function describeElement(el: SlideElement): string {
     case 'web':
       return `web page: ${el.title || el.src.split('/').pop()}`;
     case 'shape': {
-      const name = SHAPE_NAMES[el.shape] ?? el.shape;
+      // Lines are one family: whatever its kind, a line with an arrowhead is
+      // an arrow, and an open path (the pen's, the pencil's) is a line.
+      const arrowed = isLineFamily(el) && (capOf(el, 'start') === 'arrow' || capOf(el, 'end') === 'arrow');
+      const name = arrowed ? 'arrow'
+        : el.shape === 'path' && isLineFamily(el) && !isClosedOutline(el) && !el.fill ? 'line'
+          : SHAPE_NAMES[el.shape] ?? el.shape;
       // A shape's identity on the slide is its outline colour when it is a
       // stroke-only line or arrow, and its fill otherwise.
       const color = colorName(el.fill) ?? colorName(el.stroke);
