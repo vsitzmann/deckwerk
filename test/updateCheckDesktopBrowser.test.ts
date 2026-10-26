@@ -140,7 +140,14 @@ describe.skipIf(!electronBinary)('checking for updates in the desktop app', () =
     // The quiet launch check runs on its own; the feed has no manifest yet,
     // so it fails — and a failure at launch shows nothing, and does not use
     // up the day's check.
-    await eventually(async () => requests.includes(CHANNEL_FILE), 'the launch check never asked the feed', Boolean, 40_000);
+    try {
+      await eventually(async () => requests.includes(CHANNEL_FILE), 'the launch check never asked the feed', Boolean, 40_000);
+    } catch (error) {
+      // Say why: what an explicit check answers, what the feed was asked,
+      // and the tail of the app's own output (electron-updater logs there).
+      const explicit = await cdp.evaluate('window.api.updates.check()').catch((e) => String(e));
+      throw new Error(`${(error as Error).message}\nexplicit check: ${JSON.stringify(explicit)}\nfeed requests: ${JSON.stringify(requests)}\napp log:\n${app.log().slice(-4000)}`);
+    }
     await new Promise((resolve) => setTimeout(resolve, 500));
     expect(await cdp.evaluate(readDialog)).toBeNull();
     expect(await cdp.evaluate(`localStorage.getItem('deckwerk.updates.lastCheck')`)).toBeNull();

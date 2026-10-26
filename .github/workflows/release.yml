@@ -178,7 +178,20 @@ jobs:
           # Lets electron-builder resolve the GitHub publish config for the
           # latest*.yml update manifests without actually uploading.
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: npm run dist:${{ matrix.platform }} -- --${{ matrix.arch }}
+        # Notarizing and stapling talk to Apple's notary and ticket services,
+        # which now and then drop the connection mid-request ("The network
+        # connection was lost", stapler error 68) and fail a build that is
+        # otherwise fine. A mac build that fails is packaged again, up to
+        # three times; any other platform fails at once.
+        shell: bash
+        run: |
+          for attempt in 1 2 3; do
+            npm run dist:${{ matrix.platform }} -- --${{ matrix.arch }} && exit 0
+            if [ "${{ matrix.platform }}" != mac ] || [ "$attempt" -eq 3 ]; then exit 1; fi
+            echo "::warning::Packaging failed (attempt $attempt of 3); retrying in case Apple's services dropped the connection"
+            rm -rf release
+            sleep $((attempt * 30))
+          done
 
       # The notary service accepting the app is not the end of it: check the
       # dmg and zip people actually download — signature, Gatekeeper verdict,
