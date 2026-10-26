@@ -1,5 +1,11 @@
 import type { SlideElement } from './deck.js';
 import { braceDepthOf, bracePath } from './brace.js';
+import { strokeDashAttrs, strokeStyleOf, styledPathSvg } from './strokeStyles.js';
+import { capOf, type LineCap } from './lineFamily.js';
+import {
+  parsePath, pathLength, pathPrefix, runFromCubics, segmentCount, segmentOf, serializePath, splitCubic,
+  cubicAt, type Cubic, type SubPath,
+} from './pathNodes.js';
 
 /**
  * A shape as SVG markup.
@@ -16,10 +22,10 @@ import { braceDepthOf, bracePath } from './brace.js';
 type Shape = Extract<SlideElement, { type: 'shape' }>;
 
 /**
- * `drawProgress` (0..1) draws a line or arrow only that far along its length,
- * for the Line Draw build: the piece drawn is a line or arrow in its own
- * right, heads and all, so the head rides the tip and the last frame is
- * exactly the static drawing. Other shapes ignore it.
+ * `drawProgress` (0..1) draws a line, an arrow or a path only that far along
+ * its length, for the Line Draw build: the piece drawn is a line in its own
+ * right, caps and all, so an arrowhead rides the tip and the last frame is
+ * exactly the static drawing. Boxes and ellipses ignore it.
  */
 export function shapeSvg(el: Shape, options: { drawProgress?: number } = {}): string {
   // A path carries its own coordinate space; everything else is drawn directly
@@ -35,9 +41,12 @@ export function shapeSvg(el: Shape, options: { drawProgress?: number } = {}): st
   // Open strokes must not be flood-filled; closed shapes take their fill.
   const unfilled = el.shape === 'line' || el.shape === 'arrow' || el.shape === 'brace';
   const paint = `fill="${unfilled ? 'none' : fill}" stroke="${stroke}"`
-    + ` stroke-width="${el.strokeWidth}"`;
+    + ` stroke-width="${el.strokeWidth}"${strokeDashAttrs(el)}`
+    // A dot is a dash of no length: only a round end draws it. Paths and
+    // braces have round ends already.
+    + (el.strokeDash === 'dotted' && el.shape !== 'path' && el.shape !== 'brace' ? ' stroke-linecap="round"' : '');
 
-  const markerId = `arrowhead-${el.id}`.replace(/[^a-zA-Z0-9_-]/g, '-');
+  const stem = `${el.id}`.replace(/[^a-zA-Z0-9_-]/g, '-');
   let defs = '';
   let node = '';
 
@@ -47,19 +56,34 @@ export function shapeSvg(el: Shape, options: { drawProgress?: number } = {}): st
         + ` rx="${Math.max(0, el.w / 2 - inset)}" ry="${Math.max(0, el.h / 2 - inset)}" ${paint}/>`;
       break;
     case 'line':
-    case 'arrow':
-      node = lineSvg(el, stroke, paint, options.drawProgress ?? 1);
+    case 'arrow': {
+      if (strokeStyleOf(el) === 'pen') {
+        node = lineSvg(el, stroke, paint, options.drawProgress ?? 1);
+        break;
+      }
+      // A line drawn with a brush, a pencil or a marker is drawn as the path
+      // it is, in its own box: from its left-centre to its right-centre.
+      const control = el.control ? quadraticControl(el) : null;
+      const d = `M 0 ${el.h / 2} ${control ? `Q ${control.x} ${control.y}` : 'L'} ${el.w} ${el.h / 2}`;
+      const drawn = pathSvg(el, d, parsePath(d)!, view, { fill: 'none', stroke, paint, stem }, options.drawProgress ?? 1);
+      defs = drawn.defs;
+      node = drawn.node;
       break;
+    }
     case 'brace':
       node = `<path d="${bracePath(el.w, el.h, braceDepthOf(el))}" stroke-linecap="round"`
         + ` stroke-linejoin="round" ${paint}/>`;
       break;
     case 'path': {
-      if (el.arrowEnd || el.arrowStart) defs = arrowMarker(markerId, stroke, arrowHeadSize(el));
-      const markers = (el.arrowStart ? ` marker-start="url(#${markerId})"` : '')
-        + (el.arrowEnd ? ` marker-end="url(#${markerId})"` : '');
-      node = `<path d="${escapeAttr(el.path ?? '')}" stroke-linecap="round"`
-        + ` stroke-linejoin="round"${markers} ${paint}/>`;
+      const d = el.path ?? '';
+      const runs = parsePath(d);
+      if (!runs) {
+        node = `<path d="${escapeAttr(d)}" stroke-linecap="round" stroke-linejoin="round" ${paint}/>`;
+        break;
+      }
+      const drawn = pathSvg(el, d, runs, view, { fill, stroke, paint, stem }, options.drawProgress ?? 1);
+      defs = drawn.defs;
+      node = drawn.node;
       break;
     }
     default:
@@ -98,8 +122,10 @@ type Stop = { point: XY; run: XY; ease: number };
  * the line itself. A curved line keeps its round end where it has no head.
  */
 function lineSvg(el: Shape, stroke: string, paint: string, progress = 1): string {
-  const startHead = el.arrowStart;
-  const endHead = el.arrowEnd || (!el.arrowStart && el.shape === 'arrow');
+  const startCap = capOf(el, 'start');
+  const endCap = capOf(el, 'end');
+  const startHead = startCap === 'arrow';
+  const endHead = endCap === 'arrow';
   const local = el.control ? quadraticControl(el) : null;
   const start = { x: 0, y: el.h / 2 };
   const end = { x: el.w, y: el.h / 2 };
@@ -197,7 +223,178 @@ function lineSvg(el: Shape, stroke: string, paint: string, progress = 1): string
       line = `<line x1="${n(a.x)}" y1="${n(a.y)}" x2="${n(b.x)}" y2="${n(b.y)}" ${paint}/>`;
     }
   }
-  return line + heads.map((d) => `<path class="arrowhead" d="${d}" fill="${stroke}" stroke="none"/>`).join('');
+  // A dot or a bar sits on its end, square to the way the line runs there.
+  const ornaments: string[] = [];
+  const ornament = (cap: LineCap, from: 0 | 1): void => {
+    if (cap !== 'dot' && cap !== 'bar') return;
+    const tip = at(from);
+    const near = at(paramAtDistance(at, from, Math.max(1, arrowHeadSize(el) / 4)));
+    const run = unit({ x: tip.x - near.x, y: tip.y - near.y })
+      ?? unit(quadraticTangent(p0, p1, p2, from)) ?? { x: 1, y: 0 };
+    ornaments.push(capOrnament(cap, tip, run, el, stroke));
+  };
+  ornament(startCap, 0);
+  ornament(endCap, 1);
+  return line + heads.map((d) => `<path class="arrowhead" d="${d}" fill="${stroke}" stroke="none"/>`).join('')
+    + ornaments.join('');
+}
+
+/**
+ * A dot or a bar on a line's end at `tip`, the line arriving there along
+ * `run`: a dot half a head across, centred on the end; a bar two thirds of
+ * a head long, the line's own width, straight across it.
+ */
+function capOrnament(cap: 'dot' | 'bar', tip: XY, run: XY, el: Shape, color: string): string {
+  const n = (value: number): string => String(Math.round(value * 100) / 100 + 0);
+  const size = arrowHeadSize(el);
+  if (cap === 'dot') {
+    return `<circle class="line-cap" cx="${n(tip.x)}" cy="${n(tip.y)}" r="${n(Math.max(size / 4, el.strokeWidth / 2))}"`
+      + ` fill="${color}" stroke="none"/>`;
+  }
+  const half = Math.max(size / 3, el.strokeWidth);
+  return `<line class="line-cap" x1="${n(tip.x - run.y * half)}" y1="${n(tip.y + run.x * half)}"`
+    + ` x2="${n(tip.x + run.y * half)}" y2="${n(tip.y - run.x * half)}"`
+    + ` stroke="${color}" stroke-width="${n(Math.max(el.strokeWidth, 0.5))}" stroke-linecap="round"/>`;
+}
+
+/**
+ * A path — drawn with the pen or the pencil, imported, or a styled line — as
+ * SVG, with its caps. A cap goes on the start of the first run and the end
+ * of the last when those are open, where SVG's markers went. An arrowhead is
+ * drawn as a line's is (`headPath`): its tip on the end, the stroke stopping
+ * inside its tail, the last stretch of the curve turned onto its axis. Drawn
+ * partway (Line Draw), the path is its first `progress` by length and the
+ * end cap rides the tip.
+ */
+function pathSvg(
+  el: Shape,
+  d: string,
+  runs: SubPath[],
+  view: { w: number; h: number },
+  paints: { fill: string; stroke: string; paint: string; stem: string },
+  progress: number,
+): { defs: string; node: string } {
+  const { fill, stroke, paint, stem } = paints;
+  const style = strokeStyleOf(el);
+  const stroked = stroke !== 'none' && el.strokeWidth > 0;
+  const startCap = stroked && runs.length > 0 && !runs[0].closed ? capOf(el, 'start') : 'none';
+  const endCap = stroked && runs.length > 0 && !runs[runs.length - 1].closed ? capOf(el, 'end') : 'none';
+  const drawnAll = progress >= 1;
+  if (!drawnAll && progress <= 0) return { defs: '', node: '' };
+  const shown = drawnAll ? runs : pathPrefix(runs, progress);
+  if (shown.length === 0) return { defs: '', node: '' };
+
+  const heads = [startCap, endCap].filter((cap) => cap === 'arrow').length;
+  const size = heads > 0 ? Math.min(arrowHeadSize(el), pathLength(shown) / heads) : 0;
+  const width = Math.min(Math.max(el.strokeWidth, 0), size);
+  const tail = Math.min(Math.max(el.strokeWidth, 0), 2);
+  let trimmed = shown.map((run) => ({ closed: run.closed, nodes: run.nodes.map((node) => ({ ...node })) }));
+  const caps: string[] = [];
+  const capEnd = (cap: LineCap, atStart: boolean): void => {
+    if (cap === 'none') return;
+    const index = atStart ? 0 : trimmed.length - 1;
+    const run = atStart ? reverseRun(trimmed[index]) : trimmed[index];
+    if (run.nodes.length < 2) return;
+    const tip = run.nodes[run.nodes.length - 1];
+    if (cap === 'arrow') {
+      const base = backAlong(run, size);
+      const axis = unit({ x: tip.x - base.point.x, y: tip.y - base.point.y }) ?? { x: 1, y: 0 };
+      caps.push(`<path class="arrowhead" d="${headPath(tip, { x: tip.x - axis.x, y: tip.y - axis.y }, size, width, tail)}"`
+        + ` fill="${stroke}" stroke="none"/>`);
+      const cut = trimEnd(run, size + tail / 2, axis);
+      trimmed[index] = atStart ? reverseRun(cut) : cut;
+      return;
+    }
+    const near = backAlong(run, Math.max(1, arrowHeadSize(el) / 4));
+    const along = unit({ x: tip.x - near.point.x, y: tip.y - near.point.y }) ?? { x: 1, y: 0 };
+    caps.push(capOrnament(cap, tip, along, el, stroke));
+  };
+  capEnd(startCap, true);
+  capEnd(endCap, false);
+  trimmed = trimmed.filter((run) => run.nodes.length >= 2 || run.closed);
+
+  // The data as authored, where nothing was cut from it, so a path that was
+  // never capped or drawn partway is written exactly as it always was.
+  const untouched = drawnAll && caps.every((cap) => !cap.includes('arrowhead'));
+  const strokeD = untouched ? escapeAttr(d) : serializePath(trimmed);
+  const fillD = drawnAll ? escapeAttr(d) : strokeD;
+  if (style !== 'pen' && stroked) {
+    // Caps are drawn in the stroke's own ink: see-through with a marker's.
+    return styledPathSvg(el, { fill, stroke, d: strokeD, fillD, view, id: stem, caps: caps.join('') });
+  }
+  // A filled path whose stroke was cut for a head keeps its whole outline filled.
+  if (strokeD !== fillD && fill !== 'none') {
+    return {
+      defs: '',
+      node: `<path class="shape-fill" d="${fillD}" fill="${fill}" stroke="none"/>`
+        + `<path class="shape-stroke" d="${strokeD}" stroke-linecap="round" stroke-linejoin="round"`
+        + ` ${paint.replace(/^fill="[^"]*"/, 'fill="none"')}/>${caps.join('')}`,
+    };
+  }
+  return {
+    defs: '',
+    node: `<path d="${strokeD}" stroke-linecap="round" stroke-linejoin="round" ${paint}/>${caps.join('')}`,
+  };
+}
+
+/** A run walked the other way: its anchors in reverse, each one's handles swapped. */
+function reverseRun(run: SubPath): SubPath {
+  return {
+    closed: run.closed,
+    nodes: [...run.nodes].reverse().map(({ x, y, in: into, out }) => ({
+      x, y, ...(out ? { in: out } : {}), ...(into ? { out: into } : {}),
+    })),
+  };
+}
+
+/**
+ * Walking back from a run's last point, the first point on it `distance`
+ * away in a straight line: which segment, where on it, and the point. The
+ * run's start, if it never gets that far.
+ */
+function backAlong(run: SubPath, distance: number): { segment: number; t: number; point: XY } {
+  const tip = run.nodes[run.nodes.length - 1];
+  const reach = (p: XY): number => Math.hypot(p.x - tip.x, p.y - tip.y);
+  const steps = 32;
+  for (let segment = segmentCount(run) - 1; segment >= 0; segment -= 1) {
+    const curve = segmentOf(run, segment);
+    let inside = 1;
+    for (let i = steps - 1; i >= 0; i -= 1) {
+      const t = i / steps;
+      if (reach(cubicAt(curve, t)) >= distance) {
+        let lo = t;
+        let hi = inside;
+        for (let k = 0; k < 24; k += 1) {
+          const mid = (lo + hi) / 2;
+          if (reach(cubicAt(curve, mid)) >= distance) lo = mid;
+          else hi = mid;
+        }
+        return { segment, t: lo, point: cubicAt(curve, lo) };
+      }
+      inside = t;
+    }
+  }
+  return { segment: 0, t: 0, point: { x: run.nodes[0].x, y: run.nodes[0].y } };
+}
+
+/**
+ * The run with its last `distance` (in a straight line from its end) taken
+ * off, for a head to stand there. The cut end is put on the head's axis and
+ * arrives running along it, so the stroke meets the head's tail square on.
+ */
+function trimEnd(run: SubPath, distance: number, axis: XY): SubPath {
+  const tip = run.nodes[run.nodes.length - 1];
+  const cut = backAlong(run, distance);
+  const curves: Cubic[] = [];
+  for (let i = 0; i < cut.segment; i += 1) curves.push(segmentOf(run, i));
+  if (cut.t <= 0 && cut.segment === 0) return { nodes: [run.nodes[0]], closed: false };
+  const [from, out, into, to] = splitCubic(segmentOf(run, cut.segment), cut.t)[0];
+  const end = { x: tip.x - axis.x * distance, y: tip.y - axis.y * distance };
+  // The handle into the cut end keeps its length and turns onto the axis; a
+  // straight piece has none, and stays straight.
+  const reach = Math.hypot(into.x - to.x, into.y - to.y);
+  curves.push([from, out, reach < 1e-6 ? end : { x: end.x - axis.x * reach, y: end.y - axis.y * reach }, end]);
+  return runFromCubics(curves);
 }
 
 /**
@@ -328,12 +525,6 @@ export function cssGradient(from: string, gradient: NonNullable<Shape['fillGradi
 export function arrowHeadSize(el: Pick<Shape, 'arrowSize' | 'strokeWidth'>): number {
   const stroke = Math.max(el.strokeWidth, 0);
   return Math.max(el.arrowSize ?? stroke * 6, stroke, 1);
-}
-
-function arrowMarker(id: string, color: string, size: number): string {
-  return `<defs><marker id="${id}" markerUnits="userSpaceOnUse" viewBox="0 0 6 6"`
-    + ` markerWidth="${size}" markerHeight="${size}" refX="5" refY="3"`
-    + ` orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="${color}"/></marker></defs>`;
 }
 
 /** A curved line's canvas-space control point, in its rotated element's own coordinates. */

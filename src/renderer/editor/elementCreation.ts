@@ -2,9 +2,12 @@ import type { ShapeEl, TextEl } from '@shared/deck.js';
 import { makeId } from '@shared/geometry.js';
 import { DEFAULT_BRACE_DEPTH } from '@shared/brace.js';
 import { presetPath, type PolygonPreset } from '@shared/polygonShape.js';
+import { pathGeometry, type SubPath } from '@shared/pathNodes.js';
+import { STROKE_STYLE_WIDTHS } from '@shared/strokeStyles.js';
 import { applyTableColumnWidths } from '@shared/paragraphs.js';
 import { newObjectColors } from '@shared/themes.js';
 import type { EditorStore } from './store.js';
+import type { DrawingTool } from './pathTools.js';
 
 function nextZ(store: EditorStore): number {
   return (store.slide?.elements.reduce((max, el) => Math.max(max, el.z), 0) ?? 0) + 1;
@@ -103,6 +106,33 @@ export function insertPolygon(store: EditorStore, preset: PolygonPreset): ShapeE
   return created;
 }
 
+/**
+ * Insert what the pen or the pencil drew, `run` given in canvas coordinates,
+ * and select it (unless `select` is false: the pencil stays out for the next
+ * stroke). A closed shape is filled like any new shape; an open one is a
+ * stroked line in the theme's ink, like a new line, and takes caps, a dash
+ * and a stroke style in Props like any other line.
+ */
+export function insertPath(
+  store: EditorStore,
+  slideIndex: number,
+  run: SubPath,
+  options: { select?: boolean; label?: string } = {},
+): ShapeEl {
+  const { deck } = store.get();
+  const { fill, stroke } = newObjectColors(deck);
+  const created: ShapeEl = {
+    type: 'shape', id: makeId('shape'), ...pathGeometry([run]),
+    rot: 0, z: (deck.slides[slideIndex]?.elements.reduce((max, el) => Math.max(max, el.z), 0) ?? 0) + 1,
+    opacity: 1, class: [], style: {},
+    shape: 'path', fill: run.closed ? fill : null, stroke: run.closed ? null : stroke,
+    strokeWidth: STROKE_STYLE_WIDTHS.pen, radius: 0, arrowStart: false, arrowEnd: false,
+  };
+  store.commit((d) => d.slides[slideIndex].elements.push(created), { label: options.label ?? 'Draw path' });
+  if (options.select !== false) store.select([created.id]);
+  return created;
+}
+
 /** Insert a native line, arrow or curly brace and select it. */
 export function insertLine(
   store: EditorStore,
@@ -128,7 +158,12 @@ export function insertLine(
   return created;
 }
 
-type ShapeKind = 'rect' | 'ellipse' | PolygonPreset | 'line' | 'arrow' | 'curved-arrow' | 'brace';
+/** A pen nib, for the toolbar's Pen control. */
+const PEN_NIB = '<path d="M8 14.5 3.8 8.6 6 2.5h4l2.2 6.1z"/><path d="M8 14.5V9.6"/><circle cx="8" cy="8.6" r="1"/>';
+/** A pencil, for the same control's freehand tool. */
+const PENCIL = '<path d="M3 13l.8-3.2L11 2.6a1.4 1.4 0 0 1 2 0l.4.4a1.4 1.4 0 0 1 0 2L6.2 12.2z"/><path d="M9.8 3.8l2.4 2.4"/>';
+
+type ShapeKind = 'rect' | 'ellipse' | PolygonPreset | 'line' | 'arrow' | 'brace';
 
 function shapeIcon(paths: string): string {
   return (
@@ -153,20 +188,28 @@ const SHAPE_OPTIONS: Array<{ kind: ShapeKind; label: string; icon: string }> = [
     icon: shapeIcon('<path d="M2.5 13.5 13.5 2.5"/>') },
   { kind: 'arrow', label: 'Arrow',
     icon: shapeIcon('<path d="M2.5 13.5 13.5 2.5M7.5 2.5h6v6"/>') },
-  { kind: 'curved-arrow', label: 'Curved arrow',
-    icon: shapeIcon('<path d="M2.5 13.5C3 7 7 3 13.5 2.7M8.6 2.5l5-.2.2 5"/>') },
   { kind: 'brace', label: 'Curly brace',
     icon: shapeIcon('<path d="M1.5 5a2 2 0 0 0 2 2h2.5a2 2 0 0 1 2 2 2 2 0 0 1 2-2h2.5a2 2 0 0 0 2-2"/>') },
 ];
 
-/** Shape menu: a custom dropdown so each option carries an icon. */
-export function createShapeInsertPicker(store: EditorStore): HTMLElement {
+/**
+ * Shape menu: a custom dropdown so each option carries an icon. Like Figma's
+ * shape tools it holds the closed shapes and the lines — Line and Arrow, an
+ * arrow being a line with an arrow cap — while drawing belongs to the Pen ▾
+ * beside it (`createPenButton`). Where there is no Pen control beside the
+ * menu (the layout editor), `drawPath` puts the pen at the end of the menu.
+ */
+export function createShapeInsertPicker(
+  store: EditorStore,
+  options: { drawPath?: () => void } = {},
+): HTMLElement {
   const wrap = document.createElement('span');
   wrap.className = 'shape-menu-wrap';
 
   const trigger = document.createElement('button');
   trigger.type = 'button';
   trigger.className = 'shape-menu-trigger';
+  trigger.title = 'Shape';
   trigger.setAttribute('aria-haspopup', 'menu');
   trigger.setAttribute('aria-expanded', 'false');
   trigger.innerHTML =
@@ -200,7 +243,14 @@ export function createShapeInsertPicker(store: EditorStore): HTMLElement {
     menu = document.createElement('div');
     menu.className = 'shape-menu';
     menu.setAttribute('role', 'menu');
-    for (const { kind, label, icon } of SHAPE_OPTIONS) {
+    // A toolbar with its own Pen ▾ keeps drawing there, as Figma does.
+    const penBeside = Boolean(wrap.parentElement?.querySelector('.pen-tool-control'));
+    const entries: Array<{ kind: ShapeKind | 'pen'; label: string; icon: string }> = [
+      ...SHAPE_OPTIONS,
+      ...(options.drawPath && !penBeside
+        ? [{ kind: 'pen' as const, label: 'Draw with Pen', icon: shapeIcon(PEN_NIB) }] : []),
+    ];
+    for (const { kind, label, icon } of entries) {
       const item = document.createElement('button');
       item.type = 'button';
       item.className = 'shape-menu-item';
@@ -212,7 +262,7 @@ export function createShapeInsertPicker(store: EditorStore): HTMLElement {
         // shortcuts; the newly created object is the active context.
         item.blur();
         trigger.blur();
-        if (kind === 'curved-arrow') insertLine(store, 'arrow', true);
+        if (kind === 'pen') options.drawPath?.();
         else if (kind === 'line' || kind === 'arrow' || kind === 'brace') insertLine(store, kind);
         else if (kind === 'rect' || kind === 'ellipse') insertShape(store, kind);
         else insertPolygon(store, kind);
@@ -230,6 +280,120 @@ export function createShapeInsertPicker(store: EditorStore): HTMLElement {
   return wrap;
 }
 
+/** What the Pen control needs of the canvas it draws on. */
+export interface PenCanvas {
+  startPen(): void;
+  startPencil(): void;
+  togglePen(): void;
+  togglePencil(): void;
+  drawingTool(): DrawingTool | null;
+  onPenToolChange?: (tool: DrawingTool | null) => void;
+}
+
+const DRAWING_TOOLS: Array<{ tool: DrawingTool; label: string; icon: string; shortcut: string; hint: string }> = [
+  { tool: 'pen', label: 'Pen', icon: PEN_NIB, shortcut: 'P', hint: 'click for corners, drag for curves' },
+  { tool: 'pencil', label: 'Pencil', icon: PENCIL, shortcut: '⇧P', hint: 'draw freehand' },
+];
+
+/**
+ * The toolbar's Pen ▾, as Figma groups its drawing tools: the button is the
+ * tool last chosen — the Pen (P), placing points, or the Pencil (Shift+P),
+ * drawing freehand — and stays pressed while it is out; pressing it again
+ * puts the tool down. The menu segment picks the other. How a line looks
+ * (pen, brush, pencil or marker stroke, caps, dash) is chosen afterwards in
+ * Props, like any line's.
+ */
+export function createPenButton(canvas: PenCanvas): HTMLElement {
+  const wrap = document.createElement('span');
+  wrap.className = 'shape-menu-wrap pen-tool-control';
+  let current: DrawingTool = 'pen';
+
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'bar-icon-button pen-tool-button';
+  button.setAttribute('aria-pressed', 'false');
+  const show = (): void => {
+    const entry = DRAWING_TOOLS.find((candidate) => candidate.tool === current)!;
+    button.dataset.tool = current;
+    button.innerHTML =
+      '<svg class="bar-icon" viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" fill="none" ' +
+      `stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">${entry.icon}</svg>` +
+      `<span>${entry.label}</span>`;
+    button.title = `${entry.label} (${entry.shortcut}): ${entry.hint}`;
+  };
+  show();
+  button.addEventListener('click', () => {
+    // A focused button keeps the keys the pen answers (Return, Escape).
+    button.blur();
+    if (current === 'pen') canvas.togglePen();
+    else canvas.togglePencil();
+  });
+
+  const trigger = document.createElement('button');
+  trigger.type = 'button';
+  trigger.className = 'pen-tool-menu';
+  trigger.setAttribute('aria-label', 'Drawing tools');
+  trigger.setAttribute('aria-haspopup', 'menu');
+  trigger.setAttribute('aria-expanded', 'false');
+  trigger.innerHTML = '<svg class="shape-menu-chevron" viewBox="0 0 10 10" width="9" height="9" aria-hidden="true">' +
+    '<path d="M2 3.5l3 3 3-3" fill="none" stroke="currentColor" stroke-width="1.5" ' +
+    'stroke-linecap="round" stroke-linejoin="round"/></svg>';
+
+  let menu: HTMLDivElement | null = null;
+  const close = (): void => {
+    menu?.remove();
+    menu = null;
+    trigger.setAttribute('aria-expanded', 'false');
+    document.removeEventListener('pointerdown', outside, true);
+    document.removeEventListener('keydown', keys, true);
+  };
+  const outside = (event: PointerEvent): void => {
+    if (!wrap.contains(event.target as Node)) close();
+  };
+  const keys = (event: KeyboardEvent): void => {
+    if (event.key === 'Escape') close();
+  };
+  const open = (): void => {
+    menu = document.createElement('div');
+    menu.className = 'shape-menu pen-tool-popover';
+    menu.setAttribute('role', 'menu');
+    for (const { tool, label, icon, shortcut } of DRAWING_TOOLS) {
+      const item = document.createElement('button');
+      item.type = 'button';
+      item.className = 'shape-menu-item';
+      item.dataset.drawingTool = tool;
+      item.setAttribute('role', 'menuitemradio');
+      item.setAttribute('aria-checked', String(current === tool));
+      item.innerHTML = `${shapeIcon(icon)}<span>${label}</span><kbd class="shape-menu-shortcut">${shortcut}</kbd>`;
+      item.addEventListener('click', () => {
+        close();
+        item.blur();
+        trigger.blur();
+        if (tool === 'pen') canvas.startPen();
+        else canvas.startPencil();
+      });
+      menu.appendChild(item);
+    }
+    wrap.appendChild(menu);
+    trigger.setAttribute('aria-expanded', 'true');
+    document.addEventListener('pointerdown', outside, true);
+    document.addEventListener('keydown', keys, true);
+  };
+  trigger.addEventListener('click', () => (menu ? close() : open()));
+
+  // The button follows the tool in hand, however it was taken up: the menu,
+  // the P and Shift+P keys, or the button itself.
+  canvas.onPenToolChange = (tool) => {
+    if (tool && tool !== current) {
+      current = tool;
+      show();
+    }
+    button.setAttribute('aria-pressed', String(tool !== null));
+  };
+  wrap.append(button, trigger);
+  return wrap;
+}
+
 const TABLE_PICKER_ROWS = 8;
 const TABLE_PICKER_COLUMNS = 10;
 
@@ -241,6 +405,7 @@ export function createTableInsertPicker(store: EditorStore): HTMLElement {
   const trigger = document.createElement('button');
   trigger.type = 'button';
   trigger.className = 'shape-menu-trigger table-picker-trigger';
+  trigger.title = 'Table';
   trigger.setAttribute('aria-haspopup', 'grid');
   trigger.setAttribute('aria-expanded', 'false');
   trigger.innerHTML =

@@ -144,6 +144,7 @@ body.welcome-mode .toolbar-expanded-file-actions { display: inline-flex; }
 }
 #toolbar.toolbar-compact-secondary .toolbar-expanded-secondary-actions { display: none; }
 #toolbar.toolbar-compact-secondary .toolbar-compact-secondary-action { display: inline-block; }
+#toolbar.toolbar-compact-insert .bar-center :is(.bar-icon-button, .shape-menu-trigger) > span { display: none; }
 
 .bar-right { margin-left: auto; }
 
@@ -936,6 +937,69 @@ body.panel-resizing iframe { pointer-events: none; }
   pointer-events: auto;
   transform: translate(-50%, -50%) rotate(45deg) !important;
 }
+
+/* The pen and point editing: the outline being drawn or edited, the segment
+   the next click would add, and the points and their handles — square points,
+   round handles, as in every vector editor. Canvas coordinates, counter-scaled
+   by --inv like the rest of the selection chrome. */
+.canvas-host.pen-tool,
+.canvas-host.pen-tool .stage *,
+.canvas-host.pencil-tool,
+.canvas-host.pencil-tool .stage * { cursor: crosshair !important; }
+
+.path-overlay {
+  position: absolute;
+  left: 0;
+  top: 0;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.path-overlay path {
+  fill: none;
+  stroke: var(--accent);
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* The pencil's stroke in progress is drawn as the ink it will be. */
+.path-overlay .pencil-overlay-stroke { stroke-linecap: round; stroke-linejoin: round; }
+
+.path-overlay-outline { stroke-width: calc(1.5px * var(--inv)); }
+.path-overlay-stalks { stroke-width: calc(1px * var(--inv)); }
+.path-overlay-preview {
+  stroke-width: calc(1px * var(--inv));
+  stroke-dasharray: calc(4px * var(--inv)) calc(3px * var(--inv));
+}
+
+.path-anchor,
+.path-knob {
+  position: absolute;
+  box-sizing: border-box;
+  width: calc(9px * var(--inv));
+  height: calc(9px * var(--inv));
+  transform: translate(-50%, -50%);
+  border: calc(1.5px * var(--inv)) solid var(--accent);
+  background: #fff;
+  pointer-events: auto;
+  cursor: move;
+}
+
+.path-anchor { border-radius: calc(1.5px * var(--inv)); z-index: 1; }
+.path-anchor.selected { background: var(--accent); }
+/* The first point, under a pen that would close the shape there. */
+.path-anchor.closing {
+  box-shadow: 0 0 0 calc(3px * var(--inv)) color-mix(in srgb, var(--accent) 35%, transparent);
+}
+
+.path-knob {
+  width: calc(7px * var(--inv));
+  height: calc(7px * var(--inv));
+  border-radius: 50%;
+}
+
+/* A path whose points are being edited shows them, not its box. */
+.sel-box.path-editing { outline: none; }
 
 .guide {
   position: absolute;
@@ -3979,6 +4043,39 @@ select.panel-action-select {
   background: var(--panel-2);
   border-color: var(--line);
 }
+
+/* The Pen: the tool itself, and a narrow segment for how it draws. */
+.pen-tool-control { display: inline-flex; }
+.pen-tool-control .pen-tool-button { border-radius: 6px 0 0 6px; }
+.pen-tool-menu {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  padding: 0;
+  border-left: 0;
+  border-radius: 0 6px 6px 0;
+}
+.pen-tool-menu svg { color: var(--muted); }
+.pen-tool-menu[aria-expanded="true"] { background: var(--panel-2); border-color: var(--line); }
+/* A menu entry's keyboard shortcut, quiet and to the right of its name. */
+.shape-menu-shortcut {
+  margin-left: auto;
+  padding-left: 16px;
+  font: inherit;
+  font-size: 11px;
+  color: var(--muted);
+}
+.shape-menu-item:hover:not(:disabled) .shape-menu-shortcut { color: var(--on-accent, #fff); }
+.shape-menu-item[aria-checked] .shape-menu-shortcut + * { margin-left: 0; }
+.shape-menu-item:has(.shape-menu-shortcut)[aria-checked]::after { margin-left: 6px; }
+
+/* The Pen stays pressed while it is drawing. */
+.pen-tool-button[aria-pressed="true"],
+.pen-tool-button[aria-pressed="true"]:hover:not(:disabled) {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 24%, var(--panel-2));
+}
+.pen-tool-button[aria-pressed="true"] .bar-icon { color: var(--accent); }
 
 .toolbar-split-button {
   display: inline-grid;

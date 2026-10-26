@@ -26,6 +26,7 @@ import { MediaPanel, installMediaDrop } from '../editor/mediaPanel.js';
 import { createHistoryButton, createMediaButton, popoverPanelHost } from '../editor/toolbarPanels.js';
 import { ObjectList } from '../editor/objectList.js';
 import {
+  createPenButton,
   createShapeInsertPicker,
   createTableInsertPicker,
   insertText,
@@ -995,6 +996,7 @@ function buildToolbar(): void {
       codeBlock: () => { canvas.beginCodeEdit(insertCode(store).id, 'all'); },
     }),
     createShapeInsertPicker(store),
+    createPenButton(canvas),
     createTableInsertPicker(store),
     createMediaButton(mediaHost),
   );

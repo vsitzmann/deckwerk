@@ -216,6 +216,17 @@ export function agentFixtureDeck(): Deck {
           { id: 'details-mirrored', type: 'shape', shape: 'path', x: 1450, y: 760, w: 300, h: 160, rot: 120, flipX: true, fill: '#cc5533', path: 'M0,0 L300,80 L0,160 Z', pathSize: { w: 300, h: 160 } },
           // A thick arrow with a head smaller than its width would give it.
           { id: 'details-arrow', type: 'shape', shape: 'arrow', x: 120, y: 1000, w: 500, h: 2, strokeWidth: 10, arrowEnd: true, arrowSize: 36, stroke: '#333333' },
+          // The line family: a pen path with an arrowhead, a dot and dashes; a
+          // line drawn with a marker and a bar on its end.
+          {
+            id: 'details-pen', type: 'shape', shape: 'path', x: 1300, y: 300, w: 400, h: 100, strokeWidth: 6,
+            stroke: '#333333', path: 'M 0 100 C 100 0 300 0 400 100', pathSize: { w: 400, h: 100 },
+            arrowEnd: true, startCap: 'dot', strokeDash: 'dashed', strokeStyle: 'pencil',
+          },
+          {
+            id: 'details-marker', type: 'shape', shape: 'line', x: 1300, y: 500, w: 400, h: 2, strokeWidth: 20,
+            stroke: '#ffcc00', strokeStyle: 'marker', endCap: 'bar', control: { x: 1500, y: 420 },
+          },
           {
             id: 'details-region', type: 'html', x: 800, y: 760, w: 300, h: 200,
             // As a browser serialises it, which is how the compile stores it.

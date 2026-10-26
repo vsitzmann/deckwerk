@@ -29,7 +29,8 @@ export function shapeToTextBox(shape: ShapeEl): TextEl {
   const {
     type: _type, shape: kind, fill, fillGradient, stroke, strokeWidth, radius,
     path: _path, pathSize: _pathSize, arrowStart: _arrowStart, arrowEnd: _arrowEnd, arrowSize: _arrowSize,
-    control: _control, braceDepth: _braceDepth,
+    control: _control, braceDepth: _braceDepth, strokeStyle: _strokeStyle, strokeDash: _strokeDash,
+    startCap: _startCap, endCap: _endCap,
     ...base
   } = shape;
   const style: Style = { ...shape.style };

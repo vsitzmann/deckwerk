@@ -320,6 +320,14 @@ const VideoElement = BaseElement.extend({
     .default(null),
 });
 
+/** The ways a path's stroke can be drawn; the first is the default. */
+export const STROKE_STYLES = ['pen', 'brush', 'pencil', 'marker'] as const;
+export type StrokeStyle = (typeof STROKE_STYLES)[number];
+
+/** The broken strokes; a stroke with none is solid. */
+export const STROKE_DASHES = ['dashed', 'dotted'] as const;
+export type StrokeDash = (typeof STROKE_DASHES)[number];
+
 const ShapeElement = BaseElement.extend({
   type: z.literal('shape'),
   shape: z.enum(['rect', 'ellipse', 'line', 'arrow', 'path', 'brace']),
@@ -348,6 +356,15 @@ const ShapeElement = BaseElement.extend({
     .object({ w: z.number().positive(), h: z.number().positive() })
     .nullable()
     .default(null),
+  /**
+   * How a path's stroke is drawn: `pen` (absent too) a clean even line,
+   * `brush` swelling in the middle and tapering at its ends, `pencil` thin,
+   * grainy and a little translucent, `marker` a flat, see-through
+   * highlighter. Lines, arrows and paths take it; see `strokeStyles.ts`.
+   */
+  strokeStyle: z.enum(STROKE_STYLES).optional(),
+  /** A dashed or a dotted stroke; absent is solid. */
+  strokeDash: z.enum(STROKE_DASHES).optional(),
   arrowStart: z.boolean().default(false),
   arrowEnd: z.boolean().default(false),
   /**
@@ -356,6 +373,16 @@ const ShapeElement = BaseElement.extend({
    * than the line is wide: at that size the line simply ends in a point.
    */
   arrowSize: z.number().positive().optional(),
+  /**
+   * How an open line ends, when not in an arrowhead (`arrowStart` and
+   * `arrowEnd` say where those are, and an arrowhead wins): `dot`, a round
+   * dot on the end, or `bar`, a short stroke across it. Absent is a plain
+   * end. Every open line takes them — a line, an arrow, a curve, a path
+   * drawn with the pen or the pencil; read and write them through
+   * `capOf`/`setCap` in lineFamily.ts.
+   */
+  startCap: z.enum(['dot', 'bar']).optional(),
+  endCap: z.enum(['dot', 'bar']).optional(),
   /** Absolute canvas-space control point for an editable quadratic curve. */
   control: z.object({ x: z.number(), y: z.number() }).nullable().optional(),
   /**

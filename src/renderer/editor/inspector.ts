@@ -1,7 +1,17 @@
 import { codeTypeSection } from './codeInspector.js';
-import type { Deck, MediaEffect, Slide, SlideElement } from '@shared/deck.js';
+import {
+  STROKE_DASHES, STROKE_STYLES, type Deck, type MediaEffect, type ShapeEl, type Slide, type SlideElement, type StrokeDash,
+  type StrokeStyle,
+} from '@shared/deck.js';
 import { braceDepthOf } from '@shared/brace.js';
 import { flipElement, normalizeDegrees, type FlipAxis } from '@shared/flip.js';
+import { drawnAtPixelScale, redrawPathAtSize } from '@shared/pathNodes.js';
+import {
+  STROKE_DASH_GLYPHS, STROKE_DASH_LABELS, STROKE_STYLE_GLYPHS, STROKE_STYLE_LABELS, strokeStyleOf,
+} from '@shared/strokeStyles.js';
+import {
+  LINE_CAPS, capOf, isClosedOutline, isLineFamily, openEnds, setCap, type LineCap, type LineEnd,
+} from '@shared/lineFamily.js';
 import {
   paragraphsToList,
   paragraphsToOrderedList,
@@ -232,6 +242,10 @@ export class Inspector {
   onToggleMask?: (elementId: string) => void;
   /** Which element is currently in mask mode, so the button can reflect it. */
   maskingElement?: () => string | null;
+  /** Start or stop editing a path's points on the canvas. */
+  onTogglePathEdit?: (elementId: string) => void;
+  /** Which path's points are being edited, so the button can reflect it. */
+  pathEditingElement?: () => string | null;
   /** Show the frame at a given time on the canvas while a trim handle moves. */
   onSeekPreview?: (elementId: string, time: number) => void;
   /** Clip length from the canvas video element, when ffprobe cannot say. */
@@ -538,7 +552,12 @@ export class Inspector {
       this.host.appendChild(this.geometrySection(selected));
       const first = selected[0];
       const sameType = selected.every((element) => element.type === first.type);
-      if (
+      if (selected.every(isLineFamily)) {
+        // Lines, arrows, curves and paths are one family, edited alike.
+        const lines = selected as ShapeEl[];
+        if (lines.every((line) => isClosedOutline(line) || line.fill)) this.host.appendChild(this.fillSection(lines));
+        this.host.appendChild(this.strokeSection(lines));
+      } else if (
         first.type === 'shape' &&
         selected.every((element) => element.type === 'shape' && element.shape === first.shape)
       ) {
@@ -948,8 +967,13 @@ export class Inspector {
     const boxField = (key: 'x' | 'y' | 'w' | 'h'): HTMLElement => {
       const field = numberField(key.toUpperCase(), shared(key), (v) => {
         this.store.updateSelected((el) => {
-          if (key === 'w' || key === 'h') el[key] = Math.max(8, v);
-          else {
+          if (key === 'w' || key === 'h') {
+            const redraw = el.type === 'shape' && drawnAtPixelScale(el)
+              ? { path: el.path!, w: el.w, h: el.h }
+              : null;
+            el[key] = Math.max(8, v);
+            if (redraw && el.type === 'shape') redrawPathAtSize(el, redraw.path, redraw);
+          } else {
             const delta = v - el[key];
             el[key] = v;
             if (el.type === 'shape' && el.control) el.control[key] += delta;
@@ -1113,19 +1137,122 @@ export class Inspector {
    * A size shorter than the line is wide is kept as typed but drawn at the
    * line's width (`arrowHeadSize`), so thickening the line never buries it.
    */
+  /**
+   * The one Stroke section every line in the family shares — a line, an
+   * arrow, a curve, a path from the pen or the pencil, a polygon's outline:
+   * its colour and width, how it is drawn (pen, brush, pencil, marker),
+   * solid or broken, the cap on each open end, and the way into its points.
+   */
+  private strokeSection(shapes: ShapeEl[]): HTMLElement {
+    const section = optionSection('Stroke', 'shape-stroke-options');
+    const first = shapes[0];
+    const shared = <T,>(read: (shape: ShapeEl) => T): T | null => commonValue(shapes.map(read));
+
+    const paint = document.createElement('div');
+    paint.className = 'compact-field-row';
+    const color = colorField('Color', shared((shape) => shape.stroke) ?? first.stroke, (value) =>
+      this.store.updateSelected((element) => {
+        if (element.type === 'shape') element.stroke = value;
+      }, { label: value ? 'Change stroke colour' : 'Remove stroke' }),
+      { clear: { kind: 'none', label: 'No stroke' } },
+    );
+    color.classList.add('field-color-stacked');
+    paint.appendChild(color);
+    paint.appendChild(numberField('WIDTH', shared((shape) => shape.strokeWidth), (value) =>
+      this.store.updateSelected((element) => {
+        if (element.type === 'shape') element.strokeWidth = Math.max(0, value);
+      }, { label: 'Change stroke width' }), { unit: 'px', step: 0.5 },
+    ));
+    section.content.appendChild(paint);
+
+    const style = shared((shape) => strokeStyleOf(shape));
+    section.content.appendChild(segmentedSelectField(
+      'Style',
+      STROKE_STYLES.map((value) => ({ value, title: STROKE_STYLE_LABELS[value], icon: STROKE_STYLE_GLYPHS[value] })),
+      style ?? '',
+      (value) => this.store.updateSelected((element) => {
+        if (element.type !== 'shape') return;
+        if (value === 'pen') delete element.strokeStyle;
+        else element.strokeStyle = value as StrokeStyle;
+      }, { label: 'Change stroke style' }),
+    ));
+
+    // A brush stroke is an outline filled in: it has no dashes to break.
+    if (style !== 'brush') {
+      section.content.appendChild(segmentedSelectField(
+        'Dash',
+        (['solid', ...STROKE_DASHES] as const).map((value) => ({
+          value, title: STROKE_DASH_LABELS[value], icon: STROKE_DASH_GLYPHS[value],
+        })),
+        shared((shape) => shape.strokeDash ?? 'solid') ?? '',
+        (value) => this.store.updateSelected((element) => {
+          if (element.type !== 'shape') return;
+          if (value === 'solid') delete element.strokeDash;
+          else element.strokeDash = value as StrokeDash;
+        }, { label: 'Change stroke dash' }),
+      ));
+    }
+
+    // Caps go on open ends only: a closed outline has none.
+    const capped = (['start', 'end'] as const).filter((end) => shapes.every((shape) => openEnds(shape)[end]));
+    if (capped.length > 0) {
+      const caps = document.createElement('div');
+      caps.className = 'compact-field-row line-cap-fields';
+      for (const end of capped) {
+        caps.appendChild(segmentedSelectField(
+          end === 'start' ? 'Start' : 'End',
+          LINE_CAPS.map((cap) => ({ value: cap, title: LINE_CAP_LABELS[cap], icon: lineCapGlyph(cap, end) })),
+          shared((shape) => capOf(shape, end)) ?? '',
+          (value) => this.store.updateSelected((element) => {
+            if (element.type === 'shape') setCap(element, end, value as LineCap);
+          }, { label: `${end === 'start' ? 'Start' : 'End'} cap: ${LINE_CAP_LABELS[value as LineCap]}` }),
+        ));
+      }
+      section.content.appendChild(caps);
+      if (shapes.some((shape) => capped.some((end) => capOf(shape, end) !== 'none'))) {
+        section.content.appendChild(this.arrowSizeRow(shapes));
+      }
+    }
+
+    if (shapes.length === 1 && this.onTogglePathEdit) {
+      const editing = this.pathEditingElement?.() === first.id;
+      section.content.appendChild(button(
+        editing ? 'Done editing points' : 'Edit points',
+        () => this.onTogglePathEdit?.(first.id),
+        'panel-action path-edit-toggle',
+      ));
+    }
+    return section.section;
+  }
+
+  /** The inside of a closed path: its colour, or a gradient. */
+  private fillSection(shapes: ShapeEl[]): HTMLElement {
+    const section = optionSection('Fill', 'shape-fill-options');
+    const fill = colorField('Color', commonValue(shapes.map((shape) => shape.fill)) ?? shapes[0].fill, (value) =>
+      this.store.updateSelected((element) => {
+        if (element.type === 'shape') element.fill = value;
+      }),
+      { clear: { kind: 'none', label: 'No fill (transparent)' } },
+    );
+    fill.classList.add('field-color-stacked');
+    section.content.appendChild(fill);
+    section.content.appendChild(this.gradientFields(shapes));
+    return section.section;
+  }
+
   private arrowSizeRow(shapes: Array<Extract<SlideElement, { type: 'shape' }>>): HTMLElement {
     const row = document.createElement('div');
     row.className = 'compact-field-row';
     const authored = commonValue(shapes.map((shape) => shape.arrowSize ?? null));
-    row.appendChild(numberField('HEAD SIZE', authored, (value) =>
+    row.appendChild(numberField('CAP SIZE', authored, (value) =>
       this.store.updateSelected((element) => {
         if (element.type === 'shape') element.arrowSize = Math.max(1, Math.min(1000, value));
-      }, { label: 'Change arrowhead size' }), {
+      }, { label: 'Change cap size' }), {
       unit: 'px',
       placeholder: 'Auto',
       onClear: () => this.store.updateSelected((element) => {
         if (element.type === 'shape') delete element.arrowSize;
-      }, { label: 'Automatic arrowhead size' }),
+      }, { label: 'Automatic cap size' }),
     }));
     return row;
   }
@@ -1441,27 +1568,10 @@ export class Inspector {
     shapes: Array<Extract<SlideElement, { type: 'shape' }>>,
   ): HTMLElement {
     const kind = shapes[0].shape;
-    const label = kind === 'arrow' ? 'Arrow style'
-      : kind === 'line' ? 'Line style'
-        : kind === 'brace' ? 'Brace style' : 'Shape style';
-    const wrap = group(label);
+    const wrap = group(kind === 'brace' ? 'Brace style' : 'Shape style');
 
     if (kind === 'brace') {
       // A brace is shaped by its point handle on the slide; it has no fill.
-    } else if (kind === 'line' || kind === 'arrow') {
-      wrap.appendChild(mixedCheckboxField(
-        'Curved',
-        commonValue(shapes.map((shape) => Boolean(shape.control))),
-        (on) => this.store.updateSelected((element) => {
-          if (element.type !== 'shape') return;
-          element.control = on
-            ? { x: element.x + element.w / 2, y: element.y + element.h / 2 - Math.max(80, element.w / 3) }
-            : null;
-        }),
-      ));
-      if (shapes.some((shape) => shape.arrowStart || shape.arrowEnd || shape.shape === 'arrow')) {
-        wrap.appendChild(this.arrowSizeRow(shapes));
-      }
     } else {
       wrap.appendChild(colorField(
         'Fill',
@@ -2667,19 +2777,23 @@ export class Inspector {
 
       case 'shape': {
         const wrap = typeSections();
+        if (isLineFamily(el)) {
+          // A line, an arrow, a curve, a path: a Stroke section like every
+          // other line's, and a Fill when it closes round an inside.
+          if (isClosedOutline(el) || el.fill) wrap.appendChild(this.fillSection([el]));
+          wrap.appendChild(this.strokeSection([el]));
+          wrap.appendChild(this.shadowSection([el], 'shape'));
+          return wrap;
+        }
         const style = optionSection('Style', 'shape-style-options');
+        // Lines and arrows are the Stroke section's (above): an arrow is a
+        // line with an arrow cap, not a kind of box.
         const kinds: Array<{ value: string; title: string; icon: string }> = [
           { value: 'rect', title: 'Rectangle', icon: SHAPE_KIND_GLYPHS.rect },
           { value: 'ellipse', title: 'Ellipse', icon: SHAPE_KIND_GLYPHS.ellipse },
-          { value: 'line', title: 'Line', icon: SHAPE_KIND_GLYPHS.line },
-          { value: 'arrow', title: 'Arrow', icon: SHAPE_KIND_GLYPHS.arrow },
           { value: 'brace', title: 'Curly brace', icon: SHAPE_KIND_GLYPHS.brace },
         ];
-        // Imported vector art keeps its geometry as a path; it can be shown
-        // but not chosen, since there is no path to switch another kind to.
-        if (el.shape === 'path') {
-          kinds.push({ value: 'path', title: 'Path (drag its corners on the slide)', icon: SHAPE_KIND_GLYPHS.path });
-        }
+        if (el.shape === 'path') kinds.push({ value: 'path', title: 'Path', icon: SHAPE_KIND_GLYPHS.path });
         style.content.appendChild(
           segmentedSelectField('Kind', kinds, el.shape, (v) =>
             this.store.updateSelected((e) => {
@@ -2688,12 +2802,11 @@ export class Inspector {
           ),
         );
         const brace = el.shape === 'brace';
-        const stroked = el.shape === 'line' || el.shape === 'arrow' || brace;
         const paint = document.createElement('div');
         paint.className = 'compact-field-row';
-        // A line has no interior, so Fill and Radius would do nothing; the
+        // A brace has no interior, so Fill and Radius would do nothing; the
         // slot goes to the stroke width instead.
-        if (!stroked) {
+        if (!brace) {
           const fill = colorField('Fill', el.fill, (v) =>
             this.store.updateSelected((e) => {
               if (e.type === 'shape') e.fill = v;
@@ -2716,10 +2829,10 @@ export class Inspector {
             if (e.type === 'shape') e.strokeWidth = Math.max(0, v);
           }), { unit: 'px' },
         );
-        if (stroked) paint.appendChild(width);
+        if (brace) paint.appendChild(width);
         style.content.appendChild(paint);
-        if (!stroked) style.content.appendChild(this.gradientFields([el]));
-        if (!stroked) {
+        if (!brace) {
+          style.content.appendChild(this.gradientFields([el]));
           const nums = document.createElement('div');
           nums.className = 'compact-field-row';
           nums.appendChild(width);
@@ -2731,7 +2844,7 @@ export class Inspector {
             ),
           );
           style.content.appendChild(nums);
-        } else if (brace) {
+        } else {
           const row = document.createElement('div');
           row.className = 'compact-field-row';
           row.appendChild(
@@ -2742,37 +2855,6 @@ export class Inspector {
             ),
           );
           style.content.appendChild(row);
-        } else {
-          const flags = document.createElement('div');
-          flags.className = 'compact-field-row shape-line-flags';
-          flags.appendChild(
-            checkboxField('Curved', Boolean(el.control), (on) =>
-              this.store.updateSelected((e) => {
-                if (e.type !== 'shape') return;
-                e.control = on
-                  ? { x: e.x + e.w / 2, y: e.y + e.h / 2 - Math.max(80, e.w / 3) }
-                  : null;
-              }),
-            ),
-          );
-          flags.appendChild(
-            checkboxField('Head at end', el.arrowEnd, (on) =>
-              this.store.updateSelected((e) => {
-                if (e.type === 'shape') e.arrowEnd = on;
-              }, { label: on ? 'Add arrowhead at end' : 'Remove arrowhead at end' }),
-            ),
-          );
-          flags.appendChild(
-            checkboxField('Head at start', el.arrowStart, (on) =>
-              this.store.updateSelected((e) => {
-                if (e.type === 'shape') e.arrowStart = on;
-              }, { label: on ? 'Add arrowhead at start' : 'Remove arrowhead at start' }),
-            ),
-          );
-          style.content.appendChild(flags);
-          if (el.arrowStart || el.arrowEnd || el.shape === 'arrow') {
-            style.content.appendChild(this.arrowSizeRow([el]));
-          }
         }
         wrap.appendChild(style.section);
         wrap.appendChild(this.shadowSection([el], 'shape'));
@@ -3736,6 +3818,19 @@ const INDENT_GLYPHS = {
   out: '<path d="M6 3.5h6M6 7h6M6 10.5h6M4 5L2 7l2 2"/>',
   in: '<path d="M6 3.5h6M6 7h6M6 10.5h6M2 5l2 2-2 2"/>',
 } as const;
+
+const LINE_CAP_LABELS: Record<LineCap, string> = { none: 'None', arrow: 'Arrow', dot: 'Dot', bar: 'Bar' };
+
+/** Each cap on a short line, drawn at the end it is for. */
+function lineCapGlyph(cap: LineCap, end: LineEnd): string {
+  const drawn = {
+    none: '<path d="M2 7h10"/>',
+    arrow: '<path d="M2 7h7"/><path class="fill" d="M12.5 7 8.5 4.2v5.6z"/>',
+    dot: '<path d="M2 7h8"/><circle class="fill" cx="10.5" cy="7" r="2.2"/>',
+    bar: '<path d="M2 7h9.5M11.5 3.5v7"/>',
+  }[cap];
+  return end === 'end' ? drawn : `<g transform="matrix(-1 0 0 1 14 0)">${drawn}</g>`;
+}
 
 const SHAPE_KIND_GLYPHS = {
   rect: '<rect x="2" y="3" width="10" height="8" rx=".5"/>',

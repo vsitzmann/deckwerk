@@ -77,14 +77,15 @@ describe.skipIf(!electronBinary)('responsive desktop toolbar', () => {
 
     // The File menu carries New / Open / Import / Save As at every width, so
     // a medium window keeps Insert centred and simply drops the deck name.
-    const medium = await toolbarAt(900, (layout) => layout.fileVisible
+    // (Medium is 960: with the Pen and its style menu, Insert outgrew 900.)
+    const medium = await toolbarAt(960, (layout) => layout.fileVisible
       && layout.classes.includes('toolbar-hide-deck-name'));
     expect(medium.height).toBe(44);
     expect(medium.fileVisible).toBe(true);
     expect(medium.moreVisible).toBe(false);
     expect(medium.leftRight).toBeLessThanOrEqual(medium.centerLeft);
     expect(medium.centerRight).toBeLessThanOrEqual(medium.rightLeft);
-    expect(medium.insertLabels).toEqual(expect.arrayContaining(['Text', 'Shape', 'Table']));
+    expect(medium.insertLabels).toEqual(expect.arrayContaining(['Text', 'Shape', 'Pen', 'Table']));
     expect(medium.presentVisible).toBe(true);
 
     const narrow = await toolbarAt(500, (layout) => layout.classes.includes('toolbar-compact-file')
@@ -93,7 +94,7 @@ describe.skipIf(!electronBinary)('responsive desktop toolbar', () => {
     expect(narrow.moreVisible).toBe(true);
     expect(narrow.leftRight).toBeLessThanOrEqual(narrow.centerLeft);
     expect(narrow.centerRight).toBeLessThanOrEqual(narrow.rightLeft);
-    expect(narrow.insertLabels).toEqual(expect.arrayContaining(['Text', 'Shape', 'Table']));
+    expect(narrow.insertLabels).toEqual(expect.arrayContaining(['Text', 'Shape', 'Pen', 'Table']));
     expect(narrow.presentVisible).toBe(true);
     expect(narrow.fileVisible).toBe(true);
   });

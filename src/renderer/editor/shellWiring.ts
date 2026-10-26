@@ -3,6 +3,7 @@ import { openThreadCount } from '@shared/comments.js';
 import { commentHighlightsShown, setCommentHighlightsShown } from './comments.js';
 import { elementFollowsLayout, layoutGeometryFor, realignElementToLayout } from '@shared/layoutMasters.js';
 import { EditorCanvas } from './canvas.js';
+import { isLineFamily } from '@shared/lineFamily.js';
 import { ARRANGE_LABELS, arrangeSelection } from './arrange.js';
 import { setCircularMask } from '@shared/mediaMask.js';
 import { wipeCandidates, wipeOfPair } from '@shared/compare.js';
@@ -155,9 +156,12 @@ export function wireCanvasInspector(
   inspector.textComputedTypography = (elementId) => canvas.textComputedTypography(elementId);
   inspector.onToggleMask = (id) => canvas.toggleMaskMode(id);
   inspector.maskingElement = () => canvas.maskingElement();
+  inspector.onTogglePathEdit = (id) => canvas.togglePathEdit(id);
+  inspector.pathEditingElement = () => canvas.pathEditingElement();
   inspector.onSeekPreview = (id, t) => canvas.seekVideo(id, t);
   inspector.videoDuration = (id) => canvas.videoDuration(id);
   canvas.onMaskModeChange = () => inspector.render();
+  canvas.onPathEditChange = () => inspector.render();
   canvas.onTextEditModeChange = () => inspector.render();
   canvas.onTextFormatStateChange = () => inspector.render();
   canvas.onTableSelectionChange = () => inspector.render();
@@ -488,6 +492,25 @@ export function bindEditorKeys(deps: ShellDeps, clipboard: ClipboardActions): vo
       case 'n':
         if (!mod) rail.addSlide();
         break;
+      // Figma's drawing keys: P takes up the pen, Shift+P the pencil.
+      case 'p':
+      case 'P':
+        if (!mod && !e.altKey) {
+          e.preventDefault();
+          if (e.shiftKey) canvas.startPencil();
+          else canvas.startPen();
+        }
+        break;
+      case 'Enter': {
+        // Return on a selected line, arrow, curve or path opens its points,
+        // as a double-click does; a focused control keeps its own Return.
+        const [only] = store.selectedElements();
+        if (mod || e.altKey || !only || store.get().selection.size !== 1 || !isLineFamily(only)) break;
+        if (t?.closest('button, a, [role="menuitem"], #rail')) break;
+        e.preventDefault();
+        canvas.togglePathEdit(only.id);
+        break;
+      }
     }
   });
 }
@@ -570,6 +593,12 @@ export function makeContextActions(
           items.push({ label: 'Edit w/ ffmpeg…', action: () => openTrim(el) });
         }
       }
+      if (isLineFamily(el) && sel === 1) {
+        items.push('separator', {
+          label: canvas.pathEditingElement() === el.id ? 'Done editing points' : 'Edit points',
+          action: () => canvas.togglePathEdit(el.id),
+        });
+      }
       if (el.type === 'web') {
         items.push({
           label: canvas.isWebLive(el.id) ? 'Back to editing' : 'Interact with page',
@@ -634,6 +663,7 @@ export function barButton(label: string, onClick: () => void, variant = ''): HTM
 export function barIconButton(label: string, iconSvg: string, onClick: () => void): HTMLButtonElement {
   const b = document.createElement('button');
   b.className = 'bar-icon-button';
+  b.title = label;
   b.innerHTML = `${iconSvg}<span>${label}</span>`;
   b.addEventListener('click', onClick);
   return b;

@@ -23,7 +23,9 @@ import { collabClientDir } from './support/collabClient.js';
  * Select the arrow, Build → Add animation, pick "line draw", present, click:
  * the arrow is visible at once but only partly drawn, and whole when its
  * time is up, its head riding the tip of the line all the way. A bent path
- * arrow traces its outline the same way, carrying a copy of its head.
+ * arrow traces its outline the same way, carrying a copy of its head. A
+ * filled shape drawn with the pen is outlined first, one run after another,
+ * and coloured in only once its outline is complete.
  */
 const DECK_ID = 'shape-text';
 const BOX_ID = 'label-box';
@@ -145,45 +147,103 @@ describe.skipIf(!electronBinary)('line draw on an arrow', () => {
     const svg = `[data-element-id="${BOX_ID}"] svg`;
     await eventually(async () => editor!.evaluate<boolean>(`Boolean(document.querySelector('${svg} > path'))`), 'the presentation never came up');
     await wait(500);
-    const state = () => editor!.evaluate<{ marker: string | null; heads: number; transform: string | null }>(`(() => {
-      const paths = [...document.querySelectorAll('${svg} > path')];
-      return {
-        marker: paths[0].getAttribute('marker-end'),
-        heads: paths.length - 1,
-        transform: paths[1]?.getAttribute('transform') ?? null,
-      };
-    })()`);
+    // The head is drawn as a line's is: a path whose data starts at its tip,
+    // then runs to one corner of its base.
+    type Head = { heads: number; tip: number[] | null; corner: number[] | null };
+    const read = `(() => {
+      const heads = [...document.querySelectorAll('${svg} > path.arrowhead')];
+      const numbers = heads[0]?.getAttribute('d')?.match(/-?[\\d.]+/g)?.map(Number) ?? null;
+      return { heads: heads.length, tip: numbers ? numbers.slice(0, 2) : null, corner: numbers ? numbers.slice(2, 4) : null };
+    })()`;
+    const state = () => editor!.evaluate<Head>(read);
     // Recorded on every frame in the page (see the straight arrow above).
     await editor.evaluate(`(() => {
       window.__heads = [];
+      const sample = () => {
+        window.__heads.push(${read});
+        if (window.__heads.length < 600) requestAnimationFrame(sample);
+      };
+      requestAnimationFrame(sample);
+    })()`);
+    await editor.key('ArrowRight', 39);
+    // Drawn: one head, its tip on the path's end.
+    const done = await eventually(state, 'the path never finished drawing',
+      (now) => now.heads === 1 && now.tip![0] === 400 && now.tip![1] === 400);
+    expect(done.heads).toBe(1);
+    const frames = await editor.evaluate<Head[]>('window.__heads');
+    // On the way: a single head out on the top edge, pointing right.
+    const early = frames.find((frame) => frame.tip && frame.tip[0] > 0 && frame.tip[0] < 380);
+    expect(early).toBeDefined();
+    expect(early!.heads).toBe(1);
+    expect(early!.tip![1]).toBeCloseTo(0, 0);
+    expect(early!.corner![0]).toBeLessThan(early!.tip![0]);
+    // Never two heads, never one left behind at the far end while it draws.
+    expect(frames.every((frame) => frame.heads <= 1)).toBe(true);
+    expect(frames.filter((frame) => frame.tip && frame.tip[0] === 400 && frame.tip[1] === 400).length)
+      .toBeLessThan(frames.length);
+  });
+  it('outlines a filled pen shape first, one run after another, and only then colours it in', { timeout: 120_000 }, async () => {
+    workDir = await mkdtemp(join(tmpdir(), 'fill-draw-'));
+    const decksRoot = join(workDir, 'decks');
+    const deckDir = join(decksRoot, DECK_ID);
+    const clientDir = await collabClientDir();
+    const profileDir = join(workDir, 'electron-profile');
+    await mkdir(deckDir, { recursive: true });
+    await mkdir(profileDir, { recursive: true });
+    const deck = emptyDeck('Fill draw');
+    // A frame with a hole, filled and with no stroke: the pen's closed shape.
+    deck.slides[0].elements.push({
+      id: BOX_ID, type: 'shape', x: 400, y: 300, w: 400, h: 400, rot: 0, z: 1,
+      opacity: 1, class: [], style: {}, shape: 'path', fill: '#c96442', stroke: null,
+      strokeWidth: 2, radius: 0, pathSize: { w: 400, h: 400 }, arrowStart: false, arrowEnd: false,
+      path: 'M 0 400 C 0 0 400 0 400 400 Z M 100 300 L 300 300 L 200 150 Z',
+    } as never);
+    deck.slides[0].timeline.push({
+      id: 'draw-1', trigger: { on: 'click', ref: null, delay: 0 },
+      action: { type: 'appear', target: BOX_ID, value: 'draw', duration: 1500 },
+    });
+    await saveDeck(deckDir, deck);
+    await writeFile(join(deckDir, 'theme.css'), '.slide { background: #fff; }\n', 'utf8');
+    server = await startCollabServer({ rootDir: decksRoot, clientDir, host: '127.0.0.1', port: 0 });
+    browser = await launchBrowser(`http://127.0.0.1:${server.port}/present.html?deck=${DECK_ID}&slide=1`, profileDir);
+    const target = await findTarget(browser.debugPort, (c) => c.url.includes(`deck=${DECK_ID}`), browser.log);
+    editor = await Cdp.connect(target.webSocketDebuggerUrl!);
+    const svg = `[data-element-id="${BOX_ID}"] svg`;
+    await eventually(async () => editor!.evaluate<boolean>(`Boolean(document.querySelector('${svg} > path'))`), 'the presentation never came up');
+    await wait(500);
+    type Frame = { drawn: number[]; fill: string; traces: number };
+    // How much of each run is drawn, and how far the fill is in, on every frame.
+    const sample = `(() => {
+      const shape = document.querySelector('${svg} > path:not(.draw-trace)');
+      const traces = [...document.querySelectorAll('${svg} > .draw-trace')];
+      return {
+        traces: traces.length,
+        fill: shape.style.fillOpacity,
+        drawn: traces.map((trace) => trace.style.visibility === 'hidden' ? 0
+          : 1 - Number(trace.style.strokeDashoffset) / trace.getTotalLength()),
+      };
+    })()`;
+    await editor.evaluate(`(() => {
+      window.__frames = [];
       const read = () => {
-        const paths = [...document.querySelectorAll('${svg} > path')];
-        window.__heads.push({
-          marker: paths[0].getAttribute('marker-end'),
-          heads: paths.length - 1,
-          transform: paths[1]?.getAttribute('transform') ?? null,
-        });
-        if (window.__heads.length < 600) requestAnimationFrame(read);
+        window.__frames.push(${sample});
+        if (window.__frames.length < 600) requestAnimationFrame(read);
       };
       requestAnimationFrame(read);
     })()`);
     await editor.key('ArrowRight', 39);
-    // Drawn: the ordinary marker is back and the travelling head is gone.
-    const done = await eventually(state, 'the path never finished drawing',
-      (now) => now.marker !== null && now.heads === 0);
-    expect(done.marker).toMatch(/^url\(#arrowhead-/);
-    const frames = await editor.evaluate<Array<{ marker: string | null; heads: number; transform: string | null }>>('window.__heads');
-    // On the way: no marker at the far end, a head out on the top edge pointing right.
-    const early = frames.find((frame) => {
-      const match = frame.transform && /translate\(([-\d.]+) ([-\d.]+)\)/.exec(frame.transform);
-      return match && Number(match[1]) > 0 && Number(match[1]) < 400;
-    });
-    expect(early).toBeDefined();
-    expect(early!.marker).toBeNull();
-    expect(early!.heads).toBe(1);
-    const [x, y, angle] = /translate\(([-\d.]+) ([-\d.]+)\) rotate\(([-\d.]+)\)/.exec(early!.transform!)!.slice(1).map(Number);
-    expect(y).toBeCloseTo(0, 0);
-    expect(x).toBeGreaterThan(0);
-    expect(angle).toBeCloseTo(0, 0);
+    await eventually(async () => editor!.evaluate<Frame>(sample), 'the shape never finished drawing',
+      (frame) => frame.traces === 0 && frame.fill === '');
+    const frames = (await editor.evaluate<Frame[]>('window.__frames')).filter((frame) => frame.traces === 2);
+    // It was traced through the middle of each run, unfilled, the outer run first.
+    expect(frames.some((frame) => frame.drawn[0] > 0.2 && frame.drawn[0] < 0.8 && frame.drawn[1] === 0
+      && Number(frame.fill) === 0)).toBe(true);
+    expect(frames.some((frame) => frame.drawn[0] > 0.99 && frame.drawn[1] > 0.2 && frame.drawn[1] < 0.8)).toBe(true);
+    for (const frame of frames) {
+      if (frame.drawn[1] > 0) expect(frame.drawn[0]).toBeGreaterThan(0.99);
+      // No colour before the whole outline is there.
+      if (Number(frame.fill) > 0) expect(Math.min(...frame.drawn)).toBeGreaterThan(0.99);
+    }
+    expect(frames.some((frame) => Number(frame.fill) > 0.2 && Number(frame.fill) < 0.9)).toBe(true);
   });
 });

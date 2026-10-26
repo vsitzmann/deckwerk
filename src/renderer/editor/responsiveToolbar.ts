@@ -2,6 +2,7 @@ const LAYOUT_CLASSES = [
   'toolbar-hide-deck-name',
   'toolbar-compact-file',
   'toolbar-compact-secondary',
+  'toolbar-compact-insert',
 ] as const;
 
 const COLLISION_GAP = 8;
@@ -52,6 +53,11 @@ export function refreshResponsiveToolbar(toolbar: HTMLElement): void {
   if (flowingGroupsFit(toolbar)) return;
 
   toolbar.classList.add('toolbar-compact-secondary');
+  if (flowingGroupsFit(toolbar)) return;
+
+  // Last, Insert keeps its icons and drops its words (each says what it is
+  // on hover).
+  toolbar.classList.add('toolbar-compact-insert');
 }
 
 /**

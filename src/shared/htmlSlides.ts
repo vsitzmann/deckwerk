@@ -1,6 +1,6 @@
 import type { AgentOperation } from './agent.js';
-import { MediaEffectSchema, MIRRORED_TEXT_STYLE_PROPERTIES, SlideSchema } from './deck.js';
-import type { Deck, MediaEffect, Slide, SlideElement, TimelineEntry } from './deck.js';
+import { MediaEffectSchema, MIRRORED_TEXT_STYLE_PROPERTIES, SlideSchema, STROKE_DASHES, STROKE_STYLES } from './deck.js';
+import type { Deck, MediaEffect, Slide, SlideElement, StrokeDash, StrokeStyle, TimelineEntry } from './deck.js';
 import { fitAutoTextElement } from './autoFit.js';
 import { KATEX_AUTO_RENDER_JS, KATEX_CSS, KATEX_JS } from './katexInline.js';
 import {
@@ -1516,6 +1516,13 @@ function elementFromMeasured(
       ...(node.dataset.control ? { control: { x: cx, y: cy } } : {}),
       ...(Number.isFinite(Number.parseFloat(node.dataset.braceDepth ?? ''))
         ? { braceDepth: Number.parseFloat(node.dataset.braceDepth ?? '') } : {}),
+      ...((STROKE_STYLES as readonly string[]).includes(node.dataset.strokeStyle ?? '')
+        && node.dataset.strokeStyle !== 'pen'
+        ? { strokeStyle: node.dataset.strokeStyle as StrokeStyle } : {}),
+      ...((STROKE_DASHES as readonly string[]).includes(node.dataset.strokeDash ?? '')
+        ? { strokeDash: node.dataset.strokeDash as StrokeDash } : {}),
+      ...(node.dataset.startCap === 'dot' || node.dataset.startCap === 'bar' ? { startCap: node.dataset.startCap } : {}),
+      ...(node.dataset.endCap === 'dot' || node.dataset.endCap === 'bar' ? { endCap: node.dataset.endCap } : {}),
     };
   }
 
@@ -1891,6 +1898,10 @@ function elementToHtml(
         + (element.arrowSize !== undefined ? ` data-arrow-size="${element.arrowSize}"` : '')
         + (element.control ? ` data-control="${element.control.x},${element.control.y}"` : '')
         + (element.braceDepth !== undefined ? ` data-brace-depth="${element.braceDepth}"` : '')
+        + (element.strokeStyle && element.strokeStyle !== 'pen' ? ` data-stroke-style="${element.strokeStyle}"` : '')
+        + (element.strokeDash ? ` data-stroke-dash="${element.strokeDash}"` : '')
+        + (element.startCap ? ` data-start-cap="${element.startCap}"` : '')
+        + (element.endCap ? ` data-end-cap="${element.endCap}"` : '')
         + attr('data-path', element.path)
         + (element.pathSize ? ` data-path-size="${element.pathSize.w},${element.pathSize.h}"` : '')
         // Paint effects live on the wrapper rather than the nested SVG. Give

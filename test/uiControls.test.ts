@@ -63,12 +63,13 @@ describe('shared editor controls', () => {
       .map((item) => `${item.textContent}:${item.getAttribute('aria-checked')}`);
 
     open();
-    expect(radios()).toEqual(['System:true', 'Light:false', 'Dark:false']);
+    const sizes = ['Small · 90%:false', 'Default · 100%:true', 'Large · 115%:false', 'Larger · 130%:false'];
+    expect(radios()).toEqual(['System:true', 'Light:false', 'Dark:false', ...sizes]);
     [...document.querySelectorAll<HTMLButtonElement>('[role="menuitemradio"]')]
       .find((item) => item.textContent === 'Light')!.click();
     expect(document.documentElement.dataset.uiTheme).toBe('light');
     open();
-    expect(radios()).toEqual(['System:false', 'Light:true', 'Dark:false']);
+    expect(radios()).toEqual(['System:false', 'Light:true', 'Dark:false', ...sizes]);
     localStorage.removeItem('deckwerk.uiTheme');
   });
 
@@ -93,6 +94,7 @@ describe('shared editor controls', () => {
       expect(source).toContain('createTextInsertPicker({');
       expect(source).not.toContain("barIconButton('Code'");
       expect(source).toContain('createShapeInsertPicker(store)');
+      expect(source).toContain('createPenButton(canvas)');
       expect(source).not.toContain("menuButton('File'");
       expect(source).not.toContain("menuButton('Insert'");
     }
@@ -213,7 +215,9 @@ describe('shared editor controls', () => {
     left.getBoundingClientRect = () => toolbar.classList.contains('toolbar-compact-file')
       ? rect(0, 120)
       : rect(0, toolbar.classList.contains('toolbar-hide-deck-name') ? 430 : 450);
-    center.getBoundingClientRect = () => deckControlsVisible ? rect(400, 220) : rect(0, 0);
+    center.getBoundingClientRect = () => deckControlsVisible
+      ? rect(400, toolbar.classList.contains('toolbar-compact-insert') ? 120 : 220)
+      : rect(0, 0);
     right.getBoundingClientRect = () => deckControlsVisible
       ? rect(660, toolbar.classList.contains('toolbar-compact-secondary') ? 100 : 240)
       : rect(0, 0);
@@ -226,6 +230,12 @@ describe('shared editor controls', () => {
     Object.defineProperty(toolbar, 'clientWidth', { configurable: true, value: 500 });
     refreshResponsiveToolbar(toolbar);
     expect(toolbar.classList.contains('toolbar-compact-secondary')).toBe(true);
+    expect(toolbar.classList.contains('toolbar-compact-insert')).toBe(false);
+
+    // Narrower still, Insert keeps its icons and drops its words.
+    Object.defineProperty(toolbar, 'clientWidth', { configurable: true, value: 420 });
+    refreshResponsiveToolbar(toolbar);
+    expect(toolbar.classList.contains('toolbar-compact-insert')).toBe(true);
 
     deckControlsVisible = false;
     refreshResponsiveToolbar(toolbar);
