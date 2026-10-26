@@ -92,8 +92,16 @@ describe.skipIf(!electronBinary)('responsive desktop toolbar', () => {
     expect(medium.presentVisible).toBe(true);
 
     // Narrower, Agent and Collaborate fold into More before Insert gives
-    // up any of its words.
-    const compact = await toolbarAt(1060, (layout) => layout.classes.includes('toolbar-compact-secondary'));
+    // up any of its words. Where that happens depends on the platform's
+    // fonts, so walk the width down until it does.
+    const fits = (layout: ToolbarLayout) => layout.leftRight <= layout.centerLeft
+      && layout.centerRight <= layout.rightLeft;
+    let compact: ToolbarLayout | null = null;
+    for (let width = 1180; width >= 600 && !compact; width -= 20) {
+      const layout = await toolbarAt(width, fits);
+      if (layout.classes.includes('toolbar-compact-secondary')) compact = layout;
+    }
+    if (!compact) throw new Error('Agent and Collaborate never folded into More');
     expect(compact.height).toBe(44);
     expect(compact.classes).not.toContain('toolbar-compact-insert');
     expect(compact.moreVisible).toBe(true);
