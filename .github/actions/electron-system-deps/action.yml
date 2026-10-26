@@ -76,8 +76,8 @@ runs:
         exit 1
 
     - name: Save the .deb cache
-      # Saved right away rather than in a post step, so a red test run (these
-      # jobs are advisory and often red) still leaves the cache for the next.
+      # Saved right away rather than in a post step, so a red test run (a
+      # failing suite) still leaves the cache for the next.
       if: steps.install.outputs.fetched == 'true'
       uses: actions/cache/save@v4
       continue-on-error: true

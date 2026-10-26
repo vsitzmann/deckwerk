@@ -37,11 +37,9 @@ jobs:
       - name: Importer tests
         run: npm run test:importers
 
-  # These jobs launch real Electron under Xvfb. They are valuable integration
-  # signals, but the input, focus, IME, clipboard, and compositor paths are not
-  # deterministic enough on shared Linux runners to block every merge.
+  # Real Electron under Xvfb. Required, like `test`: a red browser run blocks
+  # the merge, so a flaky suite is a bug to fix, not noise to read past.
   browser:
-    continue-on-error: true
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -57,13 +55,16 @@ jobs:
         run: |
           sudo chown root:root node_modules/electron/dist/chrome-sandbox
           sudo chmod 4755 node_modules/electron/dist/chrome-sandbox
-      - name: Browser tests (advisory)
+      - name: Browser tests
         env:
           # Bare Xvfb has no compositor. Pixel-capture suites use this to skip
           # instead of waiting forever for a frame that cannot be produced.
           CI_NO_WINDOW_MANAGER: "1"
         run: xvfb-run -a --server-args="-screen 0 2560x1440x24" npm run test:browser
 
+  # Suites that share machine-wide state (the OS clipboard, presentation
+  # windows) one at a time. Still advisory: the clipboard and focus paths are
+  # not deterministic enough on shared Linux runners to block every merge.
   serial:
     continue-on-error: true
     runs-on: ubuntu-latest
