@@ -353,7 +353,15 @@ memory. Order: the next two slides, then the slide on screen, then the rest of
 the talk ahead, then what lies behind, nearest first. The cache holds (starts
 no new transfer) from each slide change until the visible slide can paint,
 exactly like the lookahead. The lookahead decodes an upcoming clip only once
-its blob has landed, so a clip is never downloaded twice. The budget is 1 GB.
+its blob has landed, and a slide the presenter reaches while its clip is
+still on its way takes no source until that download ends
+(`awaitClipsOnTheirWayIntoMemory`), so a clip is never downloaded twice.
+That second rule is not about Safari: two transfers of one file at once is
+what Chromium's HTTP cache handles worst. It lets a range request (the media
+stack's `bytes=0-`) wait only about 25 ms for the transfer already writing the
+entry, then sends it past the cache, and the whole clip crossed the wire again
+whenever the talk outran the download (mediaTransferBudgetBrowser failed
+on about half of CI runs before Oct 2026). The budget is 1 GB.
 Past it, the cache drops the files the talk reaches last, but never one an
 element still reads. A file it cannot hold, or that fails twice, streams the
 old way.
@@ -430,8 +438,16 @@ accumulates decoded bitmaps from the rest of the deck.
 - `test/presentVideosFromMemory.test.ts` — the blob cache's order, hold,
   budget and fallbacks, and the Player with it: a revisited slide fetches
   nothing, an upcoming clip is decoded from memory rather than downloaded
-  twice, a failed element is not reused, and a clip whose retries ran out
-  mid-load starts once it can play.
+  twice, a slide reached while its clip is still on its way into memory
+  waits for that download instead of opening a second one, a failed element
+  is not reused, and a clip whose retries ran out mid-load starts once it can
+  play.
+- `test/renderInvariants.test.ts` — besides the invariant itself: the check
+  loads no media. Test builds run it after every in-place canvas patch; its
+  fresh render and its copies used to be live `<video>` elements that fetched
+  the slide's clips beside the canvas's own, and the resulting pile-up of
+  concurrent range requests made Chromium doom the clip's cache entry, so the
+  next viewer downloaded every byte again.
 - `test/editorImageWarmup.test.ts` — the editor decodes a next-slide image once
   and adopts that exact node on navigation.
 - `test/canvasVideoReuseBrowser.test.ts` — the same rule through the real rail

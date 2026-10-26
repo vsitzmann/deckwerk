@@ -21,6 +21,8 @@
  */
 import type { Slide } from '../../shared/deck.js';
 import { renderSlide } from '../player/render.js';
+import { ungateVideoLoad } from '../player/mediaLoadGate.js';
+import { releaseDecodedVideo } from '../player/decodedVideoPool.js';
 
 /** Nodes the editor adds on top of a player render; not part of the model. */
 const EDITOR_ONLY_SELECTOR = [
@@ -92,6 +94,26 @@ export function findRenderDivergences(
   const live = slideLayer.querySelector<HTMLElement>(':scope > .slide');
   if (!live) return [];
   const fresh = renderSlide(slide, { resolveSrc, mediaPreload: 'metadata' });
+  try {
+    return compareSlides(live, fresh, slide, options);
+  } finally {
+    // The fresh render exists only to be read. Its videos were handed to the
+    // load gate and given a source; a media element starts fetching once the
+    // task that set its source ends, detached or not. Release them before it
+    // does, so a check costs the network nothing (see `inert`).
+    for (const video of fresh.querySelectorAll('video')) {
+      ungateVideoLoad(video);
+      releaseDecodedVideo(video);
+    }
+  }
+}
+
+function compareSlides(
+  live: HTMLElement,
+  fresh: HTMLElement,
+  slide: Slide,
+  options: { skipElementIds?: Iterable<string> },
+): RenderDivergence[] {
   const skip = new Set(options.skipElementIds ?? []);
   const divergences: RenderDivergence[] = [];
 
@@ -189,11 +211,29 @@ export function reportRenderDivergences(
 }
 
 /**
+ * A document with no browsing context, to hold the copies the check compares.
+ *
+ * A copy of a `<video>` made in the page is a live element: it loads its
+ * source like any other, and the canvas's clips were fetched again by every
+ * check (test builds run one after each in-place patch). Several requests for
+ * one clip at once is what Chromium's HTTP cache handles worst — a range
+ * request that gives up waiting for another writer dooms the entry, and every
+ * byte of the clip the editor already had was downloaded again by the next
+ * viewer (mediaTransferBudgetBrowser). Nothing in a document without a
+ * browsing context loads anything.
+ */
+let inertDocument: Document | null = null;
+function inert(): Document {
+  inertDocument ??= document.implementation.createHTMLDocument('');
+  return inertDocument;
+}
+
+/**
  * Strip the editor's own decorations and runtime-measured values so what is
  * left is only what the model is supposed to determine.
  */
 function normalize(node: HTMLElement): HTMLElement {
-  const clone = node.cloneNode(true) as HTMLElement;
+  const clone = inert().importNode(node, true) as HTMLElement;
   for (const extra of clone.querySelectorAll(EDITOR_ONLY_SELECTOR)) extra.remove();
   // Effect filter definitions carry generated ids that differ per render.
   for (const svg of clone.querySelectorAll('svg')) {

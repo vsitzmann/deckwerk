@@ -1,10 +1,11 @@
 // @vitest-environment jsdom
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { emptyDeck, type Slide, type SlideElement } from '../src/shared/deck.js';
 import { EditorCanvas } from '../src/renderer/editor/canvas.js';
 import { EditorStore } from '../src/renderer/editor/store.js';
 import { findRenderDivergences, formatDivergence } from '../src/renderer/editor/renderInvariants.js';
 import { installCanvasDomShims } from './support/canvasHarness.js';
+import { gatedLoadsPending, resetMediaLoadGateForTests } from '../src/renderer/player/mediaLoadGate.js';
 
 /**
  * The model/DOM agreement invariant, applied to one editor operation at a time.
@@ -269,5 +270,48 @@ describe('canvas render invariant', () => {
     expect(divergencesAfter([textElement(), videoElement()], (slide) => {
       firstOf(slide, 'text').z = 9;
     })).toEqual([]);
+  });
+});
+
+describe('the render invariant check itself', () => {
+  // mediaTransferBudgetBrowser, Oct 2026: test builds run this check after
+  // every in-place patch, and its fresh render and the copies it compares
+  // were real <video> elements with a source. Each check opened the slide's
+  // clips again beside the canvas's own elements -- five concurrent requests
+  // for one clip after a text edit -- and Chromium's HTTP cache, when a range
+  // request gives up waiting for another writer, dooms the entry: the bytes
+  // the editor had were thrown away, and the next viewer of the clip (the
+  // presentation) downloaded all of them again.
+  it('loads no media: nothing it renders or copies to compare keeps a source', () => {
+    const { store, canvas, slideLayer } = setup([videoElement()]);
+    store.commit((deck) => { deck.slides[0].elements[0].x += 10; }, { label: 'edit' });
+    canvas.render();
+    resetMediaLoadGateForTests();
+    const created: HTMLVideoElement[] = [];
+    const createElement = document.createElement.bind(document);
+    vi.spyOn(document, 'createElement').mockImplementation(((tag: string, options?: ElementCreationOptions) => {
+      const element = createElement(tag, options);
+      if (tag === 'video') created.push(element as HTMLVideoElement);
+      return element;
+    }) as typeof document.createElement);
+    const cloned: Node[] = [];
+    const cloneNode = Node.prototype.cloneNode;
+    vi.spyOn(Node.prototype, 'cloneNode').mockImplementation(function (this: Node, deep?: boolean) {
+      const copy = cloneNode.call(this, deep);
+      cloned.push(copy);
+      return copy;
+    });
+
+    findRenderDivergences(slideLayer, store.get().deck.slides[0], (src) => `/x/${src}`);
+    vi.restoreAllMocks();
+
+    expect(created.length).toBeGreaterThan(0);
+    expect(created.filter((video) => video.hasAttribute('src'))).toEqual([]);
+    expect(gatedLoadsPending()).toBe(false);
+    // A copy made in the live document is a live element: it loads its source.
+    const liveCopies = cloned.flatMap((copy) => copy.ownerDocument === document && copy instanceof Element
+      ? [...(copy.matches('video') ? [copy] : []), ...copy.querySelectorAll('video')]
+      : []);
+    expect(liveCopies.filter((video) => video.hasAttribute('src'))).toEqual([]);
   });
 });

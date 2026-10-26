@@ -217,6 +217,57 @@ describe('the Player with clips in memory', () => {
     expect(warming().map((video) => video.getAttribute('src'))).toEqual(['blob:test/0']);
   });
 
+  // The CI browser job, Oct 2026 (mediaTransferBudgetBrowser): the presenter
+  // reached the next slide while its clip was still on its way into memory,
+  // and the slide's <video> opened the same URL from the network beside the
+  // download. Chromium's HTTP cache serves a range request only after the
+  // writer before it has finished, and gives up on waiting after 25 ms: the
+  // element's `bytes=0-` went straight to the server and the whole clip
+  // crossed the wire a second time.
+  it('shows a clip that is on its way into memory from memory, never from a second download', async () => {
+    const { requests, fetchFile } = controlledFetch();
+    const { cache } = cacheWith(fetchFile);
+    const deck = deckWith([
+      [],
+      [videoElement('v', 'assets/clip.05a38d7a.mp4', { autoplay: true })],
+    ]);
+    const plays: Array<string | null> = [];
+    HTMLMediaElement.prototype.play = function () {
+      plays.push(this.getAttribute('src'));
+      return Promise.resolve();
+    };
+    player = new Player({ deck, container: host, resolveSrc: (src) => `/x/${src}`, videoBlobs: cache });
+    expect(requests.map((r) => r.url)).toEqual(['/x/assets/clip.05a38d7a.mp4']);
+
+    // The talk arrives before the download has finished.
+    player.goToSlide(1, { play: true });
+    const video = host.querySelector('video')!;
+    expect(video.getAttribute('src')).toBeNull();
+
+    requests[0].respond();
+    await flush();
+    expect(host.querySelector('video')).toBe(video);
+    expect(video.getAttribute('src')).toBe('blob:test/0');
+    expect(video.dataset.mediaKey).toContain('blob:test/0');
+    // It was asked to play on arrival, and still is once it has a source.
+    expect(plays.at(-1)).toBe('blob:test/0');
+    expect(requests).toHaveLength(1);
+  });
+
+  it('streams a clip whose download into memory fails, once that download has ended', async () => {
+    const { requests, fetchFile } = controlledFetch();
+    const { cache } = cacheWith(fetchFile);
+    const deck = deckWith([[], [videoElement('v', 'assets/clip.05a38d7a.mp4')]]);
+    player = new Player({ deck, container: host, resolveSrc: (src) => `/x/${src}`, videoBlobs: cache });
+    player.goToSlide(1);
+    const video = host.querySelector('video')!;
+    expect(video.getAttribute('src')).toBeNull();
+
+    requests[0].fail();
+    await flush();
+    expect(video.getAttribute('src')).toBe('/x/assets/clip.05a38d7a.mp4');
+  });
+
   it('does not reuse an element whose load failed', () => {
     const deck = deckWith([
       [videoElement('a', 'assets/clip.05a38d7a.mp4')],

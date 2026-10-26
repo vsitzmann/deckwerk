@@ -38,6 +38,13 @@ interface Entry {
   bytes: number;
 }
 
+interface Flight {
+  url: string;
+  abort: AbortController;
+  /** Callers waiting for this transfer to end (`settled`). */
+  waiters: Array<(objectUrl: string | undefined) => void>;
+}
+
 export class VideoBlobCache {
   private readonly budget: number;
   private readonly fetchFile: typeof fetch;
@@ -50,7 +57,7 @@ export class VideoBlobCache {
   /** Network URLs in the order they are wanted, most urgent first. */
   private order: string[] = [];
   private held = false;
-  private inFlight: { url: string; abort: AbortController } | null = null;
+  private inFlight: Flight | null = null;
   private failures = new Map<string, number>();
   /** Files that did not fit the budget for the current order; retried when it changes. */
   private noRoom = new Set<string>();
@@ -77,6 +84,30 @@ export class VideoBlobCache {
   covers(url: string): boolean {
     return this.entries.has(url)
       || ((this.failures.get(url) ?? 0) < FAILURE_LIMIT && !this.noRoom.has(url));
+  }
+
+  /** Whether this file is being downloaded right now. */
+  fetching(url: string): boolean {
+    return this.inFlight?.url === url;
+  }
+
+  /**
+   * Resolves once the download of `url` now running has ended: with its
+   * `blob:` URL if the file landed in memory, `undefined` if it did not
+   * (failed, abandoned, or too large to hold). With no download of `url`
+   * running it resolves at once, the same way.
+   *
+   * A `<video>` that wants a file this cache is downloading waits here rather
+   * than opening the URL itself. Two transfers of one file at once is the
+   * case the HTTP cache handles worst: Chromium lets a range request (the
+   * media stack's `bytes=0-`) wait only 25 ms for the transfer already
+   * writing the entry, then sends it to the network past the cache, and the
+   * whole file crosses the wire a second time.
+   */
+  settled(url: string): Promise<string | undefined> {
+    const flight = this.inFlight;
+    if (flight?.url !== url) return Promise.resolve(this.objectUrl(url));
+    return new Promise((resolve) => flight.waiters.push(resolve));
   }
 
   /**
@@ -141,7 +172,7 @@ export class VideoBlobCache {
   }
 
   private async download(url: string): Promise<void> {
-    const flight = { url, abort: new AbortController() };
+    const flight: Flight = { url, abort: new AbortController(), waiters: [] };
     this.inFlight = flight;
     try {
       const response = await this.fetchFile(url, { signal: flight.abort.signal });
@@ -169,6 +200,7 @@ export class VideoBlobCache {
         this.failures.set(url, (this.failures.get(url) ?? 0) + 1);
       }
     } finally {
+      for (const resolve of flight.waiters) resolve(this.objectUrl(url));
       if (this.inFlight === flight) {
         this.inFlight = null;
         this.pump();

@@ -651,6 +651,7 @@ export class Player {
         releaseDecodedVideo(video);
       }
     }
+    this.awaitClipsOnTheirWayIntoMemory(slide, adopted);
 
     this.rescale();
 
@@ -668,6 +669,54 @@ export class Player {
     if (played.length > 0) this.playEntries(slide, played, state);
     this.startLookaheadWhenVisibleSlideCanPaint();
     this.onCursor?.(this.getCursor(), steps);
+  }
+
+  /**
+   * A fresh element whose clip the blob cache is downloading right now takes
+   * no source until that download ends, then the clip from memory (or, if it
+   * did not land, from the network).
+   *
+   * The cache fetches the next slides' clips first, so a presenter who
+   * advances quickly reaches a slide whose clip is still on its way. Opening
+   * the network URL beside the download made two transfers of one file, and
+   * Chromium's HTTP cache does not share an entry between them: the media
+   * stack's range request waits 25 ms for the download writing the entry,
+   * then bypasses the cache, and the whole clip crossed the wire again (the
+   * intermittent "downloads nothing for the presentation" failure in
+   * mediaTransferBudgetBrowser). The download is the most urgent transfer
+   * there is at that point, and the loading ring shows while it finishes.
+   *
+   * Runs in the task that rendered the slide: the element's resource
+   * selection waits for a stable state, so taking the source away here means
+   * it never opened a connection. Adopted elements keep what they are
+   * already playing.
+   */
+  private awaitClipsOnTheirWayIntoMemory(slide: Slide, adopted: Set<HTMLVideoElement>): void {
+    const cache = this.videoBlobs;
+    if (!cache) return;
+    for (const video of this.stage.querySelectorAll('video')) {
+      if (adopted.has(video)) continue;
+      const network = video.getAttribute('src');
+      if (!network || !cache.fetching(network)) continue;
+      video.removeAttribute('src');
+      void cache.settled(network).then((objectUrl) => {
+        // The slide moved on, or the element was handed elsewhere: nothing to load.
+        if (!video.isConnected || !this.stage.contains(video) || video.hasAttribute('src')) return;
+        const src = objectUrl ?? network;
+        const id = video.closest<HTMLElement>('[data-element-id]')?.dataset.elementId;
+        const el = slide.elements.find((candidate) => candidate.id === id);
+        // Filed under the URL it now reads, so the pool and the lookahead
+        // match it with elements made for the same bytes.
+        if (el?.type === 'video') video.dataset.mediaKey = videoPresentationKey(el, src);
+        video.src = src;
+        // A play() made while it had no source cannot start it; ask again
+        // now that it has one, with a fresh retry budget.
+        if (id && this.intendedPlaying.has(id) && !this.blanked && video.dataset.holdFrame !== 'true') {
+          this.playAttempts.delete(id);
+          this.keepPlaying(id, video);
+        }
+      });
+    }
   }
 
   /**
