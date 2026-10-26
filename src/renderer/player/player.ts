@@ -33,7 +33,7 @@ import {
   renderSlide,
   videoPresentationKey,
 } from './render.js';
-import { decodeImage, revealImagesWhenDecoded } from './imageDecode.js';
+import { decodedOrLoaded, decodeImage, revealImagesWhenDecoded } from './imageDecode.js';
 import {
   DecodedVideoPool,
   decodeVideoFrame,
@@ -98,6 +98,13 @@ const IMAGE_WARM_PIXEL_LIMIT = 48_000_000;
  * bounds the memory.
  */
 const IMAGE_WARM_COUNT_LIMIT = 40;
+/**
+ * How long the lookahead waits on one image's decode once its bytes are in,
+ * before starting the next. Decoding one at a time bounds memory; a decode
+ * that never seems to finish (Safari, for a detached image) must not hold up
+ * the rest of the slide.
+ */
+const WARM_DECODE_PATIENCE_MS = 250;
 /**
  * Decoded images of the slides shown last, kept for a step back or a jump
  * home: the same bound as the lookahead, most recently shown kept first.
@@ -573,7 +580,7 @@ export class Player {
     }
 
     this.keepShownImages();
-    const rendered = renderSlide(slide, { resolveSrc: this.resolveSrc });
+    const rendered = renderSlide(slide, { resolveSrc: this.resolveSrc, deferImageSrc: this.deferImageSrc });
     this.adoptWarmedImages(rendered);
     const awaited = this.awaitImagesOnTheirWayIntoMemory(rendered);
     revealImagesWhenDecoded(rendered);
@@ -770,25 +777,33 @@ export class Player {
     return awaited;
   }
 
+  /** A picture the blob cache means to hold and does not yet: rendered without a source (see below). */
+  private deferImageSrc = (url: string): boolean => {
+    const cache = this.mediaBlobs;
+    return cache !== null && cache.isImage(url) && cache.objectUrl(url) === undefined && cache.covers(url);
+  };
+
   /**
-   * A fresh `<img>` whose picture the blob cache is still to hold takes no
-   * source until it lands, then the picture from memory (or, if it did not
-   * land, from the network), shown once decoded.
+   * A fresh `<img>` whose picture the blob cache is still to hold is rendered
+   * with no source (`deferImageSrc`) and given one when the picture lands:
+   * from memory, or, if it did not land, from the network. It is shown once
+   * decoded.
    *
    * The cache fetches this slide's pictures before anything else, so the
    * wait is the transfer itself. Letting the element fetch beside the cache
-   * would send the picture twice wherever the HTTP cache does not join the
-   * two (Safari), and a picture asked for from the network is one the next
-   * reshow asks about again. Returns the network URLs it waits for.
+   * sent the picture twice in Safari, whose HTTP cache does not join the two
+   * (and WebKit starts an `<img>`'s request as soon as `src` is set, so the
+   * source must never be assigned at all); and a picture asked for from the
+   * network is one the next reshow asks about again. Returns the network URLs
+   * it waits for.
    */
   private awaitImagesOnTheirWayIntoMemory(root: HTMLElement): string[] {
     const cache = this.mediaBlobs;
     const awaited: string[] = [];
     if (!cache) return awaited;
-    for (const image of root.querySelectorAll<HTMLImageElement>('img')) {
-      const network = image.getAttribute('src');
-      if (!network || !cache.isImage(network) || cache.objectUrl(network) !== undefined || !cache.covers(network)) continue;
-      image.removeAttribute('src');
+    for (const image of root.querySelectorAll<HTMLImageElement>('img[data-deferred-src]')) {
+      const network = image.dataset.deferredSrc!;
+      delete image.dataset.deferredSrc;
       image.style.visibility = 'hidden';
       awaited.push(network);
       void cache.whenHeld(network).then((objectUrl) => {
@@ -1105,7 +1120,7 @@ export class Player {
       image.decoding = 'async';
       image.src = src;
       this.warmedImages.set(network, image);
-      await decodeImage(image);
+      await decodedOrLoaded(image, WARM_DECODE_PATIENCE_MS);
       if (generation !== this.imageWarmGeneration) return;
       retainedPixels += image.naturalWidth * image.naturalHeight;
     }

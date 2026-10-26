@@ -33,10 +33,37 @@ export function decodeImage(image: HTMLImageElement): Promise<boolean> {
   return tracked;
 }
 
+/**
+ * Resolves once the node is decoded, or `patienceMs` after its bytes are in,
+ * whichever comes first. For a loop that decodes one image at a time: Safari
+ * can take seconds to resolve `decode()` for an image that is not in the
+ * document, and waiting on it stalled every image queued behind it.
+ */
+export function decodedOrLoaded(image: HTMLImageElement, patienceMs: number): Promise<void> {
+  const loaded = new Promise<void>((resolve) => {
+    const settle = () => setTimeout(resolve, patienceMs);
+    if (image.complete) settle();
+    else {
+      image.addEventListener('load', settle, { once: true });
+      image.addEventListener('error', settle, { once: true });
+    }
+  });
+  return Promise.race([decodeImage(image).then(() => undefined), loaded]);
+}
+
 /** Hide incomplete images and reveal each one only after its full decode. */
 export function revealImagesWhenDecoded(root: ParentNode): void {
   for (const image of root.querySelectorAll<HTMLImageElement>('img')) {
     if (decodedImages.has(image)) continue;
+    // Every byte is in (a lookahead node still decoding, a picture read from
+    // memory): nothing can paint as a partial strip, so hiding it would only
+    // cost frames. Safari can resolve `decode()` for a detached image
+    // seconds after its bytes are in, and lookahead nodes stayed hidden there
+    // for as long, a whole slide's worth on the media budget suite.
+    if (image.complete && image.naturalWidth > 0) {
+      void decodeImage(image);
+      continue;
+    }
     // A complete-but-broken image has already fired `error`; leave its native
     // broken-image indication visible rather than hiding it forever.
     if (image.complete && image.naturalWidth <= 0) continue;

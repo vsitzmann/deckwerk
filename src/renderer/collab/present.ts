@@ -130,6 +130,16 @@ const bus = agentViewer ? null : createPresentationBus(deckId);
  */
 const mediaBlobs = agentViewer ? undefined : new MediaBlobCache({ borrow: borrowFromEditor() });
 
+declare global {
+  interface Window {
+    /** Whether this presentation holds its whole talk in memory (see `mediaBlobs`). */
+    deckwerkPresentationMemory?: { holdsAll(): boolean };
+  }
+}
+// Read by whoever needs to know the talk can go on without the server (the
+// media budget suite cuts the link once it is true).
+if (mediaBlobs) window.deckwerkPresentationMemory = { holdsAll: () => mediaBlobs.holdsAll() };
+
 /**
  * The editor tab that embeds this presentation may already hold the talk's
  * clips in memory (editorVideoMemory.ts, in Safari): its `blob:` URLs are this

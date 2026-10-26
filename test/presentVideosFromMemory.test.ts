@@ -319,9 +319,18 @@ describe('the Player with pictures in memory', () => {
       [videoElement('v', 'assets/clip.05a38d7a.mp4')],
       [imageElement('p2', 'assets/two.jpg'), imageElement('p3', 'assets/three.jpg')],
     ]);
+    // WebKit starts an <img>'s request the moment `src` is set, detached or
+    // not: a picture the cache is fetching must never be given its network URL.
+    const assigned: string[] = [];
+    const srcProperty = Object.getOwnPropertyDescriptor(HTMLImageElement.prototype, 'src')!;
+    vi.spyOn(HTMLImageElement.prototype, 'src', 'set').mockImplementation(function (this: HTMLImageElement, value: string) {
+      assigned.push(value);
+      srcProperty.set!.call(this, value);
+    });
     player = new Player({ deck, container: host, resolveSrc: (src) => `/x/${src}`, mediaBlobs: cache });
     // The slide on screen waits for its picture, which the cache fetches first.
     expect(host.querySelector('img')!.getAttribute('src')).toBeNull();
+    expect(assigned.filter((url) => !url.startsWith('blob:'))).toEqual([]);
     expect(requests.map((r) => r.url)).toEqual(['/x/assets/zero.jpg', '/x/assets/two.jpg', '/x/assets/three.jpg']);
     for (const request of requests) request.respond();
     await flush();

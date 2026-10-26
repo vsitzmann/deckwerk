@@ -156,6 +156,14 @@ export class MediaBlobCache {
       || ((this.failures.get(url) ?? 0) < FAILURE_LIMIT && !this.noRoom.has(url) && !this.tooLarge.has(url));
   }
 
+  /**
+   * Whether every file wanted is in memory: from here on the talk needs
+   * nothing from the network, and survives losing it.
+   */
+  holdsAll(): boolean {
+    return this.order.every((url) => this.entries.has(url) || this.borrowed(url) !== undefined);
+  }
+
   /** Whether this wanted file is a picture (see `want`). */
   isImage(url: string): boolean {
     return this.images.has(url);

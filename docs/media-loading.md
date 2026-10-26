@@ -443,7 +443,11 @@ Three rules now:
   `MediaBlobCache` that holds its clips), so a slide renders them as `blob:`
   URLs: no request at all, not even to the HTTP cache. A picture the slide
   on screen needs that is not in memory yet waits for the cache's transfer
-  (`awaitImagesOnTheirWayIntoMemory`) rather than starting a second one.
+  (`awaitImagesOnTheirWayIntoMemory`) rather than starting a second one. It
+  is rendered with no `src` at all (`deferImageSrc` in render.ts): WebKit
+  starts an `<img>`'s request the moment `src` is assigned, detached or not,
+  so assigning the URL and removing it again sent the first slide's photos
+  twice in Safari.
 - **One order for the link** (`Player.mediaOrder`): the pictures of the slide
   on screen and the next four slides; the clips of the next two slides and of
   the slide on screen; every other picture of the talk, ahead then behind;
@@ -474,7 +478,18 @@ memory as soon as the slide changes (decoding costs the link nothing) and
 again as each lands, rather than after the visible slide paints. The decoded
 pictures of the slides just shown are kept too, under the same 48 megapixel
 bound, most recent first (`shownImages`), so stepping back or jumping home
-shows them in the slide's first frame.
+shows them in the slide's first frame. Two Safari findings shape this: it
+can take seconds to resolve `decode()` for an image that is not in the
+document, so the lookahead waits on one decode for at most 250 ms after the
+bytes are in (`decodedOrLoaded`) before starting the next, and an image
+whose bytes are all in is never hidden waiting for its decode
+(`revealImagesWhenDecoded`): only a partly loaded image can paint as a strip.
+
+Once the presentation holds the whole talk (`MediaBlobCache.holdsAll`, read
+through `window.deckwerkPresentationMemory`), it needs nothing from the
+server: losing the connection leaves the show running from memory, forward,
+back and jumping, clips playing, while the connection notice says the link is
+gone.
 
 The editor canvas applies the same exact-node rule to still images, with a
 tighter budget: during idle time it decodes images from only the next
@@ -536,7 +551,11 @@ accumulates decoded bitmaps from the rest of the deck.
   and clips" — over the throttled link, each slide's photos are on screen in
   the frame the slide appears once the background fetch has reached it,
   moving back, jumping home and presenting again included; each photo
-  crosses the wire once under one URL, and nothing is asked about it again.
+  crosses the wire once under one URL, and nothing is asked about it again;
+  and once the presentation holds the talk, cutting the link (`cut()` on the
+  throttled link: open connections dropped, new ones never answered) leaves
+  every slide's photos in its first frame and every clip playing, with no
+  media request attempted.
 - `test/presentVideosFromMemory.test.ts` — pictures before the clips ranked
   below them, several at once and never held; a clip set aside for a picture
   and resumed with a range request; a clip the slide waits for never set

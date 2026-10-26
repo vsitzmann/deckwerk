@@ -56,6 +56,22 @@ export interface RenderOptions {
    * `mediaPreload: 'metadata'`.
    */
   deferVideoSrc?: boolean;
+  /**
+   * Pictures whose bytes the host is still fetching itself (the browser
+   * presentation's blob cache, mediaBlobCache.ts): such an `<img>` is built
+   * with no `src`, the URL parked in `data-deferred-src`, and the host gives
+   * it one once the bytes are in. Assigning the URL and taking it away again
+   * is not the same: WebKit starts the request the moment `src` is set, even
+   * on an element not yet in the document, and the picture crossed the wire
+   * twice, once for the element and once for the cache.
+   */
+  deferImageSrc?: (url: string) => boolean;
+}
+
+/** Give a picture its source, or park it for the host (`deferImageSrc`). */
+function assignImageSrc(image: HTMLImageElement, url: string, opts: RenderOptions): void {
+  if (opts.deferImageSrc?.(url)) image.dataset.deferredSrc = url;
+  else image.src = url;
 }
 
 export { quadraticPath };
@@ -765,7 +781,7 @@ function renderBody(el: SlideElement, opts: RenderOptions): HTMLElement | SVGEle
         return pdf;
       }
       const img = document.createElement('img');
-      img.src = opts.resolveSrc(el.src);
+      assignImageSrc(img, opts.resolveSrc(el.src), opts);
       img.alt = el.alt;
       img.draggable = false;
 
@@ -879,7 +895,7 @@ function renderWeb(
 
   if (preview && el.poster) {
     const poster = document.createElement('img');
-    poster.src = opts.resolveSrc(el.poster);
+    assignImageSrc(poster, opts.resolveSrc(el.poster), opts);
     poster.alt = el.title;
     poster.style.width = '100%';
     poster.style.height = '100%';
@@ -917,7 +933,7 @@ function renderWeb(
   // author wants clicks on the page to advance the deck instead.
   frame.style.pointerEvents = preview || !el.interactive ? 'none' : 'auto';
   box.appendChild(frame);
-  if (!preview) revealWhenReady(box, frame, el.poster ? opts.resolveSrc(el.poster) : null, el.title);
+  if (!preview) revealWhenReady(box, frame, el.poster ? opts.resolveSrc(el.poster) : null, el.title, opts);
   return box;
 }
 
@@ -958,6 +974,7 @@ function revealWhenReady(
   frame: HTMLIFrameElement,
   posterSrc: string | null,
   title: string,
+  opts: RenderOptions,
 ): void {
   box.style.position = 'relative';
   box.dataset.webReady = 'false';
@@ -966,7 +983,7 @@ function revealWhenReady(
   if (posterSrc) {
     poster = document.createElement('img');
     poster.className = 'web-poster';
-    poster.src = posterSrc;
+    assignImageSrc(poster, posterSrc, opts);
     poster.alt = title;
     poster.setAttribute('aria-hidden', 'true');
     poster.draggable = false;

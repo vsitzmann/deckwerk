@@ -81,8 +81,13 @@ const TICK_MS = 5;
 
 export class ThrottledLink {
   readonly responses: LinkResponse[] = [];
+  /** Requests the browser tried after `cut`, none of which reached the server. */
+  readonly attempts: Array<{ at: number; method: string; url: string }> = [];
   private server: Server | null = null;
   private pipes = new Set<Pipe>();
+  /** Connections accepted after `cut`, held open and never answered. */
+  private dead = new Set<Socket>();
+  private lost = false;
   private timer: ReturnType<typeof setInterval> | null = null;
   private tokens = 0;
   private lastTick = Date.now();
@@ -97,8 +102,23 @@ export class ThrottledLink {
     return (this.server.address() as { port: number }).port;
   }
 
+  /**
+   * Lose the link, as a tailnet route drops: every open connection goes
+   * (the WebSocket with them), and a connection opened afterwards is accepted
+   * but never answered and nothing reaches the server, so the browser waits
+   * as it would on a dead route. What it tries is recorded in `attempts`.
+   */
+  cut(): void {
+    this.lost = true;
+    for (const pipe of [...this.pipes]) {
+      pipe.client.destroy();
+      pipe.upstream.destroy();
+    }
+  }
+
   async close(): Promise<void> {
     if (this.timer) clearInterval(this.timer);
+    for (const socket of this.dead) socket.destroy();
     for (const pipe of this.pipes) {
       pipe.client.destroy();
       pipe.upstream.destroy();
@@ -107,6 +127,21 @@ export class ThrottledLink {
   }
 
   private accept(client: Socket): void {
+    if (this.lost) {
+      this.dead.add(client);
+      let pending = '';
+      client.on('data', (chunk) => {
+        pending += chunk.toString('latin1');
+        for (let blank = pending.indexOf('\r\n\r\n'); blank >= 0; blank = pending.indexOf('\r\n\r\n')) {
+          const [method = '', url = ''] = pending.slice(0, blank).split('\r\n')[0].split(' ');
+          this.attempts.push({ at: Date.now(), method, url });
+          pending = pending.slice(blank + 4);
+        }
+      });
+      client.on('error', () => this.dead.delete(client));
+      client.on('close', () => this.dead.delete(client));
+      return;
+    }
     const upstream = connect(this.targetPort, '127.0.0.1');
     const pipe: Pipe = {
       client, upstream, queue: [], queued: 0, current: null, head: null,
