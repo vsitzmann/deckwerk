@@ -161,6 +161,9 @@ class Walk {
   private spareUsed = 0;
   /** Slides this show has had on stage (their pictures may be kept decoded). */
   private seen = new Set<string>();
+  /** Slides in the order they appeared, and the one on stage. */
+  private recent: string[] = [];
+  private last = '';
 
   constructor(private readonly page: DrivenPage, private readonly rand: () => number) {}
 
@@ -381,13 +384,30 @@ class Walk {
       }
     }
     if (!pressed.mounted) return `present refused (${pressed.status.slice(-60)})`;
+    if (m.link !== 'up' && online) {
+      // The editor did not know the link was gone yet. With a worker the show
+      // comes from the shell; without one nothing can answer for it, and the
+      // overlay must come down with the reason rather than stay up black.
+      const outcome = await eventually(() => this.page.evaluate<{ stage: boolean; overlay: boolean; status: string }>(`({
+        stage: Boolean(document.querySelector('iframe[src*="present.html"]')?.contentDocument?.querySelector('#stage .stage > .slide')),
+        overlay: Boolean(document.querySelector('iframe[src*="present.html"]')),
+        status: document.getElementById('status')?.textContent ?? '',
+      })`), 'the show began or said why not', (o) => o.stage || !o.overlay, 30_000).catch(() => null);
+      if (!outcome) this.fail('Present without a server it did not know was gone: neither a show nor a reason');
+      else if (!outcome.stage) {
+        if (!outcome.status.includes('did not load')) this.fail(`a show that never loaded was taken down without the reason: ${outcome.status}`);
+        return 'present (did not load: the link was gone)';
+      }
+    }
     m.presenting = true;
     this.seen.clear();
     m.presentationCovered = online || pressed.offlineAtClick === 'ready';
     m.presentationLocal = pressed.offlineAtClick === 'ready';
     m.showLostLink = !online;
     await watchPresentation(this.page).catch((error) => this.fail(`the presentation never built its stage: ${error}`));
-    this.seen.add((await stageState(this.page).catch(() => ({ slideId: '' }))).slideId);
+    this.last = (await stageState(this.page).catch(() => ({ slideId: '' }))).slideId;
+    this.seen.add(this.last);
+    this.recent = [this.last];
     await this.checkStage('present');
     return `present (${online ? 'online' : 'offline'})`;
   }
@@ -407,7 +427,9 @@ class Walk {
     } else {
       const target = Math.floor(this.rand() * slides);
       const deck = await this.serverDeck(m.open!);
-      jumpedToUnseen = !this.seen.has(deck.slides[target]?.id ?? '');
+      const from = deck.slides.findIndex((slide) => slide.id === this.last);
+      // Only a jump next door, or back to a slide just shown, can count on decoded pictures.
+      jumpedToUnseen = Math.abs(target - from) > 1 && !this.recent.slice(-3).includes(deck.slides[target]?.id ?? '');
       await presentJump(this.page, m.open!, target);
       label = `jump to ${target + 1}`;
     }
@@ -432,6 +454,8 @@ class Walk {
         this.fail(`${frame.slide} appeared without ${frame.missing.join(', ')}`);
       }
       this.seen.add(frame.slide);
+      this.recent.push(frame.slide);
+      this.last = frame.slide;
     }
     if (m.presentationLocal || (m.presentationCovered && !m.showLostLink)) {
       for (const error of errors) this.fail(`media element failed: ${error}`);

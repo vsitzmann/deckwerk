@@ -506,6 +506,8 @@ export async function giveTalk(driven: DrivenPage, deck: TalkDeck, label: string
   const ids = await driven.evaluate<string[]>(`window.store.get().deck.slides.map((slide) => slide.id)`);
   /** Slides this show has had on stage: the Player may keep their pictures decoded. */
   const seen = new Set<string>([(await stageState(driven)).slideId]);
+  /** Slides in the order they appeared. */
+  const recent: string[] = [...seen];
   let ticks = 0;
   const look = async (step: string, excused = false) => {
     const { state, problems: wrong } = await stageComplete(driven);
@@ -521,6 +523,7 @@ export async function giveTalk(driven: DrivenPage, deck: TalkDeck, label: string
         problems.push(`${label}, ${step}: ${frame.slide} appeared without ${frame.missing.join(', ')}; frames: ${(frame.frames ?? []).join(' / ')}`);
       }
       seen.add(frame.slide);
+      recent.push(frame.slide);
     }
     for (const error of taken.errors) problems.push(`${label}, ${step}: media element failed: ${error}`);
     // A presenter talks over each slide: a second is a brisk one.
@@ -539,10 +542,14 @@ export async function giveTalk(driven: DrivenPage, deck: TalkDeck, label: string
   }
   for (const fraction of [0.75, 0, 0.5, 1, 0.25]) {
     const target = Math.round(fraction * (deck.slides - 1));
-    const unseen = !seen.has(ids[target]);
+    // Only a jump next door can count on decoded pictures: the Player keeps
+    // the slides around the one shown, and the few shown last
+    // (`imageWarmSlides`, `shownImages`), not every slide of a long talk.
+    const from = ids.indexOf(await editorStateOfStage(driven));
+    const far = Math.abs(target - from) > 1 && !recent.slice(-3).includes(ids[target]);
     await presentJump(driven, deck.id, target);
     await eventually(() => editorStateOfStage(driven), `${label}: jump to ${target + 1}`, (id) => id !== '', 10_000);
-    await look(`jump to ${target + 1}${unseen ? ' (not shown before)' : ''}`, unseen);
+    await look(`jump to ${target + 1}${far ? ' (far)' : ''}`, far);
   }
   // Safari driven by WebDriver behind other windows paints nothing at all;
   // there the first frame is mediaTransferBudgetBrowser's to judge, and this
