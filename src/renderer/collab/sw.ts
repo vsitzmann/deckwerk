@@ -199,10 +199,29 @@ worker.addEventListener('fetch', (event) => {
     keptLoading = null;
     void loadKept();
   }
-  // Not from the copy: the network, untouched.
-  if (!fromCopy(request, key, client)) return;
+  if (!fromCopy(request, key, client)) {
+    // A picture (or any whole file) under a content key, not kept yet:
+    // fetched here rather than passed through. WebKit sends a request a
+    // worker passes through past the HTTP cache, so Safari downloaded every
+    // picture the editor had shown a second time when the copy asked for it
+    // (dev/offline/safari-cache-probe3.mts). Fetched here, the page's
+    // pictures are kept as they arrive, and the copy finds them kept.
+    if (!isVideo(request) && isImmutableMedia(path)) event.respondWith(fetchAndKeep(request, key));
+    // A clip, or a file without a content key: the network, untouched.
+    return;
+  }
   event.respondWith(media(request, path, key));
 });
+
+/** The network's answer; a whole picture a page shows is kept as it passes. */
+async function fetchAndKeep(request: Request, key: string): Promise<Response> {
+  const response = await network(request);
+  if (request.destination === 'image' && response.status === 200 && response.type === 'basic') {
+    const copy = response.clone();
+    void caches.open(MEDIA_CACHE).then((cache) => cache.put(key, copy)).then(() => kept?.add(key)).catch(() => undefined);
+  }
+  return response;
+}
 
 /*
  * Never switch a page's video from the network to the copy in mid-life.
