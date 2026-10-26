@@ -56,14 +56,22 @@ export async function launchSafari(): Promise<SafariPage> {
     }
     await new Promise((resolve) => setTimeout(resolve, 200));
   }
-  let sessionId: string;
-  try {
-    ({ sessionId } = await call<{ sessionId: string }>('POST', '/session', {
-      capabilities: { alwaysMatch: { browserName: 'safari' } },
-    }));
-  } catch (error) {
-    driver.kill();
-    throw new Error(`Safari refused an automation session (Develop › Allow Remote Automation): ${(error as Error).message}`);
+  // A cold Safari on a busy machine (a hosted macOS runner) can miss
+  // safaridriver's launch timeout: "The session timed out while connecting to
+  // a Safari instance". That is a slow start, not a refusal, so it is asked
+  // again; anything else (remote automation off) fails at once.
+  let sessionId = '';
+  for (let attempt = 1; !sessionId; attempt += 1) {
+    try {
+      ({ sessionId } = await call<{ sessionId: string }>('POST', '/session', {
+        capabilities: { alwaysMatch: { browserName: 'safari' } },
+      }));
+    } catch (error) {
+      const message = (error as Error).message;
+      if (attempt < 3 && /timed out/i.test(message)) continue;
+      driver.kill();
+      throw new Error(`Safari refused an automation session (Develop › Allow Remote Automation): ${message}`);
+    }
   }
   const session = `/session/${sessionId}`;
 
