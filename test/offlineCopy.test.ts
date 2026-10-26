@@ -10,6 +10,8 @@ import {
   MEDIA_CACHE,
   parseRange,
   snapshotKey,
+  STAGING_CACHE,
+  STAGING_HEADER,
 } from '../src/renderer/collab/offlineShared.js';
 import { talkMediaOrder } from '../src/renderer/player/talkMediaOrder.js';
 
@@ -99,6 +101,11 @@ function harness(overrides: Partial<OfflineCopyOptions> = {}, deck = talk()): Ha
   const storage = new FakeCaches();
   const fetches: Harness['fetches'] = [];
   const posted: unknown[] = [];
+  // The worker's half of a download (sw.ts): reading it back from staging.
+  const readBack = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response | null> => {
+    if (!new Headers(init?.headers).has(STAGING_HEADER)) return null;
+    return (await storage.cache(STAGING_CACHE).match(String(input))) ?? new Response(null, { status: 404 });
+  };
   const options: OfflineCopyOptions = {
     deckId: 'talk',
     deck: () => deck,
@@ -113,6 +120,8 @@ function harness(overrides: Partial<OfflineCopyOptions> = {}, deck = talk()): Ha
     onChange: () => undefined,
     caches: storage as unknown as CacheStorage,
     fetch: (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const staged = await readBack(input, init);
+      if (staged) return staged;
       const url = String(input);
       const range = new Headers(init?.headers).get('range');
       fetches.push({ url, range });
@@ -125,8 +134,14 @@ function harness(overrides: Partial<OfflineCopyOptions> = {}, deck = talk()): Ha
     storage: { estimate: async () => ({ usage: 0, quota: 10 * 1024 * 1024 }), persist: async () => true },
     locks: null,
     worker: () => ({ postMessage: (message) => posted.push(message) }),
+    controlled: () => true,
     ...overrides,
   };
+  // A test's own fetch still has the worker answering read-backs.
+  if (overrides.fetch) {
+    const own = overrides.fetch;
+    options.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => (await readBack(input, init)) ?? own(input, init)) as typeof fetch;
+  }
   const copy = new OfflineCopy(options);
   copy.setShellReady(true);
   return { copy, storage, fetches, posted, options };

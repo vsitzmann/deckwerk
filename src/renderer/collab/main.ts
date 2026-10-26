@@ -399,6 +399,9 @@ if (OfflineCopy.supported()) {
   window.deckwerkOffline = offline;
 }
 
+// The worker took charge of this page: downloads read back through it can start.
+navigator.serviceWorker?.addEventListener('controllerchange', () => offline?.resume());
+
 // A snapshot due in a moment is written now if the page goes away: a deck
 // closed right after an edit still opens without the server as it was.
 window.addEventListener('pagehide', () => offline?.flushSnapshot());

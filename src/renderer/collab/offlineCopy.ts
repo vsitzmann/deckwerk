@@ -7,6 +7,8 @@ import {
   MEDIA_CACHE,
   mediaKey,
   snapshotKey,
+  STAGING_CACHE,
+  STAGING_HEADER,
   type OfflineWorkerMessage,
 } from './offlineShared.js';
 
@@ -150,6 +152,11 @@ export interface OfflineCopyOptions {
   locks?: Pick<LockManager, 'request'> | null;
   /** The active service worker, to hear what was added and removed. */
   worker?: () => { postMessage(message: OfflineWorkerMessage): void } | null;
+  /**
+   * Whether the worker controls this page: a download is read back through
+   * it (STAGING_CACHE), so nothing is downloaded before it does.
+   */
+  controlled?: () => boolean;
   now?: () => number;
 }
 
@@ -247,6 +254,11 @@ export class OfflineCopy {
   setShellReady(ready: boolean): void {
     this.shell = ready ? 'ready' : 'unavailable';
     this.options.onChange();
+    if (ready && this.started) void this.pump();
+  }
+
+  private isControlled(): boolean {
+    return this.options.controlled ? this.options.controlled() : Boolean(globalThis.navigator?.serviceWorker?.controller);
   }
 
   /** The deck, its theme, its media variants or the slide shown changed. */
@@ -401,6 +413,8 @@ export class OfflineCopy {
           this.retrySoon();
           break;
         }
+        // Resumed by setShellReady once the worker is in charge.
+        if (!this.isControlled()) break;
         if (!this.next(kept)) break;
         await this.quiet();
         // The plan may have moved on while the editor was busy.
@@ -489,7 +503,17 @@ export class OfflineCopy {
       const body = clip
         ? pausable(response.body, () => !flight.urgent && !this.disposed && this.options.busy(), () => this.quiet(() => flight.urgent))
         : response.body;
-      await cache.put(key, new Response(body, { status: 200, headers }));
+      // Written aside, then read back through the worker, so what is kept
+      // carries its URL: Chromium plays no `<video>` from a response without one.
+      const staging = await this.caches.open(STAGING_CACHE);
+      await staging.put(key, new Response(body, { status: 200, headers }));
+      try {
+        const settled = await this.fetchFile(url, { headers: { [STAGING_HEADER]: '1' } });
+        if (!settled.ok) throw new Error(`the worker could not read back ${url}`);
+        await cache.put(key, settled);
+      } finally {
+        await staging.delete(key);
+      }
       kept.add(key);
       this.failures.delete(url);
       this.options.worker?.()?.postMessage({ type: 'offline-media', added: [url] });

@@ -1,6 +1,9 @@
 import {
   answerFromKept,
+  DECKS_CACHE,
   KEPT_HEADER,
+  STAGING_CACHE,
+  STAGING_HEADER,
   isImmutableMedia,
   isMediaPath,
   MEDIA_CACHE,
@@ -32,6 +35,8 @@ interface ExtendableEvent extends Event {
 }
 interface FetchEvent extends ExtendableEvent {
   readonly request: Request;
+  readonly clientId: string;
+  readonly resultingClientId: string;
   respondWith(response: Response | Promise<Response>): void;
 }
 interface ExtendableMessageEvent extends ExtendableEvent {
@@ -42,7 +47,10 @@ interface WorkerScope {
   readonly registration: { readonly scope: string };
   readonly location: Location;
   skipWaiting(): Promise<void>;
-  readonly clients: { claim(): Promise<void> };
+  readonly clients: {
+    claim(): Promise<void>;
+    matchAll(options?: { includeUncontrolled?: boolean }): Promise<Array<{ id: string }>>;
+  };
   addEventListener(type: 'install' | 'activate', listener: (event: ExtendableEvent) => void): void;
   addEventListener(type: 'fetch', listener: (event: FetchEvent) => void): void;
   addEventListener(type: 'message', listener: (event: ExtendableMessageEvent) => void): void;
@@ -105,7 +113,7 @@ worker.addEventListener('activate', (event) => {
     const shells = (await caches.keys()).filter((name) => name.startsWith(SHELL_CACHE_PREFIX) && name !== SHELL_CACHE);
     // caches.keys() lists in creation order: keep the newest few.
     for (const name of shells.slice(0, Math.max(0, shells.length - SHELL_GENERATIONS))) await caches.delete(name);
-    await loadKept();
+    await Promise.all([loadKept(), loadClientsBorn()]);
     await worker.clients.claim();
   })());
 });
@@ -155,6 +163,7 @@ worker.addEventListener('fetch', (event) => {
   // The app's pages only: a download or an export opened in a tab is the
   // server's business, and passes straight through.
   if (relative === '' || PAGES.has(relative)) {
+    bornHere(event.resultingClientId);
     event.respondWith(page(request, relative === '' ? 'index.html' : relative));
     return;
   }
@@ -173,21 +182,91 @@ worker.addEventListener('fetch', (event) => {
   }
   if (!isMediaPath(path)) return;
   const key = mediaKey(url);
-  if (kept === null) {
-    // Restarted: the decision needs the cache's keys.
-    event.respondWith(loadKept().then((keys) => (keys.has(key) ? media(request, path, key) : network(request))));
+  if (request.headers.has(STAGING_HEADER)) {
+    // The offline copy reading back a download (offlineCopy.ts): the answer
+    // carries this URL, so it can be kept and later given to a <video>.
+    event.respondWith(caches.open(STAGING_CACHE).then((cache) => cache.match(key)).then((found) => found ?? Response.error()));
     return;
   }
-  // Not kept: the network, untouched.
-  if (!kept.has(key)) {
-    if (Date.now() - keptReadAt > KEPT_REREAD_MS) {
-      keptLoading = null;
-      void loadKept();
-    }
+  const client = event.clientId;
+  if (kept === null || clientsBorn === null) {
+    // Restarted: the decision needs what was kept, and which pages were born here.
+    event.respondWith(Promise.all([loadKept(), loadClientsBorn()])
+      .then(() => (fromCopy(request, key, client) ? media(request, path, key) : network(request))));
     return;
   }
+  if (!kept.has(key) && Date.now() - keptReadAt > KEPT_REREAD_MS) {
+    keptLoading = null;
+    void loadKept();
+  }
+  // Not from the copy: the network, untouched.
+  if (!fromCopy(request, key, client)) return;
   event.respondWith(media(request, path, key));
 });
+
+/*
+ * Never switch a page's video from the network to the copy in mid-life.
+ * Chromium's media stack keeps one data source per URL in a page, shared by
+ * every <video> on it; once some of a clip's ranges came from the network
+ * and later ones from the worker, every element on that URL in that page
+ * fails ("data source error"). That broke the editor canvas the moment the
+ * copy finished a clip it had been streaming. So a clip a page first had
+ * from the network stays on the network for that page, and so does every
+ * clip of a page this worker did not control from its start (it cannot know
+ * what that page loaded before). Pages born here (the presentation, an
+ * editor opened or reloaded since) read clips from the copy from the start.
+ * With the server gone the copy answers anyway: there is nothing to keep
+ * consistent with.
+ */
+const streamedFromNetwork = new Map<string, Set<string>>();
+/** Pages whose navigation this worker answered, so every request they made came here; null until read. */
+let clientsBorn: Set<string> | null = null;
+let clientsBornLoading: Promise<void> | null = null;
+const CLIENTS_KEY = '/__offline__/clients';
+
+function fromCopy(request: Request, key: string, client: string): boolean {
+  if (!kept?.has(key)) {
+    if (isVideo(request) && client) {
+      const seen = streamedFromNetwork.get(client) ?? new Set<string>();
+      seen.add(key);
+      streamedFromNetwork.set(client, seen);
+    }
+    return false;
+  }
+  if (!isVideo(request) || serverSeemsDown()) return true;
+  return Boolean(client) && Boolean(clientsBorn?.has(client)) && !streamedFromNetwork.get(client)?.has(key);
+}
+
+function isVideo(request: Request): boolean {
+  return request.destination === 'video' || request.destination === 'audio';
+}
+
+function loadClientsBorn(): Promise<void> {
+  clientsBornLoading ??= (async () => {
+    try {
+      const found = await (await caches.open(DECKS_CACHE)).match(CLIENTS_KEY);
+      const ids = found ? await found.json() as string[] : [];
+      // Only pages still open.
+      const open = new Set((await worker.clients.matchAll({ includeUncontrolled: true })).map((each) => each.id));
+      clientsBorn = new Set([...ids.filter((id) => open.has(id)), ...clientsBorn ?? []]);
+    } catch {
+      clientsBorn ??= new Set();
+    }
+  })();
+  return clientsBornLoading;
+}
+
+/** A page this worker answered the navigation of: its every request comes here. */
+function bornHere(id: string): void {
+  if (!id) return;
+  clientsBorn ??= new Set();
+  clientsBorn.add(id);
+  void (async () => {
+    const open = new Set((await worker.clients.matchAll({ includeUncontrolled: true })).map((each) => each.id));
+    const ids = [...clientsBorn ?? []].filter((each) => each === id || open.has(each));
+    await (await caches.open(DECKS_CACHE)).put(CLIENTS_KEY, new Response(JSON.stringify(ids)));
+  })().catch(() => undefined);
+}
 
 /** A kept file: from the cache if its URL names its bytes, else from the server while it answers. */
 async function media(request: Request, path: string, key: string): Promise<Response> {
@@ -199,9 +278,22 @@ async function media(request: Request, path: string, key: string): Promise<Respo
   }
   // A URL that names its bytes needs no server; anything else is the
   // server's to answer while it can.
-  if (isImmutableMedia(path)) return answerFromKept(request, found);
+  if (isImmutableMedia(path)) return answerFromKept(request, found, { whole: wholeForMedia(request) });
   const answer = await freshOrKept(request, PAGE_TIMEOUT_MS, (response) => response.ok || response.status === 304);
-  return answer ?? answerFromKept(request, found);
+  return answer ?? answerFromKept(request, found, { whole: wholeForMedia(request) });
+}
+
+/**
+ * Chromium's media stack (as of Chrome 155) aborts a load answered with a
+ * byte range a service worker made up itself: the 206 arrives, the element
+ * reports a format error. It plays the whole file answered with a 200, and
+ * reads on through it to seek. Safari's media stack is the opposite: it
+ * needs real ranges and refuses a 200 for video.
+ */
+const CHROMIUM = /\bChrom(?:e|ium)\//.test(navigator.userAgent);
+
+function wholeForMedia(request: Request): boolean {
+  return CHROMIUM && (request.destination === 'video' || request.destination === 'audio');
 }
 
 async function network(request: Request): Promise<Response> {

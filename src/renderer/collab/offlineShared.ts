@@ -16,6 +16,15 @@ export const SHELL_CACHE_PREFIX = 'deckwerk-shell-';
 export const MEDIA_CACHE = 'deckwerk-media';
 /** Snapshots of decks and the index of what each one holds. */
 export const DECKS_CACHE = 'deckwerk-decks';
+/**
+ * A download on its way into MEDIA_CACHE. It is written here first, then
+ * read back through the worker (STAGING_HEADER): a response the page
+ * fetched carries its URL, which a response it built does not, and
+ * Chromium's media stack refuses a URL-less response for a `<video>`.
+ */
+export const STAGING_CACHE = 'deckwerk-staging';
+/** On a page's request for a file in STAGING_CACHE: the worker answers from there. */
+export const STAGING_HEADER = 'x-deckwerk-staging';
 
 /** Where a deck's snapshot is kept in DECKS_CACHE: never a URL the server answers. */
 export function snapshotKey(deckId: string): string {
@@ -80,9 +89,9 @@ export function parseRange(header: string, size: number): { start: number; end: 
  * server would: a `<video>` reads its source in ranges and cannot seek
  * without them, Safari's media stack least of all.
  */
-export async function answerFromKept(request: Request, kept: Response): Promise<Response> {
+export async function answerFromKept(request: Request, kept: Response, options: { whole?: boolean } = {}): Promise<Response> {
   const range = request.headers.get('range');
-  if (!range) return kept;
+  if (!range || options.whole) return kept;
   const blob = await kept.blob();
   const type = kept.headers.get('content-type') ?? blob.type;
   const wanted = parseRange(range, blob.size);

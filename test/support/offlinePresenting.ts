@@ -493,9 +493,26 @@ export async function giveTalk(driven: DrivenPage, deck: TalkDeck, label: string
   const pressed = await pressPresent(driven);
   if (!pressed.mounted) return [`${label}: Present was refused: ${pressed.status}`];
   await watchPresentation(driven);
-  const look = async (step: string) => {
+  const ids = await driven.evaluate<string[]>(`window.store.get().deck.slides.map((slide) => slide.id)`);
+  /** Slides this show has had on stage: the Player may keep their pictures decoded. */
+  const seen = new Set<string>([(await stageState(driven)).slideId]);
+  let ticks = 0;
+  const look = async (step: string, excused = false) => {
     const { state, problems: wrong } = await stageComplete(driven);
     for (const problem of wrong) problems.push(`${label}, ${step} (${state.slideId}): ${problem}`);
+    // The first frame of what this step put on stage. A jump to a slide the
+    // show has not been near is excused: the Player decodes the pictures
+    // around the slide shown and of slides shown before (player.ts), and a
+    // slide it could not know was next paints them a frame late.
+    const taken = await takeFirstFrames(driven);
+    ticks += taken.ticks;
+    for (const frame of taken.frames) {
+      if (frame.missing.length > 0 && !excused) {
+        problems.push(`${label}, ${step}: ${frame.slide} appeared without ${frame.missing.join(', ')}; frames: ${(frame.frames ?? []).join(' / ')}`);
+      }
+      seen.add(frame.slide);
+    }
+    for (const error of taken.errors) problems.push(`${label}, ${step}: media element failed: ${error}`);
     // A presenter talks over each slide: a second is a brisk one.
     await new Promise((resolve) => setTimeout(resolve, DWELL_MS));
   };
@@ -512,23 +529,16 @@ export async function giveTalk(driven: DrivenPage, deck: TalkDeck, label: string
   }
   for (const fraction of [0.75, 0, 0.5, 1, 0.25]) {
     const target = Math.round(fraction * (deck.slides - 1));
+    const unseen = !seen.has(ids[target]);
     await presentJump(driven, deck.id, target);
     await eventually(() => editorStateOfStage(driven), `${label}: jump to ${target + 1}`, (id) => id !== '', 10_000);
-    await look(`jump to ${target + 1}`);
+    await look(`jump to ${target + 1}${unseen ? ' (not shown before)' : ''}`, unseen);
   }
-  const { frames, errors, ticks } = await takeFirstFrames(driven);
   // Safari driven by WebDriver behind other windows paints nothing at all;
   // there the first frame is mediaTransferBudgetBrowser's to judge, and this
   // walk holds it to every slide being complete.
   if (ticks < 10 && driven.kind !== 'safari') problems.push(`${label}: the presentation painted ${ticks} frames: nothing to judge first frames by`);
   if (ticks < 10 && driven.kind === 'safari') console.log(`${label}: Safari painted no frames (window not visible); first frames not judged`);
-  frames.forEach((frame, i) => {
-    if (frame.missing.length > 0) {
-      problems.push(`${label}: ${frame.slide} appeared without ${frame.missing.join(', ')} (slide change ${i + 1}: `
-        + `${frames.map((f) => f.slide).join(' ')}); frames: ${(frame.frames ?? []).join(' / ')}`);
-    }
-  });
-  for (const error of errors) problems.push(`${label}: media element failed: ${error}`);
   await exitPresentation(driven);
   return problems;
 }
