@@ -37,8 +37,9 @@ jobs:
       - name: Importer tests
         run: npm run test:importers
 
-  # Real Electron under Xvfb. Required, like `test`: a red browser run blocks
-  # the merge, so a flaky suite is a bug to fix, not noise to read past.
+  # Real Electron under Xvfb, including the Chromium media transfer budgets.
+  # Required, like `test`: a red browser run blocks the merge, so a flaky
+  # suite is a bug to fix, not noise to read past.
   browser:
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -86,3 +87,27 @@ jobs:
         env:
           CI_NO_WINDOW_MANAGER: "1"
         run: xvfb-run -a --server-args="-screen 0 2560x1440x24" npm run test:serial
+
+  # The media transfer budgets in real Safari. Its media stack (AVFoundation)
+  # fetches and re-fetches video in ways Chromium never does, and it exists
+  # only on macOS, so this is the one place it runs. Advisory: it cannot run
+  # on every platform, and hosted macOS runners are slow and Safari
+  # automation fragile there. The Chromium half of the same suite runs in
+  # `browser`, which is required.
+  safari:
+    continue-on-error: true
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Allow Safari to be automated
+        run: sudo safaridriver --enable
+      - name: Media transfer budgets in Safari (advisory)
+        env:
+          RUN_SAFARI_MEDIA_BUDGET: "1"
+        run: npx vitest run --config vitest.browser.config.ts test/mediaTransferBudgetBrowser.test.ts -t "Safari"
