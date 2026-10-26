@@ -59,7 +59,7 @@ describe('collab server tailnet HTTPS listener', () => {
   /** GET over the TLS listener, verifying the test certificate (no `rejectUnauthorized: false`). */
   const tlsGet = (path: string, headers: Record<string, string> = {}) => new Promise<{ status: number; body: any }>((resolve, reject) => {
     const req = httpsRequest({
-      host: '127.0.0.1', port: server.tlsPort, path, headers, ca: cert, servername: 'localhost',
+      host: '127.0.0.1', port: server.tlsPort, path, headers, ca: cert,
       // A connection's identity is settled once, at the handshake: each call
       // here is a fresh peer.
       agent: false,
@@ -94,10 +94,10 @@ describe('collab server tailnet HTTPS listener', () => {
     await seedDeck('public', 'Public deck');
     await seedDeck('alices-private', 'Alice private', { owner: ALICE, visibility: 'private', sharedWith: [] });
 
-    // A certificate for "localhost", as `tailscale cert` would issue one for the machine's name.
+    // A certificate for the listener's address, as `tailscale cert` issues one for the machine's name.
     execFileSync('openssl', [
       'req', '-x509', '-newkey', 'ec', '-pkeyopt', 'ec_paramgen_curve:prime256v1', '-nodes', '-days', '1',
-      '-subj', '/CN=localhost', '-addext', 'subjectAltName=DNS:localhost',
+      '-subj', '/CN=localhost', '-addext', 'subjectAltName=DNS:localhost,IP:127.0.0.1',
       '-keyout', join(workDir, 'key.pem'), '-out', join(workDir, 'cert.pem'),
     ], { stdio: 'ignore' });
     cert = await readFile(join(workDir, 'cert.pem'));
@@ -178,7 +178,7 @@ describe('collab server tailnet HTTPS listener', () => {
   it('carries the WebSocket over the same listener, as the whois user', async () => {
     whoIsLogin = ALICE;
     const welcome = await new Promise<any>((resolve, reject) => {
-      const socket = new WebSocket(`wss://127.0.0.1:${server.tlsPort}/ws?deck=alices-private`, { ca: cert, servername: 'localhost' });
+      const socket = new WebSocket(`wss://127.0.0.1:${server.tlsPort}/ws?deck=alices-private`, { ca: cert });
       sockets.push(socket);
       socket.on('open', () => socket.send(JSON.stringify({ kind: 'hello', version: COLLAB_PROTOCOL_VERSION })));
       socket.on('message', (raw) => resolve(JSON.parse(String(raw))));
@@ -191,7 +191,7 @@ describe('collab server tailnet HTTPS listener', () => {
     whoIsLogin = BOB;
     const refused = await new Promise<any>((resolve, reject) => {
       const socket = new WebSocket(`wss://127.0.0.1:${server.tlsPort}/ws?deck=alices-private`, {
-        ca: cert, servername: 'localhost', headers: { 'tailscale-user-login': ALICE },
+        ca: cert, headers: { 'tailscale-user-login': ALICE },
       });
       sockets.push(socket);
       socket.on('open', () => socket.send(JSON.stringify({ kind: 'hello', version: COLLAB_PROTOCOL_VERSION })));
