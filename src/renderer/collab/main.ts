@@ -276,7 +276,12 @@ new TimelinePanel(el('timeline'), store, new BuildPreview(canvas, store));
 new HistoryPanel(el('history'), store);
 const rail = new SlideRail(el('rail'), store);
 rail.onStatus = setStatusMessage;
-new ObjectList(el('objects'), store);
+const objectsDrawer = document.createElement('div');
+objectsDrawer.id = 'objects';
+objectsDrawer.className = 'objects-drawer';
+const objectList = new ObjectList(objectsDrawer, store);
+objectList.toggle.classList.add('objects-toggle');
+el('canvas').append(objectList.toggle, objectsDrawer);
 // The CSS buffer backs the Theme panel and live theme sync. Like the desktop
 // app it has no sidebar tab of its own — theme.css is edited on disk or
 // through theme adoption, not in this UI.

@@ -1,4 +1,5 @@
 import { appearanceMenuSection } from '../uiTheme.js';
+import { interfaceSizeMenuSection } from '../uiScale.js';
 import { createToolbarPicker } from './exportPicker.js';
 
 const ABOUT_DIALOG_ID = 'deckwerk-about';
@@ -14,9 +15,11 @@ export function createDeckWerkButton(): HTMLElement {
   button.textContent = 'DeckWerk';
   button.setAttribute('aria-label', 'DeckWerk menu');
   button.title = 'DeckWerk';
+  const size = interfaceSizeMenuSection();
   return createToolbarPicker('DeckWerk', [
     { label: 'About DeckWerk', action: showAboutDialog },
     appearanceMenuSection(),
+    ...(size ? [size] : []),
   ], { trigger: button });
 }
 

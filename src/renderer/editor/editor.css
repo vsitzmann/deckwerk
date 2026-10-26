@@ -68,16 +68,46 @@ body.mac-titlebar #toolbar { padding-left: 84px; }
   align-self: center;
 }
 .bar-deck-name {
+  display: flex;
   align-self: center;
-  max-width: 220px;
-  overflow: hidden;
+  align-items: baseline;
+  gap: 8px;
+  max-width: 300px;
+  padding: 4px 8px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
   color: var(--text);
   font: inherit;
+  cursor: pointer;
+}
+.bar-deck-name:hover,
+.bar-deck-name[aria-expanded="true"] { border-color: var(--line); background: var(--panel-2); }
+.bar-deck-name[hidden] { display: none; }
+.bar-deck-name-text {
+  overflow: hidden;
   font-weight: 600;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.bar-deck-name[hidden] { display: none; }
+.bar-deck-name-hint { flex: none; color: var(--muted); font-size: 11px; }
+
+/* The deck's history, opened from its name (it was a sidebar tab). */
+.history-popover {
+  position: fixed;
+  z-index: 10020;
+  display: flex;
+  flex-direction: column;
+  width: 360px;
+  max-height: min(560px, calc(100vh - 80px));
+  overflow-y: auto;
+  padding: 4px 0 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--text);
+  box-shadow: 0 14px 38px rgb(0 0 0 / 45%);
+}
 .bar-group {
   display: flex;
   align-items: center;
@@ -192,7 +222,7 @@ body.welcome-mode .deck-only { display: none; }
 #body {
   position: relative;
   display: grid;
-  grid-template-columns: auto auto minmax(0, 1fr) auto;
+  grid-template-columns: auto minmax(0, 1fr) auto;
   min-height: 0;
 }
 
@@ -231,10 +261,6 @@ body.welcome-mode .deck-only { display: none; }
 .panel-resize-divider .panel-resize-handle { pointer-events: auto; }
 .panel-resize-rail { left: calc(var(--rail-width, 220px) - 4px); }
 .panel-resize-side { right: calc(var(--sidebar-width, 320px) - 4px); }
-.panel-resize-objects {
-  left: calc(var(--rail-width, 220px) + var(--object-list-width, 220px) - 4px);
-}
-#objects.collapsed ~ .panel-resize-objects { display: none; }
 
 .panel-resize-left,
 .panel-resize-right {
@@ -666,7 +692,6 @@ body.panel-resizing iframe { pointer-events: none; }
 
 #body.welcome-mode { grid-template-columns: 1fr; }
 #body.welcome-mode > #rail,
-#body.welcome-mode > #objects,
 #body.welcome-mode > #side,
 #body.welcome-mode > .panel-resize-divider { display: none; }
 .canvas-host.welcome-mode .stage { display: none; }
@@ -4975,45 +5000,72 @@ button.ghost:hover:not(:disabled) { color: var(--text); background: transparent;
 
 /* --- object list --- */
 
-/* A column between the rail and the canvas. Closed, it folds to a strip that
-   keeps only its toggle, so the list is always one click away. */
-#objects {
+/* A drawer over the canvas, opened from a floating icon in its top-left
+   corner the way the notes open from the bottom-left one. Closed, only the
+   icon shows; it moves aside for the rulers as the notes toggle does. */
+.objects-toggle {
+  position: absolute;
+  z-index: 21;
+  left: 12px;
+  top: 12px;
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--panel) 92%, transparent);
+  color: var(--text);
+  box-shadow: 0 4px 16px rgb(0 0 0 / 35%);
+  cursor: pointer;
+}
+.objects-toggle:hover { background: var(--panel-2); }
+.objects-toggle[aria-pressed="true"] { color: var(--accent); }
+.canvas-host.rulers-shown > .objects-toggle { left: calc(20px + 12px); top: calc(20px + 12px); }
+.canvas-host.welcome-mode > .objects-toggle,
+.canvas-host.welcome-mode > .objects-drawer { display: none; }
+
+.objects-drawer {
+  position: absolute;
+  z-index: 20;
+  left: 12px;
+  top: 48px;
   display: flex;
   flex-direction: column;
-  width: var(--object-list-width, 220px);
+  width: 280px;
+  max-height: calc(100% - 48px - 56px);
   min-height: 0;
   overflow: hidden;
-  border-right: 1px solid var(--line);
+  border: 1px solid var(--line);
+  border-radius: 10px;
   background: var(--panel);
+  box-shadow: 0 16px 40px rgb(0 0 0 / 40%);
 }
-#objects.collapsed { width: 36px; }
-#objects.collapsed > :not(.object-list-header),
-#objects.collapsed .object-list-header > :not(.object-list-toggle) { display: none; }
-#objects.collapsed .object-list-header { justify-content: center; padding: 8px 0; }
+.objects-drawer.collapsed { display: none; }
+.canvas-host.notes-open > .objects-drawer { max-height: calc(100% - 48px - 56px - var(--notes-drawer-height, 180px)); }
+.canvas-host.rulers-shown > .objects-drawer { left: calc(20px + 12px); top: calc(20px + 48px); }
 
 .object-list-header {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 6px;
-  padding: 8px 14px 2px 8px;
+  padding: 10px 12px 4px;
 }
 .object-list-header .insp-title { flex: 1; margin: 0; }
 .object-list-count { color: var(--muted); font: 10.5px var(--mono); }
-.object-list-hint { margin: 0; padding: 0 14px 8px; }
-
-#objects .object-list-toggle {
+.object-list-order { flex-basis: 100%; }
+.object-list-hint { margin: 0; padding: 4px 12px 8px; }
+.object-list-badge {
   flex: none;
-  display: grid;
-  width: 26px;
-  height: 26px;
-  padding: 0;
-  border: 1px solid transparent;
-  background: transparent;
-  color: var(--muted);
-  place-items: center;
+  margin-left: auto;
+  padding: 1px 6px;
+  border-radius: 9px;
+  background: var(--accent);
+  color: var(--on-accent, #fff);
+  font: 600 10.5px var(--mono);
 }
-#objects .object-list-toggle:hover:not(:disabled) { border-color: var(--line); background: var(--panel-2); color: var(--text); }
-#objects .object-list-toggle[aria-pressed="true"] { color: var(--accent); }
 
 .object-list-rows {
   flex: 1;

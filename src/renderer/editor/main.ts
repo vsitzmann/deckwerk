@@ -4,6 +4,7 @@ import './editor.css';
 import '../collab/collab.css';
 import '../lightTheme.css';
 import { applyUiTheme } from '../uiTheme.js';
+import { applyUiScale } from '../uiScale.js';
 import { applyAgentOperations, applyAgentTransaction, type AgentOperation } from '@shared/agent.js';
 import type { Deck, SlideElement } from '@shared/deck.js';
 import { emptyDeck } from '@shared/deck.js';
@@ -50,6 +51,7 @@ import {
   type ShellDeps,
 } from './shellWiring.js';
 import { SlideRail } from './slideRail.js';
+import { closePopover, openAnchoredPopover } from './ui.js';
 import { installWindowApiPosterProvider } from '../player/previewPosterProvider.js';
 import { EditorStore } from './store.js';
 import { statusBarText } from './statusBar.js';
@@ -69,6 +71,7 @@ import { setSlideColorSource } from './colorPicker.js';
 import { slideColors } from '@shared/slideColors.js';
 
 applyUiTheme();
+applyUiScale();
 
 /**
  * Editor shell: wires the panels to one store, owns the toolbar, the keyboard
@@ -165,18 +168,30 @@ window.addEventListener('keydown', (event) => {
 }, true);
 const inspector = new Inspector(el('inspector'), store);
 new TimelinePanel(el('timeline'), store, new BuildPreview(canvas, store));
-new HistoryPanel(el('history'), store);
+// History is the deck's past, not the selection's: it opens from the deck
+// name in the toolbar rather than from a sidebar tab.
+const historyHost = el('history');
+historyHost.remove();
+historyHost.hidden = true;
+historyHost.classList.remove('side-panel');
+new HistoryPanel(historyHost, store);
 const rail = new SlideRail(el('rail'), store);
 rail.onStatus = setStatusMessage;
-new ObjectList(el('objects'), store);
+// The slide's objects, from a floating icon in the canvas's top-left corner,
+// as the speaker notes open from the bottom-left one: a drawer over the canvas
+// rather than a column of its own.
+const objectsDrawer = document.createElement('div');
+objectsDrawer.id = 'objects';
+objectsDrawer.className = 'objects-drawer';
+const objectList = new ObjectList(objectsDrawer, store);
+objectList.toggle.classList.add('objects-toggle');
+el('canvas').append(objectList.toggle, objectsDrawer);
 const editorBody = el('body');
 const railDivider = document.createElement('div');
 railDivider.className = 'panel-resize-divider panel-resize-rail';
 const sideDivider = document.createElement('div');
 sideDivider.className = 'panel-resize-divider panel-resize-side';
-const objectsDivider = document.createElement('div');
-objectsDivider.className = 'panel-resize-divider panel-resize-objects';
-editorBody.append(railDivider, sideDivider, objectsDivider);
+editorBody.append(railDivider, sideDivider);
 makePanelResizable(railDivider, {
   storageKey: 'deckwerk.editor.rail-size',
   sizeTarget: editorBody,
@@ -197,17 +212,6 @@ makePanelResizable(sideDivider, {
     min: 240,
     max: () => Math.min(560, window.innerWidth - 500),
     edge: 'left',
-  },
-});
-makePanelResizable(objectsDivider, {
-  storageKey: 'deckwerk.editor.object-list-size',
-  sizeTarget: editorBody,
-  width: {
-    property: '--object-list-width',
-    initial: 220,
-    min: 160,
-    max: () => Math.min(420, window.innerWidth - 760),
-    edge: 'right',
   },
 });
 let agentSessionBridge: CollabBridge | null = null;
@@ -483,6 +487,31 @@ async function placeSyncedSlides(
 /* --- toolbar --- */
 
 let deckNameLabel: HTMLElement | null = null;
+let deckNameButton: HTMLButtonElement | null = null;
+
+/** The deck's edit history, in a popover under the deck name. */
+function toggleHistoryPopover(): void {
+  if (!deckNameButton) return;
+  if (historyHost.isConnected) {
+    closePopover();
+    return;
+  }
+  const popover = document.createElement('div');
+  popover.className = 'ui-popover history-popover';
+  popover.setAttribute('role', 'dialog');
+  popover.setAttribute('aria-label', 'Deck history');
+  historyHost.hidden = false;
+  popover.appendChild(historyHost);
+  openAnchoredPopover(deckNameButton, popover, { focus: false });
+  // Hidden again once the popover goes, however it was dismissed, so edits
+  // made with it closed do not redraw its rows.
+  const watch = new MutationObserver(() => {
+    if (popover.isConnected) return;
+    historyHost.hidden = true;
+    watch.disconnect();
+  });
+  watch.observe(document.body, { childList: true });
+}
 
 function barDivider(): HTMLElement {
   const divider = document.createElement('span');
@@ -498,8 +527,10 @@ function syncDeckNameLabel(): void {
   const folder = dir ? dir.replace(/[\\/]+$/, '').split(/[\\/]/).pop() ?? '' : '';
   const name = folder || deck.title || '';
   deckNameLabel.textContent = name;
-  deckNameLabel.hidden = name === '';
-  deckNameLabel.title = dir ?? '';
+  if (deckNameButton) {
+    deckNameButton.hidden = name === '';
+    deckNameButton.title = dir ? `${dir}\nClick for the deck's history` : "The deck's history";
+  }
 }
 
 function buildToolbar(): void {
@@ -508,8 +539,18 @@ function buildToolbar(): void {
 
   const left = document.createElement('div');
   left.className = 'bar-group';
+  deckNameButton = document.createElement('button');
+  deckNameButton.type = 'button';
+  deckNameButton.className = 'bar-deck-name deck-only';
+  deckNameButton.setAttribute('aria-haspopup', 'dialog');
+  deckNameButton.setAttribute('aria-expanded', 'false');
+  deckNameButton.addEventListener('click', toggleHistoryPopover);
   deckNameLabel = document.createElement('span');
-  deckNameLabel.className = 'bar-deck-name';
+  deckNameLabel.className = 'bar-deck-name-text';
+  const historyHint = document.createElement('span');
+  historyHint.className = 'bar-deck-name-hint';
+  historyHint.textContent = 'History';
+  deckNameButton.append(deckNameLabel, historyHint);
   const fileActions = document.createElement('span');
   fileActions.className = 'toolbar-expanded-file-actions';
   const importEntries = [
@@ -553,7 +594,7 @@ function buildToolbar(): void {
   compactFile.classList.add('toolbar-compact-file-action');
   left.append(
     createDeckWerkButton(),
-    deckNameLabel,
+    deckNameButton,
     barDivider(),
     fileActions,
     compactFile,
@@ -1017,7 +1058,6 @@ const PANELS = [
   { id: 'inspector', label: 'Props' },
   { id: 'themePanel', label: 'Design' },
   { id: 'timeline', label: 'Build' },
-  { id: 'history', label: 'History' },
 ] as const;
 
 function buildTabs(): void {

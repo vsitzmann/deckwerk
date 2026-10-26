@@ -1,4 +1,5 @@
 import type { Deck, Slide, SlideElement } from '@shared/deck.js';
+import { expandTimeline } from '@shared/timeline.js';
 import { releasePreviewVideos } from '../player/previewPoster.js';
 import { renderSlide } from '../player/render.js';
 import { arrangeSelectionAt, paintOrder } from './arrange.js';
@@ -6,8 +7,12 @@ import { describeElement, elementKind } from './elementLabel.js';
 import { previewSurface } from './slideRail.js';
 import type { EditorStore } from './store.js';
 
-/** Whether the list is open, per machine, like the panel sizes. Open unless closed. */
+/** Whether the list is open, per machine, like the panel sizes. Closed until opened. */
 const VISIBLE_KEY = 'deckwerk.editor.object-list';
+/** Which order the list shows, per machine. */
+const ORDER_KEY = 'deckwerk.editor.object-list-order';
+
+type ListOrder = 'stack' | 'build';
 
 /** The miniature's frame, in CSS pixels; editor.css draws the same box. */
 const THUMB_W = 54;
@@ -35,6 +40,12 @@ export class ObjectList {
   private store: EditorStore;
   private count: HTMLElement;
   private list: HTMLElement;
+  private hint: HTMLElement;
+  private orderButtons: HTMLButtonElement[] = [];
+  /** Stack: front to back, drag to restack. Build: in the order the slide's builds run. */
+  private order: ListOrder = readOrder();
+  /** The timeline last drawn, so a build edit renumbers the rows. */
+  private drawnTimeline: unknown = null;
   /** The elements array last drawn: a selection change only moves the highlight. */
   private drawn: readonly SlideElement[] | null = null;
   /**
@@ -72,10 +83,24 @@ export class ObjectList {
     title.textContent = 'Objects';
     this.count = document.createElement('span');
     this.count.className = 'object-list-count';
-    header.append(this.toggle, title, this.count);
+    const orders = document.createElement('div');
+    orders.className = 'segmented-buttons object-list-order';
+    orders.setAttribute('role', 'group');
+    orders.setAttribute('aria-label', 'List order');
+    for (const [value, label] of [['stack', 'Stack'], ['build', 'Build order']] as const) {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'segment-button';
+      b.dataset.value = value;
+      b.textContent = label;
+      b.addEventListener('click', () => this.setOrder(value));
+      this.orderButtons.push(b);
+      orders.appendChild(b);
+    }
+    header.append(this.toggle, title, this.count, orders);
     const hint = document.createElement('p');
     hint.className = 'insp-hint object-list-hint';
-    hint.textContent = 'Front to back. Drag to restack.';
+    this.hint = hint;
     this.list = document.createElement('div');
     this.list.className = 'object-list-rows';
     this.list.setAttribute('role', 'listbox');
@@ -85,7 +110,35 @@ export class ObjectList {
     this.bindDrop();
 
     store.subscribe(() => this.onStoreChange());
+    this.reflectOrder();
     this.setVisible(readVisible(), false);
+  }
+
+  setOrder(order: ListOrder): void {
+    if (order === this.order) return;
+    this.order = order;
+    try {
+      window.localStorage.setItem(ORDER_KEY, order);
+    } catch {
+      // Private mode: the choice lasts for this window only.
+    }
+    this.reflectOrder();
+    this.drawn = null;
+    this.render();
+  }
+
+  private reflectOrder(): void {
+    for (const b of this.orderButtons) {
+      const on = b.dataset.value === this.order;
+      b.classList.toggle('is-active', on);
+      b.setAttribute('aria-pressed', String(on));
+    }
+    this.hint.textContent = this.order === 'stack'
+      ? 'Front to back. Drag to restack.'
+      : 'In the order the builds run. Numbers are build steps.';
+    this.list.setAttribute('aria-label', this.order === 'stack'
+      ? 'Objects on this slide, front to back'
+      : 'Objects on this slide, in build order');
   }
 
   get visible(): boolean {
@@ -95,7 +148,7 @@ export class ObjectList {
   setVisible(visible: boolean, remember = true): void {
     this.host.classList.toggle('collapsed', !visible);
     this.toggle.setAttribute('aria-pressed', String(visible));
-    this.toggle.title = visible ? 'Hide object list' : 'Show object list';
+    this.toggle.title = visible ? 'Hide objects' : 'Objects on this slide';
     if (remember) {
       try {
         window.localStorage.setItem(VISIBLE_KEY, visible ? '1' : '0');
@@ -122,7 +175,7 @@ export class ObjectList {
     const slide = this.store.slide;
     const elements = slide?.elements ?? [];
     let rebuilt = false;
-    if (elements !== this.drawn) {
+    if (elements !== this.drawn || slide?.timeline !== this.drawnTimeline) {
       this.build(deck, slide, elements);
       rebuilt = true;
     }
@@ -131,6 +184,7 @@ export class ObjectList {
 
   private build(deck: Deck, slide: Slide | undefined, elements: readonly SlideElement[]): void {
     this.drawn = elements;
+    this.drawnTimeline = slide?.timeline ?? null;
     const context = slide
       ? `${slide.id}|${slide.layout ?? ''}|${JSON.stringify(slide.background)}|${deck.canvas.w}x${deck.canvas.h}`
       : '';
@@ -138,13 +192,35 @@ export class ObjectList {
       this.drawnContext = context;
       this.dropRows(new Set());
     }
-    const order = paintOrder(elements).reverse();
+    // Build steps per object, numbered as the canvas's badges and the Build
+    // tab's cards number them.
+    const steps = new Map<string, number[]>();
+    (slide ? expandTimeline(slide) : []).forEach((unit, i) => {
+      steps.set(unit.action.target, [...(steps.get(unit.action.target) ?? []), i + 1]);
+    });
+    const stack = paintOrder(elements).reverse();
+    const order = this.order === 'stack'
+      ? stack
+      : [...stack].sort((a, b) => (steps.get(a.id)?.[0] ?? Infinity) - (steps.get(b.id)?.[0] ?? Infinity));
     const rows: HTMLElement[] = order.map((element) => {
       let row = this.rowCache.get(element);
       if (!row) {
         row = this.row(deck, slide!, element);
         this.rowCache.set(element, row);
       }
+      const numbers = steps.get(element.id);
+      let badge = row.querySelector<HTMLElement>('.object-list-badge');
+      if (numbers && !badge) {
+        badge = document.createElement('span');
+        badge.className = 'object-list-badge';
+        row.appendChild(badge);
+      }
+      if (badge) {
+        badge.hidden = !numbers;
+        badge.textContent = numbers ? numbers.join(',') : '';
+      }
+      // Restacking is a Stack-order gesture; in build order a drop has no meaning.
+      row.draggable = this.order === 'stack' && !row.classList.contains('locked');
       return row;
     });
     this.dropRows(new Set(order));
@@ -391,9 +467,17 @@ function patchChildren(host: HTMLElement, nodes: HTMLElement[]): void {
 
 function readVisible(): boolean {
   try {
-    return window.localStorage.getItem(VISIBLE_KEY) !== '0';
+    return window.localStorage.getItem(VISIBLE_KEY) === '1';
   } catch {
-    return true;
+    return false;
+  }
+}
+
+function readOrder(): ListOrder {
+  try {
+    return window.localStorage.getItem(ORDER_KEY) === 'build' ? 'build' : 'stack';
+  } catch {
+    return 'stack';
   }
 }
 
