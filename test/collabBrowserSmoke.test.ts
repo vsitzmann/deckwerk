@@ -113,8 +113,9 @@ describe.skipIf(!electronBinary)('standalone collaboration browser', () => {
       panels: [...document.querySelectorAll('#side-tabs button')].map((button) => button.textContent?.trim() ?? '')
     }))()`), 'browser editor did not finish connecting', (value) => value.connected);
     expect(opened.title).toBe('Browser collaboration smoke');
-    expect(opened.controls).toEqual(expect.arrayContaining(['Text', 'Table', 'Present', 'File']));
-    expect(opened.panels).toEqual(['Props', 'Design', 'Build', 'History', 'Chat']);
+    expect(opened.controls).toEqual(expect.arrayContaining(['Text', 'Table', 'Media', 'History', 'Present', 'File']));
+    // History is a popover beside the deck name, not a side tab.
+    expect(opened.panels).toEqual(['Props', 'Design', 'Build', 'Chat']);
 
     const peerProfileDir = join(workDir, 'peer-electron-profile');
     await mkdir(peerProfileDir, { recursive: true });
@@ -188,7 +189,9 @@ describe.skipIf(!electronBinary)('standalone collaboration browser', () => {
 
     // Use the real toolbar to create the object, then finish the same edit
     // through the exposed store just as canvas/inspector controls do.
-    await editor.clickByText('#toolbar button', 'Text', 'Text toolbar button');
+    // Text ▾ offers a text box or a code block.
+    await editor.clickByText('#toolbar button', 'Text', 'Text toolbar menu');
+    await editor.clickByText('#toolbar .shape-menu-item', 'Text box', 'Text box menu item');
     const textId = await editor.evaluate<string>(`(() => {
       const id = [...window.store.get().selection][0];
       window.store.updateSelected((element) => {

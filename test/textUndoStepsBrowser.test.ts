@@ -188,7 +188,7 @@ describe.skipIf(!electronBinary)('undo steps through text edits', () => {
      * without changing what undo does: grouping is presentation only, and each
      * step inside the run is still a state to go back to.
      */
-    await editor.click('#side-tabs button[data-panel="history"]', 'History tab');
+    await editor.click('.bar-history-button', 'History button');
     const panel = async () => editor!.evaluate<{
       rows: string[];
       groups: number;

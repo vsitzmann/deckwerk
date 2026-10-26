@@ -136,7 +136,7 @@ async function exercise(cdp: Cdp): Promise<void> {
     'Escape did not end the preview');
   expect(await cdp.evaluate(editingView)).toEqual(before);
 
-  await cdp.evaluate(`document.querySelector('#side-tabs button[data-panel="history"]')?.click()`);
+  await cdp.evaluate(`document.querySelector('.bar-history-button')?.click()`);
   expect(await cdp.evaluate<boolean>(`Boolean(document.querySelector('#history .history-empty'))`)).toBe(true);
 }
 

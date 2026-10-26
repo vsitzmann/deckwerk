@@ -323,7 +323,8 @@ describe.skipIf(!electronBinary)('mid-edit race conditions', () => {
     await a!.typeKeys('abc');
 
     // Bob inserts a new text element — a structural change on the same slide.
-    await b!.clickByText('#toolbar button', 'Text', 'Text insert button');
+    await b!.click('#toolbar .text-insert-trigger', 'Text toolbar menu');
+    await b!.clickByText('#toolbar .shape-menu-item', 'Text box', 'Text box in the Text menu');
     await eventually(async () => a!.evaluate<number>(
       'window.store.slide.elements.length',
     ), "Bob's inserted element never arrived at Alice", (count) => count === 2, 15_000);

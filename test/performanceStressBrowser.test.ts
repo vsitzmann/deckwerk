@@ -404,14 +404,17 @@ describe.skipIf(!RUN_PERFORMANCE)('large-deck performance stress', () => {
         });
         return performance.now() - hydrateStarted;
       })()`);
-      // The panel is opened by a real click on the tab. The stopwatch starts
-      // inside the page on that click's own pointerdown, so the measurement
-      // covers the app's work and not the test's round trip.
+      // The panel is opened by a real click on the History button beside the
+      // deck name, into a popover. The stopwatch starts inside the page on
+      // that click's own pointerdown and stops two frames after the click
+      // opened it, so the measurement covers the app's work and not the
+      // test's round trip.
       await editor.evaluate(`(() => {
-        const tab = document.querySelector('#side-tabs button[data-panel="history"]');
+        const button = document.querySelector('.bar-history-button');
         window.__historyOpen = new Promise((resolve) => {
-          tab.addEventListener('pointerdown', () => {
-            const started = performance.now();
+          let started = 0;
+          button.addEventListener('pointerdown', () => { started = performance.now(); }, { once: true });
+          button.addEventListener('click', () => {
             requestAnimationFrame(() => requestAnimationFrame(() => resolve({
               openMs: performance.now() - started,
               rows: document.querySelectorAll('#history .history-item').length,
@@ -420,7 +423,7 @@ describe.skipIf(!RUN_PERFORMANCE)('large-deck performance stress', () => {
         });
         return true;
       })()`);
-      await editor.click('#side-tabs button[data-panel="history"]', 'History tab');
+      await editor.click('.bar-history-button', 'History button');
       const opened = await editor.evaluate<{ openMs: number; rows: number }>(
         `window.__historyOpen`);
       const historyUi = { hydrateMs, openMs: opened.openMs, rows: opened.rows };

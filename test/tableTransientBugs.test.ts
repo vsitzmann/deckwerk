@@ -187,7 +187,9 @@ describe.skipIf(!electronBinary)('table transient-commit bookkeeping', () => {
     await eventually(async () => (await session.element(NORMAL_ID)).style['font-size'],
       'the control font size never reached the server', (value) => value === '72px');
     await session.settle('after the control edit');
-    await session.cdp.click('#side-tabs button[data-panel="history"]', 'History tab');
+    // History opens in a popover from the button beside the deck name; the
+    // Props tab click above closed any earlier one.
+    await session.cdp.click('.bar-history-button', 'History button');
     await eventually(newestRowIsCurrent,
       'control: a plain-box inspector edit did not leave its history row Current',
       (state) => state.storeCurrent && state.panelCurrent);
@@ -203,7 +205,9 @@ describe.skipIf(!electronBinary)('table transient-commit bookkeeping', () => {
       'the table height never re-fitted after the font change',
       (h) => Math.abs(h - before.h) > 1);
     await session.settle('after the table edit');
-    await session.cdp.click('#side-tabs button[data-panel="history"]', 'History tab');
+    // History opens in a popover from the button beside the deck name; the
+    // Props tab click above closed any earlier one.
+    await session.cdp.click('.bar-history-button', 'History button');
     await wait(300);
 
     // BUG: the author made exactly one edit and undid nothing, yet no row is

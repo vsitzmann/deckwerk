@@ -74,8 +74,12 @@ describe.skipIf(!electronBinary)('line draw on an arrow', () => {
     await editor.click(`.build-element-row[data-element-id="${BOX_ID}"]`, 'the arrow in the Build list');
     await editor.clickByText('button', 'Add animation', 'Add animation');
     const options = await editor.evaluate<string[]>(
-      `[...document.querySelectorAll('.timeline-row select.build-action option')].map((o) => o.textContent)`);
-    expect(options).toContain('line draw');
+      `[...document.querySelectorAll('.timeline-row select.build-action option')].map((o) => o.value)`);
+    expect(options).toContain('appear:draw');
+    // Named in the menu for what it does, under Appear.
+    expect(await editor.evaluate<string>(
+      `document.querySelector('.timeline-row select.build-action option[value="appear:draw"]').textContent`))
+      .toBe('Line draw — traced from its start');
     await editor.choose('.timeline-row select.build-action', 'appear:draw', 'the action menu');
     const saved = async () => {
       const response = await fetch(`http://127.0.0.1:${server!.port}/api/deck?deck=${DECK_ID}`);
