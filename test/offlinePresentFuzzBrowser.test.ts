@@ -315,6 +315,12 @@ class Walk {
 
   private async dropSocket(): Promise<string> {
     link!.dropWebSockets();
+    // The session comes straight back; an edit made in between is discarded
+    // on reconnect (collabBridge.ts), which is not this walk's subject.
+    if (this.model.connected) {
+      await eventually(() => editorState(this.page), 'reconnect after the WebSocket dropped', (s) => s.collabReady, 30_000)
+        .catch(() => this.fail('never reconnected after the WebSocket dropped'));
+    }
     return 'drop the WebSocket';
   }
 
@@ -427,14 +433,18 @@ class Walk {
     // uploaded: a person duplicates a picture the deck already shows.
     const shown = (await this.serverDeck(id)).slides.flatMap((slide) => slide.elements)
       .filter((el) => el.type === 'image').map((el) => (el as { src: string }).src);
-    const src = state.collabReady ? spares[id][this.spareUsed++ % spares[id].length] : this.pick(shown);
+    // Online is the link being up: an editor that has not yet noticed the
+    // link went (Safari takes a moment) is offline whatever it says, and
+    // what it sends is discarded on reconnect, as any edit during an outage.
+    const online = m.link === 'up' && state.collabReady;
+    const src = online ? spares[id][this.spareUsed++ % spares[id].length] : this.pick(shown);
     const element = imageElement(`added-${this.spareUsed}-${Math.floor(this.rand() * 1e6)}`, src, 80 + Math.floor(this.rand() * 1200), 640, 320, 200);
     await this.page.evaluate(`(() => {
       const element = ${JSON.stringify(element)};
       window.store.commit((deck) => { deck.slides[window.store.get().slideIndex].elements.push(element); }, { label: 'Fuzz: add an image' });
       return true;
     })()`);
-    if (state.collabReady) {
+    if (online) {
       m.complete[id] = false;
       // The edit reaches the server; the picture is the editor's to paint.
       await eventually(() => this.serverDeck(id), 'the edit reached the server',
