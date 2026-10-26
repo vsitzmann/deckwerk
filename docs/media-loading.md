@@ -509,19 +509,28 @@ dropped, and so does reloading the editor.
 - **The shell.** A service worker (`src/renderer/collab/sw.ts`, emitted as
   `sw.js` at the root of the client build) precaches the pages, the hashed
   bundles and the woff2 fonts, from a list the build writes into it
-  (`vite.collab.config.ts`). Pages are network-first (a server that answers
-  serves its current build; one that does not answer within five seconds
-  is taken for gone); hashed files are cache-first. The worker is registered
-  only once the editor has gone quiet after opening a deck, so a first visit
-  spends the link on the slide being shown, and only in a secure context
-  (https, or localhost): a LAN joiner on plain http gets no copy.
+  (`vite.collab.config.ts`). The editor page is network-first;
+  `present.html` comes from the shell (the editor that opens it runs that
+  build). The worker is registered once the editor has gone quiet after
+  opening a deck, so a first visit spends the link on the slide being
+  shown, and only in a secure context (https, or localhost): a LAN joiner on
+  plain http gets no copy. An install the connection cut short is retried
+  when the editor reconnects.
+- **A server that does not answer.** A stopped server refuses at once; one
+  behind a route that dropped never answers, and every request hangs. A page
+  or `/api/config` waits three seconds for the server, then the kept copy
+  answers, and the worker remembers for fifteen seconds that the server did
+  not answer, so what follows (the page's config, its files) is answered at
+  once. Kept answers carry `x-deckwerk-kept`, and an editor whose config came
+  from the copy opens its deck from the copy straight away instead of
+  waiting out a socket handshake (which itself gives up after ten seconds).
 - **The files.** `OfflineCopy` (`src/renderer/collab/offlineCopy.ts`)
   downloads every file the deck shows into Cache Storage, which persists
   where the HTTP cache need not, in the presentation's order
   (`talkMediaOrder`, the same function the Player's blob cache follows)
   counted outward from the slide the editor is on, then skipped slides, web
   pages and layout masters. One file at a time in the whole browser (a Web
-  Lock), and only once the editor has been quiet for a second: a canvas
+  Lock), and only while the editor has been quiet for a second: a canvas
   video or picture still loading, a rail thumbnail in the load gate, the
   Safari video memory fetching, or a presentation running all hold it. A
   clip already downloading stops reading between chunks while the editor is
@@ -530,18 +539,33 @@ dropped, and so does reloading the editor.
   caches) instead of downloading it beside it. Chromium's HTTP cache keeps
   what a `<video>` read in pieces, so clips are asked for as `bytes=0-`,
   which it assembles from those pieces; in Safari a clip the editor holds
-  in memory is copied from there.
-- **What the worker answers.** Only files in the copy: a `/media/` URL from
-  the copy always (it names exact bytes), any other deck file only once the
-  server cannot answer, both honouring `Range` (`answerFromKept`). A file
-  not in the copy is not touched: the request reaches the network as if
-  there were no worker, so nothing above changes for a file the copy has
-  not reached.
+  in memory is copied from there. A download that gets no answer is the
+  connection's fault, not the file's: the copy waits for the server rather
+  than giving the file up.
+- **What is kept carries its URL.** A download is written to a staging cache,
+  then read back through the worker and kept as that answer. A response the
+  page built itself has no URL, and Chromium's media stack refuses one for a
+  `<video>`; Chromium's video requests get the kept response whole (a 200,
+  which it reads through to seek), Safari's get real byte ranges, which its
+  media stack needs (`answerFromKept`).
+- **A page's video never switches source.** Chromium keeps one data source
+  per URL in a page, shared by every `<video>` on it; a clip some of whose
+  ranges came from the network and later ones from the worker fails ("data
+  source error") in every element showing it. So the worker answers a video
+  request from the copy only for a page it controlled from birth (the
+  presentation, an editor opened or reloaded since the worker was
+  installed) and that has not streamed that clip from the network, or when
+  the server is down. Pictures and the presentation's blob cache read whole
+  files and are answered from the copy whenever it has them. A file not in
+  the copy is never touched: the request goes to the network as if there
+  were no worker.
 - **The deck** is kept as a snapshot (deck, theme, media variants, pending
-  clips), rewritten a couple of seconds after each change. An editor opened
-  while the server is unreachable shows it, and the first welcome replaces
-  it as any reconnect would (edits made meanwhile are discarded, as during
-  any disconnection, and the banner says so).
+  clips), written as the deck opens and within two seconds of a change (a
+  save already due is never pushed back), and at once when the page is
+  hidden or closed. An editor opened while the server is unreachable shows
+  it, and the first welcome replaces it as any reconnect would (edits made
+  meanwhile are discarded, as during any disconnection, and the banner says
+  so).
 - **Bounded.** A file goes in only while it fits 80% of the origin's quota
   (`navigator.storage.estimate`), and the copy asks for persistent storage
   (`navigator.storage.persist`). An index records each deck opened and its
@@ -555,11 +579,18 @@ dropped, and so does reloading the editor.
   counts as a file left until the version exists.
 
 The status line says "Downloading for offline: n files left", then
-"Available offline" (or why not: no room, files that kept failing). Present
-without a server is allowed once the copy is complete (shell, deck, every
-file), and refused with the reason otherwise. In the presentation, the
-disconnect pill fades after a few seconds rather than staying on the
-projector for the rest of the talk.
+"Available offline" (or why not: no room, files that kept failing, the
+server gone mid-copy). Present without a server is allowed once the copy is
+complete (shell, deck, every file), and refused with what the copy lacks
+otherwise. In the presentation, the disconnect pill fades after a few
+seconds rather than staying on the projector for the rest of the talk.
+
+Measured through an SSH forward to the lab server (Oct 2026): a 107-slide
+talk (184 MB once its clips have streaming versions) is available offline
+28 s after it opens in Chrome, 25 s in Safari; a 166-slide talk (256 MB) in
+35 s and 45 s. A deck too large for the origin's quota says so ("Not enough
+storage to keep 23 files offline") and Present without the server is
+refused with that reason.
 
 ## Regression guards
 
@@ -627,6 +658,19 @@ projector for the rest of the talk.
   element failing and nothing the worker could not answer; then a reload
   of the editor shows the deck. Chromium in CI, Safari with
   `RUN_SAFARI_MEDIA_BUDGET=1`.
+- `test/offlinePresentScenariosBrowser.test.ts` (long tier) — the server lost
+  every way (refused, a black hole, the WebSocket alone, the process
+  stopped and started) at every moment (before the copy is complete, after
+  it, mid-presentation), then the whole talk walked forward, back and by
+  jumps, the editor reloaded without the server, and the session reconnected;
+  small, medium, `OFFLINE_LARGE=1` and `OFFLINE_REAL_DECKS=<folders>`.
+- `test/offlinePresentFuzzBrowser.test.ts` — a seeded walk of open, wait,
+  lose the link (refused, black hole, WebSocket), restore it, present, step,
+  jump, reload, add a picture online and offline, and switch decks, checked
+  against a model of what must be on screen (`OFFLINE_FUZZ_SEEDS`,
+  `OFFLINE_FUZZ_STEPS`, `OFFLINE_FUZZ_BROWSERS`; nightly with
+  `npm run test:offline:fuzz`). `dev/offline/` drives the same walk against
+  any origin (an SSH-forwarded server behind a cuttable link).
 - `test/offlineCopy.test.ts` — the copy's order, its quiet periods, clips
   pausing for the editor and going at once for a waiter, pending clips,
   quota and failures in the status line, whole files kept from ranges, the
