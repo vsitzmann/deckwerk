@@ -396,7 +396,8 @@ describe.skipIf(!electronBinary)('desktop inline-formatting matrix', () => {
     // Regression journey: whole-object formatting must not leave a latent
     // bold/italic typing state that later leaks into an automatically created
     // list. This deliberately starts through the production Text toolbar.
-    await editor.click('#toolbar .bar-icon-button', 'Text toolbar button');
+    await editor.click('#toolbar .text-insert-trigger', 'Text toolbar menu');
+    await editor.clickByText('#toolbar .shape-menu-item', 'Text box', 'Text box in the Text menu');
     const listTextId = await eventually(async () => editor!.evaluate<string>(`(() => {
       const nodes = [...document.querySelectorAll('#canvas [data-element-id]')];
       return nodes.find((node) => node.dataset.elementId !== ${JSON.stringify(TEXT_ID)}

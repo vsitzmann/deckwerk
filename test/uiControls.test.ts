@@ -90,7 +90,8 @@ describe('shared editor controls', () => {
       expect(source).toContain("barButton('Open'");
       expect(source).toContain("createToolbarPicker('Import…'");
       expect(source).toContain("label: 'Keynote…'");
-      expect(source).toContain("barIconButton('Text'");
+      expect(source).toContain('createTextInsertPicker({');
+      expect(source).not.toContain("barIconButton('Code'");
       expect(source).toContain('createShapeInsertPicker(store)');
       expect(source).not.toContain("menuButton('File'");
       expect(source).not.toContain("menuButton('Insert'");

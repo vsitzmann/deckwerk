@@ -59,13 +59,9 @@ describe.skipIf(!electronBinary)('a text box sized to its text', () => {
     desktop = await launchDesktopEditor('body-text', '<p>Body copy</p>');
     const cdp = desktop.cdp;
 
-    const button = await cdp.evaluate<{ x: number; y: number }>(`(() => {
-      const button = [...document.querySelectorAll('.bar-icon-button')]
-        .find((candidate) => candidate.textContent.trim() === 'Text');
-      const rect = button.getBoundingClientRect();
-      return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
-    })()`);
-    await cdp.clickAt(button.x, button.y);
+    // Text ▾ on the Insert bar, then Text box.
+    await cdp.click('#toolbar .text-insert-trigger', 'Text toolbar menu');
+    await cdp.clickByText('#toolbar .shape-menu-item', 'Text box', 'Text box in the Text menu');
 
     // Created at a placeholder size, then measured down to "New text" — and
     // already open for editing with the placeholder selected, so the next

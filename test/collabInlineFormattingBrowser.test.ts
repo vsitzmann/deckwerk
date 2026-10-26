@@ -365,7 +365,8 @@ describe.skipIf(!electronBinary)('web inline-formatting matrix', () => {
     const editor = session.cdp;
 
     // Start through the production Text toolbar, as reported.
-    await editor.click('#toolbar .bar-icon-button', 'Text toolbar button');
+    await editor.click('#toolbar .text-insert-trigger', 'Text toolbar menu');
+    await editor.clickByText('#toolbar .shape-menu-item', 'Text box', 'Text box in the Text menu');
     const listTextId = await eventually(async () => editor.evaluate<string>(`(() => {
       const nodes = [...document.querySelectorAll('#canvas [data-element-id]')];
       return nodes.find((node) => node.dataset.elementId !== ${JSON.stringify(TEXT_ID)}

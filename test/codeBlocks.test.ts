@@ -216,7 +216,8 @@ describe('highlighting', () => {
       loadCodeAssets('python', 'deck'),
       loadCodeAssets('sql', 'nord'),
     ]);
-  });
+    // The C++ grammar CUDA borrows is large; a loaded machine needs a while to parse it.
+  }, 60_000);
 
   it('is not ready before its grammar loads, and plain text never needs one', () => {
     expect(codeAssetsReady('rust', 'dracula')).toBe(false);
