@@ -72,8 +72,14 @@ describe('starting a browser presentation', () => {
 
   afterEach(() => {
     vi.unstubAllGlobals();
+    setFullscreenElement(null);
     document.body.replaceChildren();
   });
+
+  /** jsdom has no fullscreen: say which element the browser would report. */
+  function setFullscreenElement(element: Element | null): void {
+    Object.defineProperty(document, 'fullscreenElement', { configurable: true, get: () => element });
+  }
 
   it('mounts the audience in a fullscreened overlay by default', () => {
     startPresenting('talk', 3, seed);
@@ -211,11 +217,31 @@ describe('starting a browser presentation', () => {
       origin: location.origin,
       data: { type: 'present-at', slideId: 'slide-5' },
     }));
+    setFullscreenElement(overlayFrame());
+    document.dispatchEvent(new Event('fullscreenchange'));
     // The browser consumes Escape itself; the page only sees fullscreen end.
+    setFullscreenElement(null);
     document.dispatchEvent(new Event('fullscreenchange'));
 
     expect(overlayFrame()).toBeNull();
     expect(ended).toEqual(['slide-5']);
+  });
+
+  it('keeps a new show up when the last one finishes leaving fullscreen after Present is pressed again', () => {
+    startPresenting('talk', 0, seed);
+    setFullscreenElement(overlayFrame());
+    document.dispatchEvent(new Event('fullscreenchange'));
+    // End the show from inside it; leaving fullscreen is asynchronous...
+    window.dispatchEvent(new MessageEvent('message', { origin: location.origin, data: { type: 'present-exit' } }));
+    expect(overlayFrame()).toBeNull();
+    // ...and Present is pressed again before it has.
+    startPresenting('talk', 2, seed);
+    const next = overlayFrame();
+    setFullscreenElement(null);
+    document.dispatchEvent(new Event('fullscreenchange'));
+
+    expect(overlayFrame()).toBe(next);
+    expect(next).not.toBeNull();
   });
 
   it('ignores a shown slide reported from another origin', () => {

@@ -36,6 +36,8 @@ export interface PresentOptions {
 }
 
 let overlay: HTMLIFrameElement | null = null;
+/** Whether the current overlay has been fullscreen: only then does leaving fullscreen end it. */
+let overlayFullscreen = false;
 let seedProvider: (() => PresentSeed) | null = null;
 /** The audience window opened for Speaker View, so ending here ends it too. */
 let audienceWindow: Window | null = null;
@@ -98,8 +100,15 @@ function onMessage(event: MessageEvent): void {
 
 function onFullscreenChange(): void {
   // Escape (or the browser's own exit control) leaves fullscreen; that ends the
-  // presentation, matching how the popup used to close.
-  if (!document.fullscreenElement) teardown();
+  // presentation, matching how the popup used to close. Only a presentation
+  // that was fullscreen itself ends so: leaving fullscreen is asynchronous,
+  // and the previous show's exit, landing after Present was pressed again,
+  // took the new show down with it.
+  if (overlay && document.fullscreenElement === overlay) {
+    overlayFullscreen = true;
+    return;
+  }
+  if (!document.fullscreenElement && overlayFullscreen) teardown();
 }
 
 /** Whether a presentation is running over this tab. */
@@ -169,6 +178,7 @@ export function startPresenting(
     + 'background:#000;z-index:9999;';
   document.body.appendChild(frame);
   overlay = frame;
+  overlayFullscreen = false;
   window.addEventListener('message', onMessage);
   document.addEventListener('fullscreenchange', onFullscreenChange);
   frame.requestFullscreen().catch(() => {
