@@ -53,7 +53,16 @@ check_app() {
   grep -q 'source=Notarized Developer ID' <<<"$assessment" ||
     fail "$app is accepted, but not as a notarized Developer ID app"
 
-  xcrun stapler validate "$app"
+  # stapler compares the stapled ticket with Apple's copy over the network,
+  # and a dropped connection fails it with the same exit code as a missing
+  # ticket. Retry before calling it a broken release.
+  local attempt
+  for attempt in 1 2 3 4; do
+    xcrun stapler validate "$app" && break
+    [ "$attempt" -lt 4 ] || fail "$app has no valid stapled notarization ticket"
+    echo "stapler validate failed (attempt $attempt); retrying in $((attempt * 15))s"
+    sleep $((attempt * 15))
+  done
 
   # Every Mach-O in the bundle, not just the ones codesign --deep treats as
   # nested code: notarization rejects any executable without a Developer ID
