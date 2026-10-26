@@ -16,6 +16,11 @@ export const LONG_TESTS = [
     scope: 'Every entry and exit of a text or table edit, plus a seeded random walk, checking the selection/focus invariants after each real input',
   },
   {
+    file: 'test/offlinePresentScenariosBrowser.test.ts',
+    observedSeconds: 970,
+    scope: 'The browser editor losing its server every way (refused, black hole, WebSocket, process) at every moment (before the copy, before Present, mid-talk), then presenting, reloading and reconnecting',
+  },
+  {
     file: 'test/performanceStressBrowser.test.ts',
     observedSeconds: 13,
     scope: 'Opt-in 1,000-slide media-wall/unique-video and 500-slide history performance gates',

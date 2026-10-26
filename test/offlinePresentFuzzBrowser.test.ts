@@ -296,7 +296,7 @@ class Walk {
     if (!id) return 'link up';
     const state = await this.state();
     // A tab that never had its page cannot reconnect by itself.
-    if (!state || state.slides === 0) return 'link up (no editor to reconnect)';
+    if (!state?.deckShown) return 'link up (no editor to reconnect)';
     const server = await this.serverDeck(id);
     const after = await eventually(() => editorState(this.page), 'reconnect',
       (s) => s.collabReady && s.slides === server.slides.length, 60_000).catch(() => this.state());
@@ -316,9 +316,7 @@ class Walk {
     const m = this.model;
     const id = m.open!;
     const before = await this.state();
-    if (!before || before.slides === 0 || (!before.collabReady && !before.offlineDeck && !m.connected)) {
-      return 'present (no deck on screen)';
-    }
+    if (!before?.deckShown) return 'present (no deck on screen)';
     const online = before.collabReady;
     const pressed = await pressPresent(this.page);
     if (!online) {
@@ -387,7 +385,7 @@ class Walk {
     const m = this.model;
     const id = m.open!;
     const state = await this.state();
-    if (!state || state.slides === 0 || (!state.collabReady && !state.offlineDeck)) return 'add an image (no deck)';
+    if (!state?.deckShown) return 'add an image (no deck)';
     const src = spares[id][this.spareUsed++ % spares[id].length];
     const element = imageElement(`added-${this.spareUsed}-${Math.floor(this.rand() * 1e6)}`, src, 80 + Math.floor(this.rand() * 1200), 640, 320, 200);
     await this.page.evaluate(`(() => {

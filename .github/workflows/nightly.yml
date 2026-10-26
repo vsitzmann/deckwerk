@@ -60,6 +60,10 @@ jobs:
           # walked far longer than the per-push gate walks them.
           - name: Agent collaboration fuzz
             script: test:agents:fuzz
+          # The browser editor losing its server, walked long: the fixed seed
+          # plus tonight's (FUZZ_SEED). The per-push gate walks it briefly.
+          - name: Offline presenting fuzz
+            script: test:offline:fuzz
           # test:interactions:exhaustive is deliberately absent: the suite
           # skips itself under CI_NO_WINDOW_MANAGER, so on this runner the
           # step ran nothing while looking like coverage. Bring it back with a

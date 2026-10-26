@@ -205,6 +205,8 @@ export interface EditorState {
   status: string;
   collabReady: boolean;
   offlineDeck: boolean;
+  /** A deck is on screen: welcomed by the server, opened from the copy, or kept from before the link went. */
+  deckShown: boolean;
   slides: number;
   slide: number;
   presenting: boolean;
@@ -223,6 +225,7 @@ export function editorState(page: DrivenPage): Promise<EditorState> {
       status: document.getElementById('status')?.textContent ?? '',
       collabReady: root.dataset.collabReady === 'true',
       offlineDeck: root.dataset.offlineDeck === 'true',
+      deckShown: Boolean(store) && store.get().deck.title !== 'Connecting…',
       slides: store ? store.get().deck.slides.length : 0,
       slide: store ? store.get().slideIndex : -1,
       presenting: Boolean(document.querySelector('iframe[src*="present.html"]')),
