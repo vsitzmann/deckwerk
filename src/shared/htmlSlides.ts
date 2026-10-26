@@ -11,7 +11,8 @@ import {
 } from './equationBuildHtml.js';
 import { shapeSvg } from './shapeSvg.js';
 import { bakeEndpointFlips, canonicalOrientation, elementTransform, orientationFromMatrix, sameOrientation } from './flip.js';
-import { codeElementFromNode, codeElementToHtml, lineBuildFromNode } from './codeHtml.js';
+import { codeElementFromNode, codeElementToHtml, lineBuildsFromNode } from './codeHtml.js';
+import { formatLineBuilds } from './codeBlocks.js';
 import { CODE_AUTHORING_CSS } from './codeBlocks.js';
 import { applyTableColumnWidths } from './paragraphs.js';
 import { normalizeHtmlLineHeights, normalizeStyleLineHeight } from './lineHeight.js';
@@ -854,31 +855,44 @@ function mergedTimeline(previous: Slide, compiled: Slide, theirs = new Set<strin
   // Keyed by kind and object: a page states an object's appearance, and its
   // equation builds (`equationBuildHtml.ts`), each separately.
   const authored = new Map<string, TimelineEntry>();
-  // A code block's line steps (`data-build-lines`) are the page's to state too.
-  const authoredLines = new Map<string, TimelineEntry>();
+  // A code block's line builds (`data-build-lines`) are the page's to state
+  // too, all of them, in order.
+  const authoredLines = new Map<string, TimelineEntry[]>();
   for (const entry of compiled.timeline) {
     // An object kept as somebody else left it keeps the builds they gave it.
     if (theirs.has(entry.action.target)) continue;
     const kind = pageBuildKind(entry);
     if (kind && !authored.has(kind)) authored.set(kind, entry);
-    if (entry.action.type === 'lines' && !authoredLines.has(entry.action.target)) authoredLines.set(entry.action.target, entry);
+    if (entry.action.type === 'lines') {
+      authoredLines.set(entry.action.target, [...(authoredLines.get(entry.action.target) ?? []), entry]);
+    }
   }
   const claimed = new Set<string>();
-  const claimedLines = new Set<string>();
+  /** Per block, how many of the page's line builds a deck build has taken. */
+  const claimedLines = new Map<string, number>();
   const merged: TimelineEntry[] = [];
   for (const entry of previous.timeline) {
     const { target } = entry.action;
     if (!present.has(target)) continue;
-    if (entry.action.type === 'lines' && !claimedLines.has(target)) {
-      const lines = authoredLines.get(target);
-      // The page took the line build off this block.
-      if (!lines && !theirs.has(target)) continue;
-      if (lines) {
-        // Its steps are the page's; its trigger and place in the order the deck's.
-        claimedLines.add(target);
-        merged.push({ ...structuredClone(entry), action: { ...entry.action, value: lines.action.value } });
-        continue;
-      }
+    if (entry.action.type === 'lines' && !theirs.has(target)) {
+      // The block's line builds pair up in order: the n-th the deck has takes
+      // the n-th the page states — what it does and to which lines — and
+      // keeps its trigger, its colour and its place among the other builds.
+      const taken = claimedLines.get(target) ?? 0;
+      const page = authoredLines.get(target)?.[taken];
+      // The page took this line build off the block.
+      if (!page) continue;
+      claimedLines.set(target, taken + 1);
+      const { lines: _lines, ...action } = structuredClone(entry.action);
+      merged.push({
+        ...structuredClone(entry),
+        action: {
+          ...action,
+          value: page.action.value,
+          ...(page.action.lines ? { lines: page.action.lines } : {}),
+        },
+      });
+      continue;
     }
     const kind = pageBuildKind(entry);
     const page = kind ? authored.get(kind) : undefined;
@@ -911,7 +925,14 @@ function mergedTimeline(previous: Slide, compiled: Slide, theirs = new Set<strin
     if (theirs.has(entry.action.target)) continue;
     const kind = pageBuildKind(entry);
     if (kind && claimed.has(kind)) continue;
-    if (entry.action.type === 'lines' && claimedLines.has(entry.action.target)) continue;
+    if (entry.action.type === 'lines') {
+      // The first ones were taken by the deck's own line builds above.
+      const taken = claimedLines.get(entry.action.target) ?? 0;
+      if (taken > 0) {
+        claimedLines.set(entry.action.target, taken - 1);
+        continue;
+      }
+    }
     merged.push({ ...entry, id: uniqueId(entry.id, ids) });
   }
   return merged;
@@ -1020,10 +1041,10 @@ function buildSpec(slide: Slide, elementId: string): string {
     spec += `~${entry.action.value}/${entry.action.duration ?? ''}${popSpec(entry)}`;
   }
   spec += equationBuildSpec(slide, elementId);
-  // A code block's line steps are stated by its page as well; said only when
+  // A code block's line builds are stated by its page as well; said only when
   // there are some, so every other object's fingerprint is what it was.
-  const lines = slide.timeline.find((candidate) => candidate.action.type === 'lines' && candidate.action.target === elementId);
-  return lines ? `${spec}|lines:${String(lines.action.value ?? '')}` : spec;
+  const lines = slide.timeline.filter((candidate) => candidate.action.type === 'lines' && candidate.action.target === elementId);
+  return lines.length > 0 ? `${spec}|lines:${formatLineBuilds(lines)}` : spec;
 }
 
 /** A pop's sizes, when it states any; empty otherwise, so other builds fingerprint as before. */
@@ -1331,10 +1352,7 @@ export function slideFromMeasured(
     const build = buildFromNode(node, id, timeline.length);
     if (build) timeline.push(build);
     timeline.push(...equationBuildsFromNode(node, id, timeline.length));
-    if (element.type === 'code') {
-      const lines = lineBuildFromNode(node, id, timeline.length);
-      if (lines) timeline.push(lines);
-    }
+    if (element.type === 'code') timeline.push(...lineBuildsFromNode(node, id, timeline.length));
   });
 
   return {
@@ -1683,10 +1701,12 @@ export function slideToHtml(slide: Slide, canvas: { w: number; h: number }): str
   // An object's first appearance is the one its markup states; the compile
   // pairs the page's build with that same entry (`carrySlideState`).
   const builds = new Map<string, TimelineEntry>();
-  const lineBuilds = new Map<string, TimelineEntry>();
+  const lineBuilds = new Map<string, TimelineEntry[]>();
   for (const entry of slide.timeline) {
     if (entry.action.type === 'appear' && !builds.has(entry.action.target)) builds.set(entry.action.target, entry);
-    if (entry.action.type === 'lines' && !lineBuilds.has(entry.action.target)) lineBuilds.set(entry.action.target, entry);
+    if (entry.action.type === 'lines') {
+      lineBuilds.set(entry.action.target, [...(lineBuilds.get(entry.action.target) ?? []), entry]);
+    }
   }
 
   // What this slide is now, so a save of the page can tell its own edits
@@ -1723,7 +1743,7 @@ export function slideToHtml(slide: Slide, canvas: { w: number; h: number }): str
 }
 
 function elementToHtml(
-  element: SlideElement, build?: TimelineEntry, base?: string, extraAttrs: string[] = [], lineBuild?: TimelineEntry,
+  element: SlideElement, build?: TimelineEntry, base?: string, extraAttrs: string[] = [], lineBuilds: TimelineEntry[] = [],
 ): string {
   const position = `position:absolute; left:${element.x}px; top:${element.y}px;`
     + ` width:${element.w}px; height:${element.h}px;`
@@ -1900,7 +1920,7 @@ function elementToHtml(
             + `web page: ${escape(element.title || element.src)}</div>`)
         + '</div>';
     case 'code':
-      return codeElementToHtml(element, attrs, styleAttr, position, inline, lineBuild);
+      return codeElementToHtml(element, attrs, styleAttr, position, inline, lineBuilds);
     case 'unsupported':
       // An import gap, described well enough to be fixed: replace this element
       // with real markup and it becomes a real object on the way back.

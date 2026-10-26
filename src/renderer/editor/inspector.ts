@@ -2598,7 +2598,7 @@ export class Inspector {
 
       case 'code':
         return codeTypeSection(el, this.store, {
-          typeSections, optionSection, textAreaField, checkboxField, numberField,
+          typeSections, optionSection, checkboxField, numberField,
         });
 
       case 'web': {

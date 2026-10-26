@@ -30,6 +30,7 @@ import {
   type TextFormat,
 } from './textFormatting.js';
 import { showPasteThemeDialog } from './pasteThemeDialog.js';
+import { createToolbarPicker } from './exportPicker.js';
 
 /**
  * Shell-independent wiring shared by the Electron editor and the browser
@@ -641,3 +642,21 @@ export function barIconButton(label: string, iconSvg: string, onClick: () => voi
 export const TEXT_ICON =
   '<svg class="bar-icon" viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">' +
   '<path d="M3 3.5V2.5h10v1M8 2.5v11M6 13.5h4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>';
+
+/**
+ * Text ▾ on the Insert bar: a text box, or a code block. Built on the
+ * toolbar picker, so it opens and reads exactly like Shape ▾ beside it. Both
+ * editors' toolbars use this one, so they cannot drift apart.
+ */
+export function createTextInsertPicker(insert: { textBox: () => void; codeBlock: () => void }): HTMLElement {
+  const trigger = document.createElement('button');
+  trigger.className = 'shape-menu-trigger text-insert-trigger';
+  trigger.innerHTML = `${TEXT_ICON}<span>Text</span>`
+    + '<svg class="shape-menu-chevron" viewBox="0 0 10 10" width="9" height="9" aria-hidden="true">'
+    + '<path d="M2 3.5l3 3 3-3" fill="none" stroke="currentColor" stroke-width="1.5" '
+    + 'stroke-linecap="round" stroke-linejoin="round"/></svg>';
+  return createToolbarPicker('Text', [
+    { label: 'Text box', action: insert.textBox },
+    { label: 'Code block', action: insert.codeBlock },
+  ], { trigger });
+}

@@ -5,7 +5,8 @@ import {
   normalizeCodeLanguage,
   normalizeCodeScheme,
   codeSchemeColors,
-  normalizeLineSteps,
+  formatLineBuilds,
+  parseLineBuilds,
 } from './codeBlocks.js';
 
 /**
@@ -14,7 +15,7 @@ import {
  * The markup is what anyone writes for code on the web:
  *
  *   <pre data-element="code" data-language="python" data-scheme="github-dark"
- *        data-font-size="28" data-line-numbers="true" data-build-lines="1-3; highlight:5"
+ *        data-font-size="28" data-line-numbers="true" data-build-lines="each; highlight:3-5"
  *        style="…"><code class="language-python">def f(x):
  *       return x &lt; 3</code></pre>
  *
@@ -94,18 +95,23 @@ export function codeElementFromNode(
 }
 
 /**
- * `data-build-lines="1-3; highlight:5"` as a line build, stepped by clicks.
- * A page states the steps; the trigger and the build's place among the
- * slide's other builds stay as the deck has them (`carrySlideState`).
+ * `data-build-lines="each; highlight:3-5; dim:7"` as the block's line builds,
+ * one entry per `;`-separated part, in that order, each on a click
+ * (shared/codeBlocks.ts has the grammar). A page states what each build does
+ * to which lines; the triggers, a highlight's colour and the builds' places
+ * among the slide's other builds stay as the deck has them (`mergedTimeline`).
  */
-export function lineBuildFromNode(node: MeasuredNode, elementId: string, index: number): TimelineEntry | null {
-  const spec = normalizeLineSteps(node.dataset.buildLines);
-  if (!spec) return null;
-  return {
-    id: `${elementId}-lines-${index + 1}`,
+export function lineBuildsFromNode(node: MeasuredNode, elementId: string, index: number): TimelineEntry[] {
+  return parseLineBuilds(node.dataset.buildLines).map((spec, k) => ({
+    id: `${elementId}-lines-${index + k + 1}`,
     trigger: { on: 'click', ref: null, delay: 0 },
-    action: { type: 'lines', target: elementId, value: spec },
-  };
+    action: {
+      type: 'lines',
+      target: elementId,
+      value: spec.effect,
+      ...(spec.lines ? { lines: spec.lines } : {}),
+    },
+  }));
 }
 
 /**
@@ -120,11 +126,11 @@ export function codeElementToHtml(
   styleAttr: (...declarations: string[]) => string,
   position: string,
   inline: string,
-  lineBuild?: TimelineEntry,
+  lineBuilds: TimelineEntry[] = [],
 ): string {
   const language = normalizeCodeLanguage(element.language);
   const colors = codeSchemeColors(element.scheme);
-  const spec = lineBuild ? normalizeLineSteps(String(lineBuild.action.value ?? '')) : null;
+  const spec = lineBuilds.length > 0 ? formatLineBuilds(lineBuilds) : null;
   const code = (element.code.startsWith('\n') ? '\n' : '') + escapeText(element.code);
   return `  <pre ${attrs} data-element="code" data-language="${escapeAttr(element.language)}"`
     + ` data-scheme="${escapeAttr(element.scheme)}" data-font-size="${element.fontSize}"`

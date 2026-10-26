@@ -5,16 +5,17 @@ import { emptyDeck, parseDeck, type CodeEl, type Slide } from '../src/shared/dec
 import {
   CODE_SCHEMES,
   codeBlockHeight,
-  codeLineState,
   codeLines,
   contrastRatio,
   deckCodeColors,
-  formatLineSteps,
+  describeLines,
+  formatLineBuilds,
+  formatLineRanges,
+  lineSteps,
   normalizeCodeLanguage,
   normalizeCodeScheme,
-  normalizeLineSteps,
+  parseLineBuilds,
   parseLineRanges,
-  parseLineSteps,
 } from '../src/shared/codeBlocks.js';
 import { codeAssetsReady, highlightCode, loadCodeAssets } from '../src/shared/codeHighlight.js';
 import { codeFromMarkup } from '../src/shared/codeHtml.js';
@@ -81,34 +82,44 @@ describe('languages and schemes', () => {
   });
 });
 
-describe('line ranges and steps', () => {
-  it('parses ranges, forgiving typos', () => {
+type Entry = Slide['timeline'][number];
+
+/** A `lines` build: `lines` names some of the block's lines, or none for one line per click. */
+function lineBuild(id: string, value: string, lines?: string, on: Entry['trigger']['on'] = 'click', color?: string): Entry {
+  return {
+    id, trigger: { on, ref: null, delay: 0 },
+    action: { type: 'lines', target: 'code-1', value, ...(lines ? { lines } : {}), ...(color ? { color } : {}) },
+  };
+}
+
+describe('line ranges', () => {
+  it('parses ranges, forgiving typos, and writes them back canonically', () => {
     expect(parseLineRanges('1-3, 7')).toEqual([1, 2, 3, 7]);
     expect(parseLineRanges('5-3')).toEqual([3, 4, 5]);
     expect(parseLineRanges('x, 2')).toEqual([2]);
+    expect(formatLineRanges([7, 1, 2, 3])).toBe('1-3,7');
+    expect(describeLines([3])).toBe('line 3');
+    expect(describeLines([3, 4, 5, 8])).toBe('lines 3–5, 8');
   });
 
-  it('parses a spec and writes it back canonically', () => {
-    const steps = parseLineSteps('1-3 ;show 4,5; Highlight: 5 ; focus 2-3; highlight:all; ;');
-    expect(steps).toEqual([
-      { mode: 'reveal', lines: [1, 2, 3] },
-      { mode: 'reveal', lines: [4, 5] },
-      { mode: 'highlight', lines: [5] },
-      { mode: 'highlight', lines: [2, 3] },
-      { mode: 'highlight', lines: [] },
+  it('steps a block a line at a time, a blank line joining the line after it', () => {
+    expect(lineSteps('a\nb\n\nc\n')).toEqual([[1], [2], [3, 4]]);
+    expect(lineSteps('a\n\n')).toEqual([[1, 2]]);
+    expect(lineSteps('')).toEqual([[1]]);
+  });
+
+  it('reads and writes the authoring list of a block\'s line builds', () => {
+    expect(parseLineBuilds(' each ; 2-4 ;Highlight: 5 ; dim 2-3; focus:7; reveal:1; ;nonsense')).toEqual([
+      { effect: 'appear', lines: null },
+      { effect: 'appear', lines: '2-4' },
+      { effect: 'highlight', lines: '5' },
+      { effect: 'dim', lines: '2-3' },
+      { effect: 'dim', lines: '7' },
+      { effect: 'appear', lines: '1' },
     ]);
-    expect(formatLineSteps(steps)).toBe('1-3; 4-5; highlight:5; highlight:2-3; highlight:all');
-    expect(normalizeLineSteps('  ; ')).toBeNull();
-  });
-
-  it('hides lines until their reveal, and dims around a highlight until the next step', () => {
-    const steps = parseLineSteps('2-3; highlight:2; 4; highlight:9');
-    expect(codeLineState(steps, 0)).toEqual({ hidden: new Set([2, 3, 4]), focus: null });
-    expect(codeLineState(steps, 1)).toEqual({ hidden: new Set([4]), focus: null });
-    expect(codeLineState(steps, 2)).toEqual({ hidden: new Set([4]), focus: new Set([2]) });
-    // A reveal ends the highlight: new lines are never born dimmed.
-    expect(codeLineState(steps, 3)).toEqual({ hidden: new Set(), focus: null });
-    expect(codeLineState(steps, 4).focus).toEqual(new Set([9]));
+    expect(formatLineBuilds([
+      lineBuild('a', 'appear'), lineBuild('b', 'appear', '2-4'), lineBuild('c', 'highlight', '5'), lineBuild('d', 'dim', '1,3'),
+    ])).toBe('each; 2-4; highlight:5; dim:1,3');
   });
 
   it('drops the empty line a trailing newline would make, and sizes the block to its lines', () => {
@@ -118,25 +129,57 @@ describe('line ranges and steps', () => {
   });
 });
 
-describe('a line build on the timeline', () => {
-  const lines = (value: string, on: 'click' | 'afterPrev' = 'click') => ({
-    id: 'lb', trigger: { on, ref: null, delay: 0 }, action: { type: 'lines' as const, target: 'code-1', value },
-  });
-
-  it('fans out into one step per part and replays to the right state', () => {
-    const slide = slideWith(codeEl({ code: 'a\nb\nc\nd\ne\n' }), [lines('1-2; 3; highlight:5')]);
-    expect(expandTimeline(slide).map((unit) => unit.id)).toEqual(['lb', 'lb#p1', 'lb#p2']);
+describe('line builds on the timeline', () => {
+  it('fans "appear by line" out into one step per line, each naming its lines', () => {
+    const slide = slideWith(codeEl({ code: 'a\nb\n\nc\n' }), [lineBuild('lb', 'appear')]);
+    const units = expandTimeline(slide);
+    expect(units.map((unit) => [unit.id, unit.sourceId, unit.action.lines])).toEqual([
+      ['lb', 'lb', '1'], ['lb#l1', 'lb', '2'], ['lb#l2', 'lb', '3-4'],
+    ]);
     expect(stepCount(slide)).toBe(4);
-    expect(resolveState(slide, 0).lines.get('code-1')).toEqual({ spec: '1-2; 3; highlight:5', applied: 0 });
-    expect(resolveState(slide, 3).lines.get('code-1')).toEqual({ spec: '1-2; 3; highlight:5', applied: 3 });
+    expect(resolveState(slide, 0).lines.get('code-1')).toEqual({ hidden: new Set([1, 2, 3, 4]), focus: null });
+    expect(resolveState(slide, 2).lines.get('code-1')?.hidden).toEqual(new Set([3, 4]));
+    expect(resolveState(slide, 3).lines.get('code-1')?.hidden).toEqual(new Set());
     // A line build is not a visibility action: the block shows on entry.
     expect(resolveState(slide, 0).visible.has('code-1')).toBe(true);
   });
 
-  it('cascades the parts after the first on an afterPrev trigger', () => {
-    const slide = slideWith(codeEl(), [lines('1; 2', 'afterPrev')]);
+  it('cascades the lines after the first on an afterPrev trigger', () => {
+    const slide = slideWith(codeEl({ code: 'a\nb\n' }), [lineBuild('lb', 'appear', undefined, 'afterPrev')]);
     expect(stepCount(slide)).toBe(1);
-    expect(resolveState(slide, 0).lines.get('code-1')?.applied).toBe(2);
+    expect(resolveState(slide, 0).lines.get('code-1')?.hidden).toEqual(new Set());
+  });
+
+  it('keeps a build on picked lines as one step', () => {
+    const slide = slideWith(codeEl({ code: 'a\nb\nc\nd\ne\n' }), [lineBuild('lb', 'appear', '3-5')]);
+    expect(expandTimeline(slide).map((unit) => unit.id)).toEqual(['lb']);
+    expect(resolveState(slide, 0).lines.get('code-1')?.hidden).toEqual(new Set([3, 4, 5]));
+    expect(resolveState(slide, 1).lines.get('code-1')?.hidden).toEqual(new Set());
+  });
+
+  it('holds a highlight or a dim until the next one, and ends it on a reveal', () => {
+    const slide = slideWith(codeEl({ code: 'a\nb\nc\nd\ne\n' }), [
+      lineBuild('show', 'appear', '4-5'),
+      lineBuild('hi', 'highlight', '2', 'click', '#ff0000'),
+      lineBuild('dim', 'dim', '1,3'),
+      lineBuild('hi2', 'highlight', '5'),
+      lineBuild('more', 'appear', '4'),
+    ]);
+    const at = (step: number) => resolveState(slide, step).lines.get('code-1')!;
+    expect(at(0)).toEqual({ hidden: new Set([4, 5]), focus: null });
+    expect(at(2)).toEqual({ hidden: new Set(), focus: { effect: 'highlight', lines: new Set([2]), color: '#ff0000' } });
+    expect(at(3).focus).toMatchObject({ effect: 'dim', lines: new Set([1, 3]) });
+    // A highlight with no colour of its own takes the default tint.
+    expect(at(4).focus).toMatchObject({ effect: 'highlight', lines: new Set([5]), color: '#ffd23f' });
+    // A reveal ends the focus: new lines are never born dimmed.
+    expect(at(5).focus).toBeNull();
+  });
+
+  it('shows a hidden line that a highlight points at', () => {
+    const slide = slideWith(codeEl({ code: 'a\nb\n' }), [lineBuild('show', 'appear', '2'), lineBuild('hi', 'highlight', '2')]);
+    expect(resolveState(slide, 0).lines.get('code-1')?.hidden).toEqual(new Set([2]));
+    // Jumping straight to the highlight, as a presenter going back does.
+    expect(resolveState(slide, 2).lines.get('code-1')?.hidden).toEqual(new Set());
   });
 });
 
@@ -228,9 +271,9 @@ describe('rendered lines', () => {
     expect(lines.map((line) => [...line.childNodes].filter((n) => !(n as HTMLElement).classList?.contains('code-gutter'))
       .map((n) => n.textContent).join(''))).toEqual(['import numpy as np', 'x = np.ones(3)', '', 'y = x * 2']);
 
-    const slide = slideWith(el, [{
-      id: 'lb', trigger: { on: 'click', ref: null, delay: 0 }, action: { type: 'lines', target: el.id, value: '4; highlight:2' },
-    }]);
+    const slide = slideWith(el, [
+      lineBuild('show', 'appear', '4'), lineBuild('dim', 'dim', '2'), lineBuild('hi', 'highlight', '1'),
+    ]);
     applyCodeLineState(document.body, slide, resolveState(slide, 0));
     expect(lines[3].style.visibility).toBe('hidden');
     expect(lines[0].style.visibility).toBe('');
@@ -238,6 +281,13 @@ describe('rendered lines', () => {
     expect(lines[3].style.visibility).toBe('');
     expect(lines[1].style.opacity).toBe('');
     expect(lines[0].style.opacity).toBe('0.3');
+    expect(lines[1].dataset.focus).toBe('dim');
+    // A highlight tints its line, edge to edge, and fades nothing.
+    applyCodeLineState(document.body, slide, resolveState(slide, 3));
+    expect(lines[0].style.opacity).toBe('');
+    expect(lines[0].dataset.focus).toBe('highlight');
+    expect(lines[0].style.backgroundColor).not.toBe('');
+    expect(lines[1].style.backgroundColor).toBe('');
     wrapper.remove();
   });
 });
@@ -266,13 +316,11 @@ describe('the HTML round trip', () => {
 
   it('writes a code block as <pre><code> with its code escaped, and reads it back exactly', () => {
     const el = codeEl({ code: tricky, language: 'cuda', scheme: 'deck', fontSize: 24, lineNumbers: true, style: { 'border-radius': '12px' } });
-    const slide = slideWith(el, [{
-      id: 'lb', trigger: { on: 'click', ref: null, delay: 0 }, action: { type: 'lines', target: el.id, value: '1-3;highlight:5' },
-    }]);
+    const slide = slideWith(el, [lineBuild('lb', 'appear'), lineBuild('hi', 'highlight', '5'), lineBuild('dim', 'dim', '1-3')]);
     const html = slideToHtml(slide, { w: 1920, h: 1080 });
     expect(html).toContain('<pre data-element-id="code-1"');
     expect(html).toContain('data-element="code" data-language="cuda" data-scheme="deck" data-font-size="24" data-line-numbers="true"');
-    expect(html).toContain('data-build-lines="1-3; highlight:5"');
+    expect(html).toContain('data-build-lines="each; highlight:5; dim:1-3"');
     expect(html).toContain('<code class="language-cuda">');
     expect(html).toContain('&lt;tags&gt;');
 
@@ -284,10 +332,12 @@ describe('the HTML round trip', () => {
     expect(back).toMatchObject({ type: 'code', language: 'cuda', scheme: 'deck', fontSize: 24, lineNumbers: true });
     // The scheme owns the ground, the ink and the size; the corners stay the element's.
     expect(back.style).toEqual({ 'border-radius': '12px' });
-    expect(compiled.timeline).toEqual([{
-      id: 'code-1-lines-1', trigger: { on: 'click', ref: null, delay: 0 },
-      action: { type: 'lines', target: 'code-1', value: '1-3; highlight:5' },
-    }]);
+    expect(compiled.timeline.map((entry) => entry.action)).toEqual([
+      { type: 'lines', target: 'code-1', value: 'appear' },
+      { type: 'lines', target: 'code-1', value: 'highlight', lines: '5' },
+      { type: 'lines', target: 'code-1', value: 'dim', lines: '1-3' },
+    ]);
+    expect(compiled.timeline.every((entry) => entry.trigger.on === 'click')).toBe(true);
   });
 
   it('reads the markup an agent naturally writes', () => {
@@ -304,26 +354,39 @@ describe('the HTML round trip', () => {
     expect(rust.elements[0]).toMatchObject({ type: 'code', language: 'rust' });
   });
 
-  it('lets the page state the steps while the deck keeps the build\'s trigger and place', () => {
+  it('lets the page state the line builds while the deck keeps their triggers, tints and places', () => {
     const el = codeEl({ code: 'a\nb\nc\n' });
     const previous = slideWith(el, [
       { id: 'other', trigger: { on: 'click', ref: null, delay: 0 }, action: { type: 'appear', target: el.id, value: null } },
-      { id: 'lb', trigger: { on: 'afterPrev', ref: null, delay: 300 }, action: { type: 'lines', target: el.id, value: '1; 2' } },
+      lineBuild('lb', 'appear', '1', 'afterPrev'),
+      { id: 'title', trigger: { on: 'click', ref: null, delay: 0 }, action: { type: 'pulse', target: el.id, value: null } },
+      lineBuild('hi', 'highlight', '2', 'click', '#00ff00'),
     ]);
     const compile = (markup: string) => slideFromMeasured(
       { id: previous.id, name: '', notes: '', background: previous.background, nodes: [measured(markup, el.id)] } as never,
       { slideId: previous.id, usedIds: new Set() },
     );
-    const edited = slideToHtml(previous, { w: 1920, h: 1080 }).replace('data-build-lines="1; 2"', 'data-build-lines="2-3; highlight:1"');
+    const exported = slideToHtml(previous, { w: 1920, h: 1080 });
+    expect(exported).toContain('data-build-lines="1; highlight:2"');
+    // Changed lines and effects land on the builds in order; a third is added at the end.
+    const edited = exported.replace('data-build-lines="1; highlight:2"', 'data-build-lines="2-3; dim:1; highlight:3"');
     const merged = carrySlideState(previous, compile(edited));
-    expect(merged.timeline.map((entry) => [entry.id, entry.trigger.on, entry.action.type, entry.action.value])).toEqual([
-      ['other', 'click', 'appear', null],
-      ['lb', 'afterPrev', 'lines', '2-3; highlight:1'],
+    expect(merged.timeline.map((entry) => [entry.id, entry.trigger.on, entry.action.type, entry.action.value, entry.action.lines ?? null, entry.action.color ?? null])).toEqual([
+      ['other', 'click', 'appear', null, null, null],
+      ['lb', 'afterPrev', 'lines', 'appear', '2-3', null],
+      ['title', 'click', 'pulse', null, null, null],
+      ['hi', 'click', 'lines', 'dim', '1', '#00ff00'],
+      ['code-1-lines-5', 'click', 'lines', 'highlight', '3', null],
     ]);
-    const removed = slideToHtml(previous, { w: 1920, h: 1080 }).replace(' data-build-lines="1; 2"', '');
-    expect(carrySlideState(previous, compile(removed)).timeline.map((entry) => entry.id)).toEqual(['other']);
+    // Fewer on the page: the deck's later line builds go.
+    const fewer = exported.replace('data-build-lines="1; highlight:2"', 'data-build-lines="each"');
+    expect(carrySlideState(previous, compile(fewer)).timeline.map((entry) => [entry.id, entry.action.lines ?? 'each'])).toEqual([
+      ['other', 'each'], ['lb', 'each'], ['title', 'each'],
+    ]);
+    const removed = exported.replace(' data-build-lines="1; highlight:2"', '');
+    expect(carrySlideState(previous, compile(removed)).timeline.map((entry) => entry.id)).toEqual(['other', 'title']);
     // Saving the page untouched changes nothing.
-    const same = carrySlideState(previous, compile(slideToHtml(previous, { w: 1920, h: 1080 })));
+    const same = carrySlideState(previous, compile(exported));
     expect(same.timeline).toEqual(previous.timeline);
     expect(same.elements[0]).toEqual(previous.elements[0]);
   });

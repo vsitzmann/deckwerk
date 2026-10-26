@@ -5,13 +5,13 @@ import {
   CODE_LINE_HEIGHT,
   CODE_PADDING_EM,
   CODE_TAB_SIZE,
-  codeLineState,
+  CODE_DIM_OPACITY,
+  LINE_HIGHLIGHT_STRENGTH,
   codeSchemeColors,
   codeLines,
   deckCodeCss,
   normalizeCodeLanguage,
   normalizeCodeScheme,
-  parseLineSteps,
 } from '@shared/codeBlocks.js';
 import { highlightCode, loadCodeAssets, type CodeToken } from '@shared/codeHighlight.js';
 import type { SlideState } from '@shared/timeline.js';
@@ -29,9 +29,6 @@ import type { SlideState } from '@shared/timeline.js';
  * moment it arrives (`upgradePending`), keeping whatever build state the
  * lines already carry.
  */
-
-/** Dimmed lines' strength while a highlight holds. */
-export const CODE_DIM_OPACITY = 0.3;
 
 /** The element each rendered code body draws, for recolouring it once its grammar lands. */
 const drawn = new WeakMap<HTMLElement, CodeEl>();
@@ -171,10 +168,11 @@ export function syncCodeBody(node: HTMLElement, el: CodeEl): void {
 }
 
 /**
- * Show each code block's lines as its line build leaves them at this state:
- * revealed-later lines hidden (visibility, so nothing reflows), and other
- * lines dimmed while a highlight holds. Called from `applyStaticSlideState`,
- * so the player, presenter preview and PDF pages agree.
+ * Show each code block's lines as its line builds leave them at this state:
+ * revealed-later lines hidden (visibility, so nothing reflows), a highlight's
+ * lines tinted, and every other line faded while a dim holds. Called from
+ * `applyStaticSlideState`, so the player, the editor's Build preview, the web
+ * export and PDF pages agree.
  */
 export function applyCodeLineState(stage: ParentNode, slide: Slide, state: SlideState): void {
   for (const element of slide.elements) {
@@ -184,20 +182,31 @@ export function applyCodeLineState(stage: ParentNode, slide: Slide, state: Slide
       : element.id.replace(/[\\"]/g, '\\$&');
     const body = stage.querySelector<HTMLElement>(`[data-element-id="${escaped}"] > .code-body`);
     if (!body) continue;
-    const build = state.lines?.get(element.id);
-    const { hidden, focus } = build
-      ? codeLineState(parseLineSteps(build.spec), build.applied)
-      : { hidden: new Set<number>(), focus: null };
+    const lines = state.lines?.get(element.id);
+    const hidden = lines?.hidden ?? new Set<number>();
+    const focus = lines?.focus ?? null;
+    // The tint reaches the block's edges: the padding either side is painted
+    // by two shadows the size of the line, which move nothing. It is mixed
+    // into the block's own ground rather than laid over it translucently, so
+    // neighbouring tinted lines meet without a seam at any scale.
+    const tint = focus?.effect === 'highlight'
+      ? `color-mix(in srgb, ${focus.color} ${Math.round(LINE_HIGHLIGHT_STRENGTH * 100)}%, ${codeSchemeColors(element.scheme).bg})` : '';
     for (const line of body.querySelectorAll<HTMLElement>(':scope > .code-line')) {
       const n = Number(line.dataset.line);
       const isHidden = hidden.has(n);
-      // Only opacity animates, so a revealed line fades in and a dimmed one
-      // fades down while presenting; a freshly built page (PDF) has no
-      // previous style to transition from and lands on the end state.
-      line.style.transition = 'opacity 250ms ease';
+      const inFocus = focus?.lines.has(n) ?? false;
+      // Only opacity and the tint animate, so a revealed line fades in and a
+      // dimmed one fades down while presenting; a freshly built page (PDF)
+      // has no previous style to transition from and lands on the end state.
+      line.style.transition = 'opacity 250ms ease, background-color 250ms ease, box-shadow 250ms ease';
       line.style.visibility = isHidden ? 'hidden' : '';
-      line.style.opacity = isHidden ? '0' : focus && !focus.has(n) ? String(CODE_DIM_OPACITY) : '';
-      if (focus?.has(n)) line.dataset.focus = 'true';
+      line.style.opacity = isHidden ? '0'
+        : focus?.effect === 'dim' && !inFocus ? String(CODE_DIM_OPACITY) : '';
+      const tinted = inFocus && tint !== '';
+      line.style.backgroundColor = tinted ? tint : '';
+      line.style.boxShadow = tinted
+        ? `-${CODE_PADDING_EM[1]}em 0 0 ${tint}, ${CODE_PADDING_EM[1]}em 0 0 ${tint}` : '';
+      if (inFocus) line.dataset.focus = focus!.effect;
       else delete line.dataset.focus;
     }
   }

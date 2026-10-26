@@ -15,13 +15,12 @@ import type { EditorStore } from './store.js';
  *
  * The field builders are the inspector's own, handed in rather than imported
  * (inspector.ts imports this module), so every control here is the same
- * component as its neighbours: the code is the inspector's monospace text
- * area, the choices are its styled selects, the size its number field.
+ * component as its neighbours: the choices are its styled selects, the size
+ * its number field.
  */
 export interface CodeInspectorFields {
   typeSections: () => HTMLElement;
   optionSection: (title: string, contentClass: string, caption?: string) => { section: HTMLElement; content: HTMLElement };
-  textAreaField: (label: string, value: string, onChange: (v: string) => void) => HTMLElement;
   checkboxField: (label: string, value: boolean, onChange: (v: boolean) => void) => HTMLElement;
   numberField: (label: string, value: number | null, onChange: (v: number) => void, opts?: { step?: number; unit?: string }) => HTMLElement;
 }
@@ -60,6 +59,11 @@ function fitHeight(el: CodeEl): void {
   el.h = codeBlockHeight(el);
 }
 
+/**
+ * Props for a code block: only its look. The code itself is typed on the
+ * slide (double-click the block; codeEditing.ts), where the language can be
+ * picked too.
+ */
 export function codeTypeSection(el: CodeEl, store: EditorStore, fields: CodeInspectorFields): HTMLElement {
   const update = (label: string, fn: (code: CodeEl) => void) =>
     store.updateSelected((e: SlideElement) => {
@@ -67,34 +71,13 @@ export function codeTypeSection(el: CodeEl, store: EditorStore, fields: CodeInsp
     }, { label });
 
   const wrap = fields.typeSections();
-  const source = fields.optionSection('Code', 'code-source-options');
-  const codeField = fields.textAreaField('Source', el.code, (v) =>
-    update('Edit code', (e) => {
-      e.code = v;
-      fitHeight(e);
-    }));
-  const input = codeField.querySelector('textarea');
-  if (input) {
-    input.classList.add('code-source-input');
-    input.rows = Math.min(18, Math.max(6, el.code.split('\n').length + 1));
-    // Code is text, not prose: no autocorrect, no squiggles, and long lines
-    // scroll rather than wrap so indentation reads as it will on the slide.
-    input.spellcheck = false;
-    input.wrap = 'off';
-    input.setAttribute('autocapitalize', 'off');
-    input.setAttribute('autocomplete', 'off');
-    input.setAttribute('aria-label', 'Code');
-  }
-  source.content.appendChild(codeField);
-  source.content.appendChild(labelledSelectField(
+  const look = fields.optionSection('Code', 'code-appearance-options', 'Double-click the block to edit its code');
+  look.content.appendChild(labelledSelectField(
     'Language',
     CODE_LANGUAGES.map((language) => ({ value: language.id, label: language.label })),
     normalizeCodeLanguage(el.language),
     (v) => update('Change code language', (e) => { e.language = v; }),
   ));
-  wrap.appendChild(source.section);
-
-  const look = fields.optionSection('Appearance', 'code-appearance-options');
   look.content.appendChild(labelledSelectField(
     'Colour scheme',
     CODE_SCHEMES.map((scheme) => ({
@@ -113,14 +96,6 @@ export function codeTypeSection(el: CodeEl, store: EditorStore, fields: CodeInsp
     update(v ? 'Show line numbers' : 'Hide line numbers', (e) => { e.lineNumbers = v; })));
   wrap.appendChild(look.section);
   return wrap;
-}
-
-/** Give the code field focus, for a double-click on the block on the canvas. */
-export function focusCodeSource(): boolean {
-  const input = document.querySelector<HTMLTextAreaElement>('textarea.code-source-input');
-  if (!input) return false;
-  input.focus();
-  return true;
 }
 
 const STARTER_CODE = 'def stress(F, mu, lam):\n    J = det(F)\n    return mu * (F - inv(F).T) + lam * log(J) * inv(F).T\n';
@@ -144,7 +119,3 @@ export function insertCode(store: EditorStore): CodeEl {
   return created;
 }
 
-/** Toolbar glyph: a pair of angle brackets, drawn like the other insert icons. */
-export const CODE_ICON =
-  '<svg class="bar-icon" viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">' +
-  '<path d="M5.5 4 2 8l3.5 4M10.5 4 14 8l-3.5 4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>';

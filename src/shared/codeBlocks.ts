@@ -147,12 +147,39 @@ export const CODE_AUTHORING_CSS = `
 
 /* --- line builds ------------------------------------------------------------ */
 
-export type LineStepMode = 'reveal' | 'highlight';
+/**
+ * A code block builds by lines the way a text box builds by paragraphs and an
+ * equation by terms. Each build is one ordinary timeline entry,
+ * `{ type: 'lines', target, value, lines? }`:
+ *
+ * - `value` is what happens to its lines: `appear` reveals them, `highlight`
+ *   tints them, `dim` fades every *other* line.
+ * - `lines` names them (`"3-5"`, `"3-5,8"`). Absent, the entry steps through
+ *   the whole block, one line per step (a blank line comes in with the line
+ *   after it) — "Appear by line" — fanning out in `expandTimeline` exactly as
+ *   a by-paragraph reveal does.
+ *
+ * Lines an `appear` names start hidden; every other line is on screen from
+ * the start, so a signature can stay put while its body builds in. A
+ * highlight or a dim is the block's *focus*: it holds until the block's next
+ * highlight or dim replaces it, and a reveal ends it, so newly revealed lines
+ * are never born dimmed.
+ */
 
-export interface LineStep {
-  mode: LineStepMode;
-  /** 1-based line numbers, ascending. Empty on a highlight step means "all lines". */
-  lines: number[];
+export type LineEffect = 'appear' | 'highlight' | 'dim';
+export const LINE_EFFECTS: readonly LineEffect[] = ['appear', 'highlight', 'dim'];
+
+/** Dimmed lines' strength while a `dim` holds. */
+export const CODE_DIM_OPACITY = 0.3;
+/** The tint a `highlight` lays under its lines when its entry names no colour. */
+export const DEFAULT_LINE_HIGHLIGHT = '#ffd23f';
+/** How strongly a highlight's colour shows under the code, 0–1. */
+export const LINE_HIGHLIGHT_STRENGTH = 0.3;
+
+/** A `lines` entry's effect; `appear` is the default. */
+export function lineEffect(entry: TimelineEntry): LineEffect {
+  const value = entry.action.value;
+  return value === 'highlight' || value === 'dim' ? value : 'appear';
 }
 
 /**
@@ -174,8 +201,8 @@ export function parseLineRanges(text: string): number[] {
   return [...out].sort((x, y) => x - y);
 }
 
-/** `[1,2,3,7]` → `"1-3,7"`. */
-export function formatLineRanges(lines: number[]): string {
+/** `[1,2,3,7]` → `"1-3,7"`: the spelling `action.lines` stores. */
+export function formatLineRanges(lines: Iterable<number>): string {
   const sorted = [...new Set(lines)].sort((a, b) => a - b);
   const parts: string[] = [];
   for (let i = 0; i < sorted.length; i++) {
@@ -187,44 +214,11 @@ export function formatLineRanges(lines: number[]): string {
   return parts.join(',');
 }
 
-/**
- * Parse a line-build spec: steps separated by `;`, each a set of line ranges,
- * optionally prefixed with its mode. `"1-3; 4-6; highlight:5; highlight:all"`
- * reveals lines 1-3, then 4-6, then dims everything but line 5, then brings
- * every line back to full strength. No prefix means `reveal`; `show` and
- * `focus` are accepted for `reveal` and `highlight`.
- */
-export function parseLineSteps(spec: string | null | undefined): LineStep[] {
-  const steps: LineStep[] = [];
-  for (const raw of (spec ?? '').split(';')) {
-    const text = raw.trim();
-    if (!text) continue;
-    const match = /^(reveal|show|highlight|focus)\b\s*:?\s*(.*)$/i.exec(text);
-    const word = match?.[1].toLowerCase();
-    const mode: LineStepMode = word === 'highlight' || word === 'focus' ? 'highlight' : 'reveal';
-    const rest = (match ? match[2] : text).trim();
-    if (mode === 'highlight' && /^(all|none|\*)?$/i.test(rest)) {
-      steps.push({ mode, lines: [] });
-      continue;
-    }
-    const lines = parseLineRanges(rest);
-    if (lines.length > 0) steps.push({ mode, lines });
-  }
-  return steps;
-}
-
-/** The canonical spelling of a spec, as an export writes it. */
-export function formatLineSteps(steps: LineStep[]): string {
-  return steps.map((step) => {
-    if (step.mode === 'reveal') return formatLineRanges(step.lines);
-    return `highlight:${step.lines.length > 0 ? formatLineRanges(step.lines) : 'all'}`;
-  }).join('; ');
-}
-
-/** A spec rewritten canonically, or null when it names no step at all. */
-export function normalizeLineSteps(spec: string | null | undefined): string | null {
-  const steps = parseLineSteps(spec);
-  return steps.length > 0 ? formatLineSteps(steps) : null;
+/** Lines for people: "line 3", "lines 3–5", "lines 3–5, 8". */
+export function describeLines(lines: Iterable<number>): string {
+  const sorted = [...new Set(lines)].sort((a, b) => a - b);
+  const text = formatLineRanges(sorted).replace(/-/g, '–').replace(/,/g, ', ');
+  return sorted.length === 1 ? `line ${text}` : `lines ${text}`;
 }
 
 /** A line build is a `lines` entry on a code element. */
@@ -233,45 +227,145 @@ export function isLineBuild(entry: TimelineEntry, slide: Slide): boolean {
     && slide.elements.some((el) => el.id === entry.action.target && el.type === 'code');
 }
 
-/** How many steps a line build fans out into (at least one, like a paragraph build). */
-export function lineStepCount(entry: TimelineEntry): number {
-  return Math.max(1, parseLineSteps(typeof entry.action.value === 'string' ? entry.action.value : '').length);
-}
-
-export interface CodeLineState {
-  /** Lines not yet revealed. */
-  hidden: Set<number>;
-  /** Lines in focus while a highlight step holds; null when nothing is dimmed. */
-  focus: Set<number> | null;
+function codeTarget(slide: Slide, id: string): CodeEl | undefined {
+  const element = slide.elements.find((candidate) => candidate.id === id);
+  return element?.type === 'code' ? element : undefined;
 }
 
 /**
- * Which lines are hidden and which are in focus once `applied` steps of a
- * build have run.
- *
- * Lines a reveal step names start hidden; lines no reveal step names are on
- * screen from the start, so a function's signature can stay put while its
- * body builds in. A highlight dims every other line until the next step: a
- * later highlight moves the focus, a reveal (or `highlight:all`) ends it, so
- * newly revealed lines are never born dimmed. Highlighting a line that is
- * still hidden shows it.
+ * A block's lines in reading steps, for an entry that names none: one step
+ * per line with something on it, each blank line joining the step of the line
+ * after it, and trailing blank lines the last step's.
  */
-export function codeLineState(steps: LineStep[], applied: number): CodeLineState {
-  const hidden = new Set<number>();
-  for (const step of steps) if (step.mode === 'reveal') for (const line of step.lines) hidden.add(line);
-  let focus: Set<number> | null = null;
-  for (const step of steps.slice(0, Math.max(0, applied))) {
-    for (const line of step.lines) hidden.delete(line);
-    focus = step.mode === 'highlight' && step.lines.length > 0 ? new Set(step.lines) : null;
+export function lineSteps(code: string): number[][] {
+  const lines = codeLines(code);
+  const steps: number[][] = [];
+  let pending: number[] = [];
+  lines.forEach((line, index) => {
+    pending.push(index + 1);
+    if (line.trim()) {
+      steps.push(pending);
+      pending = [];
+    }
+  });
+  if (pending.length > 0) {
+    if (steps.length > 0) steps[steps.length - 1].push(...pending);
+    else steps.push(pending);
   }
-  return { hidden, focus };
+  return steps;
 }
 
-/** One step described for a list row: "show 1–3", "highlight 5", "all lines". */
-export function describeLineStep(step: LineStep): string {
-  const ranges = formatLineRanges(step.lines).replace(/-/g, '–').replace(/,/g, ', ');
-  if (step.mode === 'reveal') return `show ${ranges}`;
-  return step.lines.length > 0 ? `highlight ${ranges}` : 'all lines';
+/**
+ * The line groups one `lines` entry steps through: its named lines as one
+ * step, or the whole block line by line when it names none. Empty for an
+ * entry whose block is gone.
+ */
+export function lineBuildSteps(entry: TimelineEntry, slide: Slide): number[][] {
+  if (entry.action.lines) {
+    const lines = parseLineRanges(entry.action.lines);
+    return lines.length > 0 ? [lines] : [];
+  }
+  const target = codeTarget(slide, entry.action.target);
+  return target ? lineSteps(target.code) : [];
+}
+
+/** Per code block: which lines are not revealed yet, and the focus a highlight or a dim holds. */
+export interface CodeLineState {
+  hidden: Set<number>;
+  focus: { effect: 'highlight' | 'dim'; lines: Set<number>; color: string } | null;
+}
+
+/**
+ * The lines each block starts with. A line some `appear` reveals starts
+ * hidden, exactly as an object with an `appear` build does.
+ */
+export function initialCodeLineStates(slide: Slide): Map<string, CodeLineState> {
+  const states = new Map<string, CodeLineState>();
+  for (const entry of slide.timeline) {
+    if (!isLineBuild(entry, slide)) continue;
+    const state = codeLineStateOf(states, entry.action.target);
+    if (lineEffect(entry) !== 'appear') continue;
+    for (const step of lineBuildSteps(entry, slide)) for (const line of step) state.hidden.add(line);
+  }
+  return states;
+}
+
+/**
+ * Fold one expanded `lines` unit into the per-block line states. An expanded
+ * unit names its lines; an entry that names none acts on every line.
+ */
+export function applyLineAction(states: Map<string, CodeLineState>, entry: TimelineEntry, slide: Slide): void {
+  if (!isLineBuild(entry, slide)) return;
+  const state = codeLineStateOf(states, entry.action.target);
+  const lines = lineBuildSteps(entry, slide).flat();
+  const effect = lineEffect(entry);
+  if (effect === 'appear') {
+    for (const line of lines) state.hidden.delete(line);
+    state.focus = null;
+    return;
+  }
+  // Pointing at a line that has not been revealed yet shows it.
+  for (const line of lines) state.hidden.delete(line);
+  state.focus = {
+    effect,
+    lines: new Set(lines),
+    color: entry.action.color ?? DEFAULT_LINE_HIGHLIGHT,
+  };
+}
+
+function codeLineStateOf(states: Map<string, CodeLineState>, target: string): CodeLineState {
+  let state = states.get(target);
+  if (!state) {
+    state = { hidden: new Set(), focus: null };
+    states.set(target, state);
+  }
+  return state;
+}
+
+/**
+ * The line builds of a block as the HTML authoring format writes them, in
+ * build order: `"each; highlight:3-5; dim:7"`. A step is `[effect:]lines`,
+ * the effect `appear` (the default, so bare ranges reveal), `highlight` or
+ * `dim`, and the lines a range list or `each` (one line per click).
+ */
+export function formatLineBuilds(entries: TimelineEntry[]): string {
+  return entries.map((entry) => {
+    const effect = lineEffect(entry);
+    const lines = entry.action.lines ? formatLineRanges(parseLineRanges(entry.action.lines)) : 'each';
+    return effect === 'appear' ? lines : `${effect}:${lines}`;
+  }).join('; ');
+}
+
+/** One step of a `data-build-lines` list, read; null for one that names nothing. */
+export interface LineBuildSpec {
+  effect: LineEffect;
+  /** Canonical ranges, or null for every line in turn. */
+  lines: string | null;
+}
+
+/**
+ * Read `"each; highlight:3-5; dim:7"` back into builds. `reveal`, `show`
+ * and `focus` are accepted for `appear` and `dim`; `all` and `*` for `each`.
+ * Parts that name no line are skipped rather than failing the page.
+ */
+export function parseLineBuilds(text: string | null | undefined): LineBuildSpec[] {
+  const out: LineBuildSpec[] = [];
+  for (const raw of (text ?? '').split(';')) {
+    const part = raw.trim();
+    if (!part) continue;
+    const match = /^(appear|reveal|show|highlight|dim|focus)\s*:?\s*(.*)$/i.exec(part);
+    const word = match?.[1].toLowerCase();
+    const effect: LineEffect = word === 'highlight' ? 'highlight'
+      : word === 'dim' || word === 'focus' ? 'dim' : 'appear';
+    const rest = (match ? match[2] : part).trim();
+    if (/^(each|all|\*|)$/i.test(rest)) {
+      out.push({ effect, lines: null });
+      continue;
+    }
+    const lines = parseLineRanges(rest);
+    if (lines.length > 0) out.push({ effect, lines: formatLineRanges(lines) });
+  }
+  return out;
 }
 
 /* --- the Deck scheme -------------------------------------------------------- */

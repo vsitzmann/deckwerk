@@ -30,12 +30,11 @@ import {
   createTableInsertPicker,
   insertText,
 } from '../editor/elementCreation.js';
-import { CODE_ICON, insertCode } from '../editor/codeInspector.js';
+import { insertCode } from '../editor/codeInspector.js';
 import { Inspector } from '../editor/inspector.js';
 import {
   barButton,
-  barIconButton,
-  TEXT_ICON,
+  createTextInsertPicker,
   bindEditorKeys,
   createClipboardActions,
   makeContextActions,
@@ -990,10 +989,13 @@ function buildToolbar(): void {
   mid.className = 'bar-group bar-center';
   mid.append(
     // Straight into the new box, its placeholder selected: typing replaces it.
-    barIconButton('Text', TEXT_ICON, () => canvas.beginTextEdit(insertText(store).id)),
+    createTextInsertPicker({
+      textBox: () => canvas.beginTextEdit(insertText(store).id),
+      // A starter listing, selected, so typing replaces it.
+      codeBlock: () => { canvas.beginCodeEdit(insertCode(store).id, 'all'); },
+    }),
     createShapeInsertPicker(store),
     createTableInsertPicker(store),
-    barIconButton('Code', CODE_ICON, () => insertCode(store)),
     createMediaButton(mediaHost),
   );
 

@@ -24,8 +24,19 @@ import {
 import { countParagraphs, paragraphTexts } from '@shared/paragraphs.js';
 import { describeElement, elementKind, renderElementLabel } from './elementLabel.js';
 import type { EditorStore } from './store.js';
-import { codeLines, isLineBuild } from '@shared/codeBlocks.js';
-import { defaultLineSpec, lineBuildCardParts } from './lineBuildPanel.js';
+import { describeLines, isLineBuild } from '@shared/codeBlocks.js';
+import {
+  CODE_EFFECT_LABELS,
+  addCodeActionOptions,
+  applyCodeActionChoice,
+  byLineBuild,
+  codeActionValue,
+  isRangedLineBuild,
+  lineBuildControls,
+  lineBuildName,
+  lineBuildRange,
+  pickedLinesBuild,
+} from './lineBuildPanel.js';
 
 /**
  * The Props tab's section: a ruled block under an `insp-subtitle` heading. The
@@ -79,13 +90,14 @@ const EFFECT_LABELS: Record<string, { group: string; label: string; short: strin
   'terms:color': { group: 'Equation', label: 'Colour terms — tints the marked terms', short: 'Colour terms' },
   play: { group: 'Video', label: 'Play — starts the video', short: 'Play' },
   pause: { group: 'Video', label: 'Pause — stops the video', short: 'Pause' },
+  ...CODE_EFFECT_LABELS,
 };
-const EFFECT_GROUPS = ['Appear', 'Disappear', 'Emphasis', 'Equation', 'Video'];
+const EFFECT_GROUPS = ['Code lines', 'Appear', 'Disappear', 'Emphasis', 'Equation', 'Video'];
 
 /** The effect menu's value for an entry: what it does and how. */
 function effectValue(entry: TimelineEntry, slide: Slide): string {
   const effect = buildEffect(entry, slide);
-  return equationActionValue(entry) ?? (isParagraphBuild(entry, slide) ? 'appear:paragraph'
+  return codeActionValue(entry) ?? equationActionValue(entry) ?? (isParagraphBuild(entry, slide) ? 'appear:paragraph'
     : effect ? `${entry.action.type}:${effect}` : entry.action.type);
 }
 
@@ -204,21 +216,18 @@ export class TimelinePanel {
     elements.head.append(...equationBuildButtons(selected, (entry, label) => this.store.commit((deck) => {
       deck.slides[this.store.get().slideIndex].timeline.push(entry);
     }, { label })));
-    // A code block builds by lines: one card whose steps reveal or highlight
-    // line ranges (lineBuildPanel.ts).
+    // A code block builds by lines as text builds by paragraphs: the whole
+    // block one line per click, or (below) just the lines picked in its gutter.
     const codeTarget = selected.length === 1 && selected[0].type === 'code' ? selected[0] : null;
-    if (codeTarget && !slide.timeline.some((e) => e.action.type === 'lines' && e.action.target === codeTarget.id)) {
+    const picked = codeTarget ? this.store.codeLineSelection() : null;
+    if (codeTarget) {
       const addLines = document.createElement('button');
       addLines.className = 'ghost build-add-paragraph build-add-lines';
-      addLines.textContent = 'Add line build';
-      addLines.title = 'Reveal or highlight this code a few lines per click';
+      addLines.textContent = 'Add animation by line';
+      addLines.title = 'Reveal this code one line per click';
       addLines.addEventListener('click', () => this.store.commit((deck) => {
-        deck.slides[this.store.get().slideIndex].timeline.push({
-          id: makeId('t'),
-          trigger: { on: 'click', ref: null, delay: 0 },
-          action: { type: 'lines', target: codeTarget.id, value: defaultLineSpec(codeLines(codeTarget.code).length) },
-        });
-      }, { label: 'Add line build' }));
+        deck.slides[this.store.get().slideIndex].timeline.push(byLineBuild(codeTarget.id));
+      }, { label: 'Add animation by line' }));
       elements.head.appendChild(addLines);
     }
 
@@ -250,15 +259,35 @@ export class TimelinePanel {
 
     const add = document.createElement('button');
     add.className = 'panel-action';
-    add.textContent = 'Add animation';
+    const pickedLines = picked
+      ? describeLines(Array.from({ length: picked.to - picked.from + 1 }, (_, i) => picked.from + i)) : null;
+    add.textContent = pickedLines ? `Add animation to ${pickedLines}` : 'Add animation';
     add.disabled = selection.size === 0;
     add.title = add.disabled
       ? 'Select an element on the slide or in the list first'
-      : selected.length === 1
-        ? `Hide “${describeElement(selected[0])}” until the next click`
-        : `Hide the ${selected.length} selected elements until the next click`;
-    add.addEventListener('click', () => this.addAnimationForSelection());
+      : pickedLines
+        ? `Hide ${pickedLines} until the next click; change it to a highlight or a dim below`
+        : selected.length === 1
+          ? `Hide “${describeElement(selected[0])}” until the next click`
+          : `Hide the ${selected.length} selected elements until the next click`;
+    add.addEventListener('click', () => {
+      if (picked) {
+        const entry = pickedLinesBuild(picked);
+        this.selectedEntryId = entry.id;
+        this.store.commit((deck) => {
+          deck.slides[this.store.get().slideIndex].timeline.push(entry);
+        }, { label: `Add animation to ${pickedLines}` });
+      } else this.addAnimationForSelection();
+    });
     elements.section.appendChild(add);
+    if (codeTarget && !picked) {
+      const hint = document.createElement('p');
+      hint.className = 'insp-hint build-lines-hint';
+      hint.textContent = codeTarget.lineNumbers
+        ? 'Click a line number on the slide to animate just that line; Shift-click for a range.'
+        : 'Click left of a line on the slide to animate just that line; Shift-click for a range.';
+      elements.section.appendChild(hint);
+    }
 
     const stepsSection = panelSection('Build order', 'build-steps-section').section;
     this.host.appendChild(stepsSection);
@@ -277,6 +306,15 @@ export class TimelinePanel {
     let chosen = slide.timeline.find((e) => e.id === this.selectedEntryId);
     if (selection.size > 0 && (!chosen || !selection.has(chosen.action.target))) {
       chosen = slide.timeline.find((e) => selection.has(e.action.target));
+    }
+    // Lines picked in a block's gutter pick the build on exactly those lines.
+    if (picked) {
+      const range = (entry: TimelineEntry) => lineBuildRange(entry);
+      const onPicked = slide.timeline.find((e) => e.action.target === picked.elementId
+        && range(e)?.from === picked.from && range(e)?.to === picked.to);
+      if (onPicked && !(chosen && range(chosen)?.from === picked.from && range(chosen)?.to === picked.to)) {
+        chosen = onPicked;
+      }
     }
     this.selectedEntryId = chosen?.id ?? null;
 
@@ -340,7 +378,9 @@ export class TimelinePanel {
     num.textContent = numbers.length > 1 ? `${numbers[0]}–${numbers[numbers.length - 1]}` : String(numbers[0] ?? '');
     const name = document.createElement('span');
     name.className = 'build-target-name';
-    if (targetEl) renderElementLabel(name, targetEl);
+    const linesName = lineBuildName(entry);
+    if (linesName) name.textContent = linesName;
+    else if (targetEl) renderElementLabel(name, targetEl);
     else name.textContent = '(missing element)';
     const effect = buildEffect(entry, slide);
     const what = document.createElement('span');
@@ -351,12 +391,15 @@ export class TimelinePanel {
     when.className = 'build-overview-when';
     const trigger = TRIGGER_CHOICES.find((choice) => choice.value === entry.trigger.on);
     when.textContent = `${trigger?.short ?? entry.trigger.on}${entry.trigger.delay > 0 ? ` +${seconds(entry.trigger.delay)}` : ''}`;
-    row.title = `${targetEl ? describeElement(targetEl) : 'Missing element'}: ${what.textContent}, ${when.textContent}`;
+    row.title = `${linesName ?? (targetEl ? describeElement(targetEl) : 'Missing element')}: ${what.textContent}, ${when.textContent}`;
     row.append(num, name, what, when);
     const pick = (): void => {
       this.selectedEntryId = entry.id;
-      // Selecting the object re-renders the panel with this build picked.
-      if (targetEl) this.store.select([targetEl.id]);
+      // Selecting the object re-renders the panel with this build picked; a
+      // build on some of a block's lines shows those lines picked too.
+      const lines = lineBuildRange(entry);
+      if (targetEl && lines) this.store.setCodeLineRange(targetEl.id, lines.from, lines.to);
+      else if (targetEl) this.store.select([targetEl.id]);
       else this.render();
     };
     row.addEventListener('click', pick);
@@ -470,7 +513,8 @@ export class TimelinePanel {
   private entryRow(entry: TimelineEntry, slide: Slide, numbers: number[]): HTMLElement {
     const elements = slide.elements;
     const byParagraph = isParagraphBuild(entry, slide);
-    const byLines = isLineBuild(entry, slide);
+    // A code block's whole-block line build lists its steps like paragraphs.
+    const byLines = isLineBuild(entry, slide) && !isRangedLineBuild(entry);
     const effect = buildEffect(entry, slide);
     const row = document.createElement('div');
     row.className = 'timeline-row';
@@ -511,6 +555,7 @@ export class TimelinePanel {
     optionAfter('disappear:dissolve', 'dissolve out', 'disappear');
     optionAfter('disappear:blur', 'blur out', 'disappear:dissolve');
     addEquationActionOptions(action, entry, targetEl);
+    addCodeActionOptions(action, entry, targetEl);
     // Group first: moving options into their headings resets the choice.
     groupEffectOptions(action);
     action.value = effectValue(entry, slide);
@@ -535,6 +580,7 @@ export class TimelinePanel {
           delete e.action.popPeak;
         }
         applyEquationActionChoice(e, action.value, this.store.get().deck.themeStyle?.colors.accent);
+        applyCodeActionChoice(e, action.value);
       }),
     );
 
@@ -595,9 +641,11 @@ export class TimelinePanel {
 
     const name = document.createElement('span');
     name.className = 'build-target-name';
-    if (targetEl) renderElementLabel(name, targetEl);
+    const linesName = lineBuildName(entry);
+    if (linesName) name.textContent = linesName;
+    else if (targetEl) renderElementLabel(name, targetEl);
     else name.textContent = '(missing element)';
-    name.title = targetEl ? describeElement(targetEl) : '(missing element)';
+    name.title = linesName ?? (targetEl ? describeElement(targetEl) : '(missing element)');
 
     // The trigger is a strip because there are four choices and they are
     // compared, not browsed. A hidden <select> carries the value for keyboard
@@ -694,7 +742,9 @@ export class TimelinePanel {
     row.addEventListener('click', (ev) => {
       const target = ev.target as HTMLElement;
       if (target.closest('select, input, button')) return;
-      this.store.select([entry.action.target]);
+      const lines = lineBuildRange(entry);
+      if (lines) this.store.setCodeLineRange(entry.action.target, lines.from, lines.to);
+      else this.store.select([entry.action.target]);
     });
 
     // The element heads the card, as the canvas badge points at it; below it
@@ -727,15 +777,13 @@ export class TimelinePanel {
     sentence.textContent = `${choice?.sentence ?? 'Starts'}${wait}.${takes}`;
     const equation = equationBuildControls(entry, slide, numbers, (fn) => this.mutate(entry.id, fn));
     what.append(...equation.fields);
-    if (byLines) {
-      const parts = lineBuildCardParts(entry, numbers, (spec) => this.mutate(entry.id, (e) => {
-        e.action.value = spec;
-      }));
-      row.append(head, parts.what, ...fields.slice(1), sentence, parts.list);
-      return row;
-    }
+    const code = lineBuildControls(
+      entry, slide, numbers, this.store.codeLineSelection(), (fn) => this.mutate(entry.id, fn),
+    );
+    fields.splice(1, 0, ...code.fields.map((line) => field(line.label, ...line.controls)));
     row.append(head, ...fields, sentence);
     if (equation.list) row.appendChild(equation.list);
+    if (code.list) row.appendChild(code.list);
 
     // The paragraphs build in document order and cannot be reordered, so they
     // are a read-only sub-list: each row's number matches its canvas badge.

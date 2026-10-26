@@ -17,7 +17,7 @@ import { collabClientDir } from './support/collabClient.js';
  * A code block, presented for real.
  *
  * Highlighting loads its grammar as a chunk of its own and recolours the
- * block in place, and a line build hides and dims lines through the same
+ * block in place, and line builds hide, dim and tint lines through the same
  * state the PDF uses. Only a real browser does both: the chunk loading, the
  * computed colours of the runs, and what is actually visible after a click.
  */
@@ -52,6 +52,7 @@ interface LineReading {
   line: string;
   visibility: string;
   opacity: string;
+  background: string;
   text: string;
 }
 
@@ -74,10 +75,12 @@ describe.skipIf(!electronBinary)('a code block while presenting', () => {
       { ...block, id: CODE_ID, type: 'code', x: 80, y: 120, w: 860, h: 252, z: 1, scheme: 'github-dark' },
       { ...block, id: DECK_CODE_ID, type: 'code', x: 980, y: 120, w: 860, h: 252, z: 2, scheme: 'deck' },
     );
-    deck.slides[0].timeline.push({
-      id: 'lines-1', trigger: { on: 'click', ref: null, delay: 0 },
-      action: { type: 'lines', target: CODE_ID, value: '3-5; highlight:5' },
-    });
+    const click = { on: 'click' as const, ref: null, delay: 0 };
+    deck.slides[0].timeline.push(
+      { id: 'lines-1', trigger: click, action: { type: 'lines', target: CODE_ID, value: 'appear', lines: '3-5' } },
+      { id: 'lines-2', trigger: click, action: { type: 'lines', target: CODE_ID, value: 'dim', lines: '5' } },
+      { id: 'lines-3', trigger: click, action: { type: 'lines', target: CODE_ID, value: 'highlight', lines: '4', color: '#ff0000' } },
+    );
     await saveDeck(deckDir, deck);
     await writeFile(join(deckDir, 'theme.css'), '.slide { background: #fff; }\n', 'utf8');
     server = await startCollabServer({ rootDir: decksRoot, clientDir, host: '127.0.0.1', port: 0 });
@@ -128,6 +131,7 @@ describe.skipIf(!electronBinary)('a code block while presenting', () => {
       line: line.dataset.line,
       visibility: getComputedStyle(line).visibility,
       opacity: getComputedStyle(line).opacity,
+      background: getComputedStyle(line).backgroundColor,
       text: [...line.childNodes].filter((n) => !(n.classList && n.classList.contains('code-gutter'))).map((n) => n.textContent).join(''),
     }))`);
     // The code is exactly what was written, blank line included.
@@ -141,14 +145,22 @@ describe.skipIf(!electronBinary)('a code block while presenting', () => {
       (readings) => readings.every((reading) => reading.visibility === 'visible' && reading.opacity === '1'));
 
     await page.key('ArrowRight', 39);
-    const dimmed = await eventually(lines, 'the second click never highlighted line 5',
+    const dimmed = await eventually(lines, 'the second click never dimmed all but line 5',
       (readings) => readings[0].opacity === '0.3' && readings[4].opacity === '1');
     expect(dimmed.map((reading) => reading.opacity)).toEqual(['0.3', '0.3', '0.3', '0.3', '1']);
 
-    // Back one step: the highlight lifts; the slide state is exact, not a replay.
+    // The third click moves the focus: line 4 tinted, nothing dimmed any more.
+    await page.key('ArrowRight', 39);
+    const tinted = await eventually(lines, 'the third click never highlighted line 4',
+      (readings) => readings.every((reading) => reading.opacity === '1') && readings[3].background !== 'rgba(0, 0, 0, 0)');
+    expect(tinted.map((reading) => reading.background !== 'rgba(0, 0, 0, 0)')).toEqual([false, false, false, true, false]);
+
+    // Back two steps: the focus lifts; the slide state is exact, not a replay.
+    await page.key('ArrowLeft', 37);
     await page.key('ArrowLeft', 37);
     await wait(400);
     expect((await lines()).map((reading) => reading.opacity)).toEqual(['1', '1', '1', '1', '1']);
+    expect((await lines()).map((reading) => reading.background)).toEqual(Array(5).fill('rgba(0, 0, 0, 0)'));
   });
 });
 
@@ -166,7 +178,7 @@ describe.skipIf(!electronBinary)('a code block in authoring HTML', () => {
     const page = `<section class="slide" style="padding: 100px; display: flex; flex-direction: column; gap: 40px;">
   <h1>Code</h1>
   <pre data-element="code" data-language="sh" data-scheme="nord" data-font-size="24" data-line-numbers="true"
-       data-build-lines="1-2; highlight:4" style="width: 1200px; border-radius: 12px;"><code>
+       data-build-lines="1-2; dim:4" style="width: 1200px; border-radius: 12px;"><code>
 ${escaped}
 </code></pre>
   <pre style="width: 800px;"><code class="language-rust">fn main() {}</code></pre>
@@ -188,10 +200,16 @@ ${escaped}
     // height is the height its lines need.
     expect(shell.h).toBeCloseTo(codeBlockHeight(shell), 0);
     expect(rust).toMatchObject({ code: 'fn main() {}', language: 'rust', scheme: 'github-dark' });
-    expect(slide.timeline).toEqual([expect.objectContaining({
-      trigger: { on: 'click', ref: null, delay: 0 },
-      action: { type: 'lines', target: shell.id, value: '1-2; highlight:4' },
-    })]);
+    expect(slide.timeline).toEqual([
+      expect.objectContaining({
+        trigger: { on: 'click', ref: null, delay: 0 },
+        action: { type: 'lines', target: shell.id, value: 'appear', lines: '1-2' },
+      }),
+      expect.objectContaining({
+        trigger: { on: 'click', ref: null, delay: 0 },
+        action: { type: 'lines', target: shell.id, value: 'dim', lines: '4' },
+      }),
+    ]);
 
     // The slide exported and compiled again comes back the same.
     const exportPath = join(deckDir, 'export.html');
@@ -205,6 +223,7 @@ ${escaped}
       expect(el.h).toBeCloseTo(codes[index].h, 0);
       expect(el.w).toBeCloseTo(codes[index].w, 0);
     }
-    expect(again.slides[0].timeline.map((entry) => entry.action.value)).toEqual(['1-2; highlight:4']);
+    expect(again.slides[0].timeline.map((entry) => [entry.action.value, entry.action.lines]))
+      .toEqual([['appear', '1-2'], ['dim', '4']]);
   });
 });

@@ -33,7 +33,7 @@ import { ObjectList } from './objectList.js';
 import { MediaPanel, installMediaDrop } from './mediaPanel.js';
 import { authoredHtmlSync, fileName } from './htmlCompile.js';
 import { createShapeInsertPicker, createTableInsertPicker, insertText } from './elementCreation.js';
-import { CODE_ICON, insertCode } from './codeInspector.js';
+import { insertCode } from './codeInspector.js';
 import { createToolbarPicker, createToolbarSplitButton } from './exportPicker.js';
 import { showPdfExportDialog } from './pdfExportDialog.js';
 import { showWebExportDialog } from './webExportDialog.js';
@@ -44,8 +44,7 @@ import { persistSessionDeck } from './sessionPersistence.js';
 import { createThemePanel } from './themePanel.js';
 import {
   barButton,
-  barIconButton,
-  TEXT_ICON,
+  createTextInsertPicker,
   bindEditorKeys,
   createClipboardActions,
   makeContextActions,
@@ -577,10 +576,13 @@ function buildToolbar(): void {
   const mid = document.createElement('div');
   mid.className = 'bar-group deck-only bar-center';
   mid.append(
-    barIconButton('Text', TEXT_ICON, () => addText()),
+    createTextInsertPicker({
+      textBox: () => addText(),
+      // A starter listing, selected, so typing replaces it.
+      codeBlock: () => { canvas.beginCodeEdit(insertCode(store).id, 'all'); },
+    }),
     createShapeInsertPicker(store),
     createTableInsertPicker(store),
-    barIconButton('Code', CODE_ICON, () => insertCode(store)),
     createMediaButton(mediaHost),
   );
 

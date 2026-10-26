@@ -507,10 +507,10 @@ export const ActionSchema = z.object({
    * On `pulse` of a whole object, `"lift"` also casts a drop shadow at the
    * peak and paints the object over its neighbours while it is up.
    *
-   * On `lines` (a code element only), the line steps it builds through, e.g.
-   * `"1-3; 4-6; highlight:5"`: each `;`-separated step reveals its lines, or
-   * with `highlight:` dims every other line (shared/codeBlocks.ts). One entry
-   * fans out into one step per part, as a by-paragraph reveal does.
+   * On `lines` (a code element only; shared/codeBlocks.ts), what happens to
+   * the lines it names: `"appear"` (default) reveals them, `"highlight"`
+   * tints them and `"dim"` fades every other line. A highlight or a dim holds
+   * until the block's next one replaces it, or a reveal ends it.
    */
   value: z.union([z.number(), z.string()]).nullable().default(null),
   /** Milliseconds an animated build takes (`"draw"`, `"dissolve"`, `"blur"`, `"pop"`). */
@@ -528,7 +528,16 @@ export const ActionSchema = z.object({
    * `terms`, `value` is `"appear"` (default) or `"color"`.
    */
   term: z.string().regex(/^[A-Za-z0-9_-]+$/).optional(),
-  /** The colour a `terms` action with value `"color"` paints its terms. */
+  /**
+   * The code lines a `lines` action acts on, 1-based: `"3"`, `"3-5"` or
+   * `"3-5,8"`. Absent, it steps through every line of the block in order —
+   * one step per line, like a by-paragraph reveal.
+   */
+  lines: z.string().regex(/^\d+(?:-\d+)?(?:,\d+(?:-\d+)?)*$/).optional(),
+  /**
+   * The colour a `terms` action with value `"color"` paints its terms, or a
+   * `lines` highlight tints its lines.
+   */
   color: z.string().optional(),
   /** How far a `pulse` (default 1.6) or a `pop` (default 1.3) enlarges its target at the peak. */
   scale: z.number().min(1).max(4).optional(),

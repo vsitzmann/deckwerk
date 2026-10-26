@@ -253,10 +253,15 @@ turns into, not a list of things to opt into.
   a highlighted code block: the code stays exactly as written, coloured by
   Shiki in a bundled scheme (`github-light`, `github-dark`, `one-dark-pro`,
   `solarized-light`, `dracula`, `nord`, or `deck` for the deck's own theme
-  colours). `data-font-size`, `data-line-numbers="true"`, and
-  `data-build-lines="1-3; 4-6; highlight:5"` (one click per step: reveal
-  those lines, or dim all but them) ride on the `<pre>`. Escape `<` and `&`
-  in the code; never fake a listing with a monospace text box.
+  colours). `data-font-size`, `data-line-numbers="true"`, and the block's
+  line builds in order, `data-build-lines="each; highlight:3-5; dim:7"`,
+  ride on the `<pre>`: each `;`-separated part is one build on its own
+  click — `each` reveals the block a line per click, bare lines (`2-4`)
+  appear, `highlight:` tints those lines and `dim:` fades every other one.
+  These are the same builds a person makes by picking lines in the block's
+  gutter, and a save keeps each build's trigger, tint and place among the
+  slide's other builds. Escape `<` and `&` in the code; never fake a listing
+  with a monospace text box.
 - **Decoration** — `::before`/`::after` come across too: solid paint as a
   shape, a gradient bar, a shadowed chip, a border-triangle arrowhead or a
   `content:"→"` as a styled text object, painted in front of or behind its

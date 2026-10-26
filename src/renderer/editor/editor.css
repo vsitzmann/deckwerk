@@ -4997,8 +4997,13 @@ button.ghost:hover:not(:disabled) { color: var(--text); background: transparent;
 .pop-size { width: 76px; }
 .pop-size > input { width: 100%; padding: 3px 24px 3px 6px; height: 24px; }
 .timeline-row select.build-action, .timeline-row select.build-term { padding: 2px 20px 2px 6px; height: 24px; font: 10.5px var(--mono); }
-/* A code block's line steps, set like the action they stand in for. */
-.timeline-row input.build-lines-input { padding: 2px 6px; height: 24px; font: 10.5px var(--mono); }
+/* A build on some of a code block's lines: which lines, and a button to move it to the picked ones. */
+.build-lines-label { font: 10.5px var(--mono); color: var(--text); }
+.build-lines-use { margin-left: auto; padding: 2px 6px; font-size: 11px; }
+.build-line-text { font-family: var(--mono); white-space: pre; }
+/* A highlight's tint sits in its labelled row; the swatch carries no label of its own. */
+.build-line-color { margin: 0; padding: 0; border: 0; justify-content: flex-start; }
+.build-line-color > span:first-child { display: none; }
 .timeline-row select.build-trigger { flex: none; }
 
 /* --- Design: canvas previews, the Props layout picker, rail design captions --- */
@@ -5233,3 +5238,34 @@ button.ghost:hover:not(:disabled) { color: var(--text); background: transparent;
 :root[data-ui-zoom] :is(#toolbar, #rail, #side, #status, .ui-menu, .ui-help-popover, .panel-popover,
   .color-picker-popover, .workflow-dialog, .canvas-host > .zoom-controls, .canvas-host > .notes-toggle,
   .canvas-host > .objects-toggle, .canvas-host > .objects-drawer) { zoom: var(--ui-zoom); }
+
+/* --- Code blocks on the canvas ----------------------------------------- */
+
+/* Lines picked in a selected block's gutter, for a build on just those lines. */
+.code-line-pick {
+  position: absolute;
+  pointer-events: none;
+  z-index: 5;
+  /* Translucent whatever the chrome theme: the picked code must stay readable. */
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  outline: calc(1.5px * var(--inv)) solid var(--accent);
+  outline-offset: 0;
+}
+
+/* Typing into a code block: the textarea's glyphs are the highlighted ones
+   drawn under it, so only its caret and its selection show. */
+.code-edit-input::selection { background: rgb(80 140 255 / 38%); color: transparent; }
+.code-edit-input:focus { outline: none; }
+
+/* The language picker that floats at the top-right corner of a block being
+   edited: the app's own select, at toolbar density, on a solid ground so it
+   reads over any slide. */
+.code-language-select {
+  position: absolute;
+  z-index: 20;
+  max-width: 180px;
+  padding: 3px 22px 3px 8px;
+  font-size: 12px;
+  background-color: var(--panel);
+  box-shadow: 0 2px 10px rgb(0 0 0 / 35%);
+}

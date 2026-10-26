@@ -612,7 +612,8 @@ export function capabilities(): Capability[] {
         'language: python, javascript, typescript, c, cpp, cuda (highlighted as C++), rust, glsl, bash, json, yaml, latex, html, css, sql, go, java, julia, matlab, plaintext. Common aliases (py, ts, sh, yml, tex, cu…) are accepted.',
         "scheme: github-light, github-dark, one-dark-pro, solarized-light, dracula, nord, or deck — derived from the deck theme's text, muted, accent and palette colours, so the code matches the slides and follows a theme change.",
         'In authoring HTML: <pre data-element="code" data-language="python" data-scheme="github-dark" data-font-size="28" data-line-numbers="true"><code>…HTML-escaped code…</code></pre>. A bare <pre><code class="language-python"> is a code block too. One newline straight after <code> and one straight before </code> are formatting and dropped. Size the box with CSS like anything else; its height should be lines × 1.5 × fontSize + 1.5 × fontSize.',
-        "Line builds: a timeline entry { action: { type: 'lines', target, value: '1-3; 4-6; highlight:5; highlight:all' } } fans out into one step per ';'-separated part. A plain step reveals its lines (lines named by reveal steps start hidden; the rest show from the start); highlight:<lines> dims every other line until the next step; highlight:all ends it. In authoring HTML: data-build-lines=\"1-3; highlight:5\" on the <pre>, one click per step.",
+        "Line builds, like paragraph builds on text: each is a timeline entry { action: { type: 'lines', target, value, lines? } }. value 'appear' reveals the lines (they start hidden; lines no appear names show from the start), 'highlight' tints them (action.color, default a soft yellow), 'dim' fades every other line. lines is '3', '3-5' or '3-5,8'; without it the entry steps through the whole block one line per click (\"Appear by line\"). A highlight or a dim holds until the block's next one replaces it; a reveal ends it.",
+        "In authoring HTML, the block's line builds in order ride on the <pre>: data-build-lines=\"each; highlight:3-5; dim:7\" — each ';'-separated part one build on its own click: bare lines (or each) appear, highlight:<lines> tints, dim:<lines> fades the rest. The deck keeps each build's trigger, colour and place among the slide's other builds when the page is saved.",
         'Borders, a corner radius and a shadow on the element style apply to the block; the scheme owns its background, ink and type.',
       ],
       elements: [
@@ -629,7 +630,17 @@ export function capabilities(): Capability[] {
         {
           id: 'cap-code-lines',
           trigger: { on: 'click', ref: null, delay: 0 },
-          action: { type: 'lines', target: 'cap-code', value: '2-3; 4; highlight:4' },
+          action: { type: 'lines', target: 'cap-code', value: 'appear', lines: '2-3' },
+        },
+        {
+          id: 'cap-code-last',
+          trigger: { on: 'click', ref: null, delay: 0 },
+          action: { type: 'lines', target: 'cap-code', value: 'appear', lines: '4' },
+        },
+        {
+          id: 'cap-code-focus',
+          trigger: { on: 'click', ref: null, delay: 0 },
+          action: { type: 'lines', target: 'cap-code', value: 'highlight', lines: '4' },
         },
       ],
     },

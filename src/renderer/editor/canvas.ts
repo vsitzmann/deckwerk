@@ -109,7 +109,8 @@ import { reportSelectionViolations } from './selectionInvariants.js';
 import { COMPARE_CHIP_CLASS, compareChip } from './compareChip.js';
 import { KeptSelectionHighlight, TEXT_EDIT_PANEL_CHROME } from './keptSelection.js';
 import { prepareCodeBlocks, syncCodeBody } from '../player/codeRender.js';
-import { focusCodeSource } from './codeInspector.js';
+import { CODE_EDIT_CHROME, CodeEditor } from './codeEditing.js';
+import { CODE_LINE_HEIGHT, CODE_PADDING_EM, describeLines, isLineBuild } from '@shared/codeBlocks.js';
 import {
   HANDLES,
   type SizeGuide,
@@ -839,6 +840,8 @@ export const CANVAS_NOTICE_EVENT = 'deckwerk-canvas-notice';
 export class EditorCanvas {
   private store: EditorStore;
   private host: HTMLElement;
+  /** Typing into a code block on the slide (codeEditing.ts). */
+  private codeEditor: CodeEditor;
   private stage: HTMLElement;
   private slideLayer: HTMLElement;
   private overlay: HTMLElement;
@@ -1047,6 +1050,8 @@ export class EditorCanvas {
    * native event alone left double-click-to-play inert there.
    */
   private pendingMediaToggle: string | null = null;
+  /** Where the press that may open a code block's edit landed, for its caret. */
+  private pendingCodePoint: { clientX: number; clientY: number } | null = null;
   /** When the pointer path last toggled media, so the native dblclick skips. */
   private mediaToggledAt = Number.NEGATIVE_INFINITY;
 
@@ -1092,6 +1097,16 @@ export class EditorCanvas {
   constructor(host: HTMLElement, store: EditorStore) {
     this.host = host;
     this.store = store;
+    this.codeEditor = new CodeEditor({
+      store,
+      chrome: host,
+      nodeFor: (id) => this.slideLayer.querySelector<HTMLElement>(`[data-element-id="${CSS.escape(id)}"]`),
+      redrawOverlay: () => {
+        const { deck, slideIndex, selection } = this.store.get();
+        const slide = deck.slides[slideIndex];
+        if (slide) this.drawOverlay(deck, slide.elements, selection);
+      },
+    });
 
     this.host.classList.add('canvas-host');
     this.stage = document.createElement('div');
@@ -1153,6 +1168,12 @@ export class EditorCanvas {
    * test for "did the content change".
    */
   render(): void {
+    this.renderSlide();
+    // A code block being typed into keeps its draft across the redraw.
+    this.codeEditor.afterRender();
+  }
+
+  private renderSlide(): void {
     // A render can replace the edited box's nodes out from under the
     // bookmark, or end the edit: either way the kept highlight is re-derived.
     this.keptSelection.schedule();
@@ -1219,7 +1240,11 @@ export class EditorCanvas {
         {
           context: 'an in-place patch',
           // Live pages deliberately differ from the preview render.
-          skipElementIds: [...(this.editingId ? [this.editingId] : []), ...this.liveWebIds],
+          skipElementIds: [
+            ...(this.editingId ? [this.editingId] : []),
+            ...(this.codeEditor.editingId() ? [this.codeEditor.editingId()!] : []),
+            ...this.liveWebIds,
+          ],
         },
       );
       this.scheduleTableHeightSync();
@@ -1880,6 +1905,7 @@ export class EditorCanvas {
     this.placePlayback();
     this.onViewportChange?.();
     for (const listener of this.viewportListeners) listener();
+    this.codeEditor?.reposition();
   }
 
   /**
@@ -2283,6 +2309,8 @@ export class EditorCanvas {
     elements: SlideElement[],
     selection: Set<string>,
   ): void {
+    // A code block being typed into is as tall as its draft, not its stored box.
+    elements = this.codeEditor.liveElements(elements);
     const frag = document.createDocumentFragment();
 
     // While the Build tab is open, number every element a build entry touches
@@ -2293,8 +2321,14 @@ export class EditorCanvas {
       // By-paragraph reveals get one badge per paragraph, pinned to the
       // paragraph's own line so each number matches its row in the panel.
       const paragraphNumbers = new Map<string, Array<{ part: number; num: number }>>();
+      // A code block's line builds get theirs beside the first line they act on.
+      const lineNumbers = new Map<string, Array<{ line: number; num: number }>>();
       (slide ? expandTimeline(slide) : []).forEach((unit, i) => {
-        if (unit.part !== null) {
+        if (slide && unit.action.lines && isLineBuild(unit, slide)) {
+          const list = lineNumbers.get(unit.action.target) ?? [];
+          list.push({ line: Number.parseInt(unit.action.lines, 10), num: i + 1 });
+          lineNumbers.set(unit.action.target, list);
+        } else if (unit.part !== null) {
           const list = paragraphNumbers.get(unit.action.target) ?? [];
           list.push({ part: unit.part, num: i + 1 });
           paragraphNumbers.set(unit.action.target, list);
@@ -2317,6 +2351,16 @@ export class EditorCanvas {
       for (const el of elements) {
         const numbers = numbersByElement.get(el.id);
         if (numbers) makeBadge(numbers.join(','), el.x + el.w, el.y);
+        const lineBuilds = lineNumbers.get(el.id);
+        if (lineBuilds) {
+          // Builds on the same line share one badge, as an object's do.
+          const byLine = new Map<number, number[]>();
+          for (const { line, num } of lineBuilds) byLine.set(line, [...(byLine.get(line) ?? []), num]);
+          for (const [line, nums] of byLine) {
+            const box = this.codeLineBox(el, line, line, stageRect);
+            makeBadge(nums.join(','), el.x + el.w, (box?.top ?? el.y) + 9);
+          }
+        }
         const parts = paragraphNumbers.get(el.id);
         if (!parts) continue;
         const content = this.stage.querySelector<HTMLElement>(
@@ -2383,6 +2427,25 @@ export class EditorCanvas {
         ghost.style.width = `${el.sourceBox.w}px`;
         ghost.style.height = `${el.sourceBox.h}px`;
         frag.appendChild(ghost);
+      }
+    }
+
+    // Lines picked in a code block's gutter, for a build on just those lines.
+    const picked = this.store.codeLineSelection();
+    if (picked && this.codeEditor.editingId() !== picked.elementId) {
+      const el = elements.find((candidate) => candidate.id === picked.elementId);
+      const box = el ? this.codeLineBox(el, picked.from, picked.to, this.stage.getBoundingClientRect()) : null;
+      if (el && box) {
+        const mark = document.createElement('div');
+        mark.className = 'code-line-pick';
+        mark.style.left = `${el.x}px`;
+        mark.style.top = `${box.top}px`;
+        mark.style.width = `${el.w}px`;
+        mark.style.height = `${box.height}px`;
+        mark.style.setProperty('--inv', String(1 / this.scale));
+        mark.dataset.lines = `${picked.from}-${picked.to}`;
+        mark.title = describeLines(Array.from({ length: picked.to - picked.from + 1 }, (_, i) => picked.from + i));
+        frag.appendChild(mark);
       }
     }
 
@@ -2730,7 +2793,7 @@ export class EditorCanvas {
     // are ordinary application controls. Capturing their pointer on the canvas
     // changes the pointer-up target and prevents Chromium from synthesising a
     // click, which made all three welcome actions appear inert.
-    if (target.closest(`.welcome-screen, .zoom-controls, .notes-toggle, .notes-drawer, .objects-toggle, .objects-drawer, .light-table, .canvas-ruler, .${COMPARE_CHIP_CLASS}`)) return;
+    if (target.closest(`.welcome-screen, .zoom-controls, .notes-toggle, .notes-drawer, .objects-toggle, .objects-drawer, .light-table, .canvas-ruler, .${COMPARE_CHIP_CLASS}, .${CODE_EDIT_CHROME}`)) return;
     const slide = this.store.slide;
     if (!slide) return;
     // A press that reaches the canvas was not on a live page (the frame keeps
@@ -2953,6 +3016,19 @@ export class EditorCanvas {
 
     // Topmost element under the cursor wins, matching what you see.
     const hit = this.hitTest(point);
+    // A selected code block's gutter picks lines rather than moving the
+    // block: a click takes one line, Shift-click stretches to it.
+    if (hit?.type === 'code' && !ev.altKey && !commandModifier(ev)) {
+      const selected = this.store.get().selection;
+      const line = selected.size === 1 && selected.has(hit.id) ? this.codeGutterLine(hit.id, ev) : null;
+      if (line !== null) {
+        this.store.selectCodeLines(hit.id, line, ev.shiftKey);
+        // Two quick gutter clicks are two picks, never a way into the code.
+        this.lastContentClick = null;
+        return;
+      }
+      if (!ev.shiftKey) this.store.clearCodeLines();
+    }
     if (hit) {
       const selection = this.store.get().selection;
       this.pendingTextEdit = !ev.shiftKey
@@ -2961,9 +3037,10 @@ export class EditorCanvas {
         ? { elementId: hit.id, clientX: ev.clientX, clientY: ev.clientY, selectWord: secondClick }
         : null;
       this.pendingMediaToggle = secondClick && !ev.shiftKey
-        && (hit.type === 'video' || hit.type === 'web' || hit.type === 'image')
+        && (hit.type === 'video' || hit.type === 'web' || hit.type === 'image' || hit.type === 'code')
         ? hit.id
         : null;
+      this.pendingCodePoint = hit.type === 'code' ? { clientX: ev.clientX, clientY: ev.clientY } : null;
       if (!selection.has(hit.id)) {
         this.store.select([hit.id], ev.shiftKey);
       } else if (ev.shiftKey) {
@@ -3458,7 +3535,7 @@ export class EditorCanvas {
     if (
       this.drag.kind === 'none'
       && (ev.target as HTMLElement | null)?.closest?.(
-        '.welcome-screen, .zoom-controls, .notes-toggle, .notes-drawer, .objects-toggle, .objects-drawer, .light-table, .canvas-ruler',
+        `.welcome-screen, .zoom-controls, .notes-toggle, .notes-drawer, .objects-toggle, .objects-drawer, .light-table, .canvas-ruler, .${CODE_EDIT_CHROME}`,
       )
     ) {
       return;
@@ -3513,6 +3590,22 @@ export class EditorCanvas {
     if (el?.type === 'video') this.toggleVideo(elementId);
     else if (el?.type === 'web') this.toggleWebLive(elementId);
     else if (el?.type === 'image') this.toggleMaskMode(elementId);
+    else if (el?.type === 'code' && this.pendingCodePoint) this.codeEditor.begin(elementId, this.pendingCodePoint);
+  }
+
+  /** Start typing into a code block on the slide; `'all'` selects its code to be typed over. */
+  beginCodeEdit(elementId: string, at?: { clientX: number; clientY: number } | 'all'): boolean {
+    return this.codeEditor.begin(elementId, at);
+  }
+
+  /** The code block being typed into, or null. */
+  editingCodeId(): string | null {
+    return this.codeEditor.editingId();
+  }
+
+  /** End a code edit, committing it. */
+  endCodeEdit(): void {
+    this.codeEditor.end(true);
   }
 
   private endDrag(): void {
@@ -3700,8 +3793,10 @@ export class EditorCanvas {
       if (ev.timeStamp - this.mediaToggledAt <= DOUBLE_CLICK_MS) return;
       this.toggleMedia(hit.id);
     } else if (hit.type === 'code') {
-      // Code is edited as plain text in the inspector, where a paste stays raw.
-      focusCodeSource();
+      // Code is typed into on the slide; the second press of the pair may
+      // already have opened it (see pendingMediaToggle).
+      if (this.codeEditor.editingId() === hit.id) return;
+      this.codeEditor.begin(hit.id, { clientX: ev.clientX, clientY: ev.clientY });
     }
   }
 
@@ -7373,6 +7468,59 @@ export class EditorCanvas {
   }
 
   /** Topmost element containing a canvas point. */
+  /**
+   * Where lines `from`…`to` of a drawn code block sit, in slide units: from
+   * the DOM when the block is on the canvas, else from its typography.
+   */
+  private codeLineBox(
+    el: SlideElement, from: number, to: number, stageRect: DOMRect,
+  ): { top: number; height: number } | null {
+    if (el.type !== 'code') return null;
+    const body = this.slideLayer.querySelector<HTMLElement>(
+      `[data-element-id="${CSS.escape(el.id)}"] > .code-body`,
+    );
+    const first = body?.querySelector<HTMLElement>(`:scope > .code-line[data-line="${from}"]`);
+    const last = body?.querySelector<HTMLElement>(`:scope > .code-line[data-line="${to}"]`);
+    if (first && last && !el.rot) {
+      const a = first.getBoundingClientRect();
+      const b = last.getBoundingClientRect();
+      if (a.height > 0) {
+        const top = (a.top - stageRect.top) / this.scale;
+        return { top, height: (b.bottom - a.top) / this.scale };
+      }
+    }
+    const lineHeight = el.fontSize * CODE_LINE_HEIGHT;
+    return {
+      top: el.y + el.fontSize * CODE_PADDING_EM[0] + (from - 1) * lineHeight,
+      height: (to - from + 1) * lineHeight,
+    };
+  }
+
+  /**
+   * The line whose gutter a press landed in, on a drawn code block: the line
+   * numbers, or the margin left of the code when it has none. Null for a
+   * press on the code itself.
+   */
+  private codeGutterLine(elementId: string, ev: PointerEvent): number | null {
+    const body = this.slideLayer.querySelector<HTMLElement>(
+      `[data-element-id="${CSS.escape(elementId)}"] > .code-body`,
+    );
+    if (!body) return null;
+    const bodyRect = body.getBoundingClientRect();
+    if (ev.clientX < bodyRect.left) return null;
+    for (const line of body.querySelectorAll<HTMLElement>(':scope > .code-line')) {
+      const rect = line.getBoundingClientRect();
+      if (ev.clientY < rect.top || ev.clientY >= rect.bottom) continue;
+      const gutter = line.querySelector<HTMLElement>('.code-gutter');
+      const right = gutter
+        ? gutter.getBoundingClientRect().right
+          + (Number.parseFloat(getComputedStyle(gutter).marginRight) || 0) * this.scale * 0.5
+        : rect.left;
+      return ev.clientX <= right ? Number(line.dataset.line) : null;
+    }
+    return null;
+  }
+
   private hitTest(point: { x: number; y: number }): SlideElement | null {
     const slide = this.store.slide;
     if (!slide) return null;

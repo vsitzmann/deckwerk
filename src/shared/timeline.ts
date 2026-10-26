@@ -11,7 +11,14 @@ import {
   termBuildLabels,
   type TermState,
 } from './equationTerms.js';
-import { isLineBuild, lineStepCount } from './codeBlocks.js';
+import {
+  applyLineAction,
+  formatLineRanges,
+  initialCodeLineStates,
+  isLineBuild,
+  lineBuildSteps,
+  type CodeLineState,
+} from './codeBlocks.js';
 
 /**
  * Timeline reasoning, shared by the player and the editor's timeline panel.
@@ -126,11 +133,24 @@ export function drawDuration(entry: TimelineEntry): number {
 export function expandTimeline(slide: Slide): ExpandedEntry[] {
   const out: ExpandedEntry[] = [];
   for (const entry of slide.timeline) {
-    // A code block's line build fans out the same way, one unit per step of
-    // its spec (shared/codeBlocks.ts).
-    if (isLineBuild(entry, slide)) {
-      out.push(...lineBuildUnits(entry));
-      continue;
+    // A code block built line by line fans out the same way, one unit per
+    // line, each naming its lines so it can be run on its own
+    // (shared/codeBlocks.ts). A build that names its lines is one unit.
+    if (isLineBuild(entry, slide) && !entry.action.lines) {
+      const steps = lineBuildSteps(entry, slide);
+      if (steps.length > 0) {
+        steps.forEach((lines, index) => out.push({
+          id: index === 0 ? entry.id : `${entry.id}#l${index}`,
+          sourceId: entry.id,
+          part: null,
+          partCount: 1,
+          trigger: index === 0
+            ? entry.trigger
+            : { on: entry.trigger.on === 'click' ? 'click' : 'afterPrev', ref: null, delay: entry.trigger.delay },
+          action: { ...entry.action, lines: formatLineRanges(lines) },
+        }));
+        continue;
+      }
     }
     // An equation's terms fan out the same way, one unit per term label, each
     // naming its term so it can be run on its own.
@@ -174,24 +194,6 @@ export function expandTimeline(slide: Slide): ExpandedEntry[] {
     }
   }
   return out;
-}
-
-/**
- * A line build's units: one per step of its spec, triggered exactly as the
- * parts of a by-paragraph reveal are.
- */
-function lineBuildUnits(entry: TimelineEntry): ExpandedEntry[] {
-  const count = lineStepCount(entry);
-  return Array.from({ length: count }, (_, part) => ({
-    id: part === 0 ? entry.id : `${entry.id}#p${part}`,
-    sourceId: entry.id,
-    part,
-    partCount: count,
-    trigger: part === 0
-      ? entry.trigger
-      : { on: entry.trigger.on === 'click' ? 'click' as const : 'afterPrev' as const, ref: null, delay: entry.trigger.delay },
-    action: entry.action,
-  }));
 }
 
 /** Expanded timeline units grouped by the step they belong to. Always length >= 1. */
@@ -243,10 +245,10 @@ export interface SlideState {
   /** For equations with term builds: which terms are still hidden, and term colours. */
   terms: Map<string, TermState>;
   /**
-   * For code blocks with a line build: the build's spec and how many of its
-   * steps have run. A block with none shows every line at full strength.
+   * For code blocks with line builds: which lines are still hidden, and the
+   * highlight or dim that holds. A block with none shows every line plainly.
    */
-  lines: Map<string, { spec: string; applied: number }>;
+  lines: Map<string, CodeLineState>;
 }
 
 /**
@@ -279,14 +281,7 @@ export function resolveState(slide: Slide, step: number): SlideState {
         .map((entry) => [entry.action.target, 0]),
     ),
     terms: initialTermStates(slide),
-    // Seeded with each block's first line build at zero steps, so its
-    // revealed-later lines are hidden from slide entry.
-    lines: new Map(
-      slide.timeline
-        .filter((entry) => isLineBuild(entry, slide))
-        .reverse()
-        .map((entry) => [entry.action.target, { spec: String(entry.action.value ?? ''), applied: 0 }]),
-    ),
+    lines: initialCodeLineStates(slide),
   };
 
   const steps = groupIntoSteps(slide);
@@ -346,16 +341,9 @@ export function applyAction(
     case 'jiggle':
     case 'pop':
       break;
-    case 'lines': {
-      // The block follows the line build that ran last; within one build,
-      // steps only ever move forward.
-      const spec = String(value ?? '');
-      const part = (entry as Partial<ExpandedEntry>).part ?? 0;
-      const current = state.lines.get(target);
-      const applied = current && current.spec === spec ? Math.max(current.applied, part + 1) : part + 1;
-      state.lines.set(target, { spec, applied });
+    case 'lines':
+      applyLineAction(state.lines, entry, slide);
       break;
-    }
   }
 }
 

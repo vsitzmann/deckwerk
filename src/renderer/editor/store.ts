@@ -22,6 +22,7 @@ import {
 } from '@shared/clipboard.js';
 import { effectiveThemeStyle } from '@shared/themes.js';
 import { makeId } from '@shared/geometry.js';
+import { codeLines } from '@shared/codeBlocks.js';
 import { pastedTableData } from '@shared/paragraphs.js';
 import { classifyMediaName } from '@shared/media.js';
 import type {
@@ -146,6 +147,13 @@ export class EditorStore {
   /** The same memo for deck properties: the last incoming set and its parse. */
   private remoteProps: { from: Omit<Deck, 'slides'>; to: Omit<Deck, 'slides'> } | null = null;
   private remoteDepth = 0;
+  /**
+   * Lines picked in a code block's gutter, for a build on just those lines.
+   * Not part of EditorState: it is a sub-selection of the one selected
+   * block, read through `codeLineSelection()`, which drops it the moment that
+   * block is no longer the selection.
+   */
+  private pickedCodeLines: { elementId: string; anchor: number; from: number; to: number } | null = null;
 
   constructor(deck: Deck, dir: string | null = null) {
     this.state = {
@@ -768,6 +776,8 @@ export class EditorStore {
   }
 
   select(ids: string[], additive = false): void {
+    // A gutter pick belongs to the selection it was made in.
+    this.pickedCodeLines = null;
     const selection = additive ? new Set(this.state.selection) : new Set<string>();
     for (const id of ids) {
       if (additive && selection.has(id)) selection.delete(id);
@@ -780,6 +790,51 @@ export class EditorStore {
       slideSelection: new Set(currentSlide ? [currentSlide.id] : []),
       selection,
     };
+    this.emit();
+  }
+
+  /**
+   * The code lines picked in the selected block's gutter, or null. Only ever
+   * answers for a code block that is the whole selection, clamped to the
+   * lines it has now.
+   */
+  codeLineSelection(): { elementId: string; from: number; to: number } | null {
+    const picked = this.pickedCodeLines;
+    if (!picked) return null;
+    const { selection } = this.state;
+    if (selection.size !== 1 || !selection.has(picked.elementId)) return null;
+    const element = this.slide?.elements.find((candidate) => candidate.id === picked.elementId);
+    if (element?.type !== 'code') return null;
+    const count = codeLines(element.code).length;
+    const from = Math.min(picked.from, count);
+    const to = Math.min(picked.to, count);
+    return from >= 1 ? { elementId: picked.elementId, from, to } : null;
+  }
+
+  /**
+   * Pick a line in a code block's gutter; `extend` (Shift) stretches the pick
+   * from the line picked before to this one. Selects the block if needed.
+   */
+  selectCodeLines(elementId: string, line: number, extend = false): void {
+    const previous = this.codeLineSelection();
+    const anchor = extend && previous?.elementId === elementId ? this.pickedCodeLines!.anchor : line;
+    // select() drops any earlier pick, so it goes first.
+    if (this.state.selection.size !== 1 || !this.state.selection.has(elementId)) this.select([elementId]);
+    this.pickedCodeLines = { elementId, anchor, from: Math.min(anchor, line), to: Math.max(anchor, line) };
+    this.emit();
+  }
+
+  /** Pick a whole range of a block's lines at once (a build's lines, shown on the slide). */
+  setCodeLineRange(elementId: string, from: number, to: number): void {
+    if (this.state.selection.size !== 1 || !this.state.selection.has(elementId)) this.select([elementId]);
+    this.pickedCodeLines = { elementId, anchor: Math.min(from, to), from: Math.min(from, to), to: Math.max(from, to) };
+    this.emit();
+  }
+
+  /** Forget a gutter pick, e.g. on a click in the code rather than its gutter. */
+  clearCodeLines(): void {
+    if (!this.pickedCodeLines) return;
+    this.pickedCodeLines = null;
     this.emit();
   }
 
