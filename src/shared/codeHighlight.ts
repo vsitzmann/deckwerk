@@ -144,7 +144,10 @@ export function loadCodeAssets(language: string, scheme: string): Promise<void> 
         // they are tried: C++ takes over a second, which would land as a stall
         // the first time a slide with C++ on it renders. Pay it here, while
         // the deck is loading, on a snippet that exercises the common rules.
-        shiki.codeToTokens(WARM_UP, { lang: grammarName, theme: DECK_THEME_NAME });
+        // Without a time limit: on a busy machine the compile alone outlasts
+        // one, and the warm-up would stop early with the patterns still
+        // uncompiled. The snippet is fixed, so it cannot run away.
+        shiki.codeToTokens(WARM_UP, { lang: grammarName, theme: DECK_THEME_NAME, tokenizeTimeLimit: 0 });
       }
       if (themeRegistration) {
         shiki.loadThemeSync(themeRegistration);
@@ -162,6 +165,16 @@ export function loadCodeAssets(language: string, scheme: string): Promise<void> 
 export function whenCodeAssetsSettled(): Promise<void> {
   return Promise.all([...pending.values()]).then(() => undefined);
 }
+
+/**
+ * How long one line may take to tokenise before Shiki gives up on the rest of
+ * it, in ms. Shiki's default of half a second is spent by the first line that
+ * reaches C++ patterns the warm-up did not compile (a quarter second on an
+ * idle machine, more on a busy one), and the line then comes back plain, and
+ * is cached plain: the same code would colour differently on a slower
+ * machine. The limit only guards against a pattern that runs away.
+ */
+const TOKENIZE_TIME_LIMIT = 5000;
 
 const cache = new Map<string, HighlightedCode>();
 const CACHE_LIMIT = 200;
@@ -186,6 +199,7 @@ export function highlightCode(code: string, language: string, scheme: string): H
   const result = highlighter.codeToTokens(lines.join('\n'), {
     lang: GRAMMAR_NAMES[lang],
     theme: themeName(theme),
+    tokenizeTimeLimit: TOKENIZE_TIME_LIMIT,
   });
   const fg = (result.fg ?? '').toLowerCase();
   const highlighted: HighlightedCode = {
