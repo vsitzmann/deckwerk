@@ -57,8 +57,8 @@ export class ObjectList {
     this.store = store;
     host.classList.add('object-list');
 
-    // The toggle heads the column and stays when the column folds to a
-    // strip, so a closed list is one click from coming back.
+    // The toggle heads the list; the editors move it to the canvas's corner,
+    // where it stays while the drawer is closed, so the list is one click away.
     this.toggle = document.createElement('button');
     this.toggle.type = 'button';
     this.toggle.className = 'object-list-toggle';
