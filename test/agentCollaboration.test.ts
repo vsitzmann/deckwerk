@@ -63,7 +63,9 @@ async function newPage(workspace: AgentWorkspace, ...sections: string[]): Promis
   const result = await workspace.run('new', '.', '--count', String(sections.length));
   expect(result.code, result.stderr).toBe(0);
   let page = result.stdout;
-  for (const section of sections) page = page.replace('<h1 class="role-title">Title</h1>', section);
+  // Function-form: a string replacement reads `$$` as an escaped `$`, and
+  // every display equation a section held reached the page as inline maths.
+  for (const section of sections) page = page.replace('<h1 class="role-title">Title</h1>', () => section);
   return page;
 }
 
@@ -548,6 +550,41 @@ for (const kind of BACKENDS) describe.skipIf(!electronBinary)(`an agent working 
       ['appear', byText('First step'), 'click', 0],
       ['appear', byText('Second step'), 'afterPrev', 250],
     ]);
+  });
+
+  // Lists as an agent writes them: pretty-printed, numbered from where the
+  // slide needs, indented by hand with em spaces, maths inside. Stored with
+  // their source indentation, every item drew a blank line under it; measured
+  // without the player's list rules, every box was too short for its list.
+  it('lands pretty-printed lists as the player draws them, and re-saves them as no change', async () => {
+    const workspace = await open(kind);
+    const em = String.fromCodePoint(0x2003);
+    await workspace.write('lists.html', await newPage(workspace, String.raw`<ul style="width: 900px;">
+      <li>First point</li>
+      <li>&emsp;&emsp;indented by hand</li>
+    </ul>
+    <ol start="3" style="width: 900px;">
+      <li>Three
+        <ol>
+          <li>sub</li>
+        </ol>
+      </li>
+      <li value="7">Seven</li>
+      <li>Then $$\int_0^1 f(t)\, dt$$</li>
+    </ol>`));
+    const result = await apply(workspace, 'lists.html');
+    const added = landed(result, workspace);
+    if (result.json.overflows) expect(result.json.overflows).toEqual([]);
+    const slide = slideById(await workspace.deck(), added.changes.inserted[0]);
+    expect(slide.elements.flatMap((element) => (element.type === 'text' ? [element.html] : []))).toEqual([
+      `<ul><li>First point</li><li>${em}${em}indented by hand</li></ul>`,
+      '<ol start="3"><li>Three<ol><li>sub</li></ol></li>'
+        + '<li value="7" style="counter-set: list-item 7;">Seven</li>'
+        + String.raw`<li>Then $$\int_0^1 f(t)\, dt$$</li></ol>`,
+    ]);
+    await workspace.write('again.html', await exportPage(workspace, slide.id));
+    expect(landed(await apply(workspace, 'again.html'), workspace).changes)
+      .toEqual({ replaced: [], inserted: [], deleted: [], moved: 0 });
   });
 
   it('lands equation term builds and emphases a new page declares, and re-saves them as no change', async () => {

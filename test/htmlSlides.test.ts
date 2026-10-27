@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { applyAgentOperations } from '../src/shared/agent.js';
 import { emptyDeck, parseDeck, type Deck, type Slide, type SlideElement } from '../src/shared/deck.js';
 import {
+  authoringListCss,
   buildFromNode,
   elementFromNode,
   htmlChangeLabel,
@@ -15,6 +16,7 @@ import {
   type MeasuredNode,
 } from '../src/shared/htmlSlides.js';
 import { parsePath, pathGeometry } from '../src/shared/pathNodes.js';
+import { PLAYER_TYPE_CSS } from '../src/shared/playerTypeCss.js';
 
 /**
  * The pure half of HTML authoring: browser-measured facts in, deck objects out.
@@ -764,6 +766,25 @@ describe('deck objects become authored HTML', () => {
     expect(html).toContain('data-slide-id="slide-1"');
     expect(html).toContain('data-canvas="1920x1080"');
     expect(html).toContain('data-morph-duration="1450"');
+  });
+});
+
+describe('the authoring page\'s list rules', () => {
+  // They are cut out of the player's type.css between two markers. Lose a
+  // marker and the cut is empty: every bare list measured on browser
+  // defaults again, silently, a dozen pixels short per item.
+  it('are the player\'s own list rules, rescoped to bare lists', () => {
+    const css = authoringListCss(PLAYER_TYPE_CSS);
+    expect(css).toMatch(/^@layer deckwerk-authoring-lists \{\n@scope \(body\) to/);
+    expect(css).toContain('li {\n  margin: 0.15em 0;');
+    expect(css).toContain('ol > li::before {\n  content: counter(list-item)');
+    expect(css).not.toContain('.text-body ');
+    expect(css).not.toContain('border-collapse');
+  });
+
+  it('go into every page an author opens', () => {
+    const page = slidesToHtml([], { w: 1920, h: 1080 }, { typeCss: PLAYER_TYPE_CSS, blank: 1 });
+    expect(page).toContain(`<style data-authoring-lists>${authoringListCss(PLAYER_TYPE_CSS)}</style>`);
   });
 });
 

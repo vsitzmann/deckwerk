@@ -1,5 +1,8 @@
 import { renameRetiredDataAttributes } from './fieldAliases.js';
-import { authoringCss, KATEX_PAGE_HTML, type MeasuredNode, type MeasuredSlide } from './htmlSlides.js';
+import {
+  AUTHORING_LISTS_ATTRIBUTE, authoringCss, authoringListStyle, KATEX_PAGE_HTML,
+  type MeasuredNode, type MeasuredSlide,
+} from './htmlSlides.js';
 
 /**
  * The browser half of HTML authoring: assemble a page, walk it, measure it.
@@ -76,6 +79,7 @@ export function authoringPageHtml(input: AuthoringPage): string {
 <base href="${page.base}">
 <style>${authoringCss(page.canvas)}</style>
 <style>${page.typeCss}</style>
+${authoringListStyle(page.typeCss)}
 <style>${page.theme}</style>
 ${KATEX_PAGE_HTML}
 </head>
@@ -111,9 +115,15 @@ function withKatex(html: string): string {
  */
 function withStructuralCss(html: string, page: AuthoringPage): string {
   // The selector below only ever appears inside the authoring CSS itself.
-  if (html.includes('section.slide, [data-slide-id]')) return html;
-  const style = `<style>${authoringCss(page.canvas)}</style>\n<style>${page.typeCss}</style>`;
-  if (/<head[\s>]/i.test(html)) {
+  const structural = html.includes('section.slide, [data-slide-id]')
+    ? '' : `<style>${authoringCss(page.canvas)}</style>\n<style>${page.typeCss}</style>\n`;
+  // The list rules are their own block, because a file exported before they
+  // existed carries the rest and not them. Layered, so where they go in the
+  // head does not change what they lose to.
+  const lists = new RegExp(`<style\\b[^>]*\\b${AUTHORING_LISTS_ATTRIBUTE}\\b`, 'i').test(html)
+    ? '' : authoringListStyle(page.typeCss);
+  const style = `${structural}${lists}`;
+  if (style && /<head[\s>]/i.test(html)) {
     return html.replace(/<head\b[^>]*>/i, (open) => `${open}\n${style}`);
   }
   return html;
@@ -243,6 +253,7 @@ export function measureSlides(doc: Document): MeasuredSlide[] {
     '-webkit-background-clip': ['border-box'],
     'background-clip': ['border-box'],
     '-webkit-text-fill-color': ['currentcolor'],
+    'list-style-position': ['outside'],
   };
   const ignorableComputed = (property: string, value: string): boolean => {
     if (!value) return true;
@@ -276,6 +287,51 @@ export function measureSlides(doc: Document): MeasuredSlide[] {
       url.startsWith(base) ? `url(${quote}${url.slice(base.length)}${quote})` : whole);
   };
 
+  /**
+   * What the lists of an independent page compute *without* the authoring
+   * list rules (`authoringListCss`), read once with those rules switched off.
+   *
+   * The rules stand in for the player's own list styling, which the player
+   * applies again by itself. Baked into the items, they would come back as
+   * the author's: an item's `list-style-type: none` is exactly what the
+   * player reads as a request for the browser's native markers. So a value
+   * those rules decided — it differs with them off — is not baked; one the
+   * author's CSS decided reads the same either way, and is.
+   */
+  const layerless = new Map<Element, Map<string, string>>();
+  const markerless = new Set<Element>();
+  const listSheet = independent
+    ? doc.querySelector<HTMLStyleElement>('style[data-authoring-lists]')?.sheet ?? null : null;
+  if (listSheet) {
+    listSheet.disabled = true;
+    for (const list of doc.querySelectorAll('ul, ol, li')) {
+      const style = computed(list);
+      layerless.set(list, new Map([...COMPUTED_TEXT_STYLE, ...COMPUTED_BOX_STYLE]
+        .map((property) => [property, style.getPropertyValue(property).trim()])));
+      if (list.tagName === 'LI' && supportsPseudoComputedStyle
+        && /^(?:none|normal)?$/.test(view.getComputedStyle(list, '::before').content)) markerless.add(list);
+    }
+    listSheet.disabled = false;
+  }
+
+  /**
+   * The marker style a browser gives a list on its own: not something the
+   * author asked for. Baked, it is — the player keeps native markers for an
+   * item that carries a `list-style-type`, so a nested `<ul>` that merely
+   * computed the browser's `circle` lost the deck's own markers.
+   */
+  const browserListStyle = (node: Element): string | null => {
+    const tag = node.tagName.toLowerCase();
+    if (tag === 'ol') return 'decimal';
+    if (tag === 'ul') {
+      let depth = 0;
+      for (let up = node.parentElement?.closest('ul, ol'); up; up = up.parentElement?.closest('ul, ol')) depth += 1;
+      return depth === 0 ? 'disc' : depth === 1 ? 'circle' : 'square';
+    }
+    // Outside any list it is the property's initial value.
+    return node.closest('ul, ol') ? null : 'disc';
+  };
+
   const computedPresentation = (node: HTMLElement, includeText: boolean): Record<string, string> => {
     if (!independent) return {};
     const style = computed(node);
@@ -286,8 +342,11 @@ export function measureSlides(doc: Document): MeasuredSlide[] {
     // The stroke colour only means anything with a width behind it, and the
     // fill colour only when it differs from the text colour it shadows.
     const strokeless = parseFloat(style.getPropertyValue('-webkit-text-stroke-width')) === 0;
+    const withoutListRules = layerless.get(node);
     for (const property of properties) {
       const value = style.getPropertyValue(property).trim();
+      if (withoutListRules && withoutListRules.get(property) !== value) continue;
+      if (property === 'list-style-type' && value === browserListStyle(node)) continue;
       if (strokeless && property.startsWith('-webkit-text-stroke')) continue;
       if (property === '-webkit-text-fill-color'
         && value === style.getPropertyValue('color').trim()) continue;
@@ -412,6 +471,92 @@ export function measureSlides(doc: Document): MeasuredSlide[] {
     });
     restoreMath();
     return clone.innerHTML;
+  };
+
+  /**
+   * Whitespace as the browser lays it out, written into the markup, because
+   * the deck draws its text `pre-wrap` and would draw every space it is given.
+   *
+   * Only what HTML collapses is collapsed: runs of spaces, tabs and newlines.
+   * An em space or a no-break space is a character the author typed because
+   * the browser keeps it — `&emsp;` indenting an algorithm's loop body — and
+   * collapsing every `\s` lost it. Whitespace the browser does not draw at
+   * all goes: at the start and end of a line, between list items and table
+   * rows, beside a block. Collapsed to one space instead, the source
+   * indentation of a pretty-printed list became a blank line per item.
+   * Maths is left alone: it goes back into the deck as the TeX it came from.
+   */
+  const collapseAuthoredWhitespace = (root: HTMLElement): void => {
+    const COLLAPSIBLE_ONLY = /^[ \t\n\r\f]*$/;
+    const breaksLine = (node: Node): boolean => {
+      if (node.nodeType !== 1) return false;
+      if ((node as Element).tagName === 'BR') return true;
+      const display = computed(node as HTMLElement).display;
+      return display !== '' && !display.startsWith('inline') && display !== 'contents' && display !== 'none';
+    };
+    // Neighbours that draw nothing between this text and the next thing on the line.
+    const neighbour = (node: Node, forward: boolean): Node | null => {
+      let next = forward ? node.nextSibling : node.previousSibling;
+      while (next && (next.nodeType === 8
+        || (next.nodeType === 3 && COLLAPSIBLE_ONLY.test((next as Text).data)))) {
+        next = forward ? next.nextSibling : next.previousSibling;
+      }
+      return next;
+    };
+    const atLineEdge = (node: Node, forward: boolean): boolean => {
+      let current: Node = node;
+      for (;;) {
+        const next = neighbour(current, forward);
+        if (next) return breaksLine(next);
+        const parent = current.parentNode;
+        if (!parent || parent === root || breaksLine(parent)) return true;
+        current = parent;
+      }
+    };
+    const blockOf = (node: Node): Node => {
+      let current = node.parentNode;
+      while (current && current !== root && !breaksLine(current)) current = current.parentNode;
+      return current ?? root;
+    };
+    const verbatim = (text: Text): boolean => {
+      const parent = text.parentElement;
+      if (!parent || parent.closest('.katex, pre, code')) return true;
+      return /^(pre|break-spaces)/.test(computed(parent).whiteSpace);
+    };
+    const texts: Text[] = [];
+    const walker = root.ownerDocument.createTreeWalker(root, 4 /* NodeFilter.SHOW_TEXT */);
+    while (walker.nextNode()) texts.push(walker.currentNode as Text);
+    let previous: Text | null = null;
+    for (const text of texts) {
+      if (verbatim(text)) { previous = null; continue; }
+      let data = text.data.replace(/[ \t\n\r\f]+/g, ' ');
+      const container = text.parentElement?.tagName ?? '';
+      const followsSpace = previous !== null && previous.data.endsWith(' ')
+        && blockOf(previous) === blockOf(text);
+      if (data.startsWith(' ') && (followsSpace || atLineEdge(text, false))) data = data.slice(1);
+      if (data.endsWith(' ') && atLineEdge(text, true)) data = data.slice(0, -1);
+      if (data === '' || (data === ' ' && /^(UL|OL|TABLE|THEAD|TBODY|TFOOT|TR)$/.test(container))) {
+        text.remove();
+        continue;
+      }
+      if (data !== text.data) text.data = data;
+      previous = text;
+    }
+  };
+
+  /**
+   * `<li value="9">` restarts the numbering there: the items after it are 10,
+   * 11. The player draws its own numbers from the `list-item` counter, which
+   * Chromium does not move for a `value` — only that item read 9 and the
+   * next went back to where the old count was. A counter reset is what
+   * `value` means, so that is what the item carries into the deck.
+   */
+  const listValuesAsCounters = (root: HTMLElement): void => {
+    for (const item of root.querySelectorAll<HTMLElement>('ol > li[value]')) {
+      const value = Number.parseInt(item.getAttribute('value') ?? '', 10);
+      if (!Number.isFinite(value) || item.style.getPropertyValue('counter-set')) continue;
+      item.style.setProperty('counter-set', `list-item ${value}`);
+    }
   };
 
   const CONTENT_TAGS = new Set(['img', 'video', 'svg', 'canvas', 'table', 'iframe']);
@@ -831,6 +976,13 @@ export function measureSlides(doc: Document): MeasuredSlide[] {
         }
         const property = text.slice(0, colon).trim().toLowerCase();
         if (!style || style.getPropertyValue(property)) continue;
+        // A shorthand reads back empty once a later declaration changes one
+        // of its parts — `border:0; border-bottom:2px solid` is a rule under
+        // a heading, applied exactly as written — so ask the parser about
+        // the declaration on its own before calling it dropped.
+        const alone = node.ownerDocument.createElement('div').style;
+        alone.cssText = text;
+        if (alone.length > 0) continue;
         out.push(`${describeNode(node)}: inline declaration "${clip(text)}" was dropped by the `
           + 'browser\'s CSS parser and is not applied');
       }
@@ -1333,6 +1485,8 @@ export function measureSlides(doc: Document): MeasuredSlide[] {
         muted: node.hasAttribute('muted') || (node.dataset.muted === 'false' ? false : undefined),
         autoplay: node.hasAttribute('autoplay') || (node.dataset.autoplay === 'false' ? false : undefined),
         controls: node.hasAttribute('controls') || undefined,
+        start: node.tagName === 'OL' ? node.getAttribute('start') ?? undefined : undefined,
+        reversed: (node.tagName === 'OL' && node.hasAttribute('reversed')) || undefined,
       },
       verbatim,
       ...(verbatim ? {
@@ -1363,6 +1517,9 @@ export function measureSlides(doc: Document): MeasuredSlide[] {
   ): MeasuredNode | null => {
     if (!independent || !supportsPseudoComputedStyle
       || owner.closest('[data-element="html"]')) return null;
+    // The marker the authoring list rules draw is the player's, not a
+    // decoration of the author's.
+    if (pseudo === '::before' && markerless.has(owner)) return null;
     const style = view.getComputedStyle(owner, pseudo);
     if (!style.content || style.content === 'none' || style.content === 'normal') return null;
     // A generated counter or image has no literal to carry across.
@@ -1614,8 +1771,8 @@ export function measureSlides(doc: Document): MeasuredSlide[] {
       // part of what it holds.
       if (typeOf(node) === 'text' && !/^(pre|code)$/.test(node.tagName.toLowerCase())
         && !node.querySelector(':scope > .text-body > [data-text-content]')) {
-        const collapsed = node.innerHTML.replace(/\s+/g, ' ').trim();
-        if (collapsed !== node.innerHTML) node.innerHTML = collapsed;
+        collapseAuthoredWhitespace(node);
+        listValuesAsCounters(node);
       }
     }
     // Force layout with the new classes applied before anything is measured.

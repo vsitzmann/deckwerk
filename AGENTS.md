@@ -268,7 +268,11 @@ turns into, not a list of things to opt into.
 
 - **Text** — any text-bearing tag: headings, `<p>`, `<blockquote>`, `<li>`,
   `<dt>`/`<dd>`, `<figcaption>`, `<small>`, `<cite>`, and their inline markup.
-  A `<ul>`/`<ol>` stays one object, markers and all, and a hand-written
+  A `<ul>`/`<ol>` stays one object, markers and all, laid out in the page with
+  the player's own list rules (markers flush with the box, a little space
+  between items), so the box you see is the box it gets. Indent and
+  pretty-print freely: whitespace between tags is dropped, while `&emsp;` and
+  `&nbsp;` are kept; `<ol start>` and `<li value>` number as in HTML. A hand-written
   `<table>` becomes an editable deck table with the column widths the browser
   measured. The player draws an unstyled table as a plain 1px grid; a
   designed table resets that first (`.results th, .results td { border: 0 }`
