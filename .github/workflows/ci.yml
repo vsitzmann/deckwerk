@@ -119,4 +119,4 @@ jobs:
         if: ${{ !cancelled() }}
         env:
           RUN_SAFARI_LATENCY: "1"
-        run: npx vitest run --config vitest.browser.config.ts test/editingLatencyBrowser.test.ts -t "Safari"
+        run: npx vitest run --config vitest.serial.config.ts test/editingLatencyBrowser.test.ts -t "Safari"
