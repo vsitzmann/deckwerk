@@ -222,8 +222,18 @@ export function measureSlides(doc: Document): MeasuredSlide[] {
    */
   const authoredHere = (node: Element): boolean =>
     independent || node.closest('[data-element-id]') === null;
-  /** Nodes the walk itself turned into HTML fallbacks, as against ones the page declared so. */
-  const walkFallbacks = new Set<HTMLElement>();
+  /**
+   * Nodes a walk itself turned into HTML fallbacks, as against ones the page
+   * declared so. The walk marks such a node `data-element="html"` in the
+   * document, so a second walk of the same document would read its own marker
+   * as the author's and stop reporting it. The set is kept on the document
+   * object, not in its markup, so nothing extra reaches the stored HTML; this
+   * function also runs serialised inside the compile page, so it cannot live
+   * at module scope.
+   */
+  const walkKey = Symbol.for('deckwerk.walkFallbacks');
+  const docSlots = doc as unknown as Record<symbol, WeakSet<HTMLElement> | undefined>;
+  const walkFallbacks = docSlots[walkKey] ?? (docSlots[walkKey] = new WeakSet<HTMLElement>());
   /** Why an inline SVG did not become a shape, for the fallback's reason and the apply's warning. */
   const svgRefusals = new Map<HTMLElement, string>();
   /** What a conversion approximated or could not carry, reported with the slide being measured. */
