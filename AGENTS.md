@@ -108,6 +108,9 @@ it is always the whole deck.
 `context` and `comments` print, and the number a person says out loud. So "my
 slide 44 is ugly" is `--slide 44`, and that slide with its neighbours is
 `--slide 43,44,45`. You never have to look up an id to act on a number.
+Where a command takes several slides (`inspect`, `render`, `validate`,
+`theme apply`), a range of numbers counts too, both ends included, and a list
+can mix them: `--slide 2-40`, `--slide 1,3-5`.
 
 ### Resolve the visual direction before creating slides
 
@@ -207,7 +210,7 @@ save the editor's status message says the same thing.
 `slide-agent validate` also reports `overflows`: every element whose authored
 box extends past the canvas, from geometry alone. Deliberate bleeds show up
 there too — the list is a checklist, not an error. Scope it to the slides you
-are actually editing with `--slide <id|number>` (repeatable, or comma-separated) or
+are actually editing with `--slide <id|number|a-b>` (repeatable, or comma-separated) or
 `--selected`; structural `errors` stay deck-wide either way.
 
 **Write semantic markup; put reusable classes in `theme.css`.** The walk bakes
@@ -581,9 +584,9 @@ Diagnostics go to stderr. Exit codes are `0` ok, `1` error,
 | `capabilities [ids...]` | Every feature (or just the named ones), with a working example, screenshot and markup |
 | `context [deck]` | What is selected, what revision is the deck, is the editor live |
 | `new [deck] [--count <n>]` | A blank authoring page — no ids, no scope, so saving it only adds slides |
-| `inspect [deck] [--selected\|--slide id\|number\|--all] [--html\|--dom]` | Editable HTML for the slides it names (saving it can replace and delete them), or computed inspection data |
+| `inspect [deck] [--selected\|--slide id\|number\|a-b\|--all] [--html\|--dom]` | Editable HTML for the slides it names (saving it can replace and delete them), or computed inspection data |
 | `apply [deck] --html <file>` | Explicitly compile and sync an HTML range |
-| `render [deck] [--selected\|--slide id\|number\|--all] --output <dir> [--annotate] [--built] [--contact-sheet]` | Optional PNGs; `--contact-sheet` adds one tiled overview of everything rendered |
+| `render [deck] [--selected\|--slide id\|number\|a-b\|--all] --output <dir> [--annotate] [--built] [--contact-sheet]` | Optional PNGs; `--contact-sheet` adds a tiled overview of everything rendered, 48 slides to a sheet (`contactSheets` lists them when there are several) |
 | `preview [deck] [--port n] [--open]` | Export through the real player and serve on localhost; prints its URL as JSON, then blocks — run it in the background and give the user the URL |
 | `validate [deck]` | Schema, duplicate ids, timeline references, missing assets |
 | `asset import <deck> <paths...>` | Media copied into `assets/`, deduped, probed, transcoded |

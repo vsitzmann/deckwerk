@@ -4,7 +4,9 @@ import { cp, mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:
 import { basename, dirname, extname, join, resolve, sep } from 'node:path';
 import { type Deck, emptyDeck, parseDeck } from '@shared/deck.js';
 import type { ImportedAsset } from '@shared/ipc.js';
-import { classifyMediaName, CONVERTED_IMAGE_EXTS, importedAssetName, originalAssetCandidates } from '@shared/media.js';
+import {
+  classifyMediaName, CONVERTED_IMAGE_EXTS, importedAssetName, importedVideoExtension, originalAssetCandidates,
+} from '@shared/media.js';
 import { serializeSpeakerNotes, SPEAKER_NOTES_FILE } from '@shared/speakerNotes.js';
 import { HISTORY_FILES } from '@shared/editHistory.js';
 import { VERSIONS_DIR } from './deckVersions.js';
@@ -255,7 +257,7 @@ export async function importAsset(
   await mkdir(assetsDir, { recursive: true });
 
   const hash = await hashFile(sourcePath);
-  const ext = extname(sourcePath).toLowerCase();
+  const ext = importedVideoExtension(extname(sourcePath).toLowerCase());
   const stem = sanitize(basename(sourcePath, extname(sourcePath)));
   const name = importedAssetName.original(stem, hash, ext);
   const dest = join(assetsDir, name);

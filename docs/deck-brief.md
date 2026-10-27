@@ -9,7 +9,7 @@ into editable slide objects. Don't read or edit `deck.json`.
 ## 1. Look at the slides around yours
 
     slide-agent render . --slide 8,9,10 --output /tmp/ctx     # PNGs
-    slide-agent inspect . --html-body --slide 8,9,10          # their markup
+    slide-agent inspect . --html-body --slide 8-10            # same slides, as a range
 
 Slides are numbered as in the editor's rail. Match the neighbours' fonts,
 colours, margins and title position; `theme.css` holds the deck's styles.

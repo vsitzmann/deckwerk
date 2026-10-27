@@ -349,6 +349,35 @@ describe('slide-agent CLI', { timeout: 60_000 }, () => {
     expect(past.stderr).toMatch(/2 slides/);
   });
 
+  // On a 500-slide deck "slides 2 to 40" as a comma list is 39 numbers long;
+  // `--slide 2-40` was refused as "No such slide: 2-40".
+  it('takes a range of slide numbers, alone or mixed into a list', async () => {
+    const deck = await onDisk();
+    deck.slides.push(slideOf('slide-3'), slideOf('slide-4'), slideOf('slide-5'));
+    await writeDeck(deck);
+    const ids = async (...slideArgs: string[]) => {
+      const result = await parsed('inspect', '--elements-only', ...slideArgs);
+      expect(result.code, result.stderr).toBe(EXIT_OK);
+      return result.json.slides.map((slide: { id: string }) => slide.id);
+    };
+
+    expect(await ids('--slide', '2-4')).toEqual(['slide-2', 'slide-3', 'slide-4']);
+    expect(await ids('--slide', '1,3-5')).toEqual(['slide-1', 'slide-3', 'slide-4', 'slide-5']);
+    expect(await ids('--slide', '4-4,slide-1')).toEqual(['slide-1', 'slide-4']);
+
+    // The shared parser: validate and render read the same --slide.
+    const scoped = await parsed('validate', '--slide', '2-3');
+    expect(scoped.json.scope).toEqual(['slide-2', 'slide-3']);
+
+    const backwards = await cli('inspect', '--elements-only', '--slide', '4-2');
+    expect(backwards.code).toBe(EXIT_USAGE);
+    expect(backwards.stderr).toMatch(/4-2/);
+    const past = await cli('render', '--slide', '3-9', '--output', join(dir, 'shots'));
+    expect(past.code).toBe(EXIT_USAGE);
+    expect(past.stderr).toMatch(/No such slide: 3-9/);
+    expect(past.stderr).toMatch(/5 slides/);
+  });
+
   it('writes a blank authoring page that can only add slides', async () => {
     // Copying an export to author new slides deleted the slides it was copied
     // from: the copy inherited the scope marker. This is the file to copy
@@ -628,6 +657,32 @@ describe('slide-agent CLI', { timeout: 60_000 }, () => {
       const transcoded = await parsed('asset', 'import', dir, exotic);
       expect(transcoded.json.assets[0].src).toMatch(/\.h264\.mp4$/);
       expect(transcoded.json.assets[0].kind).toBe('video');
+    }, 180_000);
+
+    // Keynote keeps some movies as `.qt`: plain QuickTime, usually H.264. It
+    // was refused as "Unsupported media type" although remuxing it to .mp4
+    // imported fine.
+    it('imports a .qt movie as QuickTime, under a name the browser serves as video', async () => {
+      const qt = join(dir, 'tear_tape-28252.qt');
+      await run(getFfmpegPath(), [
+        '-y', '-loglevel', 'error', '-i', join(fixtures, 'testclip.mp4'), '-t', '1',
+        '-c', 'copy', '-f', 'mov', qt,
+      ]);
+      const { code, json } = await parsed('asset', 'import', dir, qt);
+      expect(code, JSON.stringify(json)).toBe(EXIT_OK);
+      expect(json.failures).toEqual([]);
+      expect(json.assets[0]).toMatchObject({ kind: 'video' });
+      expect(json.assets[0].src).toMatch(/^assets\/tear_tape-28252\.[0-9a-f]{8}(\.fs)?\.mov$/);
+      expect(json.assets[0].duration).toBeGreaterThan(0);
+
+      // A .qt Chromium cannot decode (MPEG-4 Part 2 here) is transcoded like any other.
+      const hevc = join(dir, 'screen.qt');
+      await run(getFfmpegPath(), [
+        '-y', '-loglevel', 'error', '-i', join(fixtures, 'testclip.mp4'), '-t', '1',
+        '-c:v', 'mpeg4', '-an', '-f', 'mov', hevc,
+      ]);
+      const transcoded = await parsed('asset', 'import', dir, hevc);
+      expect(transcoded.json.assets[0].src).toMatch(/\.h264\.mp4$/);
     }, 180_000);
   });
 

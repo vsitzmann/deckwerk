@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 import type { Deck } from '@shared/deck.js';
 import { exportDeck } from '../main/exportDeck.js';
 import { tempDir } from './agentCli.js';
-import { electronFailure, headlessElectronArgs } from './electronDisplay.js';
+import { electronChildEnv, electronFailure, headlessElectronArgs } from './electronDisplay.js';
 
 /**
  * Optional PNGs of slides, captured from the shared presentation renderer.
@@ -37,18 +37,34 @@ export interface RenderRequest {
    * would be absurd.
    */
   bundleDir?: string;
+  /**
+   * A fixed pause after each slide loads, before the capture waits for its
+   * media. Defaults to 400 ms; tests set 0 to prove the media wait alone is
+   * what puts pictures and clips in the PNG.
+   */
+  settleMs?: number;
+  /** How long one slide's pictures and clips may take to be paintable. */
+  mediaTimeoutMs?: number;
 }
 
 export interface RenderedImage {
   slideId: string;
   number: number;
   path: string;
+  /**
+   * Media on the slide that failed to load, or was still not paintable when
+   * the wait ran out, so the PNG may be missing it. Absent when every picture
+   * and clip was on screen.
+   */
+  problems?: string[];
 }
 
 export interface RenderResult {
   images: RenderedImage[];
-  /** Path of the tiled overview, when one was requested. */
+  /** Path of the (first) tiled overview, when one was requested. */
   contactSheet: string | null;
+  /** Every tiled overview, in slide order: one per CONTACT_SHEET_SLIDES slides. */
+  contactSheets: string[];
 }
 
 export async function renderSlidesToPng(request: RenderRequest): Promise<RenderResult> {
@@ -56,7 +72,14 @@ export async function renderSlidesToPng(request: RenderRequest): Promise<RenderR
   // this render's scratch and goes once the captures are written.
   const ownBundle = request.bundleDir ? null : await tempDir('slide-agent-bundle-');
   try {
-    if (ownBundle) await exportDeck(request.deckDir, request.deck, ownBundle);
+    // Only what the captured slides show: a deck can carry a gigabyte of
+    // media, and one unreadable file on a slide nobody asked for must not
+    // fail the render of every other slide.
+    if (ownBundle) {
+      await exportDeck(request.deckDir, request.deck, ownBundle, undefined, {
+        onlySlides: new Set(request.slides.map((slide) => slide.id)),
+      });
+    }
     return await captureSlides(request, request.bundleDir ?? ownBundle!);
   } finally {
     if (ownBundle) await rm(ownBundle, { recursive: true, force: true });
@@ -77,6 +100,8 @@ async function captureSlides(request: RenderRequest, bundleDir: string): Promise
     built: request.built,
     contactSheet: request.contactSheet ?? false,
     selectedElementIds: request.selectedElementIds,
+    ...(request.settleMs !== undefined ? { settleMs: request.settleMs } : {}),
+    mediaTimeoutMs: request.mediaTimeoutMs ?? MEDIA_TIMEOUT_MS,
     // SLIDE_AGENT_DEBUG=1 keeps the capture's own diagnostics on stderr, which
     // is the only way to see inside a headless render that came out wrong.
     debug: process.env.SLIDE_AGENT_DEBUG === '1',
@@ -87,9 +112,17 @@ async function captureSlides(request: RenderRequest, bundleDir: string): Promise
     describe: (seconds) => `Capturing ${request.slides.length} slide(s) exceeded ${seconds} seconds; `
       + 'render fewer slides at a time with --slide, or set SLIDE_AGENT_DEBUG=1 to see where it stalls.',
   });
-  const parsed = JSON.parse(stdout) as { images: RenderedImage[]; contactSheet?: string | null };
-  return { images: parsed.images, contactSheet: parsed.contactSheet ?? null };
+  const parsed = JSON.parse(stdout) as { images: RenderedImage[]; contactSheets?: string[] };
+  const contactSheets = parsed.contactSheets ?? [];
+  return { images: parsed.images, contactSheet: contactSheets[0] ?? null, contactSheets };
 }
+
+/**
+ * How long one slide's media may take to become paintable before the
+ * capture goes ahead and names what is missing. Well inside the per-slide
+ * share of `captureTimeoutMs`, so a deck of slow clips is reported, not killed.
+ */
+const MEDIA_TIMEOUT_MS = 8_000;
 
 function captureScript(): string {
   // Resolved from this module, not from the cwd: the CLI is normally run from
@@ -222,7 +255,7 @@ function runElectron(script: string, jobPath: string, budget: ElectronBudget): P
   return new Promise((resolvePromise, reject) => {
     const child = spawn(electronBinary(), [script, jobPath, ...headlessElectronArgs()], {
       stdio: ['ignore', 'pipe', 'pipe'],
-      env: { ...process.env, ELECTRON_DISABLE_SECURITY_WARNINGS: '1' },
+      env: electronChildEnv(),
     });
     let out = '';
     let err = '';

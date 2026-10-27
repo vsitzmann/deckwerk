@@ -14,6 +14,13 @@
 const { readFileSync, writeFileSync } = require('node:fs');
 const { pathToFileURL } = require('node:url');
 const { app, BrowserWindow } = require('electron');
+// Started by Electron with ELECTRON_RUN_AS_NODE=1, this is plain Node and
+// `app` is undefined. The CLI strips the variable (electronChildEnv); say so
+// plainly to anyone who runs the script by hand with it set.
+if (!app) {
+  process.stderr.write(`${__filename} must run as Electron, not Node: unset ELECTRON_RUN_AS_NODE.\n`);
+  process.exit(1);
+}
 
 const job = JSON.parse(readFileSync(process.argv[2], 'utf8'));
 
