@@ -175,7 +175,14 @@ class Collaborator {
  * the first frame whose canvas shows the next slide.
  */
 const INSTRUMENTS = `(() => {
-  const m = window.__latency = { frames: [], keys: [], steps: [], stepTo: [], armed: false };
+  const m = window.__latency = { frames: [], keys: [], steps: [], stepTo: [], stepJs: [], armed: false };
+  // How long the page's own code takes to switch slides, apart from what the
+  // browser then spends laying out, decoding and painting the result.
+  const selectSlide = window.store.selectSlide;
+  window.store.selectSlide = function (...args) {
+    const t0 = performance.now();
+    try { return selectSlide.apply(this, args); } finally { if (m.armed) m.stepJs.push(performance.now() - t0); }
+  };
   const now = () => performance.now();
   // An event's timeStamp is when it was created, before any queueing behind a
   // busy main thread; fall back to now() where a driver's event lacks one.
@@ -210,15 +217,15 @@ const INSTRUMENTS = `(() => {
   return true;
 })()`;
 
-/** `stepTo` names the slide each of `steps` arrived at. */
-interface Measured { frames: number[]; keys: number[]; steps: number[]; stepTo: string[] }
+/** `stepTo` names the slide each of `steps` arrived at; `stepJs` is the editor's own script time for it. */
+interface Measured { frames: number[]; keys: number[]; steps: number[]; stepTo: string[]; stepJs: number[] }
 
 async function arm(page: Page): Promise<void> {
-  await page.evaluate(`(() => { const m = window.__latency; m.frames = []; m.keys = []; m.steps = []; m.stepTo = []; m.armed = true; return true; })()`);
+  await page.evaluate(`(() => { const m = window.__latency; m.frames = []; m.keys = []; m.steps = []; m.stepTo = []; m.stepJs = []; m.armed = true; return true; })()`);
 }
 
 async function disarm(page: Page): Promise<Measured> {
-  return page.evaluate<Measured>(`(() => { const m = window.__latency; m.armed = false; return { frames: m.frames, keys: m.keys, steps: m.steps, stepTo: m.stepTo }; })()`);
+  return page.evaluate<Measured>(`(() => { const m = window.__latency; m.armed = false; return { frames: m.frames, keys: m.keys, steps: m.steps, stepTo: m.stepTo, stepJs: m.stepJs }; })()`);
 }
 
 function quantile(values: number[], q: number): number {
@@ -397,8 +404,9 @@ for (const kind of BROWSERS) {
     });
 
     it('shows the next slide promptly when stepping through collages and clips', () => {
-      const { steps, stepTo, frames } = results.stepping!;
-      const detail = `steps ${steps.map((ms, i) => `${stepTo[i]} ${Math.round(ms)}`).join(', ')} ms; stalls ${round(stalls(frames))} ms`;
+      const { steps, stepTo, stepJs, frames } = results.stepping!;
+      const detail = `steps ${steps.map((ms, i) => `${stepTo[i]} ${Math.round(ms)} (script ${Math.round(stepJs[i] ?? NaN)})`).join(', ')} ms; `
+        + `stalls ${round(stalls(frames))} ms`;
       expect(steps.length, `every step was measured (${detail})`).toBeGreaterThanOrEqual(10);
       expect(quantile(steps, 0.5), `median step (${detail})`).toBeLessThanOrEqual(BUDGET.slideStepMedianMs);
       expect(Math.max(...steps), `slowest step (${detail})`).toBeLessThanOrEqual(BUDGET.slideStepWorstMs);
