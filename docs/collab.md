@@ -421,6 +421,16 @@ the participant id.
   surface ends the show on both. Speaker View needs pop-ups allowed for the
   site; if the second window is refused, Present falls back to presenting in
   this tab and says why.
+- **Present with a second screen** (Chrome and Edge, through the Window
+  Management API) — when `screen.isExtended` says another screen is attached,
+  Present (plain or Speaker View) sends this tab's presentation fullscreen to
+  that screen as the audience and opens Speaker View in a pop-up filling the
+  screen the editor is on, from the one click, like the desktop app. Press `F`
+  in Speaker View to make it fullscreen too. The first time, the browser asks
+  to allow window management; if that takes longer than the click lasts,
+  nothing starts and the status line says to press Present again. Refused, no
+  API (Safari, Firefox) or one screen: Present behaves as described above. The
+  choice of screen is `src/renderer/collab/presentScreens.ts`.
 - **Sidebar tabs** — Props, Theme (the full preset gallery + adoption
   controls, shared code with the desktop app), Build, History. Restoring a
   history snapshot broadcasts as an ordinary transaction.

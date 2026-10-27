@@ -19,6 +19,12 @@ while [ -L "$target" ]; do
 done
 root=$(cd "$(dirname "$target")/.." && pwd)
 
+# An agent hosted in an Electron app (T3 Code, an editor) inherits
+# ELECTRON_RUN_AS_NODE=1, which turns every Electron helper this CLI spawns
+# into plain Node. The spawn sites strip it too (electronChildEnv); this keeps
+# it out of anything else started from here.
+unset ELECTRON_RUN_AS_NODE
+
 exec "$root/node_modules/.bin/vite-node" \
   --config "$root/vitest.config.ts" \
   "$root/scripts/slide-agent.mts" -- "$@"

@@ -45,6 +45,30 @@ describe.skipIf(webExportUnavailableReason() !== null)('web export asset copying
     expect(existsSync(join(out, 'assets', 'figures', 'plot.png'))).toBe(true);
   });
 
+  // `slide-agent render` exports a scratch bundle to capture from. It copied
+  // every asset the deck references, each through `<name>.<pid>.copy-tmp`: a
+  // Keynote import that kept a 248-character media name pushed that past the
+  // 255-byte limit, and ENAMETOOLONG failed the render of every slide.
+  it('copies only the named slides\' media, and a name at the length limit', async () => {
+    const long = `assets/${'6874747073'.repeat(24)}-22803.gif`; // a 250-byte file name
+    const { dir, out } = await deckWithImage(long);
+    const deck = JSON.parse(await readFile(join(dir, 'deck.json'), 'utf8'));
+    deck.slides.push({
+      ...deck.slides[0],
+      id: 'other-slide',
+      elements: [{ ...deck.slides[0].elements[0], id: 'img-2', src: 'assets/other.png' }],
+    });
+    await writeFile(join(dir, long), Buffer.from([1, 2, 3]));
+    await writeFile(join(dir, 'assets', 'other.png'), Buffer.from([4, 5, 6]));
+
+    await exportDeck(dir, deck, out, undefined, { onlySlides: new Set([deck.slides[0].id]) });
+    expect(await readFile(join(out, long))).toEqual(Buffer.from([1, 2, 3]));
+    expect(existsSync(join(out, 'assets', 'other.png'))).toBe(false);
+    // Every slide is still in the page: captures address slides by number.
+    expect(await readFile(join(out, 'index.html'), 'utf8')).toContain('other-slide');
+    expect((await readdir(join(out, 'assets'))).filter((name) => name.includes('tmp'))).toEqual([]);
+  });
+
   it('refuses a symlink in assets/ that points outside the deck', async () => {
     const { root, dir, out } = await deckWithImage('assets/escape.png');
     await writeFile(join(root, 'secret.png'), Buffer.from([9, 9, 9]));

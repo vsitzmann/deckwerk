@@ -24,6 +24,9 @@ export function sanitizeAuthoredHtml(source: string): {
   };
 
   for (const node of document.querySelectorAll('script, object, embed, iframe')) {
+    // A section's timeline block is JSON in a script of a type no browser
+    // runs: data the compile reads, kept only in exactly that form.
+    if (isTimelineBlock(node)) continue;
     report.removedScripts += 1;
     node.remove();
   }
@@ -73,6 +76,32 @@ export function sanitizeAuthoredHtml(source: string): {
 
   const doctype = document.doctype ? '<!doctype html>\n' : '';
   return { html: doctype + document.documentElement.outerHTML, report };
+}
+
+/**
+ * The textual counterpart of `sanitizeAuthoredHtml`'s script removal, for
+ * the collab server, which has no DOM: every script goes except a timeline
+ * block in exactly its exported form. The export writes `<` inside the block
+ * as `\u003c`, so a block holding any `<` is refused — a browser also ends a
+ * script at `</script/` or `</script ` where this match does not, and
+ * whatever followed such an early close would otherwise survive inside it.
+ */
+export function stripScriptsKeepingTimeline(source: string): string {
+  const open = '<script type="application/deckwerk-timeline">';
+  return source.replace(/<script\b[^>]*>[\s\S]*?<\/script\s*>/gi, (script) => (
+    script.startsWith(open) && !script.slice(open.length, script.lastIndexOf('</')).includes('<') ? script : ''
+  ));
+}
+
+/**
+ * `<script type="application/deckwerk-timeline">` and nothing else on the
+ * tag: a section's timeline as JSON (`htmlSlides.ts`), which no browser
+ * executes.
+ */
+function isTimelineBlock(node: Element): boolean {
+  return node.tagName.toLowerCase() === 'script'
+    && node.attributes.length === 1
+    && node.getAttribute('type') === 'application/deckwerk-timeline';
 }
 
 /**

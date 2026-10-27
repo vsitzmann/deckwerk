@@ -20,6 +20,7 @@ import { CustomThemeSchema, parseDeck, type Comment, type Deck, type Slide, type
 import { commentsOperation, findComment, threadEdits } from '@shared/comments.js';
 import { diffDecks } from '@shared/deckDiff.js';
 import { renameRetiredFields } from '@shared/fieldAliases.js';
+import { rotatedBounds } from '@shared/geometry.js';
 import {
   type ThemeAdoption,
   type ThemePreset,
@@ -97,13 +98,13 @@ The loop — edit HTML, the editor syncs it back:
   new       [deck] [--count <n>]          a blank authoring page: the same
                                           skeleton, with no slide ids and no
                                           scope, so saving it only ADDS slides
-  inspect   [deck] --html [--selected|--slide id|number|--all]
+  inspect   [deck] --html [--selected|--slide id|number|a-b|--all]
                                           create a scoped authoring page —
                                           editing a section replaces its slide,
                                           removing one deletes it
-  inspect   [deck] --html-body [--slide id|number]
+  inspect   [deck] --html-body [--slide id|number|a-b]
                                           compact read-only section markup
-  inspect   [deck] --elements-only [--slide id|number]
+  inspect   [deck] --elements-only [--slide id|number|a-b]
                                           compact object inventory
   # then edit edit/<file>.html and save it; with the editor open the deck
   # follows within ~200ms. With it closed, apply the same file explicitly:
@@ -126,7 +127,7 @@ Everything else:
   docs [authoring|web|themes|internals]   focused guides; bare docs is the
                                           full repository reference
   capabilities                            every feature, with copyable JSON
-  validate  [deck] [--slide id|number|--selected]
+  validate  [deck] [--slide id|number|a-b|--selected]
                                           schema, ids, references, assets, and
                                           canvas overflows (scoped to your slides)
   asset import <deck> <paths...>          copy media into assets/, probed
@@ -154,7 +155,7 @@ Everything else:
                                           frame will; --replace infers the
                                           existing element's exact box size
   inspect   [deck] [--dom]                computed scenes, for questions
-  render    [deck] [--selected|--slide id|number|--all] --output <dir>
+  render    [deck] [--selected|--slide id|number|a-b|--all] --output <dir>
             [--annotate] [--built]
                                           add --contact-sheet for one tiled
                                           overview of everything rendered
@@ -170,7 +171,7 @@ Everything else:
   theme     choose [deck] --id <themeId>  the deck's current theme: what new
                                           slides are born wearing
   theme     apply  [deck] --id <themeId> [--scope deck|slides]
-            [--slide id|number|--all]
+            [--slide id|number|a-b|--all]
             [--roles title,heading,body,caption,base]
             [--properties fonts,weights,scale,text-color,background,object-colors]
             [--keep-overrides] [--detect-roles]
@@ -219,7 +220,9 @@ save/apply that file. Slides outside its recorded scope stay untouched.
 
 Anywhere a slide is named, --slide takes its id or its 1-based number — the
 number the rail shows and the number 'context' and 'comments' print. So
-"slide 44" is --slide 44, and its neighbours are --slide 43,44,45.
+"slide 44" is --slide 44, and its neighbours are --slide 43,44,45. Where
+several slides can be named (inspect, render, validate, theme apply), a range
+of numbers counts too, and a list can mix them: --slide 2-40, --slide 1,3-5.
 
 Do not hand-compute geometry: write CSS and let the browser measure.
 `;
@@ -664,7 +667,7 @@ async function renderCommand(argv: string[], io: CliIo): Promise<number> {
     return EXIT_ERROR;
   }
 
-  const { images, contactSheet } = await renderSlidesToPng({
+  const { images, contactSheet, contactSheets } = await renderSlidesToPng({
     deckDir,
     deck,
     outDir: resolve(io.cwd, outDir),
@@ -674,7 +677,17 @@ async function renderCommand(argv: string[], io: CliIo): Promise<number> {
     contactSheet: flags.has('contact-sheet'),
     selectedElementIds: context.selectedElementIds,
   });
-  io.out(json({ revision: context.deckRevision, images, contactSheet }));
+  // A PNG that may be missing media says so, here and in the JSON: a
+  // picture that silently lacks its video reads as a slide that has none.
+  for (const image of images) {
+    for (const problem of image.problems ?? []) io.err(`slide ${image.number} (${image.slideId}): ${problem}`);
+  }
+  io.out(json({
+    revision: context.deckRevision,
+    images,
+    contactSheet,
+    ...(contactSheets.length > 1 ? { contactSheets } : {}),
+  }));
   return EXIT_OK;
 }
 
@@ -759,11 +772,14 @@ async function validateCommand(argv: string[], io: CliIo): Promise<number> {
   try {
     const deck = await loadDeck(deckDir);
     overflows = deck.slides.flatMap((slide) => slide.elements.flatMap((element) => {
+      // The box it covers as drawn: a vertical axis label (rot -90) is
+      // checked as the tall, narrow thing on screen, not its wide stored box.
+      const box = rotatedBounds(element, element.rot);
       const beyond: Record<string, number> = {};
-      if (element.x < 0) beyond.left = round2(-element.x);
-      if (element.y < 0) beyond.top = round2(-element.y);
-      if (element.x + element.w > deck.canvas.w) beyond.right = round2(element.x + element.w - deck.canvas.w);
-      if (element.y + element.h > deck.canvas.h) beyond.bottom = round2(element.y + element.h - deck.canvas.h);
+      if (round2(box.x) < 0) beyond.left = round2(-box.x);
+      if (round2(box.y) < 0) beyond.top = round2(-box.y);
+      if (round2(box.x + box.w) > deck.canvas.w) beyond.right = round2(box.x + box.w - deck.canvas.w);
+      if (round2(box.y + box.h) > deck.canvas.h) beyond.bottom = round2(box.y + box.h - deck.canvas.h);
       return Object.keys(beyond).length > 0
         ? [{ slideId: slide.id, elementId: element.id, type: element.type, beyond }]
         : [];
@@ -1694,7 +1710,7 @@ function ensurePositionals(command: string, positional: string[], max: number): 
 /**
  * What `--slide` named, each flag holding one reference or a comma-separated
  * list. These are ids only once `resolveRequestedSlides` has run over them;
- * before that an entry may still be a slide number.
+ * before that an entry may still be a slide number or a range of them.
  */
 function requestedSlideIds(flags: Set<string>): string[] {
   return [...flags]
@@ -1730,18 +1746,38 @@ function resolveRequestedSlides(flags: Set<string>, deck: Deck): void {
   const refs = requestedSlideIds(flags);
   if (refs.length === 0) return;
   const missing: string[] = [];
-  const resolved = refs.map((ref) => {
-    const id = slideIdForRef(deck, ref);
-    if (id === null) missing.push(ref);
-    return id;
+  const resolved = refs.flatMap((ref) => {
+    const ids = slideIdsForRef(deck, ref);
+    if (ids === null) missing.push(ref);
+    return ids ?? [];
   });
   if (missing.length > 0) {
     throw new UsageError(`No such slide: ${missing.join(', ')}.`
-      + ` This deck has ${deck.slides.length} slides; name one by id or by its 1-based number.`
+      + ` This deck has ${deck.slides.length} slides; name one by id or by its 1-based number,`
+      + ' or a range of numbers from low to high (2-40).'
       + ' Run `slide-agent context` for the current outline.');
   }
   for (const flag of [...flags]) if (flag.startsWith('slide=')) flags.delete(flag);
   for (const id of resolved) flags.add(`slide=${id}`);
+}
+
+/**
+ * The slides one `--slide` entry names: an id, a number, or a range of
+ * numbers (`2-40`, both ends included). Null when any of it is not a slide —
+ * a range reaching past the deck or running backwards is a mistake to
+ * report, not one to clip silently.
+ */
+function slideIdsForRef(deck: Deck, ref: string): string[] | null {
+  const range = /^(\d+)-(\d+)$/.exec(ref);
+  // An id wins over a range, as it does over a number.
+  if (!range || deck.slides.some((slide) => slide.id === ref)) {
+    const id = slideIdForRef(deck, ref);
+    return id === null ? null : [id];
+  }
+  const first = Number(range[1]);
+  const last = Number(range[2]);
+  if (first < 1 || last < first || last > deck.slides.length) return null;
+  return deck.slides.slice(first - 1, last).map((slide) => slide.id);
 }
 
 /** `--selected` (default), `--slide <id>` (repeatable, or comma-separated) or `--all`. */

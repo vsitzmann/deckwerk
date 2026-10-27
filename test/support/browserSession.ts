@@ -3,6 +3,7 @@ import { existsSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { join } from 'node:path';
 import WebSocket from 'ws';
+import { electronChildEnv } from '../../src/cli/electronDisplay.js';
 
 /**
  * Shared plumbing for the production-browser tests: launch a hidden Electron
@@ -932,7 +933,7 @@ export async function launchBrowser(
   ], {
     cwd: process.cwd(),
     stdio: ['ignore', 'pipe', 'pipe'],
-    env: { ...process.env, ELECTRON_DISABLE_SECURITY_WARNINGS: '1' },
+    env: electronChildEnv(),
   });
   const log = collectProcessOutput(child);
   return { process: child, log, ...await reportedPorts(child, electronArgs, log) };

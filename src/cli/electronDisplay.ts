@@ -13,6 +13,22 @@ export function headlessElectronArgs(env: NodeJS.ProcessEnv = process.env): stri
   return ['--ozone-platform=headless'];
 }
 
+/**
+ * The environment for an Electron child: ours, minus what would stop it
+ * being Electron.
+ *
+ * `ELECTRON_RUN_AS_NODE=1` makes the Electron binary a plain Node runtime, so
+ * `require('electron')` is a path and `app` is undefined. An agent hosted
+ * inside an Electron app (T3 Code, an editor) inherits it, and every helper
+ * we spawned died with "Cannot read properties of undefined (reading
+ * 'disableHardwareAcceleration')". Nothing we spawn ever wants it.
+ */
+export function electronChildEnv(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  const child: NodeJS.ProcessEnv = { ...env, ELECTRON_DISABLE_SECURITY_WARNINGS: '1' };
+  delete child.ELECTRON_RUN_AS_NODE;
+  return child;
+}
+
 /** What Chromium prints when it finds no sandbox it can use, and aborts. */
 const NO_SANDBOX = [
   /setuid_sandbox_host\.cc.*FATAL|FATAL:setuid_sandbox_host/,

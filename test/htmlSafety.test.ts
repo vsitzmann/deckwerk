@@ -1,6 +1,8 @@
 import { JSDOM } from 'jsdom';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { sanitizeAuthoredHtml, stripFittedFontSize, stripLayoutDeclarations } from '../src/shared/htmlSafety.js';
+import {
+  sanitizeAuthoredHtml, stripFittedFontSize, stripLayoutDeclarations, stripScriptsKeepingTimeline,
+} from '../src/shared/htmlSafety.js';
 import { ElementSchema } from '../src/shared/deck.js';
 
 describe('HTML import safety and fallback compatibility', () => {
@@ -24,6 +26,28 @@ describe('HTML import safety and fallback compatibility', () => {
     expect(result.report.removedScripts).toBe(1);
     expect(result.report.removedEventHandlers).toBe(2);
     expect(result.report.blockedUrls.length).toBeGreaterThanOrEqual(3);
+  });
+
+  it('keeps a section\'s timeline block, and only in exactly that form', () => {
+    const block = '<script type="application/deckwerk-timeline">[{"id":"t"}]</script>';
+    const result = sanitizeAuthoredHtml(`<!doctype html><html><head></head><body><section class="slide">
+      ${block}
+      <script type="application/deckwerk-timeline" src="x.js">steal()</script>
+      <script type="text/javascript">steal()</script></section></body></html>`);
+    expect(result.html).toContain(block);
+    expect(result.html).not.toContain('steal()');
+    expect(result.report.removedScripts).toBe(2);
+  });
+
+  it('strips scripts textually, keeping a timeline block only when nothing can hide inside it', () => {
+    const block = '<script type="application/deckwerk-timeline">[{"id":"t"}]</script>';
+    expect(stripScriptsKeepingTimeline(`<p>a</p>${block}<script>steal()</script>`)).toBe(`<p>a</p>${block}`);
+    // A browser ends a script at `</script/`, a textual match does not: a
+    // block that closes early must not carry a live script out with it.
+    const smuggled = '<script type="application/deckwerk-timeline"></script/><script>steal()</script>';
+    expect(stripScriptsKeepingTimeline(smuggled)).not.toContain('steal()');
+    const parsed = new JSDOM(stripScriptsKeepingTimeline(smuggled)).window.document;
+    expect([...parsed.querySelectorAll('script')].map((node) => node.textContent)).not.toContain('steal()');
   });
 
   it('reports data URLs for extraction into deck assets', () => {

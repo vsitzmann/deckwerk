@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { renameRetiredFields } from './fieldAliases.js';
 import { normalizeHtmlLineHeights, normalizeStyleLineHeight } from './lineHeight.js';
+import { mediaFragmentTrim, withoutFragment } from './mediaFragment.js';
 
 /**
  * The deck format. This schema is the single source of truth: `deck.json` is
@@ -687,7 +688,7 @@ export const DECK_VERSION = 1 as const;
  * path-annotated message rather than a raw ZodError dump.
  */
 export function parseDeck(raw: unknown): Deck {
-  const result = DeckSchema.safeParse(migrateDeckMorphDuration(renameRetiredFields(raw)));
+  const result = DeckSchema.safeParse(migrateVideoFragments(migrateDeckMorphDuration(renameRetiredFields(raw))));
   if (result.success) return result.data;
   const details = result.error.issues
     .map((i) => `  ${i.path.join('.') || '<root>'}: ${i.message}`)
@@ -715,6 +716,30 @@ function migrateDeckMorphDuration(raw: unknown): unknown {
         : { ...slide, morphDuration: duration };
     }),
   };
+}
+
+/**
+ * A video src carrying a media fragment (`assets/x.mp4#t=15,20`) loads as the
+ * bare file with that trim in `start`/`end`, which is where the deck keeps it;
+ * a trim the fields already state wins. Runs on the copy `renameRetiredFields`
+ * made, so it edits in place.
+ */
+function migrateVideoFragments(raw: unknown): unknown {
+  const slides = raw && typeof raw === 'object' ? (raw as { slides?: unknown }).slides : null;
+  if (!Array.isArray(slides)) return raw;
+  for (const slide of slides) {
+    const elements = slide && typeof slide === 'object' ? (slide as { elements?: unknown }).elements : null;
+    if (!Array.isArray(elements)) continue;
+    for (const element of elements as Array<Record<string, unknown>>) {
+      if (!element || element.type !== 'video' || typeof element.src !== 'string') continue;
+      const trim = mediaFragmentTrim(element.src);
+      if (!trim) continue;
+      element.src = withoutFragment(element.src);
+      if (!element.start) element.start = trim.start;
+      if (element.end === undefined || element.end === null) element.end = trim.end;
+    }
+  }
+  return raw;
 }
 
 /**
