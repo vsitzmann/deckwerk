@@ -14,6 +14,9 @@ export default defineConfig({
   root: resolve(__dirname, 'src/renderer/collab'),
   base: './',
   resolve: { alias: { '@shared': resolve(__dirname, 'src/shared') } },
+  // The spellchecker's worker (spellcheckWorker.ts) code-splits, which
+  // only module workers can.
+  worker: { format: 'es' },
   build: {
     outDir: resolve(__dirname, 'dist/collab'),
     emptyOutDir: true,

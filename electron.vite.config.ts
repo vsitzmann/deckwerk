@@ -38,6 +38,9 @@ export default defineConfig({
         },
       },
     },
+    // The spellchecker's worker (spellcheckWorker.ts) code-splits, which
+    // only module workers can.
+    worker: { format: 'es' },
     resolve: { alias: { '@shared': shared } },
   },
 });
