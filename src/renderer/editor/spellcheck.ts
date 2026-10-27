@@ -176,7 +176,7 @@ export type SpellcheckRequest =
 export type SpellcheckReply = { id: number; lints?: PlainLint[]; error?: string };
 
 /** `lint` as the raw lint `toSpellingLints` reads. */
-function rawLint(lint: PlainLint): RawLint {
+export function rawLint(lint: PlainLint): RawLint {
   return {
     lint_kind: () => lint.kind,
     message: () => lint.message,

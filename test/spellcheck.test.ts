@@ -1,8 +1,11 @@
 // @vitest-environment jsdom
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { LocalLinter } from 'harper.js';
 import { binaryInlined } from 'harper.js/binaryInlined';
-import { maskNonProse, proseOf, rangeFor, toSpellingLints, type RawLint } from '../src/renderer/editor/spellcheck.js';
+import {
+  maskNonProse, proseOf, rangeFor, rawLint, toSpellingLints,
+  type RawLint, type SpellcheckReply, type SpellcheckRequest,
+} from '../src/renderer/editor/spellcheck.js';
 
 function box(html: string): HTMLElement {
   const el = document.createElement('div');
@@ -77,4 +80,33 @@ describe('spellcheck lint mapping', () => {
     expect(lints[0].kind).toBe('spelling');
     expect(lints[0].suggestions).toContain('propose');
   }, 60_000);
+
+  // The page reads lints the worker sends as plain data: harper.js's own
+  // WorkerLinter rebuilt them as WebAssembly objects on the page, which made
+  // the page load the whole binary too.
+  it('lints in spellcheckWorker.ts and answers with plain data', async () => {
+    const replies: SpellcheckReply[] = [];
+    vi.stubGlobal('postMessage', (reply: SpellcheckReply) => replies.push(reply));
+    try {
+      await import('../src/renderer/editor/spellcheckWorker.js');
+      const ask = async (request: SpellcheckRequest) => {
+        const before = replies.length;
+        (self.onmessage as (event: { data: SpellcheckRequest }) => void)({ data: request });
+        await vi.waitFor(() => expect(replies.length).toBe(before + 1), { timeout: 60_000 });
+        return replies[before];
+      };
+      const prose = proseOf(box('<p>We propsoe a method.</p>'));
+      const linted = await ask({ id: 7, op: 'lint', text: prose.text });
+      expect(linted.id).toBe(7);
+      expect(structuredClone(linted), 'nothing but plain data crosses back').toEqual(linted);
+      const lints = toSpellingLints(prose.text, linted.lints!.map(rawLint));
+      expect(lints.map((lint) => prose.text.slice(lint.start, lint.end))).toEqual(['propsoe']);
+      expect(lints[0].suggestions).toContain('propose');
+
+      expect(await ask({ id: 8, op: 'importWords', words: ['propsoe'] })).toEqual({ id: 8 });
+      expect((await ask({ id: 9, op: 'lint', text: prose.text })).lints).toEqual([]);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  }, 120_000);
 });
