@@ -68,7 +68,22 @@ SLIDE_SPAN = (0.30, 0.94)
 # Without this, TIFFs pasted into a Keynote deck import as blank rectangles.
 RASTER_CONVERT = {".tiff", ".tif", ".bmp", ".tga", ".heic", ".heif"}
 WEB_SAFE_IMAGE = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".avif"}
-VIDEO_EXTS = {".mp4", ".mov", ".m4v", ".webm", ".mkv", ".avi", ".m4a"}
+VIDEO_EXTS = {".mp4", ".mov", ".qt", ".m4v", ".webm", ".mkv", ".avi", ".m4a"}
+# `.qt` is QuickTime's old name for the container `.mov` names now. Chromium
+# and the deck's own media rules know only `.mov`, so it is written as that.
+RENAMED_VIDEO_EXTS = {".qt": ".mov"}
+# ISO base media files (MP4 and QuickTime) and the ffmpeg muxer each is
+# rewritten with. Their index, the `moov` box, is often written after the
+# media (screen recordings, most exports): a browser then has to fetch the
+# whole file before it can show a frame, so it is moved to the front on import.
+FASTSTART_MUXERS = {".mp4": "mp4", ".m4v": "mp4", ".m4a": "mp4", ".mov": "mov"}
+# Longest asset file stem kept, in UTF-8 bytes. Keynote keeps whatever name a
+# file arrived with, and a picture saved from the web can be named after its
+# whole URL, hex-encoded: 248 characters, so a tool that adds any suffix to
+# it (a `.h264.mp4`, a temporary `.<pid>.copy-tmp`) passes the 255-byte limit
+# on a file name and fails with ENAMETOOLONG. Longer stems are cut, and a
+# hash of the whole stem keeps two names that share a beginning apart.
+MAX_ASSET_STEM_BYTES = 80
 # Vector art pasted from a paper or a logo. A browser will not render these in
 # an <img>, so they are rasterised on import.
 PDF_EXTS = {".pdf", ".eps"}
@@ -433,6 +448,397 @@ def extract_text(objects: dict[int, Any], shape: Any) -> str:
         if chunks:
             return "\n".join(chunks)
     return ""
+
+
+# --- equations ------------------------------------------------------------------
+#
+# Insert > Equation makes a TSD.ImageArchive: Keynote's rendering as a PDF in
+# `data`, and what was typed in TSWP.EquationInfoArchive extensions on the
+# image — `equation_source_text` (LaTeX, or MathML when it was written in
+# MathML; `equation_source_old` in older saves) and `equation_text_properties`
+# (font, size, colour). Typed into a text box, the image is an attachment of
+# the storage at a U+FFFC (TSWP.DrawableAttachmentArchive); on its own it is
+# a drawable. Both become TeX, which text renders with KaTeX.
+
+EQUATION_SOURCE_FIELDS = ("equation_source_text", "equation_source_old")
+OBJECT_REPLACEMENT = "\ufffc"
+# An accent or font command whose argument is another command with its own
+# braced argument, unbraced: `\dot\mathbf{x}`.
+KATEX_UNBRACED_ARGUMENT = re.compile(
+    r"(\\(?:dot|ddot|dddot|hat|widehat|bar|vec|tilde|widetilde|check|breve|acute|grave|mathring"
+    r"|overline|underline|boldsymbol|bm|mathbf|mathrm|mathit|mathcal|mathbb|mathsf|mathtt|mathfrak))"
+    r"\s*(\\[A-Za-z]+\s*\{[^{}]*\})"
+)
+# KaTeX sets maths at 1.21em of the surrounding text; Keynote's equation font
+# size is the maths' own em.
+KATEX_SCALE = 1.21
+
+
+def _extension(obj: Any, name: str) -> Any | None:
+    try:
+        for field_descriptor, value in obj.ListFields():
+            if field_descriptor.is_extension and field_descriptor.name == name:
+                return value
+    except Exception:
+        return None
+    return None
+
+
+def equation_source(obj: Any) -> str | None:
+    """The LaTeX or MathML an equation image was typeset from; None for a picture."""
+    if obj is None or type_name(obj) != "ImageArchive":
+        return None
+    for name in EQUATION_SOURCE_FIELDS:
+        value = _extension(obj, name)
+        if isinstance(value, str) and value.strip():
+            return value
+    return None
+
+
+def equation_tex(source: str) -> tuple[str | None, str]:
+    """(TeX KaTeX can render, "") or (None, why it could not be converted)."""
+    text = source.strip()
+    if text.startswith("<"):
+        try:
+            text = mathml_to_tex(text)
+        except ValueError as exc:
+            return None, f"MathML {exc}"
+        kind = "MathML"
+    else:
+        kind = "LaTeX"
+        # A comment runs to the end of its line, which joining lines would
+        # stretch over the rest of the formula.
+        text = re.sub(r"(?<!\\)%[^\n]*", "", text)
+    # Text stores the formula between dollars on one line; TeX reads a line
+    # break as a space anyway.
+    text = re.sub(r"\s+", " ", text).strip()
+    # Keynote typesets `\dot\mathbf{x}`; KaTeX wants the accent's argument
+    # braced, `\dot{\mathbf{x}}`, and otherwise shows the source in red.
+    while True:
+        braced = KATEX_UNBRACED_ARGUMENT.sub(r"\1{\2}", text)
+        if braced == text:
+            break
+        text = braced
+    if not text:
+        return None, f"{kind} empty"
+    if re.search(r"(?<!\\)\$", text):
+        return None, f"{kind} with a dollar sign"
+    return text, ""
+
+
+def inline_equation_markup(
+    objects: dict[int, Any], storage: Any
+) -> list[tuple[int, Any | None, str | None, str]]:
+    """Every attachment of a storage, in text order.
+
+    Entries are (index, attached object, TeX or None, why not). Only an
+    equation has TeX; the other attachments (a slide-number field, an inline
+    picture) come back without, as do equations that could not be converted.
+    """
+    if storage is None or not _has(storage, "table_attachment"):
+        return []
+    out = []
+    for entry in sorted(storage.table_attachment.entries, key=lambda e: int(e.character_index)):
+        attachment = objects.get(int(entry.object.identifier)) if entry.object.identifier else None
+        drawable = None
+        if attachment is not None and _has(attachment, "drawable") and attachment.drawable.identifier:
+            drawable = objects.get(int(attachment.drawable.identifier))
+        source = equation_source(drawable)
+        tex, why = equation_tex(source) if source is not None else (None, "")
+        out.append((int(entry.character_index), drawable, tex, why))
+    return out
+
+
+def attachment_inserts(text: str, attachments: list[tuple[int, Any, str | None, str]], render) -> dict[int, str]:
+    """What to write at each U+FFFC of `text` that holds a convertible equation.
+
+    The attachment table indexes the storage's own text. When that is the
+    text here, the indices are used as they are; otherwise (text split over
+    chunks) the n-th U+FFFC is the n-th attachment.
+    """
+    if not attachments:
+        return {}
+    if all(index < len(text) and text[index] == OBJECT_REPLACEMENT for index, *_ in attachments):
+        positions = [index for index, *_ in attachments]
+    else:
+        positions = [i for i, c in enumerate(text) if c == OBJECT_REPLACEMENT][: len(attachments)]
+    return {
+        at: render(tex)
+        for at, (_, _, tex, _) in zip(positions, attachments)
+        if tex is not None
+    }
+
+
+def inline_tex_html(tex: str) -> str:
+    return f"${html.escape(tex)}$"
+
+
+def _escape_text(text: str) -> str:
+    """HTML for literal text. A dollar is written `\\$`: text renders `$…$`
+    as maths, and an imported price would pair with the next one."""
+    return html.escape(text).replace("$", "\\$")
+
+
+def _escape_with_inserts(text: str, start: int, end: int, inserts: dict[int, str] | None) -> str:
+    """`_escape_text(text[start:end])`, with `inserts` written at their indices."""
+    if not inserts:
+        return _escape_text(text[start:end])
+    out: list[str] = []
+    at = start
+    for index in sorted(i for i in inserts if start <= i < end):
+        out.append(_escape_text(text[at:index]))
+        out.append(inserts[index])
+        at = index + 1
+    out.append(_escape_text(text[at:end]))
+    return "".join(out)
+
+
+# MathML operators with a TeX command KaTeX knows; anything else in an <mo>
+# is passed through as the character, which KaTeX renders as a symbol.
+MATHML_OPERATORS = {
+    "\u27f6": r"\longrightarrow", "\u2192": r"\rightarrow", "\u2190": r"\leftarrow",
+    "\u27f5": r"\longleftarrow", "\u2194": r"\leftrightarrow", "\u21d2": r"\Rightarrow",
+    "\u27f9": r"\Longrightarrow", "\u21d0": r"\Leftarrow", "\u21d4": r"\Leftrightarrow",
+    "\u21a6": r"\mapsto", "\u2264": r"\leq", "\u2265": r"\geq", "\u2260": r"\neq",
+    "\u2248": r"\approx", "\u223c": r"\sim", "\u2261": r"\equiv", "\u221d": r"\propto",
+    "\u00d7": r"\times", "\u00b7": r"\cdot", "\u22c5": r"\cdot", "\u2217": "*",
+    "\u2212": "-", "\u00b1": r"\pm", "\u2213": r"\mp", "\u2208": r"\in", "\u2209": r"\notin",
+    "\u2282": r"\subset", "\u2286": r"\subseteq", "\u222a": r"\cup", "\u2229": r"\cap",
+    "\u2211": r"\sum", "\u220f": r"\prod", "\u222b": r"\int", "\u221e": r"\infty",
+    "\u2207": r"\nabla", "\u2202": r"\partial", "\u2200": r"\forall", "\u2203": r"\exists",
+    "\u2026": r"\ldots", "\u22ef": r"\cdots", "\u2223": r"\mid", "\u2225": r"\|",
+    "\u2016": r"\|", "\u27e8": r"\langle", "\u27e9": r"\rangle", "{": r"\{", "}": r"\}",
+    "\u2218": r"\circ", "\u2297": r"\otimes", "\u2295": r"\oplus", "\u00ac": r"\neg",
+    "\u2227": r"\land", "\u2228": r"\lor", "\u2032": "'", "\u2033": "''",
+    # Invisible operators: function application, times, separator, plus.
+    "\u2061": "", "\u2062": "", "\u2063": "", "\u2064": "",
+}
+MATHML_ACCENTS = {
+    "^": r"\hat", "\u02c6": r"\hat", "\u0302": r"\hat", "~": r"\tilde", "\u02dc": r"\tilde",
+    "\u0303": r"\tilde", "\u00af": r"\bar", "\u203e": r"\overline", "\u0304": r"\bar",
+    "\u2192": r"\vec", "\u20d7": r"\vec", "\u02d9": r"\dot", "\u0307": r"\dot",
+    "\u00a8": r"\ddot", "\u0308": r"\ddot", "\u23de": r"\overbrace", "\u23df": r"\underbrace",
+    "_": r"\underline", "\u0332": r"\underline",
+}
+MATHML_VARIANTS = {
+    "bold": r"\mathbf", "bold-italic": r"\boldsymbol", "double-struck": r"\mathbb",
+    "script": r"\mathcal", "bold-script": r"\mathcal", "fraktur": r"\mathfrak",
+    "bold-fraktur": r"\mathfrak", "sans-serif": r"\mathsf", "bold-sans-serif": r"\mathsf",
+    "sans-serif-italic": r"\mathsf", "sans-serif-bold-italic": r"\mathsf",
+    "monospace": r"\mathtt", "normal": r"\mathrm",
+}
+# Unicode's styled letters (U+1D400…, ℝ, ℋ …), by the style in their names.
+MATH_LETTER_STYLES = [
+    ("MATHEMATICAL BOLD ITALIC", r"\boldsymbol"), ("MATHEMATICAL BOLD SCRIPT", r"\mathcal"),
+    ("MATHEMATICAL BOLD FRAKTUR", r"\mathfrak"), ("MATHEMATICAL SANS-SERIF", r"\mathsf"),
+    ("MATHEMATICAL DOUBLE-STRUCK", r"\mathbb"), ("MATHEMATICAL MONOSPACE", r"\mathtt"),
+    ("MATHEMATICAL FRAKTUR", r"\mathfrak"), ("MATHEMATICAL SCRIPT", r"\mathcal"),
+    ("MATHEMATICAL BOLD", r"\mathbf"), ("MATHEMATICAL ITALIC", ""),
+    ("DOUBLE-STRUCK", r"\mathbb"), ("SCRIPT", r"\mathcal"), ("BLACK-LETTER", r"\mathfrak"),
+]
+TEX_FUNCTIONS = {"sin", "cos", "tan", "log", "ln", "exp", "max", "min", "lim", "det", "arg", "sup", "inf", "dim"}
+TEX_SPECIALS = {"#": r"\#", "%": r"\%", "&": r"\&", "_": r"\_", "$": r"\$", "\\": r"\backslash ", "~": r"\sim "}
+
+
+def _math_letter(char: str) -> str | None:
+    """TeX for one of Unicode's styled mathematical letters, else None."""
+    if char == "\u210e":  # PLANCK CONSTANT, the italic h
+        return "h"
+    name = unicodedata.name(char, "")
+    for prefix, command in MATH_LETTER_STYLES:
+        if not name.startswith(prefix + " "):
+            continue
+        rest = name[len(prefix) + 1:]
+        if rest.startswith(("SMALL ", "CAPITAL ")) and len(rest.split()[-1]) == 1:
+            letter = rest.split()[-1]
+            plain = letter.lower() if rest.startswith("SMALL ") else letter
+        elif rest.startswith("DIGIT "):
+            plain = unicodedata.lookup(rest)
+        else:
+            greek = rest.replace("SMALL ", "SMALL LETTER ").replace("CAPITAL ", "CAPITAL LETTER ")
+            try:
+                plain = unicodedata.lookup(f"GREEK {greek}")
+            except KeyError:
+                return None
+        if command == r"\mathcal" and not plain.isupper():
+            return char  # TeX has script capitals only
+        return f"{command}{{{plain}}}" if command else plain
+    return None
+
+
+def _tex_join(parts: Iterable[str]) -> str:
+    """Concatenate TeX, keeping a command apart from a letter that follows it."""
+    out = ""
+    for part in parts:
+        if not part:
+            continue
+        if re.search(r"\\[A-Za-z]+$", out) and re.match(r"[A-Za-z0-9]", part):
+            out += " "
+        out += part
+    return out
+
+
+def mathml_to_tex(source: str) -> str:
+    """TeX for the MathML Keynote writes, or ValueError naming what has none.
+
+    Covers the presentation elements an equation editor produces: tokens,
+    rows, scripts, fractions, roots, accents, fences and tables. An
+    `<annotation encoding="application/x-tex">` is used as it is.
+    """
+    import xml.etree.ElementTree as ET
+
+    try:
+        root = ET.fromstring(source)
+    except ET.ParseError as exc:
+        raise ValueError(f"does not parse ({exc})") from None
+
+    def tag(node: Any) -> str:
+        return node.tag.rsplit("}", 1)[-1]
+
+    def colour_of(node: Any) -> str | None:
+        value = (node.get("mathcolor") or "").strip().lower()
+        return None if value in ("", "#000000", "#000", "black") else value
+
+    tokens = [node for node in root.iter() if tag(node) in ("mi", "mn", "mo", "mtext", "ms")]
+    colours = {colour_of(node) for node in tokens}
+    # One colour throughout is said once, around the whole formula.
+    uniform = colours.pop() if len(colours) == 1 else None
+
+    def token_text(node: Any, operator: bool) -> str:
+        parts = []
+        for char in (node.text or "").strip():
+            if operator and char in MATHML_OPERATORS:
+                parts.append(MATHML_OPERATORS[char])
+            elif char in TEX_SPECIALS:
+                parts.append(TEX_SPECIALS[char])
+            elif not char.isascii() and (letter := _math_letter(char)) is not None:
+                parts.append(letter)
+            elif char in MATHML_OPERATORS and MATHML_OPERATORS[char].startswith("\\"):
+                parts.append(MATHML_OPERATORS[char])
+            else:
+                parts.append(char)
+        return _tex_join(parts)
+
+    def group(tex: str) -> str:
+        """A script's base: bare when it is one symbol, braced otherwise."""
+        if len(tex) == 1 or re.fullmatch(r"\\[A-Za-z]+", tex) or re.fullmatch(r"\\[A-Za-z]+\{[^{}]*\}", tex):
+            return tex
+        return f"{{{tex}}}"
+
+    def children(node: Any) -> list[Any]:
+        return list(node)
+
+    def row(nodes: list[Any]) -> str:
+        if (
+            len(nodes) >= 2
+            and tag(nodes[0]) == "mo" and tag(nodes[-1]) == "mo"
+            and (nodes[0].text or "").strip() in "([{|\u2016\u27e8"
+            and (nodes[-1].text or "").strip() in ")]}|\u2016\u27e9"
+            and (nodes[0].text or "").strip() and (nodes[-1].text or "").strip()
+            and "false" not in (nodes[0].get("stretchy"), nodes[-1].get("stretchy"))
+        ):
+            inner = _tex_join(convert(n) for n in nodes[1:-1])
+            return _tex_join([r"\left" + fence(nodes[0]), inner, r"\right" + fence(nodes[-1])])
+        return _tex_join(convert(n) for n in nodes)
+
+    def fence(node: Any) -> str:
+        char = (node.text or "").strip()
+        return {"{": r"\{", "}": r"\}", "\u27e8": r"\langle ", "\u27e9": r"\rangle ", "\u2016": r"\| "}.get(char, char)
+
+    def need(node: Any, count: int) -> list[Any]:
+        kids = children(node)
+        if len(kids) != count:
+            raise ValueError(f"<{tag(node)}> with {len(kids)} children")
+        return kids
+
+    def convert(node: Any) -> str:
+        name = tag(node)
+        if name in ("mi", "mn", "mo", "mtext", "ms"):
+            if name == "mtext" or name == "ms":
+                body = "".join(TEX_SPECIALS.get(c, c) for c in (node.text or "")).replace("{", r"\{").replace("}", r"\}")
+                tex = rf"\text{{{body}}}" if body.strip() else r"\ "
+            else:
+                tex = token_text(node, operator=name == "mo")
+                variant = node.get("mathvariant")
+                text = (node.text or "").strip()
+                if name == "mi" and len(text) > 1 and text.isascii() and text.isalpha() and variant in (None, "normal"):
+                    tex = f"\\{text}" if text in TEX_FUNCTIONS else rf"\mathrm{{{text}}}"
+                elif variant in MATHML_VARIANTS and tex and not tex.startswith("\\"):
+                    if not (variant == "normal" and name != "mi"):
+                        tex = f"{MATHML_VARIANTS[variant]}{{{tex}}}"
+        elif name in ("math", "mrow", "mstyle", "mpadded", "merror"):
+            tex = row(children(node))
+        elif name == "semantics":
+            for kid in children(node)[1:]:
+                if tag(kid) == "annotation" and (kid.get("encoding") or "").lower() in ("application/x-tex", "tex", "latex"):
+                    return (kid.text or "").strip()
+            kids = children(node)
+            if not kids:
+                raise ValueError("<semantics> without content")
+            tex = convert(kids[0])
+        elif name == "mphantom":
+            tex = rf"\phantom{{{row(children(node))}}}"
+        elif name == "mspace":
+            tex = r"\;"
+        elif name == "msub":
+            base, sub = need(node, 2)
+            tex = f"{group(convert(base))}_{{{convert(sub)}}}"
+        elif name == "msup":
+            base, sup = need(node, 2)
+            tex = f"{group(convert(base))}^{{{convert(sup)}}}"
+        elif name == "msubsup":
+            base, sub, sup = need(node, 3)
+            tex = f"{group(convert(base))}_{{{convert(sub)}}}^{{{convert(sup)}}}"
+        elif name == "mfrac":
+            top, bottom = need(node, 2)
+            tex = rf"\frac{{{convert(top)}}}{{{convert(bottom)}}}"
+        elif name == "msqrt":
+            tex = rf"\sqrt{{{row(children(node))}}}"
+        elif name == "mroot":
+            base, index = need(node, 2)
+            tex = rf"\sqrt[{convert(index)}]{{{convert(base)}}}"
+        elif name in ("mover", "munder"):
+            base, mark = need(node, 2)
+            symbol = (mark.text or "").strip() if tag(mark) == "mo" else ""
+            accent = MATHML_ACCENTS.get(symbol)
+            under = name == "munder"
+            if accent and (accent in (r"\underbrace", r"\underline")) == under:
+                tex = f"{accent}{{{convert(base)}}}"
+            elif under:
+                tex = rf"\underset{{{convert(mark)}}}{{{convert(base)}}}"
+            else:
+                tex = rf"\overset{{{convert(mark)}}}{{{convert(base)}}}"
+        elif name == "munderover":
+            base, below, above = need(node, 3)
+            core = convert(base)
+            if core in (r"\sum", r"\prod", r"\int", r"\lim", r"\bigcup", r"\bigcap"):
+                tex = f"{core}_{{{convert(below)}}}^{{{convert(above)}}}"
+            else:
+                tex = rf"\underset{{{convert(below)}}}{{\overset{{{convert(above)}}}{{{core}}}}}"
+        elif name == "mfenced":
+            opening, closing = node.get("open", "("), node.get("close", ")")
+            separator = (node.get("separators", ",").strip() or ",")[0]
+            inner = f"{separator} ".join(convert(kid) for kid in children(node))
+            tex = rf"\left{fence_char(opening)}{inner}\right{fence_char(closing)}"
+        elif name == "mtable":
+            rows = []
+            for line in children(node):
+                if tag(line) != "mtr":
+                    raise ValueError(f"<{tag(line)}> in a table")
+                rows.append(" & ".join(row(children(cell)) for cell in children(line)))
+            tex = r"\begin{matrix} " + r" \\ ".join(rows) + r" \end{matrix}"
+        else:
+            raise ValueError(f"<{name}>")
+        colour = colour_of(node)
+        if colour and colour != uniform:
+            tex = rf"\textcolor{{{colour}}}{{{tex}}}"
+        return tex
+
+    def fence_char(char: str) -> str:
+        return {"": ".", "{": r"\{", "}": r"\}", "\u27e8": r"\langle", "\u27e9": r"\rangle"}.get(char, char)
+
+    tex = convert(root)
+    return rf"\textcolor{{{uniform}}}{{{tex}}}" if uniform else tex
 
 
 # TSP path element type enum -> (SVG command, number of points consumed).
@@ -1228,10 +1634,19 @@ def _wrap_paragraphs(paragraphs: list[str]) -> str:
     return "".join(f"<p>{p or '<br>'}</p>" for p in paragraphs)
 
 
-def text_to_html(text: str) -> str:
-    """Escape imported text, then map Keynote's paragraph breaks onto markup."""
-    escaped = html.escape(_normalise_breaks(text))
-    return _wrap_paragraphs(escaped.split("\n"))
+def text_to_html(text: str, inserts: dict[int, str] | None = None) -> str:
+    """Escape imported text, then map Keynote's paragraph breaks onto markup.
+
+    `inserts` is markup to write in place of the character at an index (an
+    equation at its U+FFFC).
+    """
+    normalised = _normalise_breaks(text)
+    paragraphs: list[str] = []
+    pos = 0
+    for line in normalised.split("\n"):
+        paragraphs.append(_escape_with_inserts(normalised, pos, pos + len(line), inserts))
+        pos += len(line) + 1
+    return _wrap_paragraphs(paragraphs)
 
 
 def _enum_name(message: Any, field_name: str, value: int) -> str:
@@ -1493,7 +1908,7 @@ EDITOR_LIST_STEP_EM = 1.4
 
 
 def styled_text_to_html(
-    objects: dict[int, Any], shape: Any, base: TextStyle
+    objects: dict[int, Any], shape: Any, base: TextStyle, inserts: dict[int, str] | None = None
 ) -> str | None:
     """HTML for a shape's text: paragraph styles, character runs and lists.
 
@@ -1625,7 +2040,7 @@ def styled_text_to_html(
             run_underlined = (
                 int(chars.underline) != 0 if chars is not None and chars.HasField("underline") else underlined
             )
-            runs.append((html.escape(text[run_start:run_end]), css, run_underlined))
+            runs.append((_escape_with_inserts(text, run_start, run_end, inserts), css, run_underlined))
             slants.append(bool(chars.italic) if chars is not None and chars.HasField("italic") else para_italic)
         # Italic as for underline below: a paragraph style can slant the block
         # while its runs set it upright again (a title Keynote draws upright
@@ -1727,7 +2142,7 @@ def styled_text_to_html(
             block if block.startswith(("<p", "<ol", "<ul")) else f"<p>{block or '<br>'}</p>"
             for block in blocks
         )
-    return None if out == text_to_html(text) else out
+    return None if out == text_to_html(text, inserts) else out
 
 
 def _face_css(style: TextStyle) -> dict[str, str]:
@@ -1849,6 +2264,8 @@ class Importer:
             elif ext in PDF_EXTS:
                 name = _safe_name(Path(file_name).stem) + ".webp"
                 self.report.converted_images += 1
+            elif ext in VIDEO_EXTS:
+                name = _video_name(file_name)
             rel = f"assets/{name}"
             self._asset_cache[data_id] = rel
             return rel
@@ -1905,14 +2322,19 @@ class Importer:
 
         This is a *compatibility* transcode, unrelated to trimming: cropping and
         trimming stay non-destructive and CSS-based.
+
+        A playable MP4 or QuickTime movie whose index sits after its media is
+        rewritten with the index first (`_move_index_first`), in place: the
+        deck keeps one file per movie, the one its slides name.
         """
-        dest = assets / _safe_name(file_name)
+        dest = assets / _video_name(file_name)
         self.progress.emit(f"Extracting {file_name} ({_human_bytes(len(raw))})")
         if not dest.exists():
             dest.write_bytes(raw)
 
         codec = _video_codec(dest)
         if codec is None or codec in WEB_SAFE_VIDEO_CODECS:
+            self._move_index_first(dest, file_name)
             return f"assets/{dest.name}"
 
         target = assets / (_safe_name(Path(file_name).stem) + ".h264.mp4")
@@ -1953,6 +2375,46 @@ class Importer:
         dest.unlink(missing_ok=True)
         self.report.transcoded_videos += 1
         return f"assets/{target.name}"
+
+    def _move_index_first(self, dest: Path, file_name: str) -> None:
+        """Remux a movie whose `moov` follows its `mdat` so the index leads.
+
+        `ffmpeg -c copy -movflags +faststart` copies every sample as it is;
+        only the boxes move. The result replaces the file under its own name,
+        so nothing else in the deck changes and no second copy is left beside
+        it. A movie that cannot be remuxed is kept as it was: it plays, it
+        just cannot start before it has been downloaded.
+        """
+        muxer = FASTSTART_MUXERS.get(dest.suffix.lower())
+        if muxer is None or not _index_after_media(dest):
+            return
+        if shutil.which("ffmpeg") is None:
+            self.report.warnings.append(
+                f"{file_name} keeps its index at the end (ffmpeg was not found to move it), "
+                "so it cannot start playing before it has been downloaded."
+            )
+            return
+        self.progress.emit(f"Moving the index of {file_name} to the front")
+        temporary = dest.with_name(f"{dest.stem}.faststart-tmp{dest.suffix}")
+        common = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-i", str(dest)]
+        tail = ["-c", "copy", "-movflags", "+faststart", "-f", muxer, str(temporary)]
+        # Every stream first, timecode and second audio tracks included; a
+        # stream the muxer cannot carry fails that, and then the default
+        # selection (one video, one audio) is what plays anyway.
+        for mapping in (["-map", "0"], []):
+            try:
+                subprocess.run(common + mapping + tail, check=True, capture_output=True, timeout=600)
+            except Exception:
+                temporary.unlink(missing_ok=True)
+                continue
+            if temporary.exists() and temporary.stat().st_size > 0 and not _index_after_media(temporary):
+                os.replace(temporary, dest)
+                return
+            temporary.unlink(missing_ok=True)
+        self.report.warnings.append(
+            f"Could not move the index of {file_name} to the front; it plays, "
+            "but cannot start before it has been downloaded."
+        )
 
     def _rasterise_pdf(self, raw: bytes, file_name: str, assets: Path) -> str | None:
         """Render a PDF's first page to a lossless WebP.
@@ -2197,6 +2659,11 @@ class Importer:
             if kind == "MovieArchive":
                 return self._wrap(self._convert_movie(obj, box, z), kind, box, z)
             if kind == "ImageArchive":
+                source = equation_source(obj)
+                if source is not None:
+                    equation = self._convert_equation(obj, source, box, z)
+                    if equation is not None:
+                        return [equation]
                 return self._wrap(self._convert_image_el(obj, box, z), kind, box, z)
             if kind in ("ShapeInfoArchive", "PlaceholderArchive", "ConnectionLineArchive"):
                 return self._convert_shape(obj, box, z)
@@ -2330,6 +2797,58 @@ class Importer:
             }
         )
         self._apply_media_style(element, obj)
+        return element
+
+    def _convert_equation(
+        self, obj: Any, source: str, box: dict[str, float], z: int
+    ) -> dict[str, Any] | None:
+        """An equation on its own: a text element holding `$$…$$`.
+
+        Keynote's picture is the formula's ink at its equation font size.
+        KaTeX's display block is taller than the ink — a line box, and an em
+        of margin above and below — so the box keeps the picture's width and
+        centre and grows to hold that block (measured in Chromium: KaTeX's
+        line is max(1.3 × ink, 1.2 em) tall). The type is the same em; KaTeX
+        sets about 15% wider than Keynote, so the auto-fit shrinks it to the
+        picture's width. Returns None when the source has no TeX, and the
+        picture Keynote rendered is imported instead.
+        """
+        tex, why = equation_tex(source)
+        if tex is None:
+            kind = why.split(" ", 1)[0]
+            self.report.unsupported[f"equation kept as a picture ({kind} not converted)"] += 1
+            shown = re.sub(r"\s+", " ", source)[:160]
+            self.report.warnings.append(f"An equation has no TeX ({why}) and is kept as a picture: {shown}")
+            return None
+        props = _extension(obj, "equation_text_properties")
+        size = float(getattr(props, "font_size", 0.0) or 0.0) if props is not None else 0.0
+        # Without a size, one that sets the formula about as tall as its picture.
+        em = size if size > 0 else box["h"] / 1.2
+        font_size = em / KATEX_SCALE
+        colour = color_to_hex(props.font_color) if props is not None and props.HasField("font_color") else None
+        framed = dict(box)
+        framed["h"] = max(box["h"] * 1.3, em * 1.2) + 2 * font_size
+        framed["y"] = box["y"] + box["h"] / 2 - framed["h"] / 2
+        element = self._base(framed, z, "text")
+        inline = {"font-size": f"{font_size:.0f}px", "line-height": "1.2"}
+        if colour:
+            inline["color"] = colour
+        element.update(
+            {
+                "html": f"$${html.escape(tex)}$$",
+                "autoFit": True,
+                "align": "center",
+                "valign": "middle",
+                "class": ["kn-text"],
+                "style": inline,
+                # Maths takes no role: a role's weight and tracking are for words.
+                "_kn_role": "base",
+            }
+        )
+        try:
+            element["opacity"] = resolve_media_style(self.objects, _ref(obj, "style")).opacity
+        except Exception:
+            pass
         return element
 
     def _convert_image_el(
@@ -2578,7 +3097,8 @@ class Importer:
 
             element = self._base(box, z, "text")
             element["opacity"] = shape_paint.opacity
-            markup = styled_text_to_html(self.objects, obj, style) or text_to_html(text)
+            inserts = self._inline_equations(obj, text)
+            markup = styled_text_to_html(self.objects, obj, style, inserts) or text_to_html(text, inserts)
             element.update(
                 {
                     "html": markup,
@@ -2602,6 +3122,28 @@ class Importer:
             out.append(element)
 
         return out
+
+    def _inline_equations(self, obj: Any, text: str) -> dict[int, str]:
+        """`$…$` for each equation in a shape's text, keyed by its U+FFFC.
+
+        Whatever stays a U+FFFC — an equation with no TeX, a picture placed
+        in the text — is reported, so the gap is not silent.
+        """
+        attachments = inline_equation_markup(self.objects, _storage_of(self.objects, obj))
+        for _, drawable, tex, why in attachments:
+            if tex is not None or drawable is None:
+                continue
+            source = equation_source(drawable)
+            if source is None:
+                self.report.unsupported[f"inline {type_name(drawable)} in text"] += 1
+                continue
+            kind = why.split(" ", 1)[0]
+            self.report.unsupported[f"inline equation ({kind} not converted)"] += 1
+            shown = re.sub(r"\s+", " ", source)[:160]
+            self.report.warnings.append(
+                f"An equation in a text box has no TeX ({why}) and is left as U+FFFC: {shown}"
+            )
+        return attachment_inserts(text, attachments, inline_tex_html)
 
     def _size_text_box(
         self,
@@ -2643,7 +3185,9 @@ class Importer:
         rotated = abs(rot) > 0.5
 
         if width_was_auto:
-            measured = _measure_text_width(
+            # An attachment (an equation, a picture) is one U+FFFC in the
+            # text but has its own width: Keynote's layout cache knows it.
+            measured = None if OBJECT_REPLACEMENT in text and natural_size is not None else _measure_text_width(
                 text, font_size, font_name, bold, horizontal_padding
             )
             if measured is not None:
@@ -3357,7 +3901,17 @@ class Importer:
         if note_id is None or note_id not in self.objects:
             return ""
         try:
-            return extract_text(self.objects, self.objects[note_id])
+            note = self.objects[note_id]
+            text = extract_text(self.objects, note)
+            # Notes are plain text: an equation in them reads as its TeX.
+            storage_ref = find_in_super_chain(note, "containedStorage")
+            storage = self.objects.get(int(storage_ref.identifier)) if storage_ref is not None and storage_ref.identifier else None
+            inserts = attachment_inserts(
+                text, inline_equation_markup(self.objects, storage), lambda tex: f"${tex}$"
+            )
+            for index in sorted(inserts, reverse=True):
+                text = text[:index] + inserts[index] + text[index + 1:]
+            return text
         except Exception:
             return ""
 
@@ -3835,6 +4389,47 @@ def _video_codec(path: Path) -> str | None:
         return None
 
 
+def _video_name(file_name: str) -> str:
+    """The asset name a movie is written under: safe, and `.qt` as `.mov`."""
+    path = Path(file_name)
+    renamed = RENAMED_VIDEO_EXTS.get(path.suffix.lower())
+    return _safe_name(path.stem) + renamed if renamed else _safe_name(file_name)
+
+
+def _index_after_media(path: Path) -> bool:
+    """Whether an MP4/QuickTime file's top-level `moov` comes after its `mdat`.
+
+    Walks the top-level box headers only, so it costs a few reads however
+    large the movie. Anything that does not parse as boxes counts as fine:
+    there is nothing to move.
+    """
+    try:
+        with path.open("rb") as handle:
+            size_total = path.stat().st_size
+            at = 0
+            while at + 8 <= size_total:
+                handle.seek(at)
+                header = handle.read(16)
+                if len(header) < 8:
+                    return False
+                size = int.from_bytes(header[:4], "big")
+                kind = header[4:8]
+                if kind == b"moov":
+                    return False
+                if kind == b"mdat":
+                    return True
+                if size == 1 and len(header) >= 16:
+                    size = int.from_bytes(header[8:16], "big")
+                elif size == 0:
+                    return False
+                if size < 8:
+                    return False
+                at += size
+    except OSError:
+        return False
+    return False
+
+
 def _is_text_box(obj: Any) -> bool:
     """Whether a drawable is a text box rather than drawn vector art."""
     current = obj
@@ -3849,8 +4444,22 @@ def _is_text_box(obj: Any) -> bool:
 
 
 def _safe_name(name: str) -> str:
-    keep = "".join(c if c.isalnum() or c in "._-" else "-" for c in name)
-    return keep.strip("-") or "asset"
+    """A file name safe on every file system, its stem capped in length."""
+    keep = "".join(c if c.isalnum() or c in "._-" else "-" for c in name).strip("-") or "asset"
+    stem, dot, ext = keep.rpartition(".")
+    if not (dot and stem and ext.isascii() and ext.isalnum() and len(ext) <= 8):
+        stem, dot, ext = keep, "", ""
+    return _cap_stem(stem) + dot + ext
+
+
+def _cap_stem(stem: str) -> str:
+    """`stem`, or its first bytes and a hash of it when it is too long."""
+    encoded = stem.encode("utf-8")
+    if len(encoded) <= MAX_ASSET_STEM_BYTES:
+        return stem
+    digest = hashlib.sha1(encoded).hexdigest()[:8]
+    cut = encoded[: MAX_ASSET_STEM_BYTES - len(digest) - 1].decode("utf-8", "ignore").rstrip("-.")
+    return f"{cut}-{digest}"
 
 
 THEME_CSS = """/*
@@ -4025,7 +4634,7 @@ def self_check() -> int:
     import importlib
 
     missing = []
-    for module in ('keynote_parser.codec', 'PIL.Image', 'PIL.ImageChops', 'PIL.ImageFont', 'pymupdf'):
+    for module in ('keynote_parser.codec', 'PIL.Image', 'PIL.ImageChops', 'PIL.ImageFont', 'pymupdf', 'xml.etree.ElementTree'):
         try:
             importlib.import_module(module)
         except ImportError as exc:

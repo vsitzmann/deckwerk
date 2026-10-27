@@ -176,7 +176,7 @@ class Reference:
             self.clamped_text, self.empty_text_boxes, self.paragraph_styles, self.line_spacing,
             self.run_styles, self.fonts, self.numbered_lists, self.list_counting, self.list_kinds,
             self.underline_italic, self.builds, self.legacy_builds, self.move_build, self.roles_by_size,
-            self.unsupported_drawable,
+            self.unsupported_drawable, self.equations, self.long_media_names, self.movie_containers,
         ):
             method()
         return self.deck
@@ -678,6 +678,68 @@ class Reference:
         """A chart: no editable equivalent yet, so its box stays as a placeholder."""
         slide = self.slide("unsupported-drawable", "Objects without an equivalent keep their box")
         slide._attach(slide.add("TSCH.ChartDrawableArchive", {"super": slide._drawable(geometry(300, 300, 800, 400))}))
+
+    def equations(self):
+        """Equations typed into text are attachments at a U+FFFC, and every
+        one is a TSD.ImageArchive whose EquationInfoArchive extensions keep
+        the LaTeX (or MathML) source. They imported as the bare U+FFFC."""
+        deck = self.deck
+        slide = self.slide("equations", "Equations become TeX: $…$ inline, $$…$$ on their own")
+        inline = self.media("equation-inline.pdf", pdf_figure())
+        body = deck.para_style(48, "HelveticaNeue")
+        bold = deck.char_style(bold=True)
+
+        def eq(source: str, w: float = 60, h: float = 50) -> int:
+            return slide.inline_equation(source, inline, (w, h), font_size=48)
+
+        # Styled runs around two LaTeX equations, beside a literal dollar.
+        text = "Inputs \ufffc and \ufffc cost $5."
+        first, second = (i for i, c in enumerate(text) if c == "\ufffc")
+        slide.text_box(geometry(95, 150, 1730, 80), Storage(
+            text, paras=[(0, body)], chars=[(0, bold), (len("Inputs"), None)],
+            attachments=[(first, eq("\\mathbf{x}")),
+                         (second, eq("\\epsilon \\sim \\mathcal{N}(\\mathbf{0},\\mathbf{I})", 300))]), self.plain)
+        # MathML, the other source Keynote writes: math-italic letters.
+        mathml = ('<math xmlns="http://www.w3.org/1998/Math/MathML">\n  <msup>\n    <mrow>\n'
+                  '      <mi mathvariant="italic" mathcolor="#000000">\U0001d453</mi>\n    </mrow>\n    <mrow>\n'
+                  '      <mi mathvariant="italic" mathcolor="#000000">\U0001d465</mi>\n    </mrow>\n  </msup>\n</math>')
+        text = "Then \ufffc follows"
+        slide.text_box(geometry(95, 260, 1730, 80), Storage(
+            text, paras=[(0, body)], attachments=[(text.index("\ufffc"), eq(mathml))]), self.plain)
+        # A matrix on a line of its own, its source spread over lines.
+        text = "Stacked:\n\ufffc\nDone"
+        matrix = "\\begin{bmatrix}\na \\\\\nb\n\\end{bmatrix}"
+        slide.text_box(geometry(95, 370, 800, 300), Storage(
+            text, paras=[(0, body)], attachments=[(text.index("\ufffc"), eq(matrix, 80, 120))]), self.plain)
+        # MathML with an element there is no TeX for here stays a marked gap.
+        odd = '<math xmlns="http://www.w3.org/1998/Math/MathML"><mmultiscripts><mi>R</mi><mi>i</mi><none/></mmultiscripts></math>'
+        text = "Odd \ufffc one"
+        slide.text_box(geometry(95, 700, 800, 80), Storage(
+            text, paras=[(0, body)], attachments=[(text.index("\ufffc"), eq(odd))]), self.plain)
+        # Equations placed on the slide by themselves; Keynote accepts an
+        # accent on an unbraced `\mathbf`, which KaTeX does not.
+        slide.equation(geometry(1000, 400, 520, 90), "p(\\dot\\mathbf{x}) = \\prod_i p(x_i \\mid x_{<i})",
+                       self.media("equation-display.pdf", pdf_figure()), font_size=60, colour=BLUE)
+        arrow = '<math xmlns="http://www.w3.org/1998/Math/MathML">\n  <mo mathcolor="#000000">\u27f6</mo>\n</math>'
+        slide.equation(geometry(1000, 600, 158, 42), arrow, self.media("equation-arrow.pdf", pdf_figure()), font_size=108)
+        slide.equation(geometry(1000, 800, 200, 100), odd, self.media("equation-fallback.pdf", pdf_figure()))
+
+    def long_media_names(self):
+        """A picture saved from a web page can carry its URL, hex-encoded, as
+        its name: 248 characters, which with any suffix a tool adds passes
+        the 255-byte limit on a file name."""
+        slide = self.slide("long-media-names", "Overlong media names are shortened, and stay distinct")
+        for i, tail in enumerate(("first", "second")):
+            url = f"https://example.org/media/a-neutral-figure-used-to-test-long-names/in/a/deep/folder/{tail}.png?size=large"
+            name = url.encode().hex() + ".png"
+            slide.image(geometry(200 + i * 600, 300, 400, 300), self.media(name, png(quadrants()), (400, 300)))
+
+    def movie_containers(self):
+        """Screen recordings: H.264 in QuickTime, the index (moov) written
+        after the media, and an old `.qt` name for the same container."""
+        slide = self.slide("movie-containers", "QuickTime movies, .qt included, are remuxed to start fast")
+        slide.movie(geometry(100, 300, 480, 270), self.media("recording.mov", clip("libx264", ".mov")), natural=(160, 90))
+        slide.movie(geometry(700, 300, 480, 270), self.media("tape.qt", clip("libx264", ".mov")), natural=(160, 90))
 
 
 def main() -> None:

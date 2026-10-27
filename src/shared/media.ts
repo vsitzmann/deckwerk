@@ -84,6 +84,46 @@ export function pendingName(src: string): string {
 }
 
 /**
+ * Longest asset file stem kept, in UTF-8 bytes. A dropped file keeps its
+ * name, and a name can be a whole URL (a Keynote deck carried a
+ * 248-character hex-encoded one): with the content hash and a derived suffix
+ * (`.h264.mp4`) added, or a copier's temporary `.<pid>.copy-tmp`, it passed
+ * the 255-byte limit on a file name and the write failed with ENAMETOOLONG.
+ * The Keynote importer caps its names the same way (MAX_ASSET_STEM_BYTES).
+ */
+export const MAX_ASSET_STEM_BYTES = 80;
+
+/** `stem`, or its beginning and a hash of the whole when it is too long. */
+export function capAssetStem(stem: string, max = MAX_ASSET_STEM_BYTES): string {
+  const encoder = new TextEncoder();
+  if (encoder.encode(stem).length <= max) return stem;
+  const digest = fnv1a(stem);
+  let cut = '';
+  for (const char of stem) {
+    if (encoder.encode(cut + char).length > max - digest.length - 1) break;
+    cut += char;
+  }
+  return `${cut.replace(/[-.]+$/, '')}-${digest}`;
+}
+
+/** A file name with its stem capped (`capAssetStem`) and its extension kept. */
+export function capAssetFileName(name: string, max = MAX_ASSET_STEM_BYTES): string {
+  const ext = /\.[A-Za-z0-9]{1,8}$/.exec(name)?.[0] ?? '';
+  const stem = name.slice(0, name.length - ext.length);
+  return stem ? capAssetStem(stem, max) + ext : capAssetStem(name, max);
+}
+
+/** 32-bit FNV-1a as eight hex digits: short, stable, and in every runtime. */
+function fnv1a(text: string): string {
+  let hash = 0x811c9dc5;
+  for (const byte of new TextEncoder().encode(text)) {
+    hash ^= byte;
+    hash = Math.imul(hash, 0x01000193) >>> 0;
+  }
+  return hash.toString(16).padStart(8, '0');
+}
+
+/**
  * The names `importAsset` gives a file it copies into `assets/`: the dropped
  * original under its stem and an 8-hex content hash, and the browser-ready
  * copies it derives from that original when Chromium cannot use it as-is.

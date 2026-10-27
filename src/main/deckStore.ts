@@ -4,7 +4,9 @@ import { cp, mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:
 import { basename, dirname, extname, join, resolve, sep } from 'node:path';
 import { type Deck, emptyDeck, parseDeck } from '@shared/deck.js';
 import type { ImportedAsset } from '@shared/ipc.js';
-import { classifyMediaName, CONVERTED_IMAGE_EXTS, importedAssetName, originalAssetCandidates } from '@shared/media.js';
+import {
+  capAssetStem, classifyMediaName, CONVERTED_IMAGE_EXTS, importedAssetName, originalAssetCandidates,
+} from '@shared/media.js';
 import { serializeSpeakerNotes, SPEAKER_NOTES_FILE } from '@shared/speakerNotes.js';
 import { HISTORY_FILES } from '@shared/editHistory.js';
 import { VERSIONS_DIR } from './deckVersions.js';
@@ -470,8 +472,9 @@ export async function importWebPage(
   return { src: `${ASSETS_DIR}/web/${name}`, bytes: Buffer.byteLength(html, 'utf8') };
 }
 
+/** A file stem safe on every file system, and short enough to add suffixes to. */
 function sanitize(name: string): string {
-  return name.replace(/[^a-zA-Z0-9._-]+/g, '-').replace(/^-+|-+$/g, '') || 'asset';
+  return capAssetStem(name.replace(/[^a-zA-Z0-9._-]+/g, '-').replace(/^-+|-+$/g, '') || 'asset');
 }
 
 async function hashFile(path: string): Promise<string> {

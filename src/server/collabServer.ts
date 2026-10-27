@@ -78,7 +78,7 @@ import { applyAgentTransaction, validateDeckIntegrity, type AgentOperation } fro
 import { NativeEditRequestSchema, applyNativeEdits, nativeEditContract } from '../shared/nativeEdits.js';
 import { type Comment, type Deck, type Slide, type SlideElement } from '../shared/deck.js';
 import { commentsAt, commentsOperation, findComment, threadEdits, threadIdOf } from '../shared/comments.js';
-import { classifyMediaName, originalDownloadName } from '../shared/media.js';
+import { capAssetFileName, classifyMediaName, originalDownloadName } from '../shared/media.js';
 import { deckOutline } from '../shared/deckDigest.js';
 import type { AgentPanelState } from '../shared/ipc.js';
 import type { LocalAgentLink, LocalAgentRegistry } from './localAgents.js';
@@ -4497,7 +4497,9 @@ function readBody(request: IncomingMessage, limit = Infinity): Promise<Buffer> {
 
 function sanitizeFilename(name: string): string {
   const base = basename(name).replace(/[^a-zA-Z0-9._-]+/g, '-');
-  return base || 'upload';
+  // An upload named after a whole URL would not even fit in the temporary
+  // folder it is staged in.
+  return capAssetFileName(base || 'upload');
 }
 
 async function downloadPublicAsset(raw: string): Promise<{ bytes: Buffer; url: URL; contentType: string }> {

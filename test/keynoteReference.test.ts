@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -93,6 +93,21 @@ function pixels(src: string, at: [number, number][]): { size: [number, number]; 
   return JSON.parse(stdout);
 }
 
+/** Whether an MP4/QuickTime file has its index (moov) before its media (mdat). */
+function startsFast(file: string): boolean {
+  const bytes = readFileSync(file);
+  for (let at = 0; at + 8 <= bytes.length;) {
+    let size = bytes.readUInt32BE(at);
+    const type = bytes.toString('latin1', at + 4, at + 8);
+    if (type === 'moov') return true;
+    if (type === 'mdat') return false;
+    if (size === 1) size = Number(bytes.readBigUInt64BE(at + 8));
+    if (size < 8) return false;
+    at += size;
+  }
+  return false;
+}
+
 // Colours the generator gives its blocks.
 const RED = '#e02020';
 const GREEN = '#20a040';
@@ -110,8 +125,8 @@ describe('the Keynote reference deck', () => {
   describe('as a whole', () => {
     it('imports every slide through the app wrapper with streaming progress', () => {
       expect(deck.slides.map((s) => s.name)).toContain('title-and-notes');
-      // 43 generated slides plus the Morph copy the Move build adds.
-      expect(deck.slides).toHaveLength(44);
+      // 46 generated slides plus the Morph copy the Move build adds.
+      expect(deck.slides).toHaveLength(47);
       expect(phases.some((p) => /^Decoding .+\.iwa \(\d+ of \d+\)$/.test(p.message))).toBe(true);
       expect(phases.some((p) => /^Converting slide \d+ of \d+$/.test(p.message))).toBe(true);
       const ratios = phases.map((p) => p.ratio).filter((r): r is number => r !== null);
@@ -124,6 +139,9 @@ describe('the Keynote reference deck', () => {
         'ImageArchive (no data)': 1,
         'MovieArchive (no data)': 1,
         ChartDrawableArchive: 1,
+        // MathML with no TeX equivalent here: one in a sentence, one on its own.
+        'inline equation (MathML not converted)': 1,
+        'equation kept as a picture (MathML not converted)': 1,
       });
       expect(report.transcoded_videos).toBe(1);
     });
@@ -657,6 +675,82 @@ describe('the Keynote reference deck', () => {
       // import has to say so or the role class turns them bold.
       expect(textNamed('roles-by-size', 'Results').style['font-weight']).toBe('400');
       expect(textNamed('roles-by-size', 'A heading').style['font-weight']).toBe('400');
+    });
+
+    it('writes equations as TeX: $…$ in the sentence, $$…$$ on their own', () => {
+      // BUG: every equation in a text box imported as U+FFFC, and the report
+      // said nothing; equations on their own came in as pictures of a PDF.
+      const texts = ofType('equations', 'text');
+      const html = (words: string) => texts.find((el) => el.html.includes(words))!.html as string;
+      // Inside styled runs, and with the literal dollar escaped so it cannot
+      // pair with the equations' delimiters.
+      expect(html('Inputs')).toContain('$\\mathbf{x}$');
+      expect(html('Inputs')).toContain('$\\epsilon \\sim \\mathcal{N}(\\mathbf{0},\\mathbf{I})$');
+      expect(html('Inputs')).toContain('cost \\$5.');
+      // MathML comes back as TeX; math-italic letters are plain letters.
+      expect(html('Then')).toBe('Then $f^{x}$ follows');
+      // A source written over several lines stays in its paragraph.
+      expect(html('Stacked')).toBe('<p>Stacked:</p><p>$\\begin{bmatrix} a \\\\ b \\end{bmatrix}$</p><p>Done</p>');
+      // What cannot be converted stays a visible gap, and is reported (above).
+      expect(html('Odd')).toBe('Odd \ufffc one');
+      for (const el of texts) {
+        if (!el.html.includes('Odd')) expect(el.html, el.html).not.toContain('\ufffc');
+      }
+      expect(report.warnings.some((w: string) => /equation.*mmultiscripts/.test(w))).toBe(true);
+
+      // Equations on their own are display maths centred where the picture
+      // was, the accent's argument braced for KaTeX.
+      const display = texts.find((el) => el.html.startsWith('$$p('))!;
+      expect(display.html).toBe('$$p(\\dot{\\mathbf{x}}) = \\prod_i p(x_i \\mid x_{&lt;i})$$');
+      expect(centre(display).x).toBeCloseTo(1260, 1);
+      expect(centre(display).y).toBeCloseTo(445, 1);
+      expect(display).toMatchObject({ align: 'center', valign: 'middle', autoFit: true });
+      // KaTeX sets maths at 1.21em: 60pt Keynote maths is 50px text. The box
+      // keeps the picture's width and has room for KaTeX's display margins.
+      expect(display.style).toMatchObject({ 'font-size': '50px', color: BLUE });
+      expect(display.w).toBe(520);
+      expect(display.h).toBeGreaterThan(90 + 2 * 49);
+      const arrow = texts.find((el) => el.html.includes('longrightarrow'))!;
+      expect(arrow.html).toBe('$$\\longrightarrow$$');
+      // The unconvertible one keeps Keynote's rendering.
+      const pictures = ofType('equations', 'image');
+      expect(pictures).toMatchObject([{ x: 1000, y: 800, w: 200, h: 100 }]);
+      expect(pictures[0].src).toMatch(/^assets\/equation-fallback-\d+\.webp$/);
+      // Only that one wrote its PDF out: no stray pictures of the others.
+      const assets = readdirSync(join(out, 'deck', 'assets'));
+      expect(assets.filter((name) => name.startsWith('equation-'))).toEqual([pictures[0].src.slice('assets/'.length)]);
+    });
+
+    it('shortens overlong media names, keeping them distinct', () => {
+      // BUG: a 248-character hex-encoded URL was kept as the file name, and
+      // a tool that added a suffix to it (`.<pid>.copy-tmp`) hit ENAMETOOLONG.
+      const [first, second] = ofType('long-media-names', 'image');
+      for (const el of [first, second]) {
+        const name = el.src.slice('assets/'.length);
+        expect(Buffer.byteLength(name)).toBeLessThanOrEqual(100);
+        expect(name).toMatch(/^68747470733a2f2f[0-9a-f]+-[0-9a-f]{8}\.png$/);
+        expect(existsSync(join(out, 'deck', el.src))).toBe(true);
+      }
+      expect(first.src).not.toBe(second.src);
+    });
+
+    it('remuxes QuickTime movies, .qt too, to start fast, leaving one file each', () => {
+      // BUG: `.qt` was kept as an unrecognised file the browser shows black,
+      // and movies with their index at the end were copied as they were.
+      const [mov, qt] = objects('movie-containers');
+      expect(mov).toMatchObject({ type: 'video' });
+      expect(qt).toMatchObject({ type: 'video' });
+      expect(mov.src).toMatch(/^assets\/recording-\d+\.mov$/);
+      expect(qt.src).toMatch(/^assets\/tape-\d+\.mov$/);
+      expect(report.warnings.filter((w: string) => /Unrecognised media type/.test(w))).toEqual([]);
+      for (const el of [mov, qt, objects('movies')[0]]) {
+        expect(startsFast(join(out, 'deck', el.src.replace(/#.*$/, ''))), el.src).toBe(true);
+      }
+      // One file per movie, the one the slides use: no copies beside them.
+      const used = new Set(deck.slides.flatMap((s) =>
+        (s.elements as Any[]).map((el) => (el.src as string | undefined)?.replace(/#.*$/, ''))));
+      const movies = readdirSync(join(out, 'deck', 'assets')).filter((name) => /\.(mp4|mov|m4v|qt)$/i.test(name));
+      expect(movies.filter((name) => !used.has(`assets/${name}`))).toEqual([]);
     });
 
     it('keeps the box of an object it cannot convert', () => {

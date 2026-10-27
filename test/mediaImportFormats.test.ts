@@ -1,4 +1,4 @@
-import { mkdtemp, readdir, readFile, rm } from 'node:fs/promises';
+import { copyFile, mkdir, mkdtemp, readdir, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -129,6 +129,29 @@ describe('media import formats', () => {
     // Two of the five leave an original beside a conversion; nothing doubles.
     expect(await readdir(join(deckDir, 'assets'))).toHaveLength(names.length + 2);
   }, 120_000);
+
+  it('shortens an overlong name, keeping its start, its extension and its original', async () => {
+    // BUG: a name as long as a URL (the Keynote importer met a 248-character
+    // one) was kept whole; with the hash and `.h264.mp4` added it passed the
+    // 255-byte limit on a file name and the import failed with ENAMETOOLONG.
+    const deckDir = join(root, 'deck-long-name');
+    await createDeck(deckDir);
+    const long = '68747470733a2f2f'.repeat(15);
+    const sources = join(root, 'long-name');
+    await mkdir(sources, { recursive: true });
+    const source = join(sources, `${long}.mov`);
+    await copyFile(files.get('screen.mov')!, source);
+
+    const asset = await importAsset(deckDir, source);
+
+    const name = asset.src.slice('assets/'.length);
+    expect(name.startsWith(long.slice(0, 60))).toBe(true);
+    expect(name).toMatch(/\.h264\.mp4$/);
+    for (const file of await readdir(join(deckDir, 'assets'))) expect(file.length).toBeLessThanOrEqual(120);
+    // "Download original" still finds the dropped file beside the conversion.
+    const original = originalAssetPath(deckDir, asset.src);
+    expect(Buffer.compare(await readFile(original), await readFile(source))).toBe(0);
+  }, 60_000);
 
   it('reports a duration for video and none for stills', async () => {
     const deckDir = join(root, 'deck-duration');

@@ -182,6 +182,31 @@ def shadow(colour: str = "#000000", angle: float = 90, offset: float = 5, radius
     }
 
 
+def equation_fields(
+    drawable: dict[str, Any], source: str, data: int, font_size: float, colour: str
+) -> dict[str, Any]:
+    """TSD.ImageArchive fields of a Keynote equation: the rendered PDF as its
+    data, and the LaTeX or MathML source, font and depth in the
+    TSWP.EquationInfoArchive extensions, as Keynote 14 writes them."""
+    w, h = drawable["geometry"]["size"]["width"], drawable["geometry"]["size"]["height"]
+    return {
+        "super": drawable,
+        "originalSize": size(w, h),
+        "naturalSize": size(w, h),
+        "flags": 0,
+        "data": {"identifier": str(data)},
+        "interpretsUntaggedImageDataAsGeneric": False,
+        "[TSWP.EquationInfoArchive.equation_source_old]": source,
+        "[TSWP.EquationInfoArchive.equation_text_properties]": {
+            "fontSize": float(font_size),
+            "fontName": "HelveticaNeue-Light",
+            "fontColor": rgb(colour),
+        },
+        "[TSWP.EquationInfoArchive.equation_depth]": 10.0,
+        "[TSWP.EquationInfoArchive.equation_source_text]": source,
+    }
+
+
 # --- the package ----------------------------------------------------------------
 
 
@@ -591,6 +616,21 @@ class Container:
         self.slide.deck.add(self.slide.stream, "TSD.ImageArchive", fields, identifier=image_id)
         return self._attach(image_id)
 
+    def equation(
+        self,
+        geo: dict[str, Any],
+        source: str,
+        data: int,
+        *,
+        font_size: float = 60.0,
+        colour: str = "#000000",
+    ) -> int:
+        """A floating equation (Insert > Equation, outside any text): a
+        TSD.ImageArchive of Keynote's rendered PDF, with the source in the
+        TSWP.EquationInfoArchive extensions."""
+        fields = equation_fields(self._drawable(geo), source, data, font_size, colour)
+        return self._attach(self.slide.add("TSD.ImageArchive", fields))
+
     def movie(
         self,
         geo: dict[str, Any],
@@ -704,6 +744,20 @@ class SlideBuilder(Container):
     def add(self, pbtype: str, fields: dict[str, Any]) -> int:
         """An object owned by this slide (not itself placed on it)."""
         return self.deck.add(self.stream, pbtype, fields)
+
+    def inline_equation(
+        self, source: str, data: int, size: tuple[float, float], *, font_size: float = 60.0
+    ) -> int:
+        """An equation typed into a text box. The text holds U+FFFC where it
+        sits; the storage's attachment table points that index at a
+        TSWP.DrawableAttachmentArchive, whose drawable is the equation image.
+        Returns the attachment's id, for `Storage(attachments=…)`."""
+        drawable = {"geometry": geometry(0, 0, *size)}
+        image = self.add("TSD.ImageArchive", equation_fields(drawable, source, data, font_size, "#000000"))
+        return self.add(
+            "TSWP.DrawableAttachmentArchive",
+            {"drawable": ref(image), "hOffsetType": 0, "hOffset": 0.0, "vOffsetType": 0, "vOffset": 0.0},
+        )
 
     def _attach(self, drawable_id: int) -> int:
         self.archive["ownedDrawables"].append(ref(drawable_id))
@@ -821,9 +875,12 @@ class Storage:
         starts: list[tuple[int, int]] = (),
         chunks: list[str] | None = None,
         kind: str | None = None,
+        attachments: list[tuple[int, int]] = (),
     ) -> None:
+        """`attachments` are (index of a U+FFFC in `text`, attachment id)."""
         self.text = text
         self.paras = paras
+        self.attachments = list(attachments)
         self.chars = list(chars)
         self.lists = list(lists)
         self.levels = list(levels) or [(0, 0)]
@@ -861,5 +918,12 @@ class Storage:
             fields["tableCharStyle"] = self._table(self.chars)
         if self.kind:
             fields["kind"] = self.kind
-        return slide.add("TSWP.StorageArchive", fields)
+        if self.attachments:
+            fields["tableAttachment"] = self._table(self.attachments)
+        storage = slide.add("TSWP.StorageArchive", fields)
+        # An inline drawable's parent is the storage it sits in.
+        for _, attachment in self.attachments:
+            drawable = deck.object(int(deck.object(attachment)["drawable"]["identifier"]))
+            drawable["super"]["parent"] = ref(storage)
+        return storage
 

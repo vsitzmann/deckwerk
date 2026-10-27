@@ -227,7 +227,7 @@ describe('keynote importer', () => {
       'source.type = 0',
       'source.naturalSize.width, source.naturalSize.height = 199, 65',
       'k.extract_text = lambda objects, shape: "Denoising"',
-      'k.styled_text_to_html = lambda objects, shape, style: "Denoising"',
+      'k.styled_text_to_html = lambda objects, shape, style, inserts=None: "Denoising"',
       'k.resolve_shape_style = lambda objects, style_id: k.ShapeStyle(fill="#ffffff")',
       'real_style = k.resolve_text_style',
       'def centred(objects, shape):',
