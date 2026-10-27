@@ -1419,7 +1419,8 @@ export class EditorCanvas {
     prepareCodeBlocks(this.store.get().deck);
     const rendered = renderSlide(
       slide,
-      { resolveSrc: (src) => window.api.assetUrl(src), mediaPreload: 'metadata' },
+      // A slide being stepped to shows at once, its pictures as they decode.
+      { resolveSrc: (src) => window.api.assetUrl(src), mediaPreload: 'metadata', decodeImagesAsync: slideChanged },
     );
     if (slideChanged) this.adoptWarmedImages(rendered);
     this.slideLayer.replaceChildren(rendered);

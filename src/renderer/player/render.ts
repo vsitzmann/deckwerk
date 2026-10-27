@@ -66,6 +66,16 @@ export interface RenderOptions {
    * twice, once for the element and once for the cache.
    */
   deferImageSrc?: (url: string) => boolean;
+  /**
+   * Decode pictures off the main thread (`decoding="async"`): the slide shows
+   * at once and each picture when it is ready. Every editor surface that is
+   * built as the author moves around sets it -- the canvas when it changes
+   * slides, the rail's miniatures, the Morph previews of this slide and the
+   * next. Decoded where they were painted, the full-size photographs of one
+   * such slide held Safari's main thread for 400-750 ms
+   * (editingLatencyBrowser.test.ts).
+   */
+  decodeImagesAsync?: boolean;
 }
 
 /** Give a picture its source, or park it for the host (`deferImageSrc`). */
@@ -781,6 +791,7 @@ function renderBody(el: SlideElement, opts: RenderOptions): HTMLElement | SVGEle
         return pdf;
       }
       const img = document.createElement('img');
+      if (opts.decodeImagesAsync) img.decoding = 'async';
       assignImageSrc(img, opts.resolveSrc(el.src), opts);
       img.alt = el.alt;
       img.draggable = false;

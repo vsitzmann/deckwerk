@@ -88,12 +88,13 @@ jobs:
           CI_NO_WINDOW_MANAGER: "1"
         run: xvfb-run -a --server-args="-screen 0 2560x1440x24" npm run test:serial
 
-  # The media transfer budgets in real Safari. Its media stack (AVFoundation)
-  # fetches and re-fetches video in ways Chromium never does, and it exists
-  # only on macOS, so this is the one place it runs. Advisory: it cannot run
-  # on every platform, and hosted macOS runners are slow and Safari
-  # automation fragile there. The Chromium half of the same suite runs in
-  # `browser`, which is required.
+  # The media transfer budgets and the editing latency budgets in real
+  # Safari. Its media stack (AVFoundation) fetches and re-fetches video, and
+  # its painting stalls, in ways Chromium never does, and it exists only on
+  # macOS, so this is the one place they run. Advisory: it cannot run on
+  # every platform, and hosted macOS runners are slow and Safari automation
+  # fragile there. The Chromium half of each suite runs in `browser`, which
+  # is required.
   safari:
     continue-on-error: true
     runs-on: macos-15
@@ -111,3 +112,11 @@ jobs:
         env:
           RUN_SAFARI_MEDIA_BUDGET: "1"
         run: npx vitest run --config vitest.browser.config.ts test/mediaTransferBudgetBrowser.test.ts -t "Safari"
+      # Typing, stepping through slides and a collaborator's edits, timed in
+      # real Safari: its painting is where the editor was slow while Chromium
+      # was quick. The Chromium half of the suite runs in `browser`.
+      - name: Editing latency in Safari (advisory)
+        if: ${{ !cancelled() }}
+        env:
+          RUN_SAFARI_LATENCY: "1"
+        run: npx vitest run --config vitest.serial.config.ts test/editingLatencyBrowser.test.ts -t "Safari"

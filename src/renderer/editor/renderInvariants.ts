@@ -51,6 +51,8 @@ const IGNORED_ATTRIBUTES = new Set([
   // player stamps the owning element id on videos it reuses across slides.
   'preload',
   'data-player-element-id',
+  // The canvas decodes a newly shown slide's pictures off the main thread.
+  'decoding',
 ]);
 
 /**

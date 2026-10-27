@@ -32,6 +32,37 @@ export function collabClientDir(): Promise<string> {
   return pending;
 }
 
+let pendingProduction: Promise<string> | null = null;
+
+/**
+ * The collaboration client exactly as the server ships it, without the render
+ * invariant checker `collabClientDir` builds in. That checker re-renders a
+ * slide after every canvas patch to compare it with the DOM, so it doubles
+ * the work of each edit: suites that time the editor measure this build.
+ */
+export function productionCollabClientDir(): Promise<string> {
+  pendingProduction ??= sharedBuild({
+    cacheName: 'slide-editor-vitest-collab-production',
+    inputs: ['src', 'vite.collab.config.ts', 'package-lock.json', 'test/support/collabClient.ts'],
+    produce: async (outDir, checkout) => {
+      // Vite reads the flag from the environment; a worker that also built
+      // the checked client set it.
+      const flag = process.env.VITE_RENDER_INVARIANTS;
+      delete process.env.VITE_RENDER_INVARIANTS;
+      try {
+        await build({
+          configFile: join(checkout, 'vite.collab.config.ts'),
+          logLevel: 'silent',
+          build: { outDir, emptyOutDir: true },
+        });
+      } finally {
+        if (flag !== undefined) process.env.VITE_RENDER_INVARIANTS = flag;
+      }
+    },
+  });
+  return pendingProduction;
+}
+
 /**
  * Test builds check, after every in-place canvas patch, that the DOM matches a
  * fresh render (renderInvariants.ts), as development builds do. A production

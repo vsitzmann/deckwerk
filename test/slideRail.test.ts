@@ -135,9 +135,61 @@ describe('editing objects with the slide rail visible', () => {
 
     store.endTransaction();
     const after = [...host.querySelectorAll<HTMLElement>('.rail-thumb')];
-    expect(after[0]).not.toBe(before[0]);
-    expect(after[1]).toBe(before[1]);
+    expect(after).toEqual(before);
+    expect(after[0].querySelector<HTMLElement>('[data-element-id="drag-me"]')?.style.left, 'the dropped object is redrawn').toBe('180px');
     expect(store.slide?.elements[0].x).toBe(180);
+  });
+
+  // Typing syncs the slide being typed on four times a second. Rebuilding
+  // its miniature for each sync re-created every picture on it, and
+  // rebuilding the rail re-created the runs of hidden slides around it: on a
+  // slide of thirty pictures that cost Chromium 100-190 ms frames and Safari
+  // more (editingLatencyBrowser.test.ts).
+  it('redraws only the typed-in object of a miniature, and nothing else in the rail', () => {
+    const { store, host } = setup();
+    store.commit((deck) => {
+      deck.slides[0].elements.push(
+        ...Array.from({ length: 6 }, (_, i) => ({
+          id: `photo-${i}`, type: 'image' as const, src: `assets/photo-${i}.webp`,
+          x: i * 300, y: 0, w: 300, h: 200, rot: 0, z: i, opacity: 1,
+          class: [], style: {}, fit: 'cover' as const, alt: '', sourceBox: null,
+        })),
+        {
+          id: 'caption', type: 'text', x: 100, y: 900, w: 1600, h: 100,
+          rot: 0, z: 10, opacity: 1, class: ['role-caption'], style: {},
+          html: 'A caption', align: 'left', valign: 'top',
+        },
+      );
+      for (const id of ['hidden-a', 'hidden-b']) {
+        deck.slides.push({
+          id, name: id, background: { color: null, image: null },
+          notes: '', elements: [], timeline: [], skipped: true,
+        });
+      }
+    }, { history: false });
+    const rows = [...host.children];
+    const pictures = [...host.querySelectorAll('.rail-item.active img')];
+    expect(pictures).toHaveLength(6);
+    const marked = new Set<Node>([...host.querySelectorAll('*')]);
+
+    store.commit((deck) => {
+      const caption = deck.slides[0].elements.find((element) => element.id === 'caption');
+      if (caption?.type === 'text') caption.html = 'A caption, retyped';
+    });
+
+    expect([...host.children], 'every row, the run of hidden slides included').toEqual(rows);
+    expect([...host.querySelectorAll('.rail-item.active img')], 'every picture on the slide').toEqual(pictures);
+    const caption = host.querySelector<HTMLElement>('.rail-item.active [data-element-id="caption"]')!;
+    expect(caption.textContent).toBe('A caption, retyped');
+    expect(marked.has(caption), 'the caption itself is redrawn').toBe(false);
+    const fresh = [...host.querySelectorAll('*')].filter((node) => !marked.has(node));
+    expect(fresh.every((node) => caption === node || caption.contains(node)), 'nothing but the caption is new').toBe(true);
+
+    // Anything more than a few objects (here: the slide's background) still
+    // redraws the miniature from scratch.
+    const thumb = host.querySelector('.rail-item.active .rail-thumb');
+    store.commit((deck) => { deck.slides[0].background.color = '#123456'; });
+    expect(host.querySelector('.rail-item.active .rail-thumb')).not.toBe(thumb);
   });
 });
 

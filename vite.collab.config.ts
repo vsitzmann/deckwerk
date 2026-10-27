@@ -68,6 +68,9 @@ export default defineConfig({
   base: './',
   resolve: { alias: { '@shared': resolve(__dirname, 'src/shared') } },
   plugins: [serviceWorker()],
+  // The spellchecker's worker (spellcheckWorker.ts) code-splits, which
+  // only module workers can.
+  worker: { format: 'es' },
   build: {
     outDir: resolve(__dirname, 'dist/collab'),
     emptyOutDir: true,

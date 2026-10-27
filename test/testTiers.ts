@@ -60,6 +60,9 @@ const CLIPBOARD_MARKERS = [
 const SERIAL_BY_NATURE = [
   // Measures the collab server's event loop under load: timing, so alone.
   'test/collabStalls.test.ts',
+  // Times keystrokes and frames in the editor: other suites' Electrons on
+  // the same cores showed up as 100-190 ms keystrokes that were not its own.
+  'test/editingLatencyBrowser.test.ts',
   // CDP's IME path reaches Chromium's real InputMethodController. When two
   // Electron apps drive it concurrently under Xvfb, Linux can terminate one
   // synthetic preedit before its next update and leave the old candidate in

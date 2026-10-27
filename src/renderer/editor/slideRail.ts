@@ -2,14 +2,14 @@ import { openContextMenu } from './contextMenuPlacement.js';
 import { makeId } from '@shared/geometry.js';
 import { recoverPreviewFrames } from '../player/previewFrameRecovery.js';
 import { freezePreviewVideos, releasePreviewVideos } from '../player/previewPoster.js';
-import { renderSlide } from '../player/render.js';
+import { renderElement, renderSlide, type RenderOptions } from '../player/render.js';
 import { applyDeckThemeToNewSlide } from '@shared/themes.js';
 import { LAYOUT_LABELS_BY_ID } from './layoutPreview.js';
 import { LAYOUT_LABELS, applySlideLayout, type SlideLayout } from './slideLayouts.js';
 import { openComments } from './comments.js';
 import { openThreadCount } from '@shared/comments.js';
 import type { Deck, Slide } from '@shared/deck.js';
-import { sameSlideDrawing, type EditorStore } from './store.js';
+import { changedSlideObjects, sameSlideDrawing, type EditorStore } from './store.js';
 import { showConfirmDialog } from './confirmDialog.js';
 
 /**
@@ -64,9 +64,7 @@ export function previewSurface(slide: Slide, canvas: { w: number; h: number }): 
   inner.style.width = `${canvas.w}px`;
   inner.style.height = `${canvas.h}px`;
   if (slide.background.color) inner.style.background = slide.background.color;
-  inner.appendChild(
-    renderSlide(slide, { resolveSrc: (src) => window.api.assetUrl(src), mediaPreload: 'metadata', deferVideoSrc: true }),
-  );
+  inner.appendChild(renderSlide(slide, previewRenderOptions()));
   for (const video of inner.querySelectorAll('video')) {
     video.removeAttribute('autoplay');
     // renderSlide's 'metadata' preload decodes exactly one poster frame,
@@ -78,6 +76,37 @@ export function previewSurface(slide: Slide, canvas: { w: number; h: number }): 
   // more players than Chromium wants resident. Freeze it into a still.
   freezePreviewVideos(inner);
   return inner;
+}
+
+function previewRenderOptions(): RenderOptions {
+  return { resolveSrc: (src) => window.api.assetUrl(src), mediaPreload: 'metadata', deferVideoSrc: true, decodeImagesAsync: true };
+}
+
+/**
+ * How to redraw only the objects of a cached miniature that `slide` changed,
+ * leaving every other node (and its decoded picture) in place; run it to
+ * apply. Null when the change is more than that, or touches a video or a web
+ * page, whose previews are frozen and gated by `previewSurface`: the caller
+ * then builds afresh.
+ */
+function previewPatch(thumb: HTMLElement, previous: Slide, slide: Slide): (() => void) | null {
+  const changed = changedSlideObjects(previous, slide);
+  if (!changed) return null;
+  const before = new Map(previous.elements.map((element) => [element.id, element]));
+  const plain = (type: string) => type !== 'video' && type !== 'web';
+  if (!changed.every((element) => plain(element.type) && plain(before.get(element.id)!.type))) return null;
+  const root = thumb.querySelector<HTMLElement>(':scope > .rail-thumb-inner > [data-slide-id]');
+  if (!root) return null;
+  const drawn = new Map<string, HTMLElement>();
+  for (const node of root.children) {
+    if (node instanceof HTMLElement && node.dataset.elementId) drawn.set(node.dataset.elementId, node);
+  }
+  const nodes = changed.map((element) => drawn.get(element.id));
+  if (nodes.some((node) => !node)) return null;
+  return () => {
+    const options = previewRenderOptions();
+    changed.forEach((element, i) => nodes[i]!.replaceWith(renderElement(element, options)));
+  };
 }
 
 export interface RailPresence {
@@ -240,11 +269,65 @@ export class SlideRail {
       this.highlight(slideIndex, slideSelection);
       return;
     }
-    if (deck.slides === this.renderedSlides) {
+    if (deck.slides === this.renderedSlides || this.redrawInPlace(deck)) {
       this.highlight(slideIndex, slideSelection);
       return;
     }
     this.render();
+  }
+
+  /**
+   * Bring the rail up to `deck` without a rebuild when the only slides that
+   * changed are shown rows whose change is their speaker notes, their
+   * comments or a few of their objects: typing syncs one such slide four
+   * times a second. A rebuild redrew that slide's miniature from scratch,
+   * every picture on it included, and re-created the runs of hidden slides
+   * around it, thumbnails and all; on a slide of thirty pictures each sync
+   * cost Chromium a 100-190 ms frame (editingLatencyBrowser.test.ts). False,
+   * having changed nothing, when any changed slide needs more.
+   */
+  private redrawInPlace(deck: Deck): boolean {
+    const before = this.renderedSlides as Slide[] | null;
+    if (!Array.isArray(before) || before.length !== deck.slides.length) return false;
+    const updates: Array<{ previous: Slide; slide: Slide; row: HTMLElement; index: number; patch: (() => void) | null }> = [];
+    for (let index = 0; index < deck.slides.length; index++) {
+      const previous = before[index];
+      const slide = deck.slides[index];
+      if (previous === slide) continue;
+      if (previous.id !== slide.id || slide.skipped || previous.skipped) return false;
+      const cached = this.rowCache.get(previous);
+      if (!cached || cached.index !== index || cached.row.parentElement !== this.host) return false;
+      if (sameSlideDrawing(previous, slide)) {
+        updates.push({ previous, slide, row: cached.row, index, patch: null });
+        continue;
+      }
+      // A row still showing its placeholder draws whatever slide it is handed
+      // when it scrolls near; it only needs the new one.
+      if (cached.row.querySelector(':scope > .rail-thumb-placeholder') && !this.thumbCache.has(previous)) {
+        updates.push({ previous, slide, row: cached.row, index, patch: null });
+        continue;
+      }
+      const thumb = this.thumbCache.get(previous);
+      const patch = thumb && cached.row.contains(thumb) ? previewPatch(thumb, previous, slide) : null;
+      if (!patch) return false;
+      updates.push({ previous, slide, row: cached.row, index, patch });
+    }
+    for (const { previous, slide, row, index, patch } of updates) {
+      patch?.();
+      const thumb = this.thumbCache.get(previous);
+      if (thumb) {
+        this.thumbCache.delete(previous);
+        this.thumbCache.set(slide, thumb);
+      }
+      const shown = row.querySelector<HTMLElement>(':scope > .rail-thumb');
+      if (shown) this.pendingThumbs.set(shown, { deck, slide });
+      this.rowCache.delete(previous);
+      this.rowCache.set(slide, { row, index });
+      this.syncCommentState(row, slide);
+    }
+    this.slideById = new Map(deck.slides.map((slide) => [slide.id, slide]));
+    this.renderedSlides = deck.slides;
+    return true;
   }
 
   private highlight(slideIndex: number, slideSelection: Set<string>): void {

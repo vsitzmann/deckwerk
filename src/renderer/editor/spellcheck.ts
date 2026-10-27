@@ -160,20 +160,84 @@ interface HarperLinter {
   importWords(words: string[]): Promise<void>;
 }
 
+/** A Harper lint as plain data, the form spellcheckWorker.ts sends back. */
+export interface PlainLint {
+  kind: string;
+  message: string;
+  start: number;
+  end: number;
+  suggestions: string[];
+}
+
+export type SpellcheckRequest =
+  | { id: number; op: 'lint'; text: string }
+  | { id: number; op: 'importWords'; words: string[] };
+
+export type SpellcheckReply = { id: number; lints?: PlainLint[]; error?: string };
+
+/** `lint` as the raw lint `toSpellingLints` reads. */
+export function rawLint(lint: PlainLint): RawLint {
+  return {
+    lint_kind: () => lint.kind,
+    message: () => lint.message,
+    span: () => ({ start: lint.start, end: lint.end }),
+    suggestions: () => lint.suggestions.map((text) => ({ get_replacement_text: () => text })),
+  };
+}
+
+/** Harper in spellcheckWorker.ts, so none of it runs on the page's thread. */
+function workerLinter(): HarperLinter {
+  const worker = new Worker(new URL('./spellcheckWorker.ts', import.meta.url), { type: 'module' });
+  const waiting = new Map<number, { resolve: (reply: SpellcheckReply) => void; reject: (error: Error) => void }>();
+  let next = 0;
+  worker.onmessage = ({ data }: MessageEvent<SpellcheckReply>) => {
+    const pending = waiting.get(data.id);
+    waiting.delete(data.id);
+    if (data.error !== undefined) pending?.reject(new Error(data.error));
+    else pending?.resolve(data);
+  };
+  worker.onerror = (event) => {
+    const error = new Error(`spellcheck worker failed: ${event.message}`);
+    for (const pending of waiting.values()) pending.reject(error);
+    waiting.clear();
+  };
+  const call = (request: SpellcheckRequest extends infer R ? R extends unknown ? Omit<R, 'id'> : never : never) =>
+    new Promise<SpellcheckReply>((resolve, reject) => {
+      const id = next++;
+      waiting.set(id, { resolve, reject });
+      worker.postMessage({ ...request, id });
+    });
+  return {
+    lint: async (text) => ((await call({ op: 'lint', text })).lints ?? []).map(rawLint),
+    importWords: async (words) => { await call({ op: 'importWords', words }); },
+  };
+}
+
 let linterPromise: Promise<HarperLinter> | null = null;
 
 /** Harper is ~15 MB of WebAssembly: load it the first time a box is edited. */
 function loadLinter(): Promise<HarperLinter> {
   linterPromise ??= (async () => {
-    const [{ LocalLinter, Dialect }, { binaryInlined }] = await Promise.all([
-      import('harper.js'),
-      import('harper.js/binaryInlined'),
-    ]);
-    const linter = new LocalLinter({ binary: binaryInlined, dialect: Dialect.American });
-    await linter.setup();
+    // Harper compiles its WebAssembly and builds its dictionary in setup(),
+    // about two seconds of work. On the page's own thread that froze the
+    // editor for those two seconds the first time anyone opened a text box
+    // (editingLatencyBrowser.test.ts), so it runs in a worker wherever there
+    // are workers.
+    let linter: HarperLinter;
+    if (typeof Worker === 'function') {
+      linter = workerLinter();
+    } else {
+      const [{ LocalLinter, Dialect }, { binaryInlined }] = await Promise.all([
+        import('harper.js'),
+        import('harper.js/binaryInlined'),
+      ]);
+      const local = new LocalLinter({ binary: binaryInlined, dialect: Dialect.American });
+      await local.setup();
+      linter = local as unknown as HarperLinter;
+    }
     const words = personalWords();
     if (words.length) await linter.importWords(words);
-    return linter as unknown as HarperLinter;
+    return linter;
   })();
   return linterPromise;
 }

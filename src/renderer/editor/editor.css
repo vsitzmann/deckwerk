@@ -1577,6 +1577,18 @@ body.panel-resizing iframe { pointer-events: none; }
   transform-origin: top left;
 }
 
+/* Every miniature is a layer of its own, and so is the stroke drawn over it
+   (.rail-thumb::after). Unlayered, Safari repainted a miniature's pictures,
+   scaling each full-size bitmap down on the main thread, whenever anything
+   in its row changed: each live sync while someone typed (a slide of 29
+   photos made every keystroke wait 150-300 ms), and each step through the
+   deck, when the old and the new row change their highlight (350-820 ms
+   onto slides of large photographs; editingLatencyBrowser.test.ts). The
+   layer is the miniature's frame, a couple of hundred pixels wide: layering
+   the slide-sized surface inside it instead cost 60 MB a row. */
+.rail-thumb,
+.rail-thumb::after { will-change: transform; }
+
 /* Thumbnail-only rows: no title, no element count. */
 .rail-item {
   grid-template-areas: "num thumb";
@@ -2419,7 +2431,11 @@ input[type="range"] { accent-color: var(--accent); border: 0; background: transp
 .guide { background: var(--danger); }
 .measure { --measure-color: var(--danger); }
 .measure-size { --measure-color: var(--accent); }
-.marquee { border-color: var(--accent); background: var(--accent-soft); }
+/* The marquee and the tint on a box being typed into lie over slide content,
+   so they take a see-through wash of the accent, never --accent-soft: that is
+   an opaque swatch for buttons and rail rows, and over the slide it hid every
+   object the marquee swept and whatever sat behind the box being edited. */
+.marquee { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, transparent); }
 
 /* Timeline + status. */
 .step-block { border: 1px solid var(--line); background: transparent; }
@@ -2452,8 +2468,8 @@ input[type="range"] { accent-color: var(--accent); border: 0; background: transp
   #status[data-busy="true"]::before { animation-duration: 1400ms; }
 }
 
-/* The element being typed into. */
-.element.editing { outline-color: var(--accent); box-shadow: inset 0 0 0 100vmax var(--accent-soft); }
+/* The element being typed into (see the marquee above). */
+.element.editing { outline-color: var(--accent); box-shadow: inset 0 0 0 100vmax color-mix(in srgb, var(--accent) 14%, transparent); }
 
 /* Colour picker: theme palette and full RGBA controls open in one popover. */
 .field-color { flex-direction: row; align-items: center; gap: 8px; }
