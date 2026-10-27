@@ -76,6 +76,9 @@ export interface MeasuredNode {
     muted?: boolean;
     autoplay?: boolean;
     controls?: boolean;
+    /** A list's own numbering, which lives on its tag rather than in its items. */
+    start?: string;
+    reversed?: boolean;
   };
   /** Set by the walker when a node must be preserved as raw markup. */
   verbatim?: boolean;
@@ -254,6 +257,7 @@ ${blank > 0 ? BLANK_RULES : `<!-- ${SCOPE_MARKER}${scope} -->\n${SCOPE_RULES}`}
 <base href="${escape(options.base ?? '../')}">
 <style>${authoringCss(canvas)}</style>
 <style>${options.typeCss ?? ''}</style>
+${authoringListStyle(options.typeCss ?? '')}
 <link rel="stylesheet" href="${escape(options.theme ?? 'theme.css')}">
 <style>${PREVIEW_CSS}</style>
 ${usesMath(body) ? KATEX_PAGE_HTML : ''}
@@ -422,6 +426,53 @@ ${fitAutoTextElement.toString()}
   if (document.fonts) document.fonts.ready.then(run);
 })();
 `;
+
+/**
+ * The player's list rules, for the lists an author writes by hand.
+ *
+ * In the player every list sits inside a text box's `.text-body`, and that is
+ * what its rules select on: markers flush with the box, items hung by their
+ * own marker, 0.15em between them. A bare `<ul>` in an authoring page has no
+ * such wrapper, so it laid out on the browser's defaults instead — 40px of
+ * inset and no gap between items — and the compile baked a box a dozen pixels
+ * per item shorter than the player then drew in it.
+ *
+ * So the authoring page carries the same rules, cut out of `type.css`
+ * between its `@authoring-lists` markers rather than copied (a copy is a
+ * second thing to keep in step), and rescoped to the page:
+ *
+ * - `@scope` stops at a `.text-body`, which the original rules already
+ *   govern, and at an HTML region, which the player draws in a shadow root
+ *   that these rules never reach.
+ * - `@layer` puts them under every unlayered rule, whatever its specificity:
+ *   they stand in for the player's defaults, so the author's own CSS — and the
+ *   deck theme — still win wherever they say something about a list.
+ */
+export function authoringListCss(typeCss: string): string {
+  const block = /\/\* @authoring-lists begin[\s\S]*?\*\/([\s\S]*?)\/\* @authoring-lists end \*\//
+    .exec(typeCss)?.[1];
+  if (!block) return '';
+  const rules = block.replace(/\.text-body\s+/g, '');
+  // In the player a list's items sit in the text box's content block, a flex
+  // item, so their margins stay inside it. A list in the page's own flow let
+  // its first and last item's margins collapse out through it, and the box
+  // was measured that much shorter than the list it holds.
+  const contained = ':is(ul, ol):not(li *, :is(ul, ol) *) { display: flow-root; }';
+  return `@layer deckwerk-authoring-lists {
+@scope (body) to ([data-element="html"], .text-body) {${rules}
+${contained}
+}
+}`;
+}
+
+/** Marks the page's copy of those rules, so a page that already has them is left alone. */
+export const AUTHORING_LISTS_ATTRIBUTE = 'data-authoring-lists';
+
+/** The authoring list rules as a page carries them. */
+export function authoringListStyle(typeCss: string): string {
+  const css = authoringListCss(typeCss);
+  return css ? `<style ${AUTHORING_LISTS_ATTRIBUTE}>${css}</style>` : '';
+}
 
 /**
  * What makes a slide a slide, before any theme is involved.
@@ -1957,10 +2008,10 @@ function elementFromMeasured(
     // A list is one text object; without its own tag around the items the
     // markers and indentation would not survive into the deck.
     html: normalizeHtmlLineHeights(node.tag === 'ul' || node.tag === 'ol'
-      ? `<${node.tag}>${node.html.trim()}</${node.tag}>`
+      ? `<${node.tag}${listAttributes(node)}>${trimCollapsible(node.html)}</${node.tag}>`
       // A deck text box's own markup is kept exactly: the player shows it
       // pre-wrap, so even a trailing space is something it holds.
-      : node.preformatted ? node.html : node.html.trim()),
+      : node.preformatted ? node.html : trimCollapsible(node.html)),
     align: flexTextAlignment(node).align ?? alignFrom(node.attrs.textAlign),
     valign: node.dataset.valign !== undefined
       ? valignFrom(node.dataset.valign)
@@ -1991,6 +2042,27 @@ function elementFromMeasured(
       ? { paragraphSpacing: Math.max(0, Number.parseFloat(node.dataset.paragraphSpacing!)) }
       : {}),
   };
+}
+
+/**
+ * The numbering a top-level list carries on its own tag. The tag is rebuilt
+ * around the items, so `<ol start="4">` came back counting from 1.
+ */
+function listAttributes(node: MeasuredNode): string {
+  if (node.tag !== 'ol') return '';
+  const start = Number.parseInt(node.attrs.start ?? '', 10);
+  return (Number.isFinite(start) ? ` start="${start}"` : '')
+    + (node.attrs.reversed ? ' reversed' : '');
+}
+
+/**
+ * Trim only what HTML itself collapses. `String.prototype.trim` also takes
+ * the em space and the no-break space, which an author types precisely
+ * because the browser keeps them: an algorithm indented with `&emsp;` lost
+ * its indentation on the way into the deck.
+ */
+function trimCollapsible(html: string): string {
+  return html.replace(/^[ \t\n\r\f]+|[ \t\n\r\f]+$/g, '');
 }
 
 /**
