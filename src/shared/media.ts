@@ -25,7 +25,16 @@ export const IMAGE_EXTS = new Set([
  * H.264 without the author choosing that.
  */
 export const CONVERTED_IMAGE_EXTS = new Set(['.heic', '.heif', '.tif', '.tiff', '.bmp']);
-export const VIDEO_EXTS = new Set(['.mp4', '.mov', '.m4v', '.webm', '.mkv', '.avi']);
+export const VIDEO_EXTS = new Set(['.mp4', '.mov', '.qt', '.m4v', '.webm', '.mkv', '.avi']);
+
+/**
+ * The extension a source file is kept under in `assets/`. A `.qt` is plain
+ * QuickTime (Keynote keeps some movies that way), but nothing serves `.qt` as
+ * video: it goes in as the `.mov` it is.
+ */
+export function importedVideoExtension(ext: string): string {
+  return ext === '.qt' ? '.mov' : ext;
+}
 
 /** Classify by file name/path extension; null means "not droppable media". */
 export function classifyMediaName(name: string): 'image' | 'video' | null {

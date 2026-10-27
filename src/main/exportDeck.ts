@@ -55,6 +55,13 @@ export interface WebExportOptions {
    * rail number, which counts skipped ones.
    */
   dropSkipped?: boolean;
+  /**
+   * Copy only the media these slides (by id) show. Every slide stays in the
+   * page, so the player's slide numbers still match the deck's; the others
+   * simply have no files. For `slide-agent render`, which captures a few
+   * slides of a deck that may carry a gigabyte of media.
+   */
+  onlySlides?: ReadonlySet<string>;
   /** Re-encodes running at once. Two keeps libx264 busy without thrashing. */
   concurrency?: number;
 }
@@ -106,7 +113,7 @@ const PROFILES: Record<WebExportQuality, QualityProfile> = {
   },
 };
 
-const VIDEO_EXTENSIONS = new Set(['.mp4', '.m4v', '.mov', '.webm', '.mkv', '.avi', '.mpg', '.mpeg', '.wmv', '.ogv']);
+const VIDEO_EXTENSIONS = new Set(['.mp4', '.m4v', '.mov', '.qt', '.webm', '.mkv', '.avi', '.mpg', '.mpeg', '.wmv', '.ogv']);
 /** Stills worth re-encoding. GIF and SVG stay as they are: one animates, one has no pixels. */
 const IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.webp', '.bmp', '.tif', '.tiff', '.heic', '.heif', '.avif']);
 
@@ -127,7 +134,9 @@ export async function exportDeck(
   const exported: Deck = options.dropSkipped
     ? { ...deck, slides: deck.slides.filter((slide) => !slide.skipped) }
     : deck;
-  const wanted = referencedAssets(exported);
+  const wanted = referencedAssets(options.onlySlides
+    ? { ...exported, slides: exported.slides.filter((slide) => options.onlySlides!.has(slide.id)) }
+    : exported);
   // theme.css names files no slide does: a webfont's `@font-face`, a paper
   // texture. It ships as written, so those go across under their own names.
   const theme = await loadTheme(deckDir, deck.theme);

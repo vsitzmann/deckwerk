@@ -292,3 +292,312 @@ describe('starting a browser presentation', () => {
     expect(audienceWindows.map((window) => window.closed)).toEqual([true, false]);
   });
 });
+
+/**
+ * Chrome on a laptop with a projector attached: the Window Management API
+ * says there is a second screen. Present must put the audience fullscreen on
+ * it and Speaker View on the laptop, as the desktop app and Keynote do.
+ *
+ * BUG (fixed): Present never looked at the screens. It fullscreened the
+ * audience over the editor tab on the laptop, and Speaker View asked the
+ * presenter to drag a window to the projector by hand.
+ */
+describe('presenting with a second screen attached', () => {
+  interface FakeScreen {
+    label: string;
+    isInternal: boolean;
+    left: number; top: number; width: number; height: number;
+    availLeft: number; availTop: number; availWidth: number; availHeight: number;
+  }
+  const laptop: FakeScreen = {
+    label: 'Built-in Retina Display', isInternal: true,
+    left: 0, top: 0, width: 1512, height: 982,
+    availLeft: 0, availTop: 25, availWidth: 1512, availHeight: 957,
+  };
+  const projector: FakeScreen = {
+    label: 'Projector', isInternal: false,
+    left: 1512, top: 0, width: 1920, height: 1080,
+    availLeft: 1512, availTop: 0, availWidth: 1920, availHeight: 1080,
+  };
+
+  let opened: Array<{ url: string; name: string; features: string }>;
+  let popups: Array<{ closed: boolean; close: () => void }>;
+  let popupsAllowed: boolean;
+  let statuses: string[];
+  let fullscreenScreens: Array<string | null>;
+  let fullscreenRefused: boolean;
+  let permission: string;
+  /** What the person answers when the browser asks. */
+  let answer: 'allow' | 'deny';
+  let promptAnswered: Promise<void>;
+  let releasePrompt: () => void;
+  let screenDetailsCalls: number;
+  let activation: { isActive: boolean };
+  let details: { screens: FakeScreen[]; currentScreen: FakeScreen };
+
+  function define(target: object, key: string, value: unknown): void {
+    Object.defineProperty(target, key, { configurable: true, writable: true, value });
+  }
+
+  beforeEach(() => {
+    document.body.replaceChildren();
+    opened = [];
+    popups = [];
+    popupsAllowed = true;
+    statuses = [];
+    fullscreenScreens = [];
+    fullscreenRefused = false;
+    permission = 'granted';
+    answer = 'allow';
+    screenDetailsCalls = 0;
+    promptAnswered = Promise.resolve();
+    releasePrompt = () => undefined;
+    activation = { isActive: true };
+    details = { screens: [laptop, projector], currentScreen: laptop };
+
+    vi.stubGlobal('open', (url: string, name: string, features = '') => {
+      opened.push({ url, name, features });
+      if (!popupsAllowed) return null;
+      const handle = { closed: false, close: () => { handle.closed = true; } };
+      popups.push(handle);
+      return handle as unknown as Window;
+    });
+    HTMLElement.prototype.requestFullscreen = vi.fn(function (options?: { screen?: FakeScreen }) {
+      fullscreenScreens.push(options?.screen?.label ?? null);
+      if (fullscreenRefused) return Promise.reject(new TypeError('refused'));
+      // Going fullscreen on the projector moves the editor's window there,
+      // and ScreenDetails.currentScreen follows it.
+      if (options?.screen) details.currentScreen = options.screen;
+      return Promise.resolve();
+    }) as unknown as HTMLElement['requestFullscreen'];
+    Object.defineProperty(document, 'exitFullscreen', {
+      configurable: true,
+      value: vi.fn(() => Promise.resolve()),
+    });
+    define(window.screen, 'isExtended', true);
+    vi.stubGlobal('getScreenDetails', async () => {
+      screenDetailsCalls++;
+      if (permission === 'prompt') {
+        await promptAnswered;
+        permission = answer === 'allow' ? 'granted' : 'denied';
+      }
+      if (permission !== 'granted') throw new DOMException('Permission denied.', 'NotAllowedError');
+      return details;
+    });
+    define(navigator, 'permissions', {
+      query: async ({ name }: { name: string }) => {
+        if (name !== 'window-management') throw new TypeError(`unknown permission ${name}`);
+        return { state: permission };
+      },
+    });
+    define(navigator, 'userActivation', activation);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    delete (window.screen as unknown as { isExtended?: boolean }).isExtended;
+    delete (navigator as unknown as { permissions?: unknown }).permissions;
+    delete (navigator as unknown as { userActivation?: unknown }).userActivation;
+    Object.defineProperty(document, 'fullscreenElement', { configurable: true, get: () => null });
+    document.body.replaceChildren();
+  });
+
+  /** The prompt stays up until the test answers it. */
+  function holdPrompt(): void {
+    permission = 'prompt';
+    promptAnswered = new Promise((resolve) => { releasePrompt = resolve; });
+  }
+
+  it('puts the audience fullscreen on the projector and Speaker View on the laptop', async () => {
+    await startPresenting('talk', 2, seed, { onStatus: (m) => statuses.push(m) });
+
+    // The editor tab is the audience: it is the one surface the click can
+    // fullscreen, and fullscreen can be sent to another screen.
+    const frame = overlayFrame()!;
+    expect(query(frame.src).get('role')).toBeNull();
+    expect(query(frame.src).get('embed')).toBe('1');
+    expect(fullscreenScreens).toEqual(['Projector']);
+
+    // Speaker View comes automatically, filling the laptop's screen.
+    expect(opened).toHaveLength(1);
+    const speaker = query(opened[0].url);
+    expect(speaker.get('role')).toBe('speaker');
+    expect(speaker.get('slide')).toBe('3');
+    expect(speaker.get('embed')).toBeNull();
+    expect(opened[0].features).toBe('popup,left=0,top=25,width=1512,height=957');
+    // Nobody has to drag a window anywhere.
+    expect(statuses.join(' ')).not.toContain('move the new window');
+  });
+
+  it('does the same for Present in Speaker View', async () => {
+    await startPresenting('talk', 0, seed, { speakerView: true, endSlideIndex: 2 });
+
+    expect(fullscreenScreens).toEqual(['Projector']);
+    expect(opened).toHaveLength(1);
+    expect(query(opened[0].url).get('role')).toBe('speaker');
+    expect(query(opened[0].url).get('endSlide')).toBe('3');
+    expect(query(overlayFrame()!.src).get('role')).toBeNull();
+    expect(query(overlayFrame()!.src).get('endSlide')).toBe('3');
+  });
+
+  it('sends the audience to the laptop when the editor is on the external monitor', async () => {
+    details.currentScreen = projector;
+    await startPresenting('talk', 0, seed);
+
+    expect(fullscreenScreens).toEqual(['Built-in Retina Display']);
+    expect(opened[0].features).toBe('popup,left=1512,top=0,width=1920,height=1080');
+  });
+
+  it('closes Speaker View when the show ends on the projector', async () => {
+    await startPresenting('talk', 0, seed);
+    Object.defineProperty(document, 'fullscreenElement', { configurable: true, get: () => overlayFrame() });
+    document.dispatchEvent(new Event('fullscreenchange'));
+    // Escape on the projector leaves fullscreen.
+    Object.defineProperty(document, 'fullscreenElement', { configurable: true, get: () => null });
+    document.dispatchEvent(new Event('fullscreenchange'));
+
+    expect(overlayFrame()).toBeNull();
+    expect(popups.map((popup) => popup.closed)).toEqual([true]);
+  });
+
+  it('ends the projector when Speaker View ends the show', async () => {
+    await startPresenting('talk', 0, seed);
+    // Speaker View's End show says goodbye on the bus; the audience in the
+    // overlay hears it and tells this tab.
+    window.dispatchEvent(new MessageEvent('message', { origin: location.origin, data: { type: 'present-exit' } }));
+
+    expect(overlayFrame()).toBeNull();
+    expect(popups[0].closed).toBe(true);
+  });
+
+  it('keeps the projector going, and says why, when the pop-up is blocked', async () => {
+    popupsAllowed = false;
+    await startPresenting('talk', 0, seed, { onStatus: (m) => statuses.push(m) });
+
+    expect(fullscreenScreens).toEqual(['Projector']);
+    expect(overlayFrame()).not.toBeNull();
+    expect(statuses.join(' ')).toContain('allow pop-ups');
+  });
+
+  it('presents in this tab, without Speaker View, when the projector refuses fullscreen', async () => {
+    fullscreenRefused = true;
+    await startPresenting('talk', 0, seed, { onStatus: (m) => statuses.push(m) });
+
+    expect(overlayFrame()).not.toBeNull();
+    expect(query(overlayFrame()!.src).get('role')).toBeNull();
+    expect(opened).toEqual([]);
+  });
+
+  it('asks once, then presents on both screens when allowed straight away', async () => {
+    holdPrompt();
+    const started = startPresenting('talk', 0, seed, { onStatus: (m) => statuses.push(m) });
+    await vi.waitFor(() => expect(screenDetailsCalls).toBe(1));
+    // Nothing is on screen while the browser asks, and the status says why.
+    expect(overlayFrame()).toBeNull();
+    expect(statuses.at(-1)).toContain('allow window management');
+    releasePrompt();
+    await started;
+
+    expect(fullscreenScreens).toEqual(['Projector']);
+    expect(query(opened[0].url).get('role')).toBe('speaker');
+  });
+
+  it('starts nothing, and says to press Present again, when the click expired during the prompt', async () => {
+    holdPrompt();
+    const started = startPresenting('talk', 0, seed, { onStatus: (m) => statuses.push(m) });
+    await vi.waitFor(() => expect(screenDetailsCalls).toBe(1));
+    activation.isActive = false;
+    releasePrompt();
+    await started;
+
+    expect(overlayFrame()).toBeNull();
+    expect(opened).toEqual([]);
+    expect(fullscreenScreens).toEqual([]);
+    expect(statuses.at(-1)).toContain('press Present again');
+
+    // Next time the permission is there: straight to both screens.
+    activation.isActive = true;
+    await startPresenting('talk', 0, seed);
+    expect(fullscreenScreens).toEqual(['Projector']);
+    expect(screenDetailsCalls).toBe(2);
+  });
+
+  it('presents on this screen as before when the prompt is refused', async () => {
+    holdPrompt();
+    answer = 'deny';
+    const started = startPresenting('talk', 0, seed, { speakerView: true, onStatus: (m) => statuses.push(m) });
+    releasePrompt();
+    await started;
+
+    // Exactly today's Speaker View: audience in a pop-up, speaker in the tab.
+    expect(fullscreenScreens).toEqual([null]);
+    expect(opened).toHaveLength(1);
+    expect(opened[0].features).toBe('');
+    expect(query(opened[0].url).get('role')).toBeNull();
+    expect(query(overlayFrame()!.src).get('role')).toBe('speaker');
+  });
+
+  it('starts nothing when the prompt is refused after the click expired', async () => {
+    holdPrompt();
+    answer = 'deny';
+    const started = startPresenting('talk', 0, seed, { onStatus: (m) => statuses.push(m) });
+    await vi.waitFor(() => expect(screenDetailsCalls).toBe(1));
+    activation.isActive = false;
+    releasePrompt();
+    await started;
+
+    expect(overlayFrame()).toBeNull();
+    expect(opened).toEqual([]);
+    expect(statuses.at(-1)).toContain('press Present again');
+  });
+
+  it('never asks again once refused, and presents on this screen', async () => {
+    permission = 'denied';
+    await startPresenting('talk', 0, seed);
+
+    expect(screenDetailsCalls).toBe(0);
+    expect(fullscreenScreens).toEqual([null]);
+    expect(opened).toEqual([]);
+  });
+
+  it('presents on this screen, without asking, when there is only one screen', () => {
+    define(window.screen, 'isExtended', false);
+    // Synchronous, exactly as before: nothing awaited before the overlay.
+    void startPresenting('talk', 0, seed);
+
+    expect(overlayFrame()).not.toBeNull();
+    expect(screenDetailsCalls).toBe(0);
+    expect(fullscreenScreens).toEqual([null]);
+  });
+
+  it('keeps one-screen Speaker View for a rehearsal', () => {
+    define(window.screen, 'isExtended', false);
+    void startPresenting('talk', 0, seed, { speakerView: true });
+
+    expect(opened).toHaveLength(1);
+    expect(query(opened[0].url).get('role')).toBeNull();
+    expect(query(overlayFrame()!.src).get('role')).toBe('speaker');
+  });
+
+  it('presents synchronously, as before, in a browser without the API', () => {
+    vi.stubGlobal('getScreenDetails', undefined);
+    void startPresenting('talk', 0, seed, { speakerView: true });
+
+    expect(screenDetailsCalls).toBe(0);
+    expect(opened).toHaveLength(1);
+    expect(query(overlayFrame()!.src).get('role')).toBe('speaker');
+  });
+
+  it('runs only the latest Present when it is pressed again during the prompt', async () => {
+    holdPrompt();
+    const first = startPresenting('talk', 0, seed);
+    await vi.waitFor(() => expect(screenDetailsCalls).toBe(1));
+    const second = startPresenting('talk', 3, seed);
+    releasePrompt();
+    await Promise.all([first, second]);
+
+    expect(document.querySelectorAll('iframe[src*="present.html"]')).toHaveLength(1);
+    expect(query(overlayFrame()!.src).get('slide')).toBe('4');
+    expect(opened).toHaveLength(1);
+  });
+});

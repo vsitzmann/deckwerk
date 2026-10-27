@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { build } from 'electron-vite';
 import { collectProcessOutput, electronBinary, reportedPorts, type DevToolsTarget } from './browserSession.js';
 import { collabClientDir, enableRenderInvariants, sharedBuild } from './collabClient.js';
+import { electronChildEnv } from '../../src/cli/electronDisplay.js';
 
 /**
  * The REAL desktop app for the integration tests: built once per source
@@ -125,8 +126,7 @@ export function launchDesktopApp(appDir: string, args: string[], options: {
     cwd: options.cwd ?? process.cwd(),
     stdio: ['ignore', 'pipe', 'pipe'],
     env: {
-      ...process.env,
-      ELECTRON_DISABLE_SECURITY_WARNINGS: '1',
+      ...electronChildEnv(),
       ...(options.visible ? {} : { DECKWERK_HEADLESS_TEST: '1' }),
       ...options.env,
     },

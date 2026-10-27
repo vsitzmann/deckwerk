@@ -16,9 +16,12 @@ are intentionally omitted.
   surfaces talk over `src/renderer/collab/presentationBus.ts`
   (`BroadcastChannel`, with a `storage`-event fallback), not over the
   collaboration socket: presenter commands are private to the presenter and
-  must keep working when the network does not. Display *placement* stays
-  user-driven, as browser security requires — "Present in Speaker View" opens
-  the audience in a second window for the presenter to move to the projector.
+  must keep working when the network does not. Where the browser has the
+  Window Management API (Chrome, Edge) and a second screen, Present places the
+  surfaces itself: the editor tab's audience fullscreen on the other screen,
+  Speaker View in a pop-up on the editor's (`presentScreens.ts`). Elsewhere
+  placement stays user-driven — "Present in Speaker View" opens the audience
+  in a second window for the presenter to move to the projector.
 - [x] **P0 — Display-role controls.** The desktop moves its two windows
   between enumerated displays; a browser cannot place a window at all. So the
   browser's **Switch views** trades the roles of the two surfaces in place,

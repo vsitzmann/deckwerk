@@ -39,9 +39,11 @@ with `./deck` and a person editing over the WebSocket). They share
 
 - `test/agentCollaboration.test.ts` — the regression suite: what a page lands,
   what it must leave alone (notes, skips, comments, non-appear builds and
-  build order, maths as TeX, line breaks, video flags, layouts, regions), an
-  untouched export re-saving as no change on the fixture and on every deck in
-  `decks/`, `--after 0`, races with a collaborator.
+  build order, maths as TeX, line breaks, video flags, layouts, regions),
+  what a section carries to a copy (notes, skip, the whole timeline), a
+  scattered export replacing in place, an untouched export re-saving as no
+  change on the fixture and on every deck in `decks/`, `--after 0`, races
+  with a collaborator.
 - `test/agentCollaborationSandbox.test.ts` — the hosted server under the
   production systemd sandbox (`packaging/linux/deckwerk-collab-chromium-sandbox.conf`),
   and on a machine that runs `deckwerk-collab.service`, under the unit systemd
@@ -108,6 +110,9 @@ it is always the whole deck.
 `context` and `comments` print, and the number a person says out loud. So "my
 slide 44 is ugly" is `--slide 44`, and that slide with its neighbours is
 `--slide 43,44,45`. You never have to look up an id to act on a number.
+Where a command takes several slides (`inspect`, `render`, `validate`,
+`theme apply`), a range of numbers counts too, both ends included, and a list
+can mix them: `--slide 2-40`, `--slide 1,3-5`.
 
 ### Resolve the visual direction before creating slides
 
@@ -198,6 +203,43 @@ is and put a new id-less section beside it. Duplicating slide 44's section to
 get a starting point only works if you **delete the copy's `data-slide-id`** —
 leave it in and the file names one slide twice, which is refused.
 
+**Where things land.** The slides a page governs keep the places they hold in
+the deck; the page's order only decides which of them goes in which place. An
+export of `--slide 2,39,77` saved with its sections in the same order moves
+nothing (`moved: 0`), and swapping two of its sections swaps exactly those two
+slides, wherever they sit — a scattered export is never pulled together. A new
+section lands right after the slide of the section before it in the page; one
+with no section before it lands right before the slide of the first section
+after it; a page left with only new sections puts them where its first
+exported slide was. For a contiguous export that is the block it always was.
+`moved` counts the slides that actually changed place.
+
+**What a section carries besides its objects.** Each exported section also
+holds what is not drawn on the slide, so a section copied into another deck's
+page (with its `data-slide-id` deleted) keeps it:
+
+- `data-skipped="true"` on the `<section>` — a skipped slide. Remove it to
+  un-skip the slide.
+- `<aside class="notes">…</aside>` inside the section — its speaker notes,
+  plain text, hidden on the page. Edit the words to change them; an empty
+  aside clears them; a section with no aside at all leaves them alone.
+- `<script type="application/deckwerk-timeline">[…]</script>` — written only
+  when the objects' `data-build` attributes cannot say the slide's builds on
+  their own (a disappear, a play/pause/seek, a by-paragraph reveal, a second
+  build of one object, or builds in another order than paint order). It is
+  the timeline as `deck.json` holds it, one step per line, naming objects by
+  their `data-element-id`: move a line to move that step, add or delete lines
+  to add or remove steps. Attributes win for what they state (an object's
+  first appearance, its trigger and effect, equation and line builds). When a
+  copy's object ids are taken in the destination deck the objects are
+  renamed and their steps follow them.
+- On a page you write yourself, `data-build-order="n"` on an object makes its
+  appearance the n-th step, whatever the paint order.
+
+Notes, skip and timeline merge like objects do: if a person changes them in
+the editor after your export and your page leaves them as exported, the
+person's version stands.
+
 **Check what actually happened.** Every `apply` reports a `changes` object —
 `replaced`, `inserted`, `deleted`, `moved`, each naming ids. Read it. If
 `deleted` is not empty and you did not mean to delete a slide, undo in the
@@ -207,7 +249,7 @@ save the editor's status message says the same thing.
 `slide-agent validate` also reports `overflows`: every element whose authored
 box extends past the canvas, from geometry alone. Deliberate bleeds show up
 there too — the list is a checklist, not an error. Scope it to the slides you
-are actually editing with `--slide <id|number>` (repeatable, or comma-separated) or
+are actually editing with `--slide <id|number|a-b>` (repeatable, or comma-separated) or
 `--selected`; structural `errors` stay deck-wide either way.
 
 **Write semantic markup; put reusable classes in `theme.css`.** The walk bakes
@@ -236,7 +278,11 @@ turns into, not a list of things to opt into.
   that media* becomes the picture's own, so a framed photograph is one object
   rather than a picture with a ring floating beside it. The deck paints a
   media border inside the box, so the frame lands on the picture's outer edge
-  rather than just outside it.
+  rather than just outside it. A video's trim is `data-trim="start,end"` in
+  seconds; an exported `<video src>` also carries `#t=<start>` so the page
+  previews the right frame. The file is the `src` without that fragment, and
+  `deck.json` never stores one: a hand-written `src="x.mp4#t=15,20"` with no
+  `data-trim` lands as `src: "x.mp4"`, `start: 15`, `end: 20`.
 - **Crops** — `object-fit: cover/contain` with an `object-position` that is
   not the default is a crop, and it is measured into the deck's own
   `sourceBox`, so the framing you chose is what the crop tool picks up when
@@ -248,6 +294,9 @@ turns into, not a list of things to opt into.
   primitive (`rect`, `circle`, `ellipse`, `line`, `path`, `polygon`,
   `polyline`) becomes that shape: a `<line>` with `marker-end` is a real
   arrow, angle and all, and a single `<path>` keeps its `d` and its viewBox.
+  An exported line or arrow says its bend as `data-control-offset="dx,dy"`,
+  relative to its box's top-left corner, so moving it by `left`/`top` moves
+  the bend too; delete the attribute to straighten it.
 - **Code** — `<pre><code class="language-python">` (or `<pre
   data-element="code" data-language="python" data-scheme="github-dark">`) is
   a highlighted code block: the code stays exactly as written, coloured by
@@ -581,9 +630,9 @@ Diagnostics go to stderr. Exit codes are `0` ok, `1` error,
 | `capabilities [ids...]` | Every feature (or just the named ones), with a working example, screenshot and markup |
 | `context [deck]` | What is selected, what revision is the deck, is the editor live |
 | `new [deck] [--count <n>]` | A blank authoring page — no ids, no scope, so saving it only adds slides |
-| `inspect [deck] [--selected\|--slide id\|number\|--all] [--html\|--dom]` | Editable HTML for the slides it names (saving it can replace and delete them), or computed inspection data |
+| `inspect [deck] [--selected\|--slide id\|number\|a-b\|--all] [--html\|--dom]` | Editable HTML for the slides it names (saving it can replace and delete them), or computed inspection data |
 | `apply [deck] --html <file>` | Explicitly compile and sync an HTML range |
-| `render [deck] [--selected\|--slide id\|number\|--all] --output <dir> [--annotate] [--built] [--contact-sheet]` | Optional PNGs; `--contact-sheet` adds one tiled overview of everything rendered |
+| `render [deck] [--selected\|--slide id\|number\|a-b\|--all] --output <dir> [--annotate] [--built] [--contact-sheet]` | Optional PNGs; `--contact-sheet` adds a tiled overview of everything rendered, 48 slides to a sheet (`contactSheets` lists them when there are several) |
 | `preview [deck] [--port n] [--open]` | Export through the real player and serve on localhost; prints its URL as JSON, then blocks — run it in the background and give the user the URL |
 | `validate [deck]` | Schema, duplicate ids, timeline references, missing assets |
 | `asset import <deck> <paths...>` | Media copied into `assets/`, deduped, probed, transcoded |

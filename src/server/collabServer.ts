@@ -71,6 +71,7 @@ import {
   slidesFromMeasured,
   slidesToHtml,
 } from '../shared/htmlSlides.js';
+import { stripScriptsKeepingTimeline } from '../shared/htmlSafety.js';
 import { PLAYER_TYPE_CSS } from '../shared/playerTypeCss.js';
 import { authoringPageHtml, type TextOverflow } from '../shared/htmlMeasure.js';
 import { deckRevision } from '../main/agentRuntime.js';
@@ -136,6 +137,7 @@ const MIME: Record<string, string> = {
   '.svg': 'image/svg+xml',
   '.mp4': 'video/mp4',
   '.mov': 'video/quicktime',
+  '.qt': 'video/quicktime',
   '.webm': 'video/webm',
   '.woff': 'font/woff',
   '.woff2': 'font/woff2',
@@ -4723,8 +4725,9 @@ async function sanitizeServerHtml(
 ): Promise<{ html: string; blocked: string[]; missing: string[]; assets: string[] }> {
   const blocked: string[] = [];
   const assets: string[] = [];
-  let html = source
-    .replace(/<script\b[^>]*>[\s\S]*?<\/script\s*>/gi, '')
+  // A section's timeline block (JSON in a script no browser runs) is kept,
+  // in exactly that form; every other script goes.
+  let html = stripScriptsKeepingTimeline(source)
     .replace(/<(?:iframe|object|embed)\b[^>]*>[\s\S]*?<\/(?:iframe|object|embed)\s*>/gi, '')
     .replace(/\s+on[a-z]+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi, '')
     .replace(/\s+(?:src|href|poster)\s*=\s*(["'])javascript:[\s\S]*?\1/gi, '');

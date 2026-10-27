@@ -58,7 +58,10 @@ describe('HTML authoring files', () => {
     expect(next.slides.map((slide) => slide.id))
       .toEqual(['new-slide', 'slide-1', 'closing']);
     expect(next.slides[0].elements[0]).toMatchObject({ type: 'text', html: 'Made in HTML' });
-    expect(transaction!.label).toBe('Added 1 slide · Updated 1 slide · Removed 1 slide · Reordered slides');
+    // The new slide lands before slide-1 and middle's place closes: no slide
+    // that was already there changes place, so nothing reads as reordered.
+    expect(transaction!.label).toBe('Added 1 slide · Updated 1 slide · Removed 1 slide');
+    expect(transaction!.operations.some((operation) => operation.op === 'moveSlide')).toBe(false);
   }, 60_000);
 
   it('uses the document intent as the History label', async () => {
