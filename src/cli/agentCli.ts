@@ -20,6 +20,7 @@ import { CustomThemeSchema, parseDeck, type Comment, type Deck, type Slide, type
 import { commentsOperation, findComment, threadEdits } from '@shared/comments.js';
 import { diffDecks } from '@shared/deckDiff.js';
 import { renameRetiredFields } from '@shared/fieldAliases.js';
+import { rotatedBounds } from '@shared/geometry.js';
 import {
   type ThemeAdoption,
   type ThemePreset,
@@ -759,11 +760,14 @@ async function validateCommand(argv: string[], io: CliIo): Promise<number> {
   try {
     const deck = await loadDeck(deckDir);
     overflows = deck.slides.flatMap((slide) => slide.elements.flatMap((element) => {
+      // The box it covers as drawn: a vertical axis label (rot -90) is
+      // checked as the tall, narrow thing on screen, not its wide stored box.
+      const box = rotatedBounds(element, element.rot);
       const beyond: Record<string, number> = {};
-      if (element.x < 0) beyond.left = round2(-element.x);
-      if (element.y < 0) beyond.top = round2(-element.y);
-      if (element.x + element.w > deck.canvas.w) beyond.right = round2(element.x + element.w - deck.canvas.w);
-      if (element.y + element.h > deck.canvas.h) beyond.bottom = round2(element.y + element.h - deck.canvas.h);
+      if (round2(box.x) < 0) beyond.left = round2(-box.x);
+      if (round2(box.y) < 0) beyond.top = round2(-box.y);
+      if (round2(box.x + box.w) > deck.canvas.w) beyond.right = round2(box.x + box.w - deck.canvas.w);
+      if (round2(box.y + box.h) > deck.canvas.h) beyond.bottom = round2(box.y + box.h - deck.canvas.h);
       return Object.keys(beyond).length > 0
         ? [{ slideId: slide.id, elementId: element.id, type: element.type, beyond }]
         : [];

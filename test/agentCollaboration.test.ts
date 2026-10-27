@@ -276,6 +276,31 @@ for (const kind of BACKENDS) describe.skipIf(!electronBinary)(`an agent working 
     expect(slideById(deck, 'opening')).toEqual(slideById(before, 'opening'));
   });
 
+  it('moves a bent line\'s control point with it when the page moves only its left and top', async () => {
+    const workspace = await open(kind);
+    const page = await exportPage(workspace, 'details');
+    // The bend is said relative to the box, so editing the box's position is
+    // the whole move; a slide-space point left behind used to bend the line.
+    expect(page).toContain('data-control-offset="200,-80"');
+    const moved = page.replace('left:1300px; top:500px; width:400px; height:2px;', 'left:100px; top:200px; width:400px; height:2px;');
+    expect(moved).not.toBe(page);
+    await workspace.write('moved.html', moved);
+    const result = landed(await apply(workspace, 'moved.html'), workspace);
+    expect(result.changes.replaced).toEqual(['details']);
+    const marker = slideById(await workspace.deck(), 'details').elements.find((element) => element.id === 'details-marker')!;
+    expect(marker).toMatchObject({ x: 100, y: 200, w: 400, h: 2, control: { x: 300, y: 120 } });
+  });
+
+  it('lands a video whose src carries a media fragment as a clean file with that trim', async () => {
+    const workspace = await open(kind);
+    await workspace.write('clip.html', await newPage(workspace,
+      '<h1 class="role-title">A trimmed clip</h1><video src="assets/clip.mp4#t=2,5" style="width:640px; height:360px;"></video>'));
+    const result = landed(await apply(workspace, 'clip.html'), workspace);
+    const slide = slideById(await workspace.deck(), result.changes.inserted[0]);
+    const video = slide.elements.find((element) => element.type === 'video');
+    expect(video).toMatchObject({ type: 'video', src: 'assets/clip.mp4', start: 2, end: 5 });
+  });
+
   it('replaces only the slide the agent edited in a page that holds them all', async () => {
     const workspace = await open(kind);
     const before = await workspace.deck();

@@ -17,6 +17,7 @@ import { CODE_AUTHORING_CSS } from './codeBlocks.js';
 import { applyTableColumnWidths } from './paragraphs.js';
 import { normalizeHtmlLineHeights, normalizeStyleLineHeight } from './lineHeight.js';
 import { compareDataAttrs, compareFromDataset, syncLengthFromDataset } from './compare.js';
+import { mediaFragmentTrim, withoutFragment } from './mediaFragment.js';
 import { layoutMaster, placeNewPlaceholders, syncSlideWithLayoutMaster, type FixedLayout } from './layoutMasters.js';
 import {
   cssMediaBorder,
@@ -1434,9 +1435,10 @@ function elementFromMeasured(
         ...common, type: 'image', alt: node.dataset.alt ?? '',
       };
     }
-    const [start, end] = trimFrom(node.dataset.trim);
+    const [start, end] = trimOf(node.dataset.trim, common.src);
     return {
       ...common,
+      src: withoutFragment(common.src),
       type: 'video',
       autoplay: node.dataset.autoplay === 'true',
       loop: node.dataset.loop === 'true',
@@ -1464,7 +1466,7 @@ function elementFromMeasured(
   }
 
   if (node.tag === 'video') {
-    const [start, end] = trimFrom(node.dataset.trim);
+    const [start, end] = trimOf(node.dataset.trim, node.attrs.src ?? '');
     return {
       ...mediaBase,
       ...mediaDecoration,
@@ -1486,7 +1488,7 @@ function elementFromMeasured(
   }
 
   if (node.dataset.element === 'shape') {
-    const [cx, cy] = numbers(node.dataset.control);
+    const control = controlFrom(node.dataset, base);
     const [pw, ph] = numbers(node.dataset.pathSize);
     const shapeBase = { ...base, style: { ...base.style } };
     for (const property of Object.keys(shapeBase.style)) {
@@ -1513,7 +1515,7 @@ function elementFromMeasured(
       arrowEnd: node.dataset.arrowEnd === 'true',
       ...(Number.parseFloat(node.dataset.arrowSize ?? '') > 0
         ? { arrowSize: Number.parseFloat(node.dataset.arrowSize ?? '') } : {}),
-      ...(node.dataset.control ? { control: { x: cx, y: cy } } : {}),
+      ...(control ? { control } : {}),
       ...(Number.isFinite(Number.parseFloat(node.dataset.braceDepth ?? ''))
         ? { braceDepth: Number.parseFloat(node.dataset.braceDepth ?? '') } : {}),
       ...((STROKE_STYLES as readonly string[]).includes(node.dataset.strokeStyle ?? '')
@@ -1896,7 +1898,9 @@ function elementToHtml(
         + (element.arrowStart ? ' data-arrow-start="true"' : '')
         + (element.arrowEnd ? ' data-arrow-end="true"' : '')
         + (element.arrowSize !== undefined ? ` data-arrow-size="${element.arrowSize}"` : '')
-        + (element.control ? ` data-control="${element.control.x},${element.control.y}"` : '')
+        + (element.control
+          ? ` data-control-offset="${round(element.control.x - element.x)},${round(element.control.y - element.y)}"`
+          : '')
         + (element.braceDepth !== undefined ? ` data-brace-depth="${element.braceDepth}"` : '')
         + (element.strokeStyle && element.strokeStyle !== 'pen' ? ` data-stroke-style="${element.strokeStyle}"` : '')
         + (element.strokeDash ? ` data-stroke-dash="${element.strokeDash}"` : '')
@@ -2184,6 +2188,28 @@ function shapeKind(value: string | undefined): 'rect' | 'ellipse' | 'line' | 'ar
   return kinds.find((kind) => kind === value) ?? 'rect';
 }
 
+/**
+ * A curve's control point. The deck keeps it in slide coordinates, but a page
+ * says it relative to the box's top-left corner (`data-control-offset`), so
+ * an agent that moves the box by its `left`/`top` moves the bend with it
+ * rather than bending a straight arrow. `data-control`, in slide
+ * coordinates, is what pages exported before that said, and still reads so.
+ */
+function controlFrom(
+  dataset: Record<string, string>,
+  box: { x: number; y: number },
+): { x: number; y: number } | null {
+  if (dataset.controlOffset) {
+    const [dx, dy] = numbers(dataset.controlOffset);
+    return { x: round(box.x + dx), y: round(box.y + dy) };
+  }
+  if (dataset.control) {
+    const [x, y] = numbers(dataset.control);
+    return { x, y };
+  }
+  return null;
+}
+
 function numbers(spec: string | undefined): [number, number] {
   const [a, b] = (spec ?? '').split(',').map((part) => Number(part.trim()));
   return [Number.isFinite(a) ? a : 0, Number.isFinite(b) ? b : 0];
@@ -2244,9 +2270,16 @@ function cropFrom(spec: string | undefined) {
   return w > 0 && h > 0 ? { x, y, w, h } : null;
 }
 
-/** `assets/clip.mp4#t=12` is a request for a frame, not a different file. */
-function withoutFragment(src: string): string {
-  return src.replace(/#t=[^#]*$/, '');
+/**
+ * A video's trim: `data-trim` when the page says it (an exported page always
+ * does), else the media fragment a hand-written `src="clip.mp4#t=15,20"`
+ * carries — dropping the fragment with the file name would play the whole
+ * file. The deck keeps the trim in `start`/`end` only, never in `src`.
+ */
+function trimOf(spec: string | undefined, src: string): [number, number | null] {
+  if (spec) return trimFrom(spec);
+  const fragment = mediaFragmentTrim(src);
+  return fragment ? [fragment.start, fragment.end] : [0, null];
 }
 
 function boxAttr(box: { x: number; y: number; w: number; h: number }): string {

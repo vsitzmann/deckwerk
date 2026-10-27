@@ -60,6 +60,21 @@ export function snapAngle(degrees: number): number {
   return Math.round(degrees / ANGLE_SNAP_DEGREES) * ANGLE_SNAP_DEGREES;
 }
 
+/**
+ * The axis-aligned box `rect` covers once turned `degrees` about its centre
+ * (the element's `rot`): what is on screen, rather than the stored
+ * unrotated box.
+ */
+export function rotatedBounds(rect: Rect, degrees: number): Rect {
+  if (!degrees) return { ...rect };
+  const radians = (degrees * Math.PI) / 180;
+  const cos = Math.abs(Math.cos(radians));
+  const sin = Math.abs(Math.sin(radians));
+  const w = rect.w * cos + rect.h * sin;
+  const h = rect.w * sin + rect.h * cos;
+  return { x: rect.x + (rect.w - w) / 2, y: rect.y + (rect.h - h) / 2, w, h };
+}
+
 export function rectsIntersect(a: Rect, b: Rect): boolean {
   return (
     a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y

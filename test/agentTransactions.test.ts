@@ -173,6 +173,25 @@ describe('agent transaction operations', () => {
     expect(JSON.stringify(deck)).toBe(before);
   });
 
+  it('changes slide properties named by slideId alone, and refuses a slide.id that names another', () => {
+    const deck = fixture();
+    const next = applyAgentTransaction(deck, transaction([
+      { op: 'setSlideProperties', slideId: 'slide-2', slide: { notes: 'Say it slowly', skipped: true } } as never,
+    ], deck));
+    expect(next.slides[1]).toMatchObject({ id: 'slide-2', notes: 'Say it slowly', skipped: true });
+    expect(next.slides[1].elements).toEqual(deck.slides[1].elements);
+
+    // Both given and the same is the old spelling, and still fine.
+    const same = applyAgentTransaction(deck, transaction([
+      { op: 'setSlideProperties', slideId: 'slide-2', slide: { id: 'slide-2', name: 'Two' } },
+    ], deck));
+    expect(same.slides[1].name).toBe('Two');
+
+    expect(() => applyAgentTransaction(deck, transaction([
+      { op: 'setSlideProperties', slideId: 'slide-2', slide: { id: 'slide-3', name: 'Which?' } },
+    ], deck))).toThrow(/must remain slide-2/);
+  });
+
   it('is all-or-nothing when a later operation fails', () => {
     const deck = fixture();
     const before = JSON.stringify(deck);

@@ -236,7 +236,11 @@ turns into, not a list of things to opt into.
   that media* becomes the picture's own, so a framed photograph is one object
   rather than a picture with a ring floating beside it. The deck paints a
   media border inside the box, so the frame lands on the picture's outer edge
-  rather than just outside it.
+  rather than just outside it. A video's trim is `data-trim="start,end"` in
+  seconds; an exported `<video src>` also carries `#t=<start>` so the page
+  previews the right frame. The file is the `src` without that fragment, and
+  `deck.json` never stores one: a hand-written `src="x.mp4#t=15,20"` with no
+  `data-trim` lands as `src: "x.mp4"`, `start: 15`, `end: 20`.
 - **Crops** — `object-fit: cover/contain` with an `object-position` that is
   not the default is a crop, and it is measured into the deck's own
   `sourceBox`, so the framing you chose is what the crop tool picks up when
@@ -248,6 +252,9 @@ turns into, not a list of things to opt into.
   primitive (`rect`, `circle`, `ellipse`, `line`, `path`, `polygon`,
   `polyline`) becomes that shape: a `<line>` with `marker-end` is a real
   arrow, angle and all, and a single `<path>` keeps its `d` and its viewBox.
+  An exported line or arrow says its bend as `data-control-offset="dx,dy"`,
+  relative to its box's top-left corner, so moving it by `left`/`top` moves
+  the bend too; delete the attribute to straighten it.
 - **Code** — `<pre><code class="language-python">` (or `<pre
   data-element="code" data-language="python" data-scheme="github-dark">`) is
   a highlighted code block: the code stays exactly as written, coloured by

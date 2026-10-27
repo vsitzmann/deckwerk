@@ -212,7 +212,22 @@ const UpdateCommentsOperation = z.object({
   comments: z.array(CommentSchema),
 });
 
-export const AgentOperationSchema = z.discriminatedUnion('op', [
+/**
+ * `setSlideProperties` names its slide in `slideId`; repeating it as
+ * `slide.id` is allowed but not required. The patch is filled in here, so
+ * every reader past the schema sees the id, and one that names another slide
+ * is still refused where the operation applies.
+ */
+function slidePropertiesIdFromSlideId(raw: unknown): unknown {
+  if (!raw || typeof raw !== 'object') return raw;
+  const operation = raw as { op?: unknown; slideId?: unknown; slide?: unknown };
+  if (operation.op !== 'setSlideProperties' || typeof operation.slideId !== 'string') return raw;
+  if (!operation.slide || typeof operation.slide !== 'object' || Array.isArray(operation.slide)) return raw;
+  if ((operation.slide as { id?: unknown }).id !== undefined) return raw;
+  return { ...operation, slide: { ...operation.slide, id: operation.slideId } };
+}
+
+export const AgentOperationSchema = z.preprocess(slidePropertiesIdFromSlideId, z.discriminatedUnion('op', [
   UpdateCommentsOperation,
   InsertSlidesOperation,
   ReplaceSlideOperation,
@@ -223,7 +238,7 @@ export const AgentOperationSchema = z.discriminatedUnion('op', [
   DeleteElementsOperation,
   UpdateDeckOperation,
   SetSlidePropertiesOperation,
-]);
+]));
 
 export const AgentTransactionSchema = z.object({
   version: z.literal(AGENT_PROTOCOL_VERSION),

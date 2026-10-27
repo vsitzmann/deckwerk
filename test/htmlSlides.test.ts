@@ -131,6 +131,27 @@ describe('measured nodes become deck objects', () => {
     expect(untrimmed).toMatchObject({ start: 3, end: null });
   });
 
+  it('reads a media fragment on a video src as its trim, and keeps the file name clean', () => {
+    // Hand-written: the fragment is the only place the trim is said.
+    const fragment = elementFromNode(node({
+      tag: 'video', attrs: { src: 'assets/clip.mp4#t=15.0,20.0' },
+    }), 'clip', 2) as Extract<SlideElement, { type: 'video' }>;
+    expect(fragment).toMatchObject({ src: 'assets/clip.mp4', start: 15, end: 20 });
+
+    // Exported: `#t=` is the preview in-point, `data-trim` the trim.
+    const exported = elementFromNode(node({
+      tag: 'video', attrs: { src: 'assets/clip.mp4#t=2' }, dataset: { trim: '2,8' },
+    }), 'clip2', 2) as Extract<SlideElement, { type: 'video' }>;
+    expect(exported).toMatchObject({ src: 'assets/clip.mp4', start: 2, end: 8 });
+
+    // A cropped clip's file rides on data-src.
+    const cropped = elementFromNode(node({
+      tag: 'div', html: '',
+      dataset: { element: 'video', src: 'assets/clip.mp4#t=4,6', crop: '0,0,800,120' },
+    }), 'clip3', 2) as Extract<SlideElement, { type: 'video' }>;
+    expect(cropped).toMatchObject({ src: 'assets/clip.mp4', start: 4, end: 6 });
+  });
+
   it('lands an imported round crop as one editable picture', () => {
     // What the walk hands over for `<div class="crop"><img></div>`: the
     // frame's ring, its backdrop and its round window folded onto the picture,
@@ -520,9 +541,24 @@ describe('deck objects become authored HTML', () => {
 
     expect(html).toContain('data-element="shape"');
     expect(html).toContain('data-shape="arrow"');
-    expect(html).toContain('data-control="400,240"');
+    // The bend is said relative to the box's top-left corner, so it moves
+    // with the arrow when an agent edits only `left`/`top`.
+    expect(html).toContain('data-control-offset="200,-60"');
+    expect(html).not.toContain('data-control=');
     expect(html).toContain('data-arrow-end="true"');
     expect(html).not.toContain('data-arrow-start');
+  });
+
+  it('moves a bent arrow\'s control point with its box', () => {
+    const arrow = (dataset: Record<string, string>) => elementFromNode(node({
+      tag: 'div', html: '', rect: { x: 900, y: 500, w: 400, h: 120 },
+      dataset: { element: 'shape', shape: 'arrow', stroke: '#111111', strokeWidth: '6', arrowEnd: 'true', ...dataset },
+    }), 'arrow', 2);
+    // Exported at x 200, y 300 with the point at (400, 240); the page moved
+    // the box to (900, 500) and left the attribute alone.
+    expect(arrow({ controlOffset: '200,-60' })).toMatchObject({ x: 900, y: 500, control: { x: 1100, y: 440 } });
+    // A page written before the offset existed still means slide coordinates.
+    expect(arrow({ control: '400,240' })).toMatchObject({ control: { x: 400, y: 240 } });
   });
 
   it('round-trips a path drawn with the pen, curves and all', () => {

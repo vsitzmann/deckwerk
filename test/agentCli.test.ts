@@ -290,6 +290,22 @@ describe('slide-agent CLI', { timeout: 60_000 }, () => {
     expect(next.slides.map((slide) => slide.id)).toEqual(['slide-3']);
   });
 
+  it('checks a rotated element against the box it actually covers', async () => {
+    const deck = await onDisk();
+    // A vertical axis label: 600 wide and 80 tall before the turn, so its
+    // unrotated box runs off the left edge, but turned it spans x 60..140,
+    // y 210..810, well inside the canvas.
+    deck.slides[0].elements.push(text('axis', 'Accuracy', { x: -200, y: 470, w: 600, h: 80, rot: -90 }) as never);
+    // The same turn near the bottom edge does run off it, by its turned height.
+    deck.slides[0].elements.push(text('low', 'Too low', { x: 1000, y: 900, w: 400, h: 80, rot: 90 }) as never);
+    await writeDeck(deck);
+
+    const { json } = await parsed('validate');
+    expect(json.overflows).toEqual([{
+      slideId: 'slide-1', elementId: 'low', type: 'text', beyond: { bottom: 60 },
+    }]);
+  });
+
   it('reports elements that extend past the canvas without failing the deck', async () => {
     const deck = await onDisk();
     deck.slides[0].elements.push(text('runaway', 'Off the edge', { y: 1000, h: 300 }) as never);
