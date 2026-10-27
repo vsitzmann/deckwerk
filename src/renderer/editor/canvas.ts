@@ -1419,16 +1419,10 @@ export class EditorCanvas {
     prepareCodeBlocks(this.store.get().deck);
     const rendered = renderSlide(
       slide,
-      { resolveSrc: (src) => window.api.assetUrl(src), mediaPreload: 'metadata' },
+      // A slide being stepped to shows at once, its pictures as they decode.
+      { resolveSrc: (src) => window.api.assetUrl(src), mediaPreload: 'metadata', decodeImagesAsync: slideChanged },
     );
-    if (slideChanged) {
-      this.adoptWarmedImages(rendered);
-      // A slide being stepped to shows at once and its pictures as they
-      // decode. Decoded where they are painted, a slide of large photographs
-      // (a 13-megapixel figure, a collage of thirty) held Safari's main
-      // thread 350-500 ms on every step (editingLatencyBrowser.test.ts).
-      for (const image of rendered.querySelectorAll('img')) image.decoding = 'async';
-    }
+    if (slideChanged) this.adoptWarmedImages(rendered);
     this.slideLayer.replaceChildren(rendered);
     this.adoptVideos(slide);
 

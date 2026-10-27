@@ -65,12 +65,6 @@ export function previewSurface(slide: Slide, canvas: { w: number; h: number }): 
   inner.style.height = `${canvas.h}px`;
   if (slide.background.color) inner.style.background = slide.background.color;
   inner.appendChild(renderSlide(slide, previewRenderOptions()));
-  // Miniatures mount as they scroll near, often several at once when a step
-  // through the deck scrolls the rail. Decoded where they were painted, the
-  // full-size pictures of a row of photographs held Safari's main thread for
-  // up to 750 ms (editingLatencyBrowser.test.ts); now each picture shows
-  // when it is ready.
-  for (const image of inner.querySelectorAll('img')) image.decoding = 'async';
   for (const video of inner.querySelectorAll('video')) {
     video.removeAttribute('autoplay');
     // renderSlide's 'metadata' preload decodes exactly one poster frame,
@@ -85,7 +79,7 @@ export function previewSurface(slide: Slide, canvas: { w: number; h: number }): 
 }
 
 function previewRenderOptions(): RenderOptions {
-  return { resolveSrc: (src) => window.api.assetUrl(src), mediaPreload: 'metadata', deferVideoSrc: true };
+  return { resolveSrc: (src) => window.api.assetUrl(src), mediaPreload: 'metadata', deferVideoSrc: true, decodeImagesAsync: true };
 }
 
 /**
