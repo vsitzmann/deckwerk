@@ -688,7 +688,6 @@ store.subscribe(() => {
 const inspectorRefresh = canvas.onTextEditModeChange;
 canvas.onTextEditModeChange = (elementId) => {
   inspectorRefresh?.(elementId);
-  rail.setTextEditing(elementId !== null);
   publishPresence();
 };
 

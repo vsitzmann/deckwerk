@@ -142,43 +142,41 @@ describe.skipIf(!electronBinary)('editor chrome drawn over the slide', () => {
   }
 });
 
-describe.skipIf(!electronBinary)('the slide rail while typing', () => {
-  // Every live sync of a box being typed into redraws the box in its slide's
-  // rail miniature. Unless that miniature is a layer of its own, Safari
-  // repaints every picture on the slide to do it, scaling each full-size
-  // bitmap down on the main thread: on a slide of 29 photos each keystroke
-  // waited 150-300 ms for a frame (measured over safaridriver; Chromium
-  // rasterises off the main thread and never showed it). Only the active
-  // slide's miniature may be layered: WebKit backs such a layer at the full
-  // slide size, and layering every thumbnail tripled the page's memory.
-  it('gives the active slide\'s miniature, and only it, a layer of its own while typing', {
+describe.skipIf(!electronBinary)('the slide rail\'s miniatures', () => {
+  // Unless a miniature is a layer of its own, Safari repaints its pictures,
+  // scaling each full-size bitmap down on the main thread, whenever anything
+  // in its row changes: each live sync of a box being typed into (a slide of
+  // 29 photos made every keystroke wait 150-300 ms) and each step through the
+  // deck, when two rows change their highlight (350-820 ms a step). The
+  // stroke over a miniature changes with the highlight, so it is a layer too.
+  // The layer is the miniature's small frame: layering the slide-sized
+  // surface inside it cost WebKit 60 MB a row.
+  it('gives every miniature, and the stroke over it, a small layer of its own', {
     timeout: 30_000,
   }, async () => {
     await session.reset();
-    const layered = () => session.cdp.evaluate<Array<{ index: string; active: boolean; willChange: string }>>(`
-      [...document.querySelectorAll('.rail-item')].map((row) => ({
-        index: row.dataset.index,
-        active: row.classList.contains('active'),
-        willChange: getComputedStyle(row.querySelector('.rail-thumb-inner') ?? row).willChange,
+    const layers = () => session.cdp.evaluate<Array<{ frame: string; stroke: string; surface: string; width: number }>>(`
+      [...document.querySelectorAll('.rail-item > .rail-thumb')].map((thumb) => ({
+        frame: getComputedStyle(thumb).willChange,
+        stroke: getComputedStyle(thumb, '::after').willChange,
+        surface: getComputedStyle(thumb.querySelector('.rail-thumb-inner') ?? thumb).willChange,
+        width: thumb.getBoundingClientRect().width,
       }))`);
 
+    const expectLayered = (rows: Awaited<ReturnType<typeof layers>>, when: string) => {
+      expect(rows.length, when).toBeGreaterThan(1);
+      for (const row of rows) {
+        expect(row, when).toMatchObject({ frame: 'transform', stroke: 'transform', surface: 'auto' });
+        expect(row.width, `${when}: the layer is the small frame`).toBeLessThan(400);
+      }
+    };
+    expectLayered(await layers(), 'at rest');
     await session.doubleClick(TEXT_A);
     await session.type('xy');
     await wait(400);
-    const whileTyping = await layered();
+    expectLayered(await layers(), 'while typing');
     await session.key('Escape', 27);
-    expect(whileTyping.find((row) => row.active)?.willChange, 'the slide being typed into').toBe('transform');
-    expect(
-      whileTyping.filter((row) => !row.active).map((row) => row.willChange),
-      'every other miniature',
-    ).toEqual(whileTyping.filter((row) => !row.active).map(() => 'auto'));
-
-    // A layer that followed every step through the deck made Safari paint
-    // each new slide's miniature at full size, pictures and all.
-    const afterTyping = await layered();
-    expect(afterTyping.map((row) => row.willChange), 'once the box is left').toEqual(afterTyping.map(() => 'auto'));
     await session.clickRail(1);
-    const after = await layered();
-    expect(after.map((row) => row.willChange), 'after stepping to another slide').toEqual(after.map(() => 'auto'));
+    expectLayered(await layers(), 'after stepping to another slide');
   });
 });

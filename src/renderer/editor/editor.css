@@ -1577,17 +1577,17 @@ body.panel-resizing iframe { pointer-events: none; }
   transform-origin: top left;
 }
 
-/* The slide being worked on is the one whose miniature changes while
-   someone types: each sync redraws the box in it. Unlayered, Safari repaints
-   every picture on the slide to redraw that box, scaling each full-size
-   bitmap down on the main thread (a slide of 29 photos made every keystroke
-   wait 150-300 ms). Its own layer confines the repaint to the box. Only the
-   active row: WebKit backs such a layer at the slide's full size, about
-   60 MB, so layering every thumbnail tripled the page's memory. And only
-   while typing (SlideRail.setTextEditing): a layer that followed every step
-   through the deck had Safari paint each new slide's miniature at full size,
-   pictures and all, 350-500 ms a step on slides of large photographs. */
-.rail-text-editing .rail-item.active > .rail-thumb > .rail-thumb-inner { will-change: transform; }
+/* Every miniature is a layer of its own, and so is the stroke drawn over it
+   (.rail-thumb::after). Unlayered, Safari repainted a miniature's pictures,
+   scaling each full-size bitmap down on the main thread, whenever anything
+   in its row changed: each live sync while someone typed (a slide of 29
+   photos made every keystroke wait 150-300 ms), and each step through the
+   deck, when the old and the new row change their highlight (350-820 ms
+   onto slides of large photographs; editingLatencyBrowser.test.ts). The
+   layer is the miniature's frame, a couple of hundred pixels wide: layering
+   the slide-sized surface inside it instead cost 60 MB a row. */
+.rail-thumb,
+.rail-thumb::after { will-change: transform; }
 
 /* Thumbnail-only rows: no title, no element count. */
 .rail-item {

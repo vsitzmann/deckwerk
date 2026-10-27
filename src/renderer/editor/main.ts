@@ -1296,7 +1296,6 @@ bindEditorKeys(shellDeps, clipboard);
 const refreshInspectorForTextMode = canvas.onTextEditModeChange;
 canvas.onTextEditModeChange = (elementId) => {
   refreshInspectorForTextMode?.(elementId);
-  rail.setTextEditing(elementId !== null);
   publishAgentPresence();
 };
 store.subscribe(() => {
