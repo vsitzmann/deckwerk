@@ -1,13 +1,14 @@
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { createRequire } from 'node:module';
-import { copyFile, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, readdir, readFile, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { Deck } from '@shared/deck.js';
 import { exportDeck } from '../main/exportDeck.js';
-import { tempDir } from './agentCli.js';
+import { writeFileNamed } from '../main/writeFailure.js';
+import { removeTempDir, tempDir, trackHelper } from './scratch.js';
 import { electronChildEnv, electronFailure, headlessElectronArgs } from './electronDisplay.js';
 
 /**
@@ -68,8 +69,10 @@ export interface RenderResult {
 }
 
 export async function renderSlidesToPng(request: RenderRequest): Promise<RenderResult> {
-  // A bundle made here is the deck's whole web export, media and all; it is
-  // this render's scratch and goes once the captures are written.
+  // A bundle made here is this render's scratch: the export of the requested
+  // slides, their media included. It goes once the captures are written or
+  // the render fails (and, through `cleanUpOnSignals`, when the CLI is
+  // stopped). It lives in os.tmpdir(), so TMPDIR moves it.
   const ownBundle = request.bundleDir ? null : await tempDir('slide-agent-bundle-');
   try {
     // Only what the captured slides show: a deck can carry a gigabyte of
@@ -82,7 +85,7 @@ export async function renderSlidesToPng(request: RenderRequest): Promise<RenderR
     }
     return await captureSlides(request, request.bundleDir ?? ownBundle!);
   } finally {
-    if (ownBundle) await rm(ownBundle, { recursive: true, force: true });
+    if (ownBundle) await removeTempDir(ownBundle);
   }
 }
 
@@ -91,7 +94,7 @@ async function captureSlides(request: RenderRequest, bundleDir: string): Promise
   // export handed in here is the folder the author is about to publish.
   await mkdir(request.outDir, { recursive: true });
   const jobPath = join(request.outDir, 'capture-job.json');
-  await writeFile(jobPath, JSON.stringify({
+  await writeFileNamed(jobPath, JSON.stringify({
     bundleDir,
     outDir: request.outDir,
     slides: request.slides,
@@ -107,11 +110,17 @@ async function captureSlides(request: RenderRequest, bundleDir: string): Promise
     debug: process.env.SLIDE_AGENT_DEBUG === '1',
   }), 'utf8');
 
-  const stdout = await runElectron(captureScript(), jobPath, {
-    timeoutMs: captureTimeoutMs(request.slides.length),
-    describe: (seconds) => `Capturing ${request.slides.length} slide(s) exceeded ${seconds} seconds; `
-      + 'render fewer slides at a time with --slide, or set SLIDE_AGENT_DEBUG=1 to see where it stalls.',
-  });
+  let stdout: string;
+  try {
+    stdout = await runElectron(captureScript(), jobPath, {
+      timeoutMs: captureTimeoutMs(request.slides.length),
+      describe: (seconds) => `Capturing ${request.slides.length} slide(s) exceeded ${seconds} seconds; `
+        + 'render fewer slides at a time with --slide, or set SLIDE_AGENT_DEBUG=1 to see where it stalls.',
+    });
+  } finally {
+    // The capture's instructions, not one of its results.
+    await rm(jobPath, { force: true });
+  }
   const parsed = JSON.parse(stdout) as { images: RenderedImage[]; contactSheets?: string[] };
   const contactSheets = parsed.contactSheets ?? [];
   return { images: parsed.images, contactSheet: contactSheets[0] ?? null, contactSheets };
@@ -183,21 +192,22 @@ export async function checkWebPage(request: {
   }
 
   await mkdir(cacheDir, { recursive: true });
+  await pruneWebCheckCache(cacheDir, ttlMs);
   const dir = await tempDir('slide-agent-web-check-');
   const jobPath = join(dir, 'check-job.json');
-  await writeFile(jobPath, JSON.stringify({
-    ...request,
-    screenshot: cachedPng,
-    settleMs: 800,
-  }), 'utf8');
   const script = fileURLToPath(new URL('../../scripts/check-web-page.cjs', import.meta.url));
   let checked: WebPageCheck;
   try {
+    await writeFileNamed(jobPath, JSON.stringify({
+      ...request,
+      screenshot: cachedPng,
+      settleMs: 800,
+    }), 'utf8');
     checked = JSON.parse(await runElectron(script, jobPath, WEB_CHECK_BUDGET)) as WebPageCheck;
   } finally {
-    await rm(dir, { recursive: true, force: true });
+    await removeTempDir(dir);
   }
-  await writeFile(cachedJson, JSON.stringify({ ...checked, screenshot: null }), 'utf8');
+  await writeFileNamed(cachedJson, JSON.stringify({ ...checked, screenshot: null }), 'utf8');
   if (request.screenshot) await copyFile(cachedPng, request.screenshot);
   return {
     ...checked,
@@ -205,6 +215,23 @@ export async function checkWebPage(request: {
     cacheHit: false,
     durationMs: Date.now() - started,
   };
+}
+
+/**
+ * Drop cached checks past their TTL. They are never read again, and the cache
+ * sits in the OS temp folder, which on a quota'd tmpfs every page check used
+ * to grow by a screenshot for good.
+ */
+async function pruneWebCheckCache(cacheDir: string, ttlMs: number): Promise<void> {
+  const now = Date.now();
+  for (const name of await readdir(cacheDir).catch(() => [] as string[])) {
+    const path = join(cacheDir, name);
+    try {
+      if (now - (await stat(path)).mtimeMs > ttlMs) await rm(path, { force: true });
+    } catch {
+      // Gone already (another check pruned it): nothing to do.
+    }
+  }
 }
 
 export interface WebPageCheck {
@@ -257,6 +284,7 @@ function runElectron(script: string, jobPath: string, budget: ElectronBudget): P
       stdio: ['ignore', 'pipe', 'pipe'],
       env: electronChildEnv(),
     });
+    trackHelper(child);
     let out = '';
     let err = '';
     let settled = false;

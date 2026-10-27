@@ -33,6 +33,7 @@ import { SPEAKER_NOTES_FILE, applySpeakerNotes, serializeSpeakerNotes } from '@s
 import { AGENT_GUIDE_FILE, AGENT_GUIDE_MARKER, renderAgentGuide } from '../main/agentGuide.js';
 import { agentRuntimePaths, atomicJson, deckRevision, replaceFileAtomically } from '../main/agentRuntime.js';
 import deckHelperSource from './deckHelper.mjs?raw';
+import { ownStop } from './scratch.js';
 
 /**
  * The bridge behind `deckwerk-connect.mjs` and `slide-agent connect`: your
@@ -1297,7 +1298,11 @@ export async function runConnectCommand(options: ConnectCommandOptions): Promise
 function waitForStop(signal?: AbortSignal): Promise<void> {
   return new Promise((resolvePromise) => {
     if (signal?.aborted) return resolvePromise();
+    // Ctrl-C ends the bridge through `done`, which closes it properly; the
+    // CLI's own signal cleanup must not exit the process first.
+    const release = ownStop();
     const done = () => {
+      release();
       process.off('SIGINT', done);
       process.off('SIGTERM', done);
       resolvePromise();

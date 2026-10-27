@@ -1,7 +1,7 @@
-import { readFile, rm, writeFile } from 'node:fs/promises';
+import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { Deck } from '@shared/deck.js';
-import { tempDir } from '../cli/agentCli.js';
+import { removeTempDir, tempDir } from '../cli/scratch.js';
 import { renderSlidesToPng } from '../cli/renderSlides.js';
 import { getFfmpegPath, run } from './ffmpeg.js';
 
@@ -56,7 +56,7 @@ export async function writeExportThumbnail(
     console.warn('Web export thumbnail skipped:', err instanceof Error ? err.message : err);
     return null;
   } finally {
-    await rm(scratch, { recursive: true, force: true });
+    await removeTempDir(scratch);
   }
 }
 

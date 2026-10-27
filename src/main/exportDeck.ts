@@ -1,11 +1,12 @@
 import { existsSync } from 'node:fs';
-import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rm, stat } from 'node:fs/promises';
 import { dirname, extname, join, relative, resolve } from 'node:path';
 import type { Deck, Slide } from '@shared/deck.js';
 import type { WebExportQuality } from '@shared/ipc.js';
 import { loadTheme, resolveAsset } from './deckStore.js';
 import { encodeImageWebp, probeImage, probeMedia, transcodeVideoForWeb } from './ffmpeg.js';
 import { copyFileStreamed } from './copyFileStreamed.js';
+import { writeFileNamed } from './writeFailure.js';
 
 /**
  * Export a deck as a self-contained folder that opens in any browser.
@@ -21,8 +22,17 @@ import { copyFileStreamed } from './copyFileStreamed.js';
  * a web host without anyone in the audience noticing.
  */
 
-/** Where the export player bundle lives, in dev and when packaged. */
+/**
+ * Where the export player bundle lives, in dev and when packaged.
+ *
+ * `DECKWERK_EXPORT_PLAYER_DIR` names a built player folder outright: a test
+ * exports with the player it built from this checkout's sources (never
+ * whatever `out/` was last built by hand), or with a stub when the export is
+ * meant to fail before anything loads it.
+ */
 function playerBundleDir(): string {
+  const named = process.env.DECKWERK_EXPORT_PLAYER_DIR;
+  if (named) return named;
   const candidates = [
     join(import.meta.dirname, '../export'),
     join(import.meta.dirname, '../../out/export'),
@@ -177,11 +187,11 @@ export async function exportDeck(
   const playerCss = join(bundleDir, 'player.css');
   report('Writing player.css');
   const structural = existsSync(playerCss) ? await readFile(playerCss, 'utf8') : '';
-  await writeFile(join(outDir, 'player.css'), structural, 'utf8');
+  await writeFileNamed(join(outDir, 'player.css'), structural, 'utf8');
   doneWeight += fixedWeight;
 
   report(`Writing ${deck.theme}`);
-  await writeFile(join(outDir, 'theme.css'), theme, 'utf8');
+  await writeFileNamed(join(outDir, 'theme.css'), theme, 'utf8');
   doneWeight += fixedWeight;
 
   // The folder exists even when every reference turned out to be unusable, so
@@ -239,8 +249,8 @@ export async function exportDeck(
   const rewritten = renamed.size > 0 || trimmed.size > 0
     ? rewriteAssetReferences(exported, renamed, trimmed)
     : exported;
-  await writeFile(join(outDir, 'index.html'), indexHtml(rewritten), 'utf8');
-  await writeFile(
+  await writeFileNamed(join(outDir, 'index.html'), indexHtml(rewritten), 'utf8');
+  await writeFileNamed(
     join(outDir, 'export.json'),
     JSON.stringify({
       title: deck.title,

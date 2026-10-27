@@ -8,9 +8,12 @@
  *
  * Plain CommonJS on purpose: Electron runs it directly, with no build step.
  */
-const { readFileSync, mkdirSync, writeFileSync } = require('node:fs');
+const { readFileSync, mkdirSync, rmSync } = require('node:fs');
 const { join } = require('node:path');
 const { app, BrowserWindow } = require('electron');
+// A full disk mid-capture must reach the CLI as "which file, which disk",
+// not as "Unknown system error -122, write".
+const { writeFileNamed, failureReport } = require('./child-failure.cjs');
 // Started by Electron with ELECTRON_RUN_AS_NODE=1, this is plain Node and
 // `app` is undefined. The CLI strips the variable (electronChildEnv); say so
 // plainly to anyone who runs the script by hand with it set.
@@ -64,7 +67,7 @@ app.whenReady().then(async () => {
       await win.webContents.executeJavaScript(NEXT_PAINT);
       const image = await win.webContents.capturePage();
       const file = join(outDir, `${slide.id}.png`);
-      writeFileSync(file, image.toPNG());
+      writeFileNamed(file, image.toPNG());
       written.push({ slideId: slide.id, number: slide.number, path: file, ...(problems.length > 0 ? { problems } : {}) });
     }
     const contactSheets = job.contactSheet && written.length > 0
@@ -73,7 +76,7 @@ app.whenReady().then(async () => {
     process.stdout.write(JSON.stringify({ images: written, contactSheets }));
     app.exit(0);
   } catch (error) {
-    process.stderr.write(String((error && error.stack) || error));
+    process.stderr.write(failureReport(error));
     app.exit(1);
   }
 });
@@ -217,7 +220,13 @@ async function captureContactSheets(win, written, canvas) {
     const name = index === 0 ? 'contact-sheet' : `contact-sheet-${index + 1}`;
     const file = join(outDir, `${name}.png`);
     const part = written.slice(start, start + CONTACT_SHEET_SLIDES);
-    writeFileSync(file, await captureContactSheet(win, part, canvas, join(outDir, `${name}.html`)));
+    const sheetPage = join(outDir, `${name}.html`);
+    try {
+      writeFileNamed(file, await captureContactSheet(win, part, canvas, sheetPage));
+    } finally {
+      // Only the page the sheet was laid out on, not a result.
+      rmSync(sheetPage, { force: true });
+    }
     sheets.push(file);
   }
   return sheets;
@@ -260,7 +269,7 @@ async function captureContactSheet(win, written, canvas, sheetPage) {
   // Written next to the PNGs and loaded as a file: a data: URL page may not
   // read file:// images, but a file:// page loads its siblings by relative
   // path without any security relaxation.
-  writeFileSync(sheetPage, page);
+  writeFileNamed(sheetPage, page);
   await win.loadFile(sheetPage);
   // Every thumb must have decoded, or the sheet ships grey rectangles.
   await win.webContents.executeJavaScript(

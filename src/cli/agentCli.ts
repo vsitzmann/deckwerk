@@ -1,8 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { existsSync, readFileSync } from 'node:fs';
-import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { readFile, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
@@ -56,6 +55,8 @@ import { exportDeck } from '../main/exportDeck.js';
 import { spawn } from 'node:child_process';
 import { htmlEditTransaction } from '../main/htmlAuthoring.js';
 import { checkWebPage, renderSlidesToPng } from './renderSlides.js';
+import { removeTempDir, tempDir, untilStopped } from './scratch.js';
+import { failureMessage } from '../main/writeFailure.js';
 import { runConnectCommand } from './agentConnect.js';
 import { ChatUsageError, listChat, postChat, resolveChatTarget, waitForMention } from './chatClient.js';
 import { HISTORY_FILE, HISTORY_ROTATED_FILE, parseEditHistory, type EditHistoryEntry } from '@shared/editHistory.js';
@@ -284,7 +285,9 @@ export async function runAgentCli(argv: string[], io: CliIo): Promise<number> {
       io.out(json({ status: 'conflict', revision: error.revision, message: error.message }));
       return EXIT_CONFLICT;
     }
-    io.err(error instanceof Error ? error.message : String(error));
+    // A full disk or used-up quota names the file and what to free, rather
+    // than "Unknown system error -122, write" (EDQUOT has no name in Node).
+    io.err(failureMessage(error));
     return error instanceof UsageError ? EXIT_USAGE : EXIT_ERROR;
   }
 }
@@ -715,11 +718,10 @@ async function previewCommand(argv: string[], io: CliIo): Promise<number> {
   if (flags.has('open') && process.platform === 'darwin') {
     spawn('open', [url], { stdio: 'ignore', detached: true }).unref();
   }
-  // Serve until killed: the caller owns this process's lifetime.
-  await new Promise<void>((done) => {
-    process.once('SIGINT', done);
-    process.once('SIGTERM', done);
-  });
+  // Serve until killed: the caller owns this process's lifetime. The bundle
+  // is the whole deck's export, media and all, so it goes with the process.
+  await untilStopped();
+  await removeTempDir(bundleDir);
   return EXIT_OK;
 }
 
@@ -910,8 +912,9 @@ async function webCommand(argv: string[], io: CliIo): Promise<number> {
   // bundle or no display simply means no poster.
   let poster: string | null = null;
   if (!flags.has('no-poster')) {
+    let shots: string | null = null;
     try {
-      const shots = await mkdtemp(join(tmpdir(), 'web-poster-'));
+      shots = await tempDir('web-poster-');
       const { images } = await renderSlidesToPng({
         deckDir,
         deck: { ...deck, slides: [slide] },
@@ -931,7 +934,9 @@ async function webCommand(argv: string[], io: CliIo): Promise<number> {
         if (element.type === 'web') element.poster = poster;
       }
     } catch (error) {
-      io.err(`No poster captured (${error instanceof Error ? error.message : String(error)}); the slide still works, previews show an inert frame.`);
+      io.err(`No poster captured (${failureMessage(error)}); the slide still works, previews show an inert frame.`);
+    } finally {
+      if (shots) await removeTempDir(shots);
     }
   }
 
@@ -1199,15 +1204,21 @@ async function webCheckCommand(argv: string[], io: CliIo): Promise<number> {
   if (!size) throw new UsageError(`--size takes WIDTHxHEIGHT, not "${options.get('size')}".`);
   // Checked with the bridge in place, as it will run once imported, so a page
   // that calls `deckwerk.onActive` does not fail here for a missing global.
-  const staged = join(await mkdtemp(join(tmpdir(), 'web-check-')), positional[0].replace(/^.*[\\/]/, ''));
-  await writeFile(staged, injectWebBridgeRuntime(await readFile(pagePath, 'utf8')), 'utf8');
+  const stage = await tempDir('web-check-');
+  const staged = join(stage, positional[0].replace(/^.*[\\/]/, ''));
   const screenshot = options.get('screenshot');
-  const result = await checkWebPage({
-    pagePath: staged,
-    width: Number(size[1]),
-    height: Number(size[2]),
-    screenshot: screenshot ? resolve(io.cwd, screenshot) : null,
-  });
+  let result: Awaited<ReturnType<typeof checkWebPage>>;
+  try {
+    await writeFile(staged, injectWebBridgeRuntime(await readFile(pagePath, 'utf8')), 'utf8');
+    result = await checkWebPage({
+      pagePath: staged,
+      width: Number(size[1]),
+      height: Number(size[2]),
+      screenshot: screenshot ? resolve(io.cwd, screenshot) : null,
+    });
+  } finally {
+    await removeTempDir(stage);
+  }
   io.out(json({
     ...result,
     checked: pagePath,
@@ -2293,7 +2304,3 @@ function parseList(value: string | undefined, allowed: string[], label: string):
   return parts;
 }
 
-/** A scratch directory for the export a render is captured from. */
-export async function tempDir(prefix: string): Promise<string> {
-  return mkdtemp(join(tmpdir(), prefix));
-}

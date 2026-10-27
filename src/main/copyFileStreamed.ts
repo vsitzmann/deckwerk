@@ -3,6 +3,7 @@ import { createReadStream, createWriteStream } from 'node:fs';
 import { rename, rm } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { pipeline } from 'node:stream/promises';
+import { withWritePath } from './writeFailure.js';
 
 /**
  * Copy a file by streaming its bytes, never through `fs.copyFile`.
@@ -30,6 +31,8 @@ export async function copyFileStreamed(source: string, target: string): Promise<
     await rename(temporary, target);
   } catch (error) {
     await rm(temporary, { force: true });
-    throw error;
+    // A failed write names no file (only open(2) is given one): say which
+    // copy it was, or a full disk reads as "Unknown system error -122, write".
+    throw withWritePath(error, target);
   }
 }

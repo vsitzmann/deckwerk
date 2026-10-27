@@ -645,6 +645,14 @@ Diagnostics go to stderr. Exit codes are `0` ok, `1` error,
 
 The deck argument defaults to the current directory.
 
+`render` and `preview` export a scratch copy of the deck, with the media of the
+slides they show, into the OS temp folder (`$TMPDIR`, else `/tmp`), and remove
+it when they finish, fail or are stopped. If that folder is small or under a
+per-user quota (a tmpfs with `usrquota`, where `df` can still show free space),
+a render fails with "Disk quota exceeded writing <file> — …"; free space there
+or run with `TMPDIR` pointing at a disk with room. The PNGs themselves go to
+`--output`.
+
 ### Comments and chat
 
 People leave you work in two places. **Comments** sit on a slide or an
