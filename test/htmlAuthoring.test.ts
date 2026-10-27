@@ -163,8 +163,10 @@ describe('HTML authoring files', () => {
       `<svg style="${at(900, 200, 120, 120)}" viewBox="0 0 120 120"><circle cx="60" cy="60" r="50" fill="none" stroke="#333333" stroke-width="4" stroke-dasharray="0 8" stroke-linecap="round"></circle></svg>`,
       // Two primitives: a picture, not a shape — kept as HTML, but said so.
       `<svg style="${at(1100, 200, 200, 100)}" viewBox="0 0 200 100"><rect width="90" height="100" fill="#123456"></rect><rect x="110" width="90" height="100" fill="#654321"></rect></svg>`,
-      // The other conversions a `new` page gives fresh markup: a table, and
-      // a gradient behind words that a class paints.
+      // A table stays an HTML region on an exported page, as it always did
+      // (its deck-table conversion needs the typography only a `new` page
+      // bakes), but now says so; a gradient behind words that a class paints
+      // becomes a box.
       `<table style="position:absolute; left:900px; top:600px; width:600px;"><tr><td>alpha</td><td>beta</td></tr></table>`,
       `<div class="wash" style="${at(100, 600, 600, 200)}"><p class="role-body">On the wash</p></div>`,
     ].join('\n');
@@ -189,14 +191,12 @@ describe('HTML authoring files', () => {
     expect(line).toMatchObject({ strokeDash: 'dashed', stroke: 'rgba(22, 24, 43, 0.45)' });
     expect(rect).toMatchObject({ fill: 'rgba(0, 170, 0, 0.5)', opacity: 0.8 });
     expect(dots).toMatchObject({ strokeDash: 'dotted' });
-    // The kept region and the two-primitive picture; nothing else is HTML.
-    expect(html).toHaveLength(2);
-    expect(elements.find((element) => element.type === 'text' && element.table), JSON.stringify(elements))
-      .toMatchObject({ html: expect.stringContaining('alpha') });
+    // The kept region, the two-primitive picture and the table; nothing else is HTML.
+    expect(html).toHaveLength(3);
     expect(elements.find((element) => element.type === 'text' && /gradient/.test(element.style['background-image'] ?? '')),
       JSON.stringify(elements)).toMatchObject({ html: '' });
     expect(warnings.filter((warning) => /HTML fallback/.test(warning)), warnings.join('\n'))
-      .toEqual([expect.stringMatching(/<svg>.*2 primitives/)]);
+      .toEqual([expect.stringMatching(/<svg>.*2 primitives/), expect.stringMatching(/<table>/)]);
   }, 60_000);
 
   // Bug #24: `<` in maths is a tag start to the parser; the text was cut off

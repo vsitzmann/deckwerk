@@ -277,7 +277,9 @@ turns into, not a list of things to opt into.
   `&nbsp;` are kept; `<ol start>` and `<li value>` number as in HTML. A hand-written
   `<table>` becomes an editable deck table with the column widths the browser
   measured, read per column from the cells' grid, so `<col>` widths and cell
-  widths survive a group-header first row of `colspan` cells. The player
+  widths survive a group-header first row of `colspan` cells. Write a new
+  table in a `slide-agent new` page: one written into an exported section
+  stays an HTML region (`apply` says so). The player
   draws an unstyled table as a plain 1px grid; a designed table resets that first (`.results th, .results td { border: 0 }`
   in `theme.css`) and then adds only the rules it wants.
 - **Maths** — `$…$` inline, `$$…$$` display, KaTeX TeX inside any text; the

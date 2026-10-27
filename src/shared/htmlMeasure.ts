@@ -212,8 +212,8 @@ export function measureSlides(doc: Document): MeasuredSlide[] {
    * `independent` is a fact about the *page*: who owns its CSS. An exported
    * page is theme-driven, so its computed styles are never baked, its classes
    * stay, its lists and pseudo-elements are the player's. Those rules stay
-   * per page. But what a node *becomes* — an SVG primitive a shape, a table a
-   * deck table, a clipped region a fallback — is a fact about the node: an
+   * per page. But what a node *becomes* — an SVG primitive a shape, a clipped
+   * region a fallback — is a fact about the node: an
    * exported object carries `data-element-id` on itself or its wrapper and
    * must come back exactly as it went out, while a fresh `<svg>` an agent
    * wrote beside it in the same section is the same markup it would be in a
@@ -1861,9 +1861,11 @@ export function measureSlides(doc: Document): MeasuredSlide[] {
       // The deck's table *is* a text element with column widths, so the only
       // thing missing was the measurement: take the widths the browser just
       // computed and the rest of the mapping already exists.
-      // Per node: a fresh table written into an exported page is as much a
-      // table as one in a `new` page.
-      if (authoredHere(node) && node.tagName.toLowerCase() === 'table' && !node.dataset.element) {
+      // Per page, unlike the SVG conversion: the deck table's text takes its
+      // typography from the descendant styles an independent page bakes, and
+      // a theme-driven page never bakes them, so a table there measured short
+      // of what the player draws.
+      if (independent && node.tagName.toLowerCase() === 'table' && !node.dataset.element) {
         node.dataset.element = 'table';
         const widths = tableColumnWidths(node as HTMLTableElement);
         // Column widths are proportions; without them the mapping falls back
