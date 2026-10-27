@@ -395,10 +395,11 @@ function applyHtmlEdit(
             options,
           );
           if (store.get().deck !== deck) continue;
-          // Inline style the browser's parser dropped would otherwise vanish
-          // silently: the page measured without it, yet the apply reads as clean.
+          // Inline style the browser's parser dropped, or maths a `<` cut
+          // short, would otherwise vanish silently: the page measured without
+          // it, yet the apply reads as clean.
           const warned = warnings.length === 0 ? ''
-            : ` — ${warnings.length} style warning${warnings.length === 1 ? '' : 's'}: ${warnings[0]}`;
+            : ` — ${warnings.length} warning${warnings.length === 1 ? '' : 's'}: ${warnings[0]}`;
           const summarise = (message: string, operations: typeof transaction extends null ? never : NonNullable<typeof transaction>['operations'] | []): HtmlSyncOutcome => ({
             stamp: pageStampOf(slides),
             changes: htmlSyncSummary(operations),

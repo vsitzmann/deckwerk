@@ -31,8 +31,8 @@ Unexpected deletion means stop and undo before another save.
 ## Native objects
 
 Use semantic HTML, flexbox/grid, role classes, and normal media tags. Real lists
-use `<ul>/<ol>`, math uses `$…$` or `$$…$$` (mark a term `\step{2}{…}` to build or
-pulse it, and pair two equations with `data-morph` to move them glyph by glyph), overflow-prone text can use
+use `<ul>/<ol>`, math uses `$…$` or `$$…$$` (write `<` inside it as `&lt;` or
+`\lt`; mark a term `\step{2}{…}` to build or pulse it, and pair two equations with `data-morph` to move them glyph by glyph), overflow-prone text can use
 `data-autofit="true"`, and tables use semantic table markup. Put reusable styles
 in `theme.css`; file-local `<style>` rules do not remain as the deck stylesheet.
 

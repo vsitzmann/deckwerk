@@ -75,6 +75,7 @@ export function capabilities(): Capability[] {
       notes: [
         '$…$ is inline and stays in the sentence flow; $$…$$ is display.',
         'A literal dollar sign is written \\$.',
+        'In authoring HTML write < inside maths as &lt; or \\lt: a bare y_{<k} starts an HTML tag and the text is cut off there (apply warns; validate lists it under mathProblems).',
         'The equation is part of the text element’s html — not a separate element.',
         'Mark a term with \\step{label}{…} (or KaTeX’s \\htmlClass{step-label}{…}) so builds can reveal, colour or pulse it; see equation-builds.',
       ],

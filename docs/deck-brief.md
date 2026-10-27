@@ -43,9 +43,9 @@ Create `drafts/slide.html` — not in `edit/`, which the editor watches:
     </section>
     </body></html>
 
-Use any HTML and CSS: flex/grid, `<img>`, `object-fit`, `border-radius`,
-`clip-path`, gradients, SVG. Put images in `assets/` (or run
-`slide-agent asset import . <file>`) and refer to them as `assets/<name>`.
+Use any HTML and CSS: flex/grid, `<img>`, `object-fit`, `border-radius`, `clip-path`, gradients, SVG.
+Maths is `$…$` / `$$…$$` (KaTeX); write `<` in it as `&lt;` or `\lt`: a bare `y_{<k}` starts a tag and cuts the text off.
+Put images in `assets/` (or run `slide-agent asset import . <file>`) and refer to them as `assets/<name>`.
 Iterate in a browser, e.g. `chromium --headless --screenshot=/tmp/s.png
 --window-size=1920,1080 drafts/slide.html`. Nothing here involves DeckWerk.
 

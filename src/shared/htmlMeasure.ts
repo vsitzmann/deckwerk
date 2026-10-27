@@ -1478,6 +1478,53 @@ export function measureSlides(doc: Document): MeasuredSlide[] {
     return holder ? holder.textContent ?? '' : undefined;
   };
 
+  /**
+   * The width the browser gave each column of a table, or null when the
+   * cells cannot say.
+   *
+   * Read from the cells' geometry on the table's grid, not from the first
+   * row: a group-header row (`<th colspan="3">`) has fewer cells than the
+   * table has columns, and reading it threw the authored `<col>` widths away
+   * for equal ones. A column starts where any cell starting in it starts and
+   * ends where any cell ending in it ends, so one spanning row does not hide
+   * the columns another row spells out.
+   */
+  const tableColumnWidths = (table: HTMLTableElement): number[] | null => {
+    const rows = [...table.rows];
+    const taken: boolean[][] = rows.map(() => []);
+    const starts = new Map<number, number>();
+    const ends = new Map<number, number>();
+    let columns = 0;
+    rows.forEach((row, r) => {
+      let column = 0;
+      for (const cell of [...row.cells]) {
+        while (taken[r][column]) column += 1;
+        const span = Math.max(1, cell.colSpan || 1);
+        // rowspan="0" runs to the end of the table.
+        const down = cell.rowSpan === 0 ? rows.length - r : Math.max(1, cell.rowSpan || 1);
+        for (let rr = r; rr < Math.min(rows.length, r + down); rr += 1) {
+          for (let cc = column; cc < column + span; cc += 1) taken[rr][cc] = true;
+        }
+        const box = cell.getBoundingClientRect();
+        if (box.width > 0) {
+          if (!starts.has(column)) starts.set(column, box.left);
+          if (!ends.has(column + span - 1)) ends.set(column + span - 1, box.right);
+        }
+        column += span;
+      }
+      columns = Math.max(columns, column);
+    });
+    if (columns === 0) return null;
+    const widths: number[] = [];
+    for (let column = 0; column < columns; column += 1) {
+      const left = starts.get(column) ?? ends.get(column - 1);
+      const right = ends.get(column) ?? starts.get(column + 1);
+      if (left === undefined || right === undefined) return null;
+      widths.push(Math.round(right - left));
+    }
+    return widths.every((width) => width > 0) ? widths : null;
+  };
+
   return roots.map((root) => {
     // Checked before anything below touches a node: assigning through
     // node.style re-serialises the attribute from the CSSOM, which would
@@ -1549,15 +1596,10 @@ export function measureSlides(doc: Document): MeasuredSlide[] {
       // computed and the rest of the mapping already exists.
       if (independent && node.tagName.toLowerCase() === 'table' && !node.dataset.element) {
         node.dataset.element = 'table';
-        const row = node.querySelector('tr');
-        const cells = row ? ([...row.children] as HTMLElement[]) : [];
-        const spanned = cells.some((cell) => (cell as HTMLTableCellElement).colSpan > 1);
-        const widths = cells.map((cell) => Math.round(cell.getBoundingClientRect().width));
-        // Column widths are proportions; a spanning first row cannot supply
-        // them, and the mapping falls back to equal columns without them.
-        if (!spanned && widths.length > 0 && widths.every((width) => width > 0)) {
-          node.dataset.tableWidths = widths.join(',');
-        }
+        const widths = tableColumnWidths(node as HTMLTableElement);
+        // Column widths are proportions; without them the mapping falls back
+        // to equal columns.
+        if (widths) node.dataset.tableWidths = widths.join(',');
       }
       // `<pre><code class="language-python">` is how the web writes a code
       // listing, so it is a code block, not a monospace text box that would

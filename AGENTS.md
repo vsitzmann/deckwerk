@@ -250,7 +250,9 @@ save the editor's status message says the same thing.
 box extends past the canvas, from geometry alone. Deliberate bleeds show up
 there too — the list is a checklist, not an error. Scope it to the slides you
 are actually editing with `--slide <id|number|a-b>` (repeatable, or comma-separated) or
-`--selected`; structural `errors` stay deck-wide either way.
+`--selected`; structural `errors` stay deck-wide either way. It also lists
+`mathProblems`: text elements whose `$`/`$$` maths opens and never closes,
+which the slide shows as raw TeX (usually a `<` inside maths; see below).
 
 **Write semantic markup; put reusable classes in `theme.css`.** The walk bakes
 layout from any CSS, keeps a dissolving container's paint (background, border,
@@ -270,9 +272,16 @@ turns into, not a list of things to opt into.
   `<dt>`/`<dd>`, `<figcaption>`, `<small>`, `<cite>`, and their inline markup.
   A `<ul>`/`<ol>` stays one object, markers and all, and a hand-written
   `<table>` becomes an editable deck table with the column widths the browser
-  measured. The player draws an unstyled table as a plain 1px grid; a
-  designed table resets that first (`.results th, .results td { border: 0 }`
+  measured, read per column from the cells' grid, so `<col>` widths and cell
+  widths survive a group-header first row of `colspan` cells. The player
+  draws an unstyled table as a plain 1px grid; a designed table resets that first (`.results th, .results td { border: 0 }`
   in `theme.css`) and then adds only the rules it wants.
+- **Maths** — `$…$` inline, `$$…$$` display, KaTeX TeX inside any text; the
+  deck stores the TeX, not KaTeX's render. A literal dollar is `\$`. **Write
+  `<` inside maths as `&lt;` or `\lt`**: the page is HTML, so `y_{<k}` or
+  `$a<b$` starts a tag and everything after it vanishes from the text. `apply`
+  warns when that happened (naming the slide, element and the spot) and
+  `validate` lists maths left unclosed as `mathProblems`. `>` is safe.
 - **Media** — `<img>` and `<video>`. A border, a radius, a circular mask, a
   ring shadow or a backdrop colour on the media *or on a frame that wraps only
   that media* becomes the picture's own, so a framed photograph is one object

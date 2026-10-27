@@ -9,7 +9,8 @@ import { htmlEditTransaction, writeHtmlScope } from '../src/main/htmlAuthoring.j
 
 /** Keep an exported page's head — scope marker, base, styles — swap its slides. */
 function rewriteBody(page: string, body: string): string {
-  return page.replace(/<body>[\s\S]*<\/body>/, `<body>${body}</body>`);
+  // A function replacement: bodies hold maths, and `$$` in a replacement string is `$`.
+  return page.replace(/<body>[\s\S]*<\/body>/, () => `<body>${body}</body>`);
 }
 
 describe('HTML authoring files', () => {
@@ -79,5 +80,78 @@ describe('HTML authoring files', () => {
     expect(htmlChangeLabel(authored)).toBe('Tighten the opening argument');
     expect((await htmlEditTransaction(dir, deck, exported.path)).transaction!.label)
       .toBe('Tighten the opening argument');
+  }, 60_000);
+
+  // Bug #23: a group-header first row (`colspan`) used to throw away the
+  // authored widths, so every column came out equal and the label column wrapped.
+  it('keeps authored column widths when the first row spans columns', async () => {
+    dir = await mkdtemp(join(tmpdir(), 'html-authoring-'));
+    await mkdir(join(dir, 'assets'));
+    await writeFile(join(dir, 'theme.css'), '.slide { background: #fff; }', 'utf8');
+    const deck = emptyDeck('HTML');
+    const exported = await writeHtmlScope(dir, deck, ['slide-1']);
+    const cells = (count: number, text: string) => Array.from({ length: count }, () => `<td>${text}</td>`).join('');
+    const table = (header: string) => `
+<table style="position:absolute; left:150px; top:300px; width:1620px; font-size:28px; border-collapse:collapse; table-layout:fixed;">
+  <colgroup><col style="width:340px">${'<col style="width:140px">'.repeat(8)}<col style="width:160px"></colgroup>
+  ${header}
+  <tr><th>Criterion</th>${cells(9, 'x')}</tr>
+  <tr><td>Architecture scales</td>${cells(9, '✓')}</tr>
+</table>`;
+    await writeFile(exported.path, rewriteBody(await readFile(exported.path, 'utf8'), `
+<section class="slide" data-slide-id="spanned">
+  ${table('<tr><th></th><th colspan="3">Autoencoders</th><th colspan="2">CLS token</th><th colspan="4">Patch features</th></tr>')}
+</section>
+<section class="slide" data-slide-id="cell-widths">
+  <table style="position:absolute; left:150px; top:300px; width:1000px; border-collapse:collapse;">
+    <tr><th colspan="2">Group</th><th>Alone</th></tr>
+    <tr><td style="width:600px">wide</td><td style="width:100px">a</td><td style="width:300px">b</td></tr>
+  </table>
+</section>`), 'utf8');
+
+    const { slides } = await htmlEditTransaction(dir, deck, exported.path);
+    const widthsOf = (id: string): number[] => {
+      const element = slides.find((slide) => slide.id === id)?.elements.find((candidate) => candidate.type === 'text');
+      expect(element?.type === 'text' && element.table, id).toBeTruthy();
+      const widths = element!.type === 'text' ? element!.table!.columnWidths : [];
+      const total = widths.reduce((sum, width) => sum + width, 0);
+      return widths.map((width) => Math.round(width / total * 1620));
+    };
+    // The colgroup's 340 / 140 × 8 / 160, give or take a pixel of rounding.
+    const spanned = widthsOf('spanned');
+    expect(spanned).toHaveLength(10);
+    [340, 140, 140, 140, 140, 140, 140, 140, 140, 160]
+      .forEach((width, index) => expect(Math.abs(spanned[index] - width), `column ${index}: ${spanned}`).toBeLessThanOrEqual(2));
+    // Widths on a later row's cells, under a spanning first row: 6 : 1 : 3.
+    const cellWidths = widthsOf('cell-widths').map((width) => width / 1620 * 10);
+    [6, 1, 3].forEach((share, index) =>
+      expect(Math.abs(cellWidths[index] - share), `column ${index}: ${cellWidths}`).toBeLessThan(0.05));
+  }, 60_000);
+
+  // Bug #24: `<` in maths is a tag start to the parser; the text was cut off
+  // there and the apply said nothing.
+  it('warns when a < inside maths cut a text element short, and not when it is escaped', async () => {
+    dir = await mkdtemp(join(tmpdir(), 'html-authoring-'));
+    await mkdir(join(dir, 'assets'));
+    await writeFile(join(dir, 'theme.css'), '.slide { background: #fff; }', 'utf8');
+    const deck = emptyDeck('HTML');
+    const exported = await writeHtmlScope(dir, deck, ['slide-1']);
+    await writeFile(exported.path, rewriteBody(await readFile(exported.path, 'utf8'), `
+<section class="slide" data-slide-id="cut">
+  <p class="role-body" style="position:absolute; left:100px; top:100px; width:1200px;">$$\\big\\langle R_\\theta(x), p(y_k\\mid y_{<k}) \\big\\rangle$$</p>
+</section>
+<section class="slide" data-slide-id="escaped">
+  <p class="role-body" style="position:absolute; left:100px; top:100px; width:1200px;">$$p(y_k\\mid y_{&lt;k}) = p(y_k\\mid y_{\\lt k})$$</p>
+</section>`), 'utf8');
+
+    const { warnings, slides } = await htmlEditTransaction(dir, deck, exported.path);
+    const cut = slides.find((slide) => slide.id === 'cut')!.elements.find((element) => element.type === 'text')!;
+    const maths = warnings.filter((warning) => /maths/.test(warning));
+    expect(maths, warnings.join('\n')).toHaveLength(1);
+    expect(maths[0]).toContain('slide cut');
+    expect(maths[0]).toContain(`element ${cut.id}`);
+    expect(maths[0]).toContain('y_{<k}');
+    expect(maths[0]).toContain('opened with $$');
+    expect(maths[0]).toMatch(/&lt;.*\\lt/);
   }, 60_000);
 });

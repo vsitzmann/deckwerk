@@ -15,6 +15,7 @@ import {
 } from '@shared/htmlMeasure.js';
 import { PLAYER_TYPE_CSS } from '@shared/playerTypeCss.js';
 import { slidesFromMeasured, slidesToHtml, type MeasuredSlide } from '@shared/htmlSlides.js';
+import { mathWarnings } from '@shared/mathDelimiters.js';
 import { loadTheme } from '../main/deckStore.js';
 import { electronChildEnv, electronFailure, headlessElectronArgs } from './electronDisplay.js';
 
@@ -38,7 +39,10 @@ export interface CompileRequest {
 
 export interface CompiledHtml {
   slides: Slide[];
-  /** Inline style the browser silently dropped; see `MeasuredSlide.warnings`. */
+  /**
+   * Inline style the browser silently dropped (see `MeasuredSlide.warnings`)
+   * and maths a text element leaves unclosed (`mathWarnings`).
+   */
   warnings: string[];
   /**
    * What the browser measured, before any of it met the deck. The layout
@@ -72,9 +76,10 @@ export async function compileHtmlToSlides(request: CompileRequest): Promise<Comp
       'utf8',
     );
     const [measured] = await runPages([pagePath], request.deck.canvas) as MeasuredSlide[][];
+    const slides = slidesFromMeasured(request.deck, measured);
     return {
-      slides: slidesFromMeasured(request.deck, measured),
-      warnings: measured.flatMap((slide) => slide.warnings ?? []),
+      slides,
+      warnings: [...measured.flatMap((slide) => slide.warnings ?? []), ...mathWarnings(slides, authored)],
       measured,
       theme,
     };

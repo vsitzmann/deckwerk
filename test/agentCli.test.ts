@@ -227,6 +227,26 @@ describe('slide-agent CLI', { timeout: 60_000 }, () => {
     }]);
   });
 
+  // Bug #24: maths an authoring page cut short (`y_{<k}` read as a tag) shows
+  // on the slide as raw TeX; validate is where an agent can still catch it.
+  it('reports maths a text element leaves unclosed, naming slide and element', async () => {
+    const deck = await onDisk();
+    deck.slides[0].elements.push(
+      text('cut', '$$\\big\\langle R_\\theta(x), p(y_k\\mid y_{') as never,
+      text('sound', 'Costs $5, and $x_{1}$ is fine') as never,
+    );
+    await writeDeck(deck);
+
+    const checked = await parsed('validate');
+    expect(checked.code).toBe(EXIT_OK);
+    expect(checked.json.valid).toBe(true);
+    expect(checked.json.mathProblems).toEqual([expect.objectContaining({
+      slideId: 'slide-1', elementId: 'cut', delimiter: '$$',
+    })]);
+    expect(checked.json.mathProblems[0].message).toMatch(/&lt;.*\\lt/);
+    expect((await parsed('validate', '--slide', 'slide-2')).json.mathProblems).toEqual([]);
+  });
+
   it('applies a transaction offline and refuses the same one twice', async () => {
     const before = (await parsed('context')).json.deckRevision;
     const transaction: AgentTransaction = {

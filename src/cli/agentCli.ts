@@ -55,6 +55,7 @@ import { serveBundle } from './previewServer.js';
 import { exportDeck } from '../main/exportDeck.js';
 import { spawn } from 'node:child_process';
 import { htmlEditTransaction } from '../main/htmlAuthoring.js';
+import { unclosedMath } from '@shared/mathDelimiters.js';
 import { checkWebPage, renderSlidesToPng } from './renderSlides.js';
 import { runConnectCommand } from './agentConnect.js';
 import { ChatUsageError, listChat, postChat, resolveChatTarget, waitForMention } from './chatClient.js';
@@ -128,8 +129,9 @@ Everything else:
                                           full repository reference
   capabilities                            every feature, with copyable JSON
   validate  [deck] [--slide id|number|a-b|--selected]
-                                          schema, ids, references, assets, and
-                                          canvas overflows (scoped to your slides)
+                                          schema, ids, references, assets, canvas
+                                          overflows and unclosed maths (scoped
+                                          to your slides)
   asset import <deck> <paths...>          copy media into assets/, probed
   web import <deck> <page.html> [--after <slideId>] [--title <text>] [--no-poster]
                                           add one slide showing a complete HTML
@@ -787,12 +789,35 @@ async function validateCommand(argv: string[], io: CliIo): Promise<number> {
   } catch {
     // The parse failure is already represented in `errors`.
   }
+  // Maths a text element opens and never closes shows on the slide as raw
+  // TeX. The classic cause is a `<` inside `$…$` in an authoring page, which
+  // the HTML parser reads as a tag and cuts the text off at.
+  let mathProblems: Array<{
+    slideId: string; elementId: string; delimiter: string; excerpt: string; message: string;
+  }> = [];
+  try {
+    const deck = await loadDeck(deckDir);
+    mathProblems = deck.slides.flatMap((slide) => slide.elements.flatMap((element) => {
+      const open = element.type === 'text' ? unclosedMath(element.html) : null;
+      return open ? [{
+        slideId: slide.id,
+        elementId: element.id,
+        delimiter: open.delimiter,
+        excerpt: open.excerpt,
+        message: `maths opened with ${open.delimiter} is never closed, so the slide shows it as raw TeX. `
+          + 'If a "<" inside the maths cut it short, write it as &lt; or \\lt.',
+      }] : [];
+    }));
+  } catch {
+    // The parse failure is already represented in `errors`.
+  }
   if (wanted) {
     const filter = wanted;
     const keep = (slideId: string): boolean =>
       filter({ id: slideId, index: 0, selected: selectedSlideIds.includes(slideId), active: false });
     importGaps = importGaps.filter((gap) => keep(gap.slideId));
     overflows = overflows.filter((overflow) => keep(overflow.slideId));
+    mathProblems = mathProblems.filter((problem) => keep(problem.slideId));
   }
 
   io.out(jsonCompactArrays(
@@ -803,6 +828,7 @@ async function validateCommand(argv: string[], io: CliIo): Promise<number> {
       errors,
       importGaps,
       overflows,
+      mathProblems,
     },
     ['overflows'],
   ));

@@ -573,6 +573,33 @@ for (const kind of BACKENDS) describe.skipIf(!electronBinary)(`an agent working 
       .toEqual({ replaced: [], inserted: [], deleted: [], moved: 0 });
   });
 
+  // Bugs #23 and #24: a group-header first row (`colspan`) threw the authored
+  // `<col>` widths away for equal ones, and a `<` inside maths cut the text
+  // off at what the parser took for a tag — both landing as success.
+  it('lands a table under a spanning header row at its authored widths, and warns when a < cut maths short', async () => {
+    const workspace = await open(kind);
+    const row = (cell: string) => `<tr><td>Architecture scales</td>${cell.repeat(4)}</tr>`;
+    await workspace.write('table.html', await newPage(workspace, [
+      '<table class="role-body" style="position:absolute; left:150px; top:300px; width:1600px; table-layout:fixed; border-collapse:collapse;">',
+      '<colgroup><col style="width:640px"><col style="width:240px"><col style="width:240px"><col style="width:240px"><col style="width:240px"></colgroup>',
+      '<tr><th></th><th colspan="2">Autoencoders</th><th colspan="2">Patch features</th></tr>',
+      row('<td>✓</td>'),
+      '</table>',
+      String.raw`<p class="role-body" style="position:absolute; left:150px; top:700px; width:1600px;">$$p(y_k\mid y_{<k}) = 1$$</p>`,
+    ].join('')));
+    const result = await apply(workspace, 'table.html');
+    const slide = slideById(await workspace.deck(), landed(result, workspace).changes.inserted[0]);
+    const table = slide.elements.find((element) => element.type === 'text' && element.table);
+    const widths = table && table.type === 'text' ? table.table!.columnWidths : [];
+    const total = widths.reduce((sum, width) => sum + width, 0);
+    expect(widths.map((width) => Math.round(width / total * 1600)), JSON.stringify(widths))
+      .toEqual([640, 240, 240, 240, 240]);
+    const cut = slide.elements.find((element) => element.type === 'text' && element.html.includes('y_{'))!;
+    expect(result.json.warnings, JSON.stringify(result.json)).toEqual([
+      expect.stringMatching(new RegExp(`slide ${slide.id}, element ${cut.id}: .*y_\\{<k\\}.*&lt; or \\\\lt`)),
+    ]);
+  });
+
   // A build's effect and its time are part of what a page states. Merging a
   // saved page kept the previous entry's whole action, so an agent that
   // changed a dissolve to a blur, or took the effect off, saw no change land.
