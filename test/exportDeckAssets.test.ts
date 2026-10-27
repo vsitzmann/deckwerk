@@ -2,10 +2,10 @@ import { mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } from 'node:
 import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { emptyDeck } from '../src/shared/deck.js';
 import { createDeck } from '../src/main/deckStore.js';
-import { exportDeck, webExportUnavailableReason } from '../src/main/exportDeck.js';
+import { exportDeck } from '../src/main/exportDeck.js';
 
 /**
  * The web export copies every asset a deck references into the output folder.
@@ -13,8 +13,25 @@ import { exportDeck, webExportUnavailableReason } from '../src/main/exportDeck.j
  * has to honour the same boundary, or a symlink planted in `assets/` walks a
  * private file into a folder that is about to be zipped and handed out.
  */
-describe.skipIf(webExportUnavailableReason() !== null)('web export asset copying', () => {
+describe('web export asset copying', () => {
   const cleanup: string[] = [];
+  // These cases are about what the export copies, not what the player draws,
+  // so a stub stands in for the built player: the suite runs in every
+  // checkout and in CI rather than skipping where `build:export` never ran.
+  const savedPlayer = process.env.DECKWERK_EXPORT_PLAYER_DIR;
+  let player = '';
+
+  beforeAll(async () => {
+    player = await mkdtemp(join(tmpdir(), 'export-assets-player-'));
+    await writeFile(join(player, 'player.js'), '// not loaded\n');
+    process.env.DECKWERK_EXPORT_PLAYER_DIR = player;
+  });
+
+  afterAll(async () => {
+    if (savedPlayer === undefined) delete process.env.DECKWERK_EXPORT_PLAYER_DIR;
+    else process.env.DECKWERK_EXPORT_PLAYER_DIR = savedPlayer;
+    await rm(player, { recursive: true, force: true });
+  });
 
   afterEach(async () => {
     await Promise.all(cleanup.splice(0).map((path) => rm(path, { recursive: true, force: true })));
