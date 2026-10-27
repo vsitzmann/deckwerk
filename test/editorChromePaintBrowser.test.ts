@@ -151,7 +151,7 @@ describe.skipIf(!electronBinary)('the slide rail while typing', () => {
   // rasterises off the main thread and never showed it). Only the active
   // slide's miniature may be layered: WebKit backs such a layer at the full
   // slide size, and layering every thumbnail tripled the page's memory.
-  it('gives the active slide\'s miniature, and only it, a layer of its own', {
+  it('gives the active slide\'s miniature, and only it, a layer of its own while typing', {
     timeout: 30_000,
   }, async () => {
     await session.reset();
@@ -173,9 +173,12 @@ describe.skipIf(!electronBinary)('the slide rail while typing', () => {
       'every other miniature',
     ).toEqual(whileTyping.filter((row) => !row.active).map(() => 'auto'));
 
+    // A layer that followed every step through the deck made Safari paint
+    // each new slide's miniature at full size, pictures and all.
+    const afterTyping = await layered();
+    expect(afterTyping.map((row) => row.willChange), 'once the box is left').toEqual(afterTyping.map(() => 'auto'));
     await session.clickRail(1);
     const after = await layered();
-    expect(after.find((row) => row.index === '1')?.willChange, 'the layer moves with the active slide').toBe('transform');
-    expect(after.find((row) => row.index === '0')?.willChange, 'and leaves the slide it was on').toBe('auto');
+    expect(after.map((row) => row.willChange), 'after stepping to another slide').toEqual(after.map(() => 'auto'));
   });
 });

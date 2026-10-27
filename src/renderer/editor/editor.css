@@ -1583,8 +1583,11 @@ body.panel-resizing iframe { pointer-events: none; }
    bitmap down on the main thread (a slide of 29 photos made every keystroke
    wait 150-300 ms). Its own layer confines the repaint to the box. Only the
    active row: WebKit backs such a layer at the slide's full size, about
-   60 MB, so layering every thumbnail tripled the page's memory. */
-.rail-item.active > .rail-thumb > .rail-thumb-inner { will-change: transform; }
+   60 MB, so layering every thumbnail tripled the page's memory. And only
+   while typing (SlideRail.setTextEditing): a layer that followed every step
+   through the deck had Safari paint each new slide's miniature at full size,
+   pictures and all, 350-500 ms a step on slides of large photographs. */
+.rail-text-editing .rail-item.active > .rail-thumb > .rail-thumb-inner { will-change: transform; }
 
 /* Thumbnail-only rows: no title, no element count. */
 .rail-item {

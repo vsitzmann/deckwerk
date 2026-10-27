@@ -1421,7 +1421,14 @@ export class EditorCanvas {
       slide,
       { resolveSrc: (src) => window.api.assetUrl(src), mediaPreload: 'metadata' },
     );
-    if (slideChanged) this.adoptWarmedImages(rendered);
+    if (slideChanged) {
+      this.adoptWarmedImages(rendered);
+      // A slide being stepped to shows at once and its pictures as they
+      // decode. Decoded where they are painted, a slide of large photographs
+      // (a 13-megapixel figure, a collage of thirty) held Safari's main
+      // thread 350-500 ms on every step (editingLatencyBrowser.test.ts).
+      for (const image of rendered.querySelectorAll('img')) image.decoding = 'async';
+    }
     this.slideLayer.replaceChildren(rendered);
     this.adoptVideos(slide);
 

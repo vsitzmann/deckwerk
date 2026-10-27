@@ -381,6 +381,17 @@ export class SlideRail {
     this.highlightedSelection = new Set(slideSelection);
   }
 
+  /**
+   * Whether a text box is being typed into: only then does the active row's
+   * miniature get a layer of its own (editor.css). The layer keeps Safari
+   * from repainting the rail's pictures for every live sync of the box, but
+   * moving it to each new slide while someone steps through the deck made
+   * Safari paint a full-size miniature, pictures and all, on every step.
+   */
+  setTextEditing(on: boolean): void {
+    this.host.classList.toggle('rail-text-editing', on);
+  }
+
   /** Show or hide the per-slide layout captions; the Design tab turns them on. */
   setDesignLabels(on: boolean): void {
     this.host.classList.toggle('rail-design-labels', on);

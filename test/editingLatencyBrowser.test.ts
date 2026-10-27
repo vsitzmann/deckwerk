@@ -175,7 +175,7 @@ class Collaborator {
  * the first frame whose canvas shows the next slide.
  */
 const INSTRUMENTS = `(() => {
-  const m = window.__latency = { frames: [], keys: [], steps: [], armed: false };
+  const m = window.__latency = { frames: [], keys: [], steps: [], stepTo: [], armed: false };
   const now = () => performance.now();
   // An event's timeStamp is when it was created, before any queueing behind a
   // busy main thread; fall back to now() where a driver's event lacks one.
@@ -196,7 +196,9 @@ const INSTRUMENTS = `(() => {
         const root = document.querySelector('.slide-layer > [data-slide-id]');
         return state.slideIndex !== before && root?.dataset.slideId === state.deck.slides[state.slideIndex].id;
       };
-      const watch = () => (shown() ? afterFrame(() => m.steps.push(now() - t0)) : requestAnimationFrame(watch));
+      const watch = () => (shown()
+        ? afterFrame(() => { m.steps.push(now() - t0); m.stepTo.push(window.store.get().deck.slides[window.store.get().slideIndex].id); })
+        : requestAnimationFrame(watch));
       requestAnimationFrame(watch);
     }
   }, true);
@@ -208,14 +210,15 @@ const INSTRUMENTS = `(() => {
   return true;
 })()`;
 
-interface Measured { frames: number[]; keys: number[]; steps: number[] }
+/** `stepTo` names the slide each of `steps` arrived at. */
+interface Measured { frames: number[]; keys: number[]; steps: number[]; stepTo: string[] }
 
 async function arm(page: Page): Promise<void> {
-  await page.evaluate(`(() => { const m = window.__latency; m.frames = []; m.keys = []; m.steps = []; m.armed = true; return true; })()`);
+  await page.evaluate(`(() => { const m = window.__latency; m.frames = []; m.keys = []; m.steps = []; m.stepTo = []; m.armed = true; return true; })()`);
 }
 
 async function disarm(page: Page): Promise<Measured> {
-  return page.evaluate<Measured>(`(() => { const m = window.__latency; m.armed = false; return { frames: m.frames, keys: m.keys, steps: m.steps }; })()`);
+  return page.evaluate<Measured>(`(() => { const m = window.__latency; m.armed = false; return { frames: m.frames, keys: m.keys, steps: m.steps, stepTo: m.stepTo }; })()`);
 }
 
 function quantile(values: number[], q: number): number {
@@ -394,8 +397,8 @@ for (const kind of BROWSERS) {
     });
 
     it('shows the next slide promptly when stepping through collages and clips', () => {
-      const { steps, frames } = results.stepping!;
-      const detail = `steps ${round(steps)} ms; stalls ${round(stalls(frames))} ms`;
+      const { steps, stepTo, frames } = results.stepping!;
+      const detail = `steps ${steps.map((ms, i) => `${stepTo[i]} ${Math.round(ms)}`).join(', ')} ms; stalls ${round(stalls(frames))} ms`;
       expect(steps.length, `every step was measured (${detail})`).toBeGreaterThanOrEqual(10);
       expect(quantile(steps, 0.5), `median step (${detail})`).toBeLessThanOrEqual(BUDGET.slideStepMedianMs);
       expect(Math.max(...steps), `slowest step (${detail})`).toBeLessThanOrEqual(BUDGET.slideStepWorstMs);
