@@ -79,6 +79,21 @@ export function sanitizeAuthoredHtml(source: string): {
 }
 
 /**
+ * The textual counterpart of `sanitizeAuthoredHtml`'s script removal, for
+ * the collab server, which has no DOM: every script goes except a timeline
+ * block in exactly its exported form. The export writes `<` inside the block
+ * as `\u003c`, so a block holding any `<` is refused — a browser also ends a
+ * script at `</script/` or `</script ` where this match does not, and
+ * whatever followed such an early close would otherwise survive inside it.
+ */
+export function stripScriptsKeepingTimeline(source: string): string {
+  const open = '<script type="application/deckwerk-timeline">';
+  return source.replace(/<script\b[^>]*>[\s\S]*?<\/script\s*>/gi, (script) => (
+    script.startsWith(open) && !script.slice(open.length, script.lastIndexOf('</')).includes('<') ? script : ''
+  ));
+}
+
+/**
  * `<script type="application/deckwerk-timeline">` and nothing else on the
  * tag: a section's timeline as JSON (`htmlSlides.ts`), which no browser
  * executes.
