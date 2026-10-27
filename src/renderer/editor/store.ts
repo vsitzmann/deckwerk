@@ -1085,6 +1085,26 @@ export function sameSlideDrawing(left: Slide, right: Slide): boolean {
     element === right.elements[i] || jsonEqual(element, right.elements[i], ['comments']));
 }
 
+/**
+ * The objects of `right` that draw differently from `left`, when that is the
+ * only way the two slides' pictures differ: the slide itself, the set of
+ * objects and their paint order all agree. `null` when anything else changed.
+ * A view that paints the slide can then redraw just those objects.
+ */
+export function changedSlideObjects(left: Slide, right: Slide): Slide['elements'] | null {
+  if (!jsonEqual(left, right, ['notes', 'comments', 'elements'])) return null;
+  if (left.elements.length !== right.elements.length) return null;
+  const changed: Slide['elements'] = [];
+  for (let i = 0; i < left.elements.length; i++) {
+    const before = left.elements[i];
+    const after = right.elements[i];
+    if (before === after) continue;
+    if (before.id !== after.id || before.z !== after.z) return null;
+    if (!jsonEqual(before, after, ['comments'])) changed.push(after);
+  }
+  return changed;
+}
+
 /** Whether two decks differ in nothing but their slides' speaker notes and comments. */
 export function sameDeckDrawing(left: Deck, right: Deck): boolean {
   if (left === right) return true;
