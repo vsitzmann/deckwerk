@@ -75,7 +75,7 @@ import { stripScriptsKeepingTimeline } from '../shared/htmlSafety.js';
 import { PLAYER_TYPE_CSS } from '../shared/playerTypeCss.js';
 import { authoringPageHtml, type TextOverflow } from '../shared/htmlMeasure.js';
 import { deckRevision } from '../main/agentRuntime.js';
-import { applyAgentTransaction, validateDeckIntegrity, type AgentOperation } from '../shared/agent.js';
+import { applyAgentTransaction, importGaps as importGapsOf, validateDeckIntegrity, type AgentOperation } from '../shared/agent.js';
 import { NativeEditRequestSchema, applyNativeEdits, nativeEditContract } from '../shared/nativeEdits.js';
 import { type Comment, type Deck, type Slide, type SlideElement } from '../shared/deck.js';
 import { commentsAt, commentsOperation, findComment, threadEdits, threadIdOf } from '../shared/comments.js';
@@ -2994,13 +2994,7 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
             ? [{ slideId: slide.id, elementId: element.id, type: element.type, beyond }]
             : [];
         }));
-      const importGaps = deck.slides.flatMap((slide) => slide.elements
-        .filter((element) => element.type === 'unsupported')
-        .map((element) => ({
-          slideId: slide.id, elementId: element.id,
-          originalType: (element as { originalType?: string }).originalType,
-          note: (element as { note?: string }).note,
-        })));
+      const importGaps = importGapsOf(deck);
       respondJson(response, 200, {
         valid: errors.length === 0, errors, overflows, importGaps, revision: deckRevision(deck),
         ...(scope ? { scope: [...wanted] } : {}),

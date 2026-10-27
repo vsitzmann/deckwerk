@@ -205,6 +205,29 @@ export function measureSlides(doc: Document): MeasuredSlide[] {
     try { return [...sheet.cssRules].map((rule) => rule.cssText); } catch { return []; }
   }).join('\n');
   const independent = doc.documentElement.dataset.slideEditorIndependent === 'true';
+  /**
+   * Whether a node is markup the author wrote on this page, rather than (part
+   * of) an object the deck already holds.
+   *
+   * `independent` is a fact about the *page*: who owns its CSS. An exported
+   * page is theme-driven, so its computed styles are never baked, its classes
+   * stay, its lists and pseudo-elements are the player's. Those rules stay
+   * per page. But what a node *becomes* — an SVG primitive a shape, a table a
+   * deck table, a clipped region a fallback — is a fact about the node: an
+   * exported object carries `data-element-id` on itself or its wrapper and
+   * must come back exactly as it went out, while a fresh `<svg>` an agent
+   * wrote beside it in the same section is the same markup it would be in a
+   * `new` page, and gets the same conversions. Deciding that per page left
+   * every arrow written into an export an inert HTML region.
+   */
+  const authoredHere = (node: Element): boolean =>
+    independent || node.closest('[data-element-id]') === null;
+  /** Nodes the walk itself turned into HTML fallbacks, as against ones the page declared so. */
+  const walkFallbacks = new Set<HTMLElement>();
+  /** Why an inline SVG did not become a shape, for the fallback's reason and the apply's warning. */
+  const svgRefusals = new Map<HTMLElement, string>();
+  /** What a conversion approximated or could not carry, reported with the slide being measured. */
+  let conversionWarnings: string[] = [];
   // jsdom accepts the pseudo-element overload but emits a noisy
   // "not implemented" diagnostic for every call. Real imports are measured
   // in Chromium, where the overload is available; unit tests simply skip this
@@ -621,7 +644,7 @@ export function measureSlides(doc: Document): MeasuredSlide[] {
   };
 
   const complexClippedMediaFrame = (node: HTMLElement): boolean => {
-    if (!independent || !supportsPseudoComputedStyle
+    if (!authoredHere(node) || !supportsPseudoComputedStyle
       || !node.querySelector(':scope > img, :scope > video')) return false;
     const style = computed(node);
     if (style.overflow !== 'hidden' && style.overflow !== 'clip') return false;
@@ -803,6 +826,7 @@ export function measureSlides(doc: Document): MeasuredSlide[] {
     if (complexClippedMediaFrame(node)) {
       node.dataset.element = 'html';
       node.dataset.fallbackReason = 'Clipped media frame with a CSS pseudo-element overlay';
+      walkFallbacks.add(node);
       return true;
     }
     // A clip path or a mask is the whole point of the element it is on, and
@@ -810,9 +834,13 @@ export function measureSlides(doc: Document): MeasuredSlide[] {
     // its paint alone turned a clipped triangle into a plain orange rectangle
     // and a masked panel into a solid one — silently, which is worse than the
     // conspicuous fallback.
-    if (independent && clippedOrMasked(node)) {
+    // Per node, not per page: an exported object keeps the inline clip it
+    // round-trips with, but a fresh one written into an export has nothing to
+    // carry it any more than in a `new` page.
+    if (authoredHere(node) && clippedOrMasked(node)) {
       node.dataset.element = 'html';
       node.dataset.fallbackReason = 'Clipped or masked CSS region';
+      walkFallbacks.add(node);
       return true;
     }
     if (CONTENT_TAGS.has(tag)) return true;
@@ -830,7 +858,14 @@ export function measureSlides(doc: Document): MeasuredSlide[] {
       // and its nested inline/block markup, while `independentTextHtml` bakes
       // the descendant typography. Exported deck documents retain the older
       // verbatim behaviour because their nested player wrappers are structural.
-      if (!independent) node.dataset.element = 'html';
+      // That stays a page-wide rule even for fresh markup in an export: the
+      // rich-text path depends on baking descendant typography, which a
+      // theme-driven page never does. The fallback is reported instead.
+      if (!independent) {
+        node.dataset.element = 'html';
+        node.dataset.fallbackReason = 'Prose mixed with block children';
+        walkFallbacks.add(node);
+      }
       return true;
     }
     // An exported text element carries the player's own wrappers (.text-body,
@@ -912,6 +947,15 @@ export function measureSlides(doc: Document): MeasuredSlide[] {
     return kept;
   };
 
+  /** How a warning names a node: its tag, its id, and its first classes. */
+  const describeNode = (node: Element): string => {
+    const id = node.getAttribute('data-element-id') ?? node.id;
+    const classes = [...node.classList]
+      .filter((name) => name !== 'element' && !name.startsWith('element-'))
+      .slice(0, 2).map((name) => `.${name}`).join('');
+    return `<${node.tagName.toLowerCase()}${id ? `#${id}` : ''}${classes}>`;
+  };
+
   /**
    * Inline style the browser silently threw away.
    *
@@ -926,11 +970,6 @@ export function measureSlides(doc: Document): MeasuredSlide[] {
    * is reported instead of baked in.
    */
   const styleWarnings = (root: HTMLElement): string[] => {
-    const describeNode = (node: Element): string => {
-      const id = node.getAttribute('data-element-id') ?? node.id;
-      const classes = [...node.classList].slice(0, 2).map((name) => `.${name}`).join('');
-      return `<${node.tagName.toLowerCase()}${id ? `#${id}` : ''}${classes}>`;
-    };
     const clip = (text: string): string => (text.length > 90 ? `${text.slice(0, 87)}…` : text);
     const out: string[] = [];
     for (const node of [root, ...root.querySelectorAll('[style]')]) {
@@ -999,6 +1038,8 @@ export function measureSlides(doc: Document): MeasuredSlide[] {
    * moment an agent is looking.
    */
   const unsupportedCssWarnings = (root: HTMLElement): string[] => {
+    // Per page: a theme-driven page carries inline CSS onto its objects as
+    // written, so there is nothing lost to warn about.
     if (!independent) return [];
     const out: string[] = [];
     const describe = (node: Element): string => {
@@ -1074,26 +1115,80 @@ export function measureSlides(doc: Document): MeasuredSlide[] {
     mirrored: boolean,
   ): MeasuredNode | null => {
     const tag = (node: Element): string => node.tagName.toLowerCase();
-    if (!independent) return null;
-    if (svg.querySelector('text, image, foreignObject, use, tspan')) return null;
+    const refuse = (why: string): null => {
+      svgRefusals.set(svg, why);
+      return null;
+    };
+    // An exported object is never an SVG of its own (the deck's HTML regions
+    // export wrapped), but whatever sits inside one is that object's markup.
+    if (!authoredHere(svg)) return null;
+    if (svg.querySelector('text, image, foreignObject, use, tspan')) {
+      return refuse('it holds text, an image or a <use> reference');
+    }
     const drawn = [...svg.querySelectorAll<SVGGraphicsElement>(
       'rect, circle, ellipse, line, path, polygon, polyline',
     )].filter((node) => !node.closest('defs, marker, clipPath, mask, pattern, symbol'));
-    if (drawn.length !== 1) return null;
+    if (drawn.length !== 1) {
+      return refuse(drawn.length === 0 ? 'it draws no primitive' : `it draws ${drawn.length} primitives`);
+    }
     const shape = drawn[0];
     const style = computed(shape as unknown as Element);
     const paint = (value: string): string | null =>
       !value || value === 'none' || value === 'rgba(0, 0, 0, 0)' ? null : value;
+    // `stroke-opacity` and `fill-opacity` thin one paint each; the deck has a
+    // colour per paint, so they fold into that colour's alpha. Dropped, a
+    // faded rule came back at full strength.
+    const withAlpha = (color: string | null, factor: number, property: string): string | null => {
+      if (!color || !(factor < 1)) return color;
+      const channels = /^rgba?\(([^)]*)\)$/.exec(color.trim())?.[1]
+        .split(/[\s,/]+/).filter(Boolean).map(Number);
+      if (!channels || channels.length < 3 || channels.some((value) => !Number.isFinite(value))) {
+        conversionWarnings.push(`<svg> <${tag(shape)}>: ${property}="${factor}" could not be folded into `
+          + `${color}, so the shape is drawn opaque; write the colour as rgba() instead.`);
+        return color;
+      }
+      const alpha = Math.round((channels[3] ?? 1) * Math.max(0, factor) * 1000) / 1000;
+      return `rgba(${channels[0]}, ${channels[1]}, ${channels[2]}, ${alpha})`;
+    };
+    const opacityOf = (value: string): number => {
+      const parsed = Number.parseFloat(value);
+      return Number.isFinite(parsed) ? parsed : 1;
+    };
     // An open stroke is not flood-filled; SVG's default black `fill` on a
     // line means nothing and would arrive as a deck shape's fill colour.
-    const fill = tag(shape) === 'line' || tag(shape) === 'polyline' ? null : paint(style.fill);
-    const stroke = paint(style.stroke);
-    if (!fill && !stroke) return null;
+    const rawFill = tag(shape) === 'line' || tag(shape) === 'polyline' ? null : paint(style.fill);
+    const rawStroke = paint(style.stroke);
+    if (!rawFill && !rawStroke) return refuse('its primitive paints nothing');
     if (style.getPropertyValue('clip-path') !== 'none'
-      || style.getPropertyValue('mask') !== 'none') return null;
+      || style.getPropertyValue('mask') !== 'none') return refuse('its primitive is clipped or masked');
     // A gradient or pattern paint server is a URL reference; a deck shape
     // holds a colour.
-    if ([fill, stroke].some((value) => value?.includes('url('))) return null;
+    if ([rawFill, rawStroke].some((value) => value?.includes('url('))) {
+      return refuse('it paints with a gradient or a pattern');
+    }
+    const fill = withAlpha(rawFill, opacityOf(style.getPropertyValue('fill-opacity')), 'fill-opacity');
+    const stroke = withAlpha(rawStroke, opacityOf(style.getPropertyValue('stroke-opacity')), 'stroke-opacity');
+    // `opacity` is not inherited: the primitive's own, each group's around
+    // it and the SVG's multiply, and the deck element carries the product.
+    let opacity = 1;
+    for (let node: Element | null = shape as unknown as Element; node; node = node.parentElement) {
+      opacity *= opacityOf(computed(node).opacity);
+      if (node === svg) break;
+    }
+    opacity = Math.round(opacity * 1000) / 1000;
+    // The deck breaks a stroke into dashes (three widths on, two off) or dots
+    // (round dots two widths apart). Whatever pattern the author wrote maps to
+    // the nearer of the two: dashes no longer than the line is wide read as
+    // dots, anything longer as dashes. A pattern with no gaps is solid.
+    const dashLengths = (style.getPropertyValue('stroke-dasharray') || 'none').trim() === 'none' ? []
+      : style.getPropertyValue('stroke-dasharray').split(/[\s,]+/)
+        .map((value) => Number.parseFloat(value)).filter((value) => Number.isFinite(value) && value >= 0);
+    const pattern = dashLengths.length % 2 === 1 ? [...dashLengths, ...dashLengths] : dashLengths;
+    const userStrokeWidth = parseFloat(style.strokeWidth) || 0;
+    const strokeDash = !rawStroke || !pattern.some((value, index) => index % 2 === 1 && value > 0)
+      || !pattern.some((value) => value > 0)
+      ? null
+      : pattern.every((value, index) => index % 2 === 1 || value <= userStrokeWidth) ? 'dotted' : 'dashed';
 
     const svgRect = svg.getBoundingClientRect();
     const box = svg as unknown as SVGSVGElement;
@@ -1110,7 +1205,7 @@ export function measureSlides(doc: Document): MeasuredSlide[] {
       classes: [],
       rotation,
       ...(mirrored ? { mirrored } : {}),
-      opacity: Number(computed(svg).opacity) || 1,
+      opacity,
       style: {},
       html: '',
       attrs: {},
@@ -1120,6 +1215,7 @@ export function measureSlides(doc: Document): MeasuredSlide[] {
       element: 'shape',
       ...(fill ? { fill } : {}),
       ...(stroke ? { stroke } : {}),
+      ...(strokeDash ? { strokeDash } : {}),
       ...(marker('marker-start') ? { arrowStart: 'true' } : {}),
       ...(marker('marker-end') ? { arrowEnd: 'true' } : {}),
       ...extra,
@@ -1136,7 +1232,7 @@ export function measureSlides(doc: Document): MeasuredSlide[] {
     // draws a line across its box horizontally, turned by `rot`.
     if (tag(shape) === 'line') {
       const matrix = shape.getScreenCTM?.();
-      if (!matrix) return null;
+      if (!matrix) return refuse('its line has no geometry here');
       const point = (x: number, y: number) => ({
         x: matrix.a * x + matrix.c * y + matrix.e,
         y: matrix.b * x + matrix.d * y + matrix.f,
@@ -1145,7 +1241,7 @@ export function measureSlides(doc: Document): MeasuredSlide[] {
       const from = point(geometry.x1.baseVal.value, geometry.y1.baseVal.value);
       const to = point(geometry.x2.baseVal.value, geometry.y2.baseVal.value);
       const length = Math.hypot(to.x - from.x, to.y - from.y);
-      if (length <= 0) return null;
+      if (length <= 0) return refuse('its line has no length');
       const thickness = Math.max(1, strokeWidth * scale);
       const angle = Math.round(Math.atan2(to.y - from.y, to.x - from.x)
         * (180 / Math.PI) * 100) / 100;
@@ -1214,13 +1310,13 @@ export function measureSlides(doc: Document): MeasuredSlide[] {
       : vertices.length >= 2
         ? `M${vertices.join(' L')}${tag(shape) === 'polygon' ? ' Z' : ''}`
         : '';
-    if (!d.trim()) return null;
+    if (!d.trim()) return refuse('its path is empty');
     // The deck draws a path into `0 0 w h`; a viewBox that starts elsewhere
     // would shift every coordinate, so such an SVG stays a fallback.
-    if (view && (view.x !== 0 || view.y !== 0)) return null;
+    if (view && (view.x !== 0 || view.y !== 0)) return refuse('its viewBox does not start at 0 0');
     const width = view?.width || svgRect.width;
     const height = view?.height || svgRect.height;
-    if (!(width > 0) || !(height > 0)) return null;
+    if (!(width > 0) || !(height > 0)) return refuse('it has no size');
     return {
       ...common,
       dataset: dataset({
@@ -1493,7 +1589,7 @@ export function measureSlides(doc: Document): MeasuredSlide[] {
         css: capturedCss,
         fallbackReason: node.dataset.element === 'html'
           ? (node.dataset.fallbackReason ?? 'Explicit HTML fallback')
-          : `${tag.toUpperCase()} is preserved as HTML`,
+          : `${tag.toUpperCase()} is preserved as HTML${svgRefusals.has(node) ? `: ${svgRefusals.get(node)}` : ''}`,
       } : {}),
     };
   };
@@ -1515,6 +1611,9 @@ export function measureSlides(doc: Document): MeasuredSlide[] {
     pseudo: '::before' | '::after',
     origin: DOMRect,
   ): MeasuredNode | null => {
+    // Per page, not per node: on a theme-driven page the pseudo-elements are
+    // the theme's (and fresh nodes wear the player's classes while measured),
+    // which the player draws again by itself — converted, they would paint twice.
     if (!independent || !supportsPseudoComputedStyle
       || owner.closest('[data-element="html"]')) return null;
     // The marker the authoring list rules draw is the player's, not a
@@ -1687,6 +1786,7 @@ export function measureSlides(doc: Document): MeasuredSlide[] {
     // node.style re-serialises the attribute from the CSSOM, which would
     // repair the very breakage this is meant to catch.
     const warnings = [...styleWarnings(root), ...unsupportedCssWarnings(root)];
+    conversionWarnings = [];
     // Collect first, then style, then measure. The player wraps every object
     // in an element wrapper carrying the type class, and the deck's type
     // sizes hang off those classes -- so without this pass the compiler would
@@ -1727,7 +1827,7 @@ export function measureSlides(doc: Document): MeasuredSlide[] {
             if (scope.spec) { child.dataset.build = scope.spec; scope.spec = 'withPrev'; }
             objects.push(child);
             synthetic.add(child);
-          } else if (independent && !ignorableComputed(
+          } else if (authoredHere(child) && !ignorableComputed(
             'background-image', computed(child).backgroundImage.trim())) {
             // A photograph or gradient *behind* content is not something a
             // deck shape can hold, and the layout box carrying it is about to
@@ -1751,7 +1851,9 @@ export function measureSlides(doc: Document): MeasuredSlide[] {
       // The deck's table *is* a text element with column widths, so the only
       // thing missing was the measurement: take the widths the browser just
       // computed and the rest of the mapping already exists.
-      if (independent && node.tagName.toLowerCase() === 'table' && !node.dataset.element) {
+      // Per node: a fresh table written into an exported page is as much a
+      // table as one in a `new` page.
+      if (authoredHere(node) && node.tagName.toLowerCase() === 'table' && !node.dataset.element) {
         node.dataset.element = 'table';
         const widths = tableColumnWidths(node as HTMLTableElement);
         // Column widths are proportions; without them the mapping falls back
@@ -1837,6 +1939,19 @@ export function measureSlides(doc: Document): MeasuredSlide[] {
 
     const origin = root.getBoundingClientRect();
     const nodes = objects.map((node, index) => measure(node, origin, angles[index], rawStyles[index], mirrors[index]));
+    // A region kept as HTML still moves and resizes, but nothing inside it can
+    // be edited — and an agent only finds that out from the apply. So every
+    // fallback this page *made* is said: the walk's own, and markup that
+    // stayed HTML for want of a conversion. An HTML region the deck already
+    // holds coming back as itself, or one the author declared, is not news.
+    const where = root.dataset.slideId ? `slide ${root.dataset.slideId}: ` : '';
+    objects.forEach((node, index) => {
+      const measured = nodes[index];
+      if (!measured.verbatim || (node.dataset.element === 'html' && !walkFallbacks.has(node))) return;
+      warnings.push(`${where}${describeNode(node)} was kept as an HTML fallback (${measured.fallbackReason}): `
+        + 'it moves and resizes, but nothing inside it can be edited as slide objects.');
+    });
+    warnings.push(...conversionWarnings.map((warning) => `${where}${warning}`));
     // Put the attribute back exactly as authored — not through the CSSOM, which
     // would leave an empty `style=""` behind and re-serialise every colour — so
     // measuring the same document again reads what the first pass read.
@@ -1856,6 +1971,22 @@ export function measureSlides(doc: Document): MeasuredSlide[] {
         nodes[index].style = Object.fromEntries(Object.entries(nodes[index].style)
           .filter(([property]) => property.startsWith('background')
             || ['border-radius', 'box-shadow', 'filter', 'mix-blend-mode'].includes(property)));
+        // A theme-driven page keeps only inline declarations, so a fresh box
+        // whose picture came from a class would arrive with no paint at all —
+        // an empty object. Like `boxPaint`, this is a fresh object each
+        // compile, so its computed paint is safe to carry.
+        if (!independent && !Object.keys(nodes[index].style).some((property) => property.startsWith('background'))) {
+          const paint = computed(node);
+          for (const property of [
+            'background-color', 'background-image', 'background-size', 'background-position',
+            'background-repeat', 'border-radius', 'box-shadow',
+          ]) {
+            const value = paint.getPropertyValue(property).trim();
+            if (!ignorableComputed(property, value)) {
+              nodes[index].style[property] = property === 'background-image' ? deckRelativeUrls(value) : value;
+            }
+          }
+        }
         nodes[index].html = '';
         return;
       }
@@ -1950,6 +2081,8 @@ export function measureSlides(doc: Document): MeasuredSlide[] {
         css: '',
         fallbackReason: 'Complex CSS slide background',
       });
+      warnings.push(`${where}the slide's CSS background is a layered or gradient paint the deck background `
+        + 'cannot hold, so it was kept as an HTML fallback behind the slide\'s objects.');
     }
     return {
       id: root.dataset.slideId ?? null,

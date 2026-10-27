@@ -279,6 +279,49 @@ for (const kind of BACKENDS) describe.skipIf(!electronBinary)(`an agent working 
     expect(slideById(deck, 'opening')).toEqual(slideById(before, 'opening'));
   });
 
+  // Bugs #26 and #27: markup written fresh into an exported section counted
+  // as part of a theme-driven export, so every one-primitive <svg> landed as
+  // an inert HTML region, silently; and a converted primitive lost its dashes
+  // and opacities.
+  it('lands fresh SVG written into an exported section as shapes, dashes and opacity kept, and re-saves it as no change', async () => {
+    const workspace = await open(kind);
+    const before = slideById(await workspace.deck(), 'details');
+    const at = (left: number, top: number, w: number, h: number) =>
+      `position:absolute; left:${left}px; top:${top}px; width:${w}px; height:${h}px;`;
+    const fresh = [
+      `<svg style="${at(100, 940, 300, 120)}" viewBox="0 0 300 120"><ellipse cx="150" cy="60" rx="140" ry="50" fill="none" stroke="#cc0033" stroke-width="4" stroke-dasharray="6 5"></ellipse></svg>`,
+      `<svg style="${at(500, 990, 400, 20)}" viewBox="0 0 400 20"><line x1="0" y1="10" x2="400" y2="10" stroke="#16182b" stroke-width="3" stroke-dasharray="8 6" stroke-opacity="0.45"></line></svg>`,
+      `<svg style="${at(1000, 940, 200, 100)}" viewBox="0 0 200 100"><rect width="90" height="100" fill="#123456"></rect><rect x="110" width="90" height="100" fill="#654321"></rect></svg>`,
+    ].join('\n');
+    const page = await exportPage(workspace, 'details');
+    const [section] = sections(page);
+    await workspace.write('fresh.html', page.replace(section, () => section.replace(/<\/section>$/, `${fresh}\n</section>`)));
+    const result = await apply(workspace, 'fresh.html');
+    expect(landed(result, workspace).changes.replaced).toEqual(['details']);
+    expect(result.json.warnings, JSON.stringify(result.json)).toEqual([
+      expect.stringMatching(/slide details: <svg> was kept as an HTML fallback .*2 primitives/),
+    ]);
+
+    const after = slideById(await workspace.deck(), 'details');
+    // What the slide held is exactly what it was, its SVG region included
+    // (paint order renumbers when a slide is replaced).
+    for (const element of before.elements) {
+      expect(after.elements.find((candidate) => candidate.id === element.id), element.id)
+        .toEqual({ ...element, z: expect.any(Number) });
+    }
+    const added = after.elements.filter((element) => !before.elements.some((old) => old.id === element.id));
+    expect(added.map((element) => (element.type === 'shape' ? element.shape : element.type)))
+      .toEqual(['ellipse', 'line', 'html']);
+    expect(added[0]).toMatchObject({ strokeDash: 'dashed', stroke: 'rgb(204, 0, 51)', fill: null });
+    expect(added[1]).toMatchObject({ strokeDash: 'dashed', stroke: 'rgba(22, 24, 43, 0.45)' });
+
+    // Exported and saved again, the shapes read back as they landed.
+    await workspace.write('again.html', await exportPage(workspace, 'details'));
+    const again = await apply(workspace, 'again.html');
+    expect(landed(again, workspace).changes).toEqual({ replaced: [], inserted: [], deleted: [], moved: 0 });
+    expect(slideById(await workspace.deck(), 'details')).toEqual(after);
+  });
+
   it('moves a bent line\'s control point with it when the page moves only its left and top', async () => {
     const workspace = await open(kind);
     const page = await exportPage(workspace, 'details');

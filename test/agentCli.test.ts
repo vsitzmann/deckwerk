@@ -227,6 +227,32 @@ describe('slide-agent CLI', { timeout: 60_000 }, () => {
     }]);
   });
 
+  // Bug #26: markup an HTML compile could not convert lands as an HTML
+  // fallback; validate lists it beside the importer's gaps, but not a region
+  // the author declared as HTML on purpose.
+  it('lists HTML fallbacks a compile made as import gaps', async () => {
+    const deck = await onDisk();
+    const region = (id: string, fallbackReason: string) => ({
+      id, type: 'html', x: 20, y: 30, w: 400, h: 300,
+      rot: 0, z: 2, opacity: 1, class: [], style: {},
+      html: '<svg><rect width="1" height="1"></rect><rect width="1" height="1"></rect></svg>',
+      sandboxed: true, css: '', fallbackReason,
+    });
+    deck.slides[0].elements.push(
+      region('diagram', 'SVG is preserved as HTML: it draws 2 primitives') as never,
+      region('declared', 'Explicit HTML fallback') as never,
+    );
+    await writeDeck(deck);
+
+    const checked = await parsed('validate');
+    expect(checked.code).toBe(EXIT_OK);
+    expect(checked.json.valid).toBe(true);
+    expect(checked.json.importGaps).toEqual([{
+      slideId: 'slide-1', elementId: 'diagram',
+      originalType: 'html', note: 'SVG is preserved as HTML: it draws 2 primitives',
+    }]);
+  });
+
   // Bug #24: maths an authoring page cut short (`y_{<k}` read as a tag) shows
   // on the slide as raw TeX; validate is where an agent can still catch it.
   it('reports maths a text element leaves unclosed, naming slide and element', async () => {

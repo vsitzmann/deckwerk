@@ -8,7 +8,9 @@ import {
   AGENT_PROTOCOL_VERSION,
   AgentTransactionSchema,
   authoredScene,
+  importGaps as importGapsOf,
   type AgentContext,
+  type ImportGap,
   type ComputedSlideScene,
 } from '@shared/agent.js';
 import { deckOutline, deckStyleDigest } from '@shared/deckDigest.js';
@@ -751,19 +753,9 @@ async function validateCommand(argv: string[], io: CliIo): Promise<number> {
       if (error instanceof UsageError) throw error;
     }
   }
-  let importGaps: Array<{
-    slideId: string; elementId: string; originalType: string; note: string;
-  }> = [];
+  let importGaps: ImportGap[] = [];
   try {
-    const deck = await loadDeck(deckDir);
-    importGaps = deck.slides.flatMap((slide) => slide.elements
-      .filter((element) => element.type === 'unsupported')
-      .map((element) => ({
-        slideId: slide.id,
-        elementId: element.id,
-        originalType: element.originalType,
-        note: element.note,
-      })));
+    importGaps = importGapsOf(await loadDeck(deckDir));
   } catch {
     // The parse failure is already represented in `errors`.
   }

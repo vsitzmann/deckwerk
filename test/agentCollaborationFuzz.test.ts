@@ -95,6 +95,8 @@ class Walk {
   private pages = 0;
   /** A page the agent last synced, for re-applying it. */
   private lastPage: string | null = null;
+  /** HTML regions the fixture starts with; any other SVG fallback is one the walk caused. */
+  private readonly fixtureRegions = new Set<string>();
 
   constructor(readonly ws: AgentWorkspace, readonly seed: number) {
     this.next = random(seed);
@@ -123,6 +125,7 @@ class Walk {
   async begin(): Promise<void> {
     const deck = await this.ws.deck();
     for (const slide of deck.slides) {
+      for (const element of slide.elements) if (element.type === 'html') this.fixtureRegions.add(element.id);
       this.order.push(slide.id);
       this.slides.set(slide.id, {
         markers: new Set(), notes: slide.notes, skipped: slide.skipped ?? false, comments: slide.comments?.length ?? 0,
@@ -253,7 +256,7 @@ class Walk {
       for (let move = 0; move < moves; move++) {
         const objects = [...section.querySelectorAll(':scope > [data-element-id]')];
         const texts = [...section.querySelectorAll('[data-text-content]')];
-        const op = this.pick(['retext', 'retext', 'add', 'remove', 'restyle', 'build', 'effect', 'effect', 'notes', 'skip']);
+        const op = this.pick(['retext', 'retext', 'add', 'shape', 'remove', 'restyle', 'build', 'effect', 'effect', 'notes', 'skip']);
         const holding = texts.filter((text) => [...markersOf(id)].some((marker) => text.textContent?.includes(marker)));
         if (op === 'notes' || op === 'skip') {
           // What the section carries besides its objects: the notes aside
@@ -308,6 +311,22 @@ class Walk {
           }
           effected.add(object);
           edits.push(`change a build effect in ${id}`);
+        } else if (op === 'shape') {
+          // A one-primitive SVG written fresh into the exported section: it
+          // lands as a native shape (bug #26), dash and opacity kept (#27),
+          // and every later untouched export of the slide re-saves as no change.
+          const holder = doc.createElement('div');
+          const left = 120 + Math.floor(this.next() * 1200);
+          const top = 100 + Math.floor(this.next() * 800);
+          const dash = this.pick(['', ' stroke-dasharray="8 6"', ' stroke-dasharray="0 8" stroke-linecap="round"']);
+          holder.innerHTML = this.chance(0.5)
+            ? `<svg style="position:absolute; left:${left}px; top:${top}px; width:400px; height:20px;" viewBox="0 0 400 20">`
+              + `<line x1="0" y1="10" x2="400" y2="10" stroke="#225588" stroke-width="4"${dash}`
+              + `${this.chance(0.5) ? ' stroke-opacity="0.5"' : ''}></line></svg>`
+            : `<svg style="position:absolute; left:${left}px; top:${top}px; width:240px; height:160px;" viewBox="0 0 240 160">`
+              + `<ellipse cx="120" cy="80" rx="110" ry="70" fill="#cc5533" fill-opacity="0.4" stroke="#333333" stroke-width="4"${dash}></ellipse></svg>`;
+          section.appendChild(holder.firstElementChild!);
+          edits.push(`add a shape to ${id}`);
         } else {
           const token = this.token();
           const paragraph = doc.createElement('p');
@@ -878,6 +897,10 @@ class Walk {
       this.expect((slide.comments?.length ?? 0) === model.comments,
         `slide ${slide.id} has ${slide.comments?.length ?? 0} comments, expected ${model.comments}`);
       for (const element of slide.elements) {
+        // Every SVG the walk writes draws one primitive: none may land inert.
+        this.expect(!(element.type === 'html' && element.fallbackReason?.startsWith('SVG')
+          && !this.fixtureRegions.has(element.id)),
+          `slide ${slide.id}: a one-primitive SVG landed as an HTML fallback in ${element.id}`);
         if (element.type !== 'text') continue;
         this.expect(!element.html.includes('class="katex'), `slide ${slide.id}: rendered KaTeX stored as text in ${element.id}`);
         this.expect(!/(^|[^\\])\$5/.test(element.html), `slide ${slide.id}: an escaped dollar lost its escape in ${element.id}`);

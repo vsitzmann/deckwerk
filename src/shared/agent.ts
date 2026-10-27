@@ -448,6 +448,34 @@ function requireSlideIndex(deck: Deck, id: string): number {
   return index;
 }
 
+/** An object the deck could not hold natively, as `validate` reports it. */
+export interface ImportGap {
+  slideId: string;
+  elementId: string;
+  originalType: string;
+  note: string;
+}
+
+/**
+ * What came into the deck as something other than a native object: an
+ * importer's `unsupported` placeholder, and an HTML region a compile fell back
+ * to (a multi-primitive SVG, a clipped panel) — the object moves and resizes,
+ * but nothing inside it is editable, and an agent should know. A region the
+ * author declared as HTML on purpose is not a gap.
+ */
+export function importGaps(deck: Deck): ImportGap[] {
+  return deck.slides.flatMap((slide) => slide.elements.flatMap((element): ImportGap[] => {
+    if (element.type === 'unsupported') {
+      return [{ slideId: slide.id, elementId: element.id, originalType: element.originalType, note: element.note }];
+    }
+    if (element.type === 'html' && element.fallbackReason
+      && element.fallbackReason !== 'Explicit HTML fallback') {
+      return [{ slideId: slide.id, elementId: element.id, originalType: 'html', note: element.fallbackReason }];
+    }
+    return [];
+  }));
+}
+
 /** Semantic constraints that Zod cannot express locally. */
 export function validateDeckIntegrity(deck: Deck, assetExists?: (src: string) => boolean): string[] {
   const errors: string[] = [];
