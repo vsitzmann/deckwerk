@@ -46,7 +46,7 @@ describe('keynote importer', () => {
         expect(payload.dir).toBe(out);
         const deck = parseDeck(payload.deck);
         // The frozen protos and libraries read every slide, notes included.
-        expect(deck.slides).toHaveLength(44);
+        expect(deck.slides).toHaveLength(48);
         expect(deck.slides[0].notes).toContain('Speaker notes must survive');
         const opened = await loadDeck(out);
         expect(opened.slides.length).toBeGreaterThan(0);
