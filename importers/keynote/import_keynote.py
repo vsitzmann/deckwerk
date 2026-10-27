@@ -526,14 +526,50 @@ def equation_tex(source: str) -> tuple[str | None, str]:
     return text, ""
 
 
-def inline_equation_markup(
-    objects: dict[int, Any], storage: Any
-) -> list[tuple[int, Any | None, str | None, str]]:
+# A slide number typed into text (Insert > Slide Number, or the theme's
+# slide-number box, a KN.PlaceholderArchive of kind kKindSlideNumberPlaceholder)
+# is a field: a U+FFFC whose attachment is a TSWP.NumberAttachmentArchive of
+# TextualAttachmentArchive kind kKindPageNumber, or in older saves a
+# KN.SlideNumberAttachmentArchive. DeckWerk has no slide-number field and a
+# number written in would go stale when slides move, so the field is removed.
+TEXTUAL_KIND_PAGE_NUMBER = 0  # TSWP.TextualAttachmentArchive.Kind.kKindPageNumber
+
+
+def is_slide_number_field(attachment: Any) -> bool:
+    name = type_name(attachment)
+    if name == "SlideNumberAttachmentArchive":
+        return True
+    if name == "NumberAttachmentArchive":
+        textual = attachment.super if _has(attachment, "super") else None
+        return textual is not None and int(getattr(textual, "kind", 0)) == TEXTUAL_KIND_PAGE_NUMBER
+    return False
+
+
+@dataclass
+class TextAttachment:
+    """One entry of a storage's attachment table: what sits at a U+FFFC."""
+
+    index: int
+    archive: Any | None  # the attachment archive (None: a dangling reference)
+    drawable: Any | None  # what a TSWP.DrawableAttachmentArchive places
+    tex: str | None  # an equation's TeX; None for anything else
+    why: str  # why an equation has no TeX
+    slide_number: bool = False
+
+    @property
+    def kind(self) -> str:
+        """A name for the report: the object placed, or the field itself."""
+        if self.drawable is not None:
+            return type_name(self.drawable)
+        return type_name(self.archive) if self.archive is not None else "<missing attachment>"
+
+
+def inline_equation_markup(objects: dict[int, Any], storage: Any) -> list[TextAttachment]:
     """Every attachment of a storage, in text order.
 
-    Entries are (index, attached object, TeX or None, why not). Only an
-    equation has TeX; the other attachments (a slide-number field, an inline
-    picture) come back without, as do equations that could not be converted.
+    Only an equation has TeX; the other attachments (a slide-number field, an
+    inline picture) come back without, as do equations that could not be
+    converted.
     """
     if storage is None or not _has(storage, "table_attachment"):
         return []
@@ -545,28 +581,38 @@ def inline_equation_markup(
             drawable = objects.get(int(attachment.drawable.identifier))
         source = equation_source(drawable)
         tex, why = equation_tex(source) if source is not None else (None, "")
-        out.append((int(entry.character_index), drawable, tex, why))
+        out.append(TextAttachment(
+            int(entry.character_index), attachment, drawable, tex, why,
+            slide_number=attachment is not None and is_slide_number_field(attachment),
+        ))
     return out
 
 
-def attachment_inserts(text: str, attachments: list[tuple[int, Any, str | None, str]], render) -> dict[int, str]:
-    """What to write at each U+FFFC of `text` that holds a convertible equation.
+def attachment_positions(text: str, attachments: list[TextAttachment]) -> list[int]:
+    """Where in `text` each attachment's U+FFFC is.
 
     The attachment table indexes the storage's own text. When that is the
     text here, the indices are used as they are; otherwise (text split over
     chunks) the n-th U+FFFC is the n-th attachment.
     """
+    if all(a.index < len(text) and text[a.index] == OBJECT_REPLACEMENT for a in attachments):
+        return [a.index for a in attachments]
+    return [i for i, c in enumerate(text) if c == OBJECT_REPLACEMENT][: len(attachments)]
+
+
+def attachment_inserts(text: str, attachments: list[TextAttachment], render) -> dict[int, str]:
+    """What to write at each U+FFFC of `text`: an equation's TeX, rendered,
+    or nothing for a slide-number field. Every other attachment is left out,
+    so its U+FFFC stays in the text, a visible gap."""
     if not attachments:
         return {}
-    if all(index < len(text) and text[index] == OBJECT_REPLACEMENT for index, *_ in attachments):
-        positions = [index for index, *_ in attachments]
-    else:
-        positions = [i for i, c in enumerate(text) if c == OBJECT_REPLACEMENT][: len(attachments)]
-    return {
-        at: render(tex)
-        for at, (_, _, tex, _) in zip(positions, attachments)
-        if tex is not None
-    }
+    out = {}
+    for at, attachment in zip(attachment_positions(text, attachments), attachments):
+        if attachment.slide_number:
+            out[at] = ""
+        elif attachment.tex is not None:
+            out[at] = render(attachment.tex)
+    return out
 
 
 def inline_tex_html(tex: str) -> str:
@@ -2223,6 +2269,8 @@ class Importer:
     _instant_alpha_cache: dict[tuple[str, str], str | None] = field(default_factory=dict)
     _mirror_cache: dict[tuple[str, bool, bool], str] = field(default_factory=dict)
     _counter: int = 0
+    #  Slide-number fields removed from text, for one warning at the end.
+    _dropped_slide_numbers: int = 0
 
     def next_id(self, prefix: str) -> str:
         self._counter += 1
@@ -3004,7 +3052,14 @@ class Importer:
         # tiny "Text" labels floating mid-slide.
         if not text.strip() and _is_text_box(obj) and box["w"] <= 1 and box["h"] <= 1:
             return out
-        if not text.strip() and _is_text_box(obj):
+        # A box that holds only a slide number (the theme's slide-number box,
+        # bottom right) holds nothing once the field is gone: it is dropped,
+        # not kept as an empty slot. Its paint, if any, stays.
+        remaining, fields = self._without_slide_numbers(obj, text)
+        if fields and not remaining.strip():
+            self._dropped_slide_numbers += fields
+            text = ""
+        elif not text.strip() and _is_text_box(obj):
             style = resolve_text_style(self.objects, obj)
             font_size = style.font_size or DEFAULT_FONT_SIZE
             box = self._size_text_box(
@@ -3124,26 +3179,50 @@ class Importer:
         return out
 
     def _inline_equations(self, obj: Any, text: str) -> dict[int, str]:
-        """`$…$` for each equation in a shape's text, keyed by its U+FFFC.
+        """`$…$` for each equation in a shape's text, keyed by its U+FFFC, and
+        nothing for each slide-number field.
 
         Whatever stays a U+FFFC — an equation with no TeX, a picture placed
-        in the text — is reported, so the gap is not silent.
+        in the text, a field DeckWerk has no equivalent for — is reported, so
+        the gap is not silent.
         """
         attachments = inline_equation_markup(self.objects, _storage_of(self.objects, obj))
-        for _, drawable, tex, why in attachments:
-            if tex is not None or drawable is None:
+        for attachment in attachments:
+            if attachment.tex is not None:
                 continue
-            source = equation_source(drawable)
+            if attachment.slide_number:
+                self._dropped_slide_numbers += 1
+                continue
+            source = equation_source(attachment.drawable)
             if source is None:
-                self.report.unsupported[f"inline {type_name(drawable)} in text"] += 1
+                self.report.unsupported[f"inline {attachment.kind} in text"] += 1
                 continue
-            kind = why.split(" ", 1)[0]
+            kind = attachment.why.split(" ", 1)[0]
             self.report.unsupported[f"inline equation ({kind} not converted)"] += 1
             shown = re.sub(r"\s+", " ", source)[:160]
             self.report.warnings.append(
-                f"An equation in a text box has no TeX ({why}) and is left as U+FFFC: {shown}"
+                f"An equation in a text box has no TeX ({attachment.why}) and is left as U+FFFC: {shown}"
             )
         return attachment_inserts(text, attachments, inline_tex_html)
+
+    def _without_slide_numbers(self, obj: Any, text: str) -> tuple[str, int]:
+        """`text` with its slide-number fields taken out, and how many there were."""
+        attachments = inline_equation_markup(self.objects, _storage_of(self.objects, obj))
+        fields = {
+            at for at, attachment in zip(attachment_positions(text, attachments), attachments)
+            if attachment.slide_number
+        }
+        if not fields:
+            return text, 0
+        return "".join(c for i, c in enumerate(text) if i not in fields), len(fields)
+
+    def finish_report(self) -> None:
+        """Warnings that sum up the whole deck."""
+        if self._dropped_slide_numbers:
+            count = self._dropped_slide_numbers
+            self.report.warnings.append(
+                f"Dropped {count} slide-number field{'s' if count != 1 else ''}; DeckWerk has no slide-number field"
+            )
 
     def _size_text_box(
         self,
@@ -3906,6 +3985,7 @@ class Importer:
             # Notes are plain text: an equation in them reads as its TeX.
             storage_ref = find_in_super_chain(note, "containedStorage")
             storage = self.objects.get(int(storage_ref.identifier)) if storage_ref is not None and storage_ref.identifier else None
+            # A slide-number field in them reads as nothing.
             inserts = attachment_inserts(
                 text, inline_equation_markup(self.objects, storage), lambda tex: f"${tex}$"
             )
@@ -4591,6 +4671,7 @@ def import_key(
                     }
                 )
 
+        importer.finish_report()
         progress.phase("Classifying text roles", SLIDE_SPAN[1])
         _classify_text_roles(slides)
 

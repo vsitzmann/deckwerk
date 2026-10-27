@@ -759,6 +759,20 @@ class SlideBuilder(Container):
             {"drawable": ref(image), "hOffsetType": 0, "hOffset": 0.0, "vOffsetType": 0, "vOffset": 0.0},
         )
 
+    def number_field(self, kind: str = "kKindPageNumber", *, legacy: bool = False) -> int:
+        """A number field typed into a text box (Insert > Slide Number): a
+        U+FFFC in the text whose attachment is a TSWP.NumberAttachmentArchive
+        (`kind` kKindPageNumber is the slide number), or with `legacy` the
+        KN.SlideNumberAttachmentArchive older Keynote wrote. Returns the
+        attachment's id, for `Storage(attachments=…)`."""
+        textual = {"stringEquivalent": "", "kind": kind}
+        if legacy:
+            return self.add("KN.SlideNumberAttachmentArchive", {"super": textual})
+        return self.add(
+            "TSWP.NumberAttachmentArchive",
+            {"super": textual, "numberFormat": 0, "numberFormatName": "decimal"},
+        )
+
     def _attach(self, drawable_id: int) -> int:
         self.archive["ownedDrawables"].append(ref(drawable_id))
         self.archive["drawablesZOrder"].append(ref(drawable_id))
@@ -923,6 +937,8 @@ class Storage:
         storage = slide.add("TSWP.StorageArchive", fields)
         # An inline drawable's parent is the storage it sits in.
         for _, attachment in self.attachments:
+            if "drawable" not in deck.object(attachment):
+                continue  # a field (a slide number), not a placed object
             drawable = deck.object(int(deck.object(attachment)["drawable"]["identifier"]))
             drawable["super"]["parent"] = ref(storage)
         return storage

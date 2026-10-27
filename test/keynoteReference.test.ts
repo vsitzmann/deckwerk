@@ -125,8 +125,8 @@ describe('the Keynote reference deck', () => {
   describe('as a whole', () => {
     it('imports every slide through the app wrapper with streaming progress', () => {
       expect(deck.slides.map((s) => s.name)).toContain('title-and-notes');
-      // 46 generated slides plus the Morph copy the Move build adds.
-      expect(deck.slides).toHaveLength(47);
+      // 47 generated slides plus the Morph copy the Move build adds.
+      expect(deck.slides).toHaveLength(48);
       expect(phases.some((p) => /^Decoding .+\.iwa \(\d+ of \d+\)$/.test(p.message))).toBe(true);
       expect(phases.some((p) => /^Converting slide \d+ of \d+$/.test(p.message))).toBe(true);
       const ratios = phases.map((p) => p.ratio).filter((r): r is number => r !== null);
@@ -142,6 +142,8 @@ describe('the Keynote reference deck', () => {
         // MathML with no TeX equivalent here: one in a sentence, one on its own.
         'inline equation (MathML not converted)': 1,
         'equation kept as a picture (MathML not converted)': 1,
+        // A number field DeckWerk has no equivalent for (the slide count).
+        'inline NumberAttachmentArchive in text': 1,
       });
       expect(report.transcoded_videos).toBe(1);
     });
@@ -751,6 +753,27 @@ describe('the Keynote reference deck', () => {
         (s.elements as Any[]).map((el) => (el.src as string | undefined)?.replace(/#.*$/, ''))));
       const movies = readdirSync(join(out, 'deck', 'assets')).filter((name) => /\.(mp4|mov|m4v|qt)$/i.test(name));
       expect(movies.filter((name) => !used.has(`assets/${name}`))).toEqual([]);
+    });
+
+    it('drops slide-number fields, and keeps any other field a marked, reported gap', () => {
+      // BUG: a slide-number field imported as a bare U+FFFC, and the report
+      // said nothing; a theme's slide-number box became a text box showing
+      // only that character on every slide that had one. DeckWerk has no
+      // slide-number field, and a typed-in number would go stale when slides
+      // move, so the field is removed and its box with it when nothing is left.
+      const texts = ofType('slide-number-fields', 'text');
+      expect(texts.map((el) => plain(el.html).trim())).toEqual(['Section', 'Count \ufffc here']);
+      // The theme's slide-number placeholder leaves nothing behind, not even
+      // an empty "Text" slot.
+      expect(texts.filter((el) => el.y > 900)).toEqual([]);
+      // A filled badge that held only the number keeps its paint.
+      expect(shapesFilled('slide-number-fields', GREEN)).toMatchObject([{ x: 1700, y: 150, w: 120, h: 120 }]);
+      expect(objects('slide-number-fields')).toHaveLength(3);
+      // The slide count stays visible as U+FFFC and is listed as unsupported
+      // (above); the dropped slide numbers are counted in a warning.
+      expect(report.warnings.filter((w: string) => /slide-number field/.test(w))).toEqual([
+        'Dropped 3 slide-number fields; DeckWerk has no slide-number field',
+      ]);
     });
 
     it('keeps the box of an object it cannot convert', () => {

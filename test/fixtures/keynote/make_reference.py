@@ -177,6 +177,7 @@ class Reference:
             self.run_styles, self.fonts, self.numbered_lists, self.list_counting, self.list_kinds,
             self.underline_italic, self.builds, self.legacy_builds, self.move_build, self.roles_by_size,
             self.unsupported_drawable, self.equations, self.long_media_names, self.movie_containers,
+            self.slide_number_fields,
         ):
             method()
         return self.deck
@@ -740,6 +741,32 @@ class Reference:
         slide = self.slide("movie-containers", "QuickTime movies, .qt included, are remuxed to start fast")
         slide.movie(geometry(100, 300, 480, 270), self.media("recording.mov", clip("libx264", ".mov")), natural=(160, 90))
         slide.movie(geometry(700, 300, 480, 270), self.media("tape.qt", clip("libx264", ".mov")), natural=(160, 90))
+
+    def slide_number_fields(self):
+        """Insert > Slide Number is a field: a U+FFFC whose attachment is a
+        TSWP.NumberAttachmentArchive of kind kKindPageNumber (older decks: a
+        KN.SlideNumberAttachmentArchive). The theme's slide-number box is a
+        KN.PlaceholderArchive holding nothing else. They imported as a bare
+        U+FFFC: a box showing only that character, bottom right on every slide."""
+        deck = self.deck
+        slide = self.slide("slide-number-fields", "Slide-number fields are dropped; other fields stay marked")
+        small = deck.para_style(24, "HelveticaNeue", colour="#888888")
+        body = deck.para_style(48, "HelveticaNeue")
+        # The theme's slide-number placeholder, bottom right.
+        slide.placeholder("kKindSlideNumberPlaceholder", geometry(1680, 1014, 200, 31), Storage(
+            "\ufffc", paras=[(0, small)], attachments=[(0, slide.number_field())]), self.plain)
+        # A number typed after a word, in the older archive.
+        text = "Section \ufffc"
+        slide.text_box(geometry(95, 200, 800, 80), Storage(
+            text, paras=[(0, body)], attachments=[(text.index("\ufffc"), slide.number_field(legacy=True))]), self.plain)
+        # A filled badge holding only the number keeps its paint.
+        slide.shape(geometry(1700, 150, 120, 120), rect_source(120, 120), self.fills[GREEN], text=Storage(
+            "\ufffc", paras=[(0, body)], attachments=[(0, slide.number_field())]))
+        # A field with no DeckWerk equivalent (the slide count) stays a marked gap.
+        text = "Count \ufffc here"
+        slide.text_box(geometry(95, 400, 800, 80), Storage(
+            text, paras=[(0, body)], attachments=[(text.index("\ufffc"), slide.number_field("kKindPageCount"))]),
+            self.plain)
 
 
 def main() -> None:
