@@ -970,7 +970,7 @@ function startPresentation(speakerView = false): void {
   }
   const { deck, slideIndex, slideSelection } = store.get();
   const range = rangeForSlideSelection(deck.slides, slideSelection);
-  startPresenting(
+  void startPresenting(
     deckId!,
     range?.start ?? slideIndex,
     () => ({ deck: store.get().deck, themeCss: cssEditor.getValue(), hostClientId: bridge.clientId }),
