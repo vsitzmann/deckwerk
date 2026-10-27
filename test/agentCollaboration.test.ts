@@ -121,8 +121,9 @@ async function personEdits(workspace: AgentWorkspace, slideId: string, change: (
 
 const sections = (page: string): string[] =>
   [...page.matchAll(/<section\b[^>]*>[\s\S]*?<\/section>/g)].map((match) => match[0]);
+// A function replacement: sections hold maths, and `$$` in a replacement string is `$`.
 const withSections = (page: string, blocks: string[]): string =>
-  page.replace(/<body>[\s\S]*<\/body>/, `<body>\n${blocks.join('\n')}\n</body>`);
+  page.replace(/<body>[\s\S]*<\/body>/, () => `<body>\n${blocks.join('\n')}\n</body>`);
 
 for (const kind of BACKENDS) describe.skipIf(!electronBinary)(`an agent working ${kind}`, { timeout: 240_000 }, () => {
   it('adds slides from a new page, stamps their ids, and saving the page again adds nothing', async () => {
@@ -345,6 +346,155 @@ for (const kind of BACKENDS) describe.skipIf(!electronBinary)(`an agent working 
     // A slide that only moved keeps everything it had.
     expect(slideById(deck, 'review').skipped).toBe(true);
     expect(slideById(deck, 'builds').timeline).toHaveLength(5);
+  });
+
+  // A page exported as `--slide 2,39,77`, edited only inside its sections,
+  // used to pull 39 and 77 up behind 2 and report a move for every slide in
+  // the deck. Scattered slides keep their places; reordering the page's
+  // sections only trades those places among them.
+  it('replaces scattered slides in place, and reorders them only among their own places', async () => {
+    const workspace = await open(kind);
+    const order = async () => (await workspace.deck()).slides.map((slide) => slide.id);
+    const before = await order();
+    await workspace.write('scattered.html', (await exportPage(workspace, '2,5,8'))
+      .replace('Review body text', 'Review body text, revised')
+      .replace('Agent fixture closing', 'Agent fixture closing, revised'));
+    const result = landed(await apply(workspace, 'scattered.html'), workspace);
+    expect(result.changes).toEqual({ replaced: ['review', 'closing'], inserted: [], deleted: [], moved: 0 });
+    expect(await order()).toEqual(before);
+
+    const [review, details, closing] = sections(await workspace.read('scattered.html'));
+    await workspace.write('scattered.html', withSections(await workspace.read('scattered.html'), [
+      closing, details, review, '<section class="slide"><h1 class="role-title">After the review</h1></section>',
+    ]));
+    const swapped = landed(await apply(workspace, 'scattered.html'), workspace);
+    expect(swapped.changes.replaced).toEqual([]);
+    expect(swapped.changes.moved).toBe(2);
+    expect(swapped.changes.inserted).toHaveLength(1);
+    expect(await order()).toEqual([
+      'opening', 'closing', 'builds', 'media', 'details', 'agenda', 'empty', 'review', swapped.changes.inserted[0],
+    ]);
+  });
+
+  // A page carried neither a slide's speaker notes nor its skip, so a slide
+  // copied to another deck through a page lost its notes and came back
+  // un-skipped. The page states both now: notes in an <aside class="notes">,
+  // the skip as data-skipped.
+  it('carries notes and the skip on the page, to a copied section and back', async () => {
+    const workspace = await open(kind);
+    const page = await exportPage(workspace, 'review');
+    expect(page).toContain('data-skipped="true"');
+    expect(page).toContain('<aside class="notes">Say this slowly.</aside>');
+
+    // Copied into a new page the way the brief says: no slide id, no record
+    // of what it was, no object ids.
+    const copy = sections(page)[0]
+      .replace(/ data-slide-id="[^"]*"/, '')
+      .replace(/ data-base(?:-ids)?="[^"]*"/g, '')
+      .replace(/ data-element-id="[^"]*"/g, '');
+    await workspace.write('copy.html', withSections(await newPage(workspace, '<p>x</p>'), [copy]));
+    const inserted = landed(await apply(workspace, 'copy.html'), workspace).changes.inserted;
+    expect(inserted).toHaveLength(1);
+    let copied = slideById(await workspace.deck(), inserted[0]);
+    expect(copied.notes).toBe('Say this slowly.');
+    expect(copied.skipped).toBe(true);
+
+    // Edited on the page: new words in the aside, the skip taken off.
+    await workspace.write('review.html', page
+      .replace('<aside class="notes">Say this slowly.</aside>', '<aside class="notes">\n    Say this faster.\n    Then pause.\n  </aside>')
+      .replace(' data-skipped="true"', ''));
+    expect(landed(await apply(workspace, 'review.html'), workspace).changes.replaced).toEqual(['review']);
+    const review = slideById(await workspace.deck(), 'review');
+    expect(review.notes).toBe('Say this faster.\nThen pause.');
+    expect(review.skipped ?? false).toBe(false);
+    // The stamped page saved again is no change. (A hosted bridge answers a
+    // page it has already synced with that sync's reply, marked idempotent.)
+    const settled = await workspace.deck();
+    const againResult = await apply(workspace, 'review.html');
+    const again = landed(againResult, workspace);
+    if (!againResult.json.idempotent) expect(again.changes).toEqual({ replaced: [], inserted: [], deleted: [], moved: 0 });
+    expect(await workspace.deck()).toEqual(settled);
+
+    // A person rewrites the notes of the copy and un-skips it after the agent
+    // exported it; the agent only rewords the body. The person's notes and
+    // skip stand: the page's aside is as it was exported.
+    const stale = await exportPage(workspace, inserted[0]);
+    await personEdits(workspace, inserted[0], (slide) => {
+      slide.notes = 'Notes by a person';
+      slide.skipped = false;
+    });
+    await workspace.write('stale.html', stale.replace('Review body text', 'Review body, by the agent'));
+    expect(landed(await apply(workspace, 'stale.html'), workspace).changes.replaced).toEqual([inserted[0]]);
+    copied = slideById(await workspace.deck(), inserted[0]);
+    expect(plainText(copied)).toContain('Review body, by the agent');
+    expect(copied.notes).toBe('Notes by a person');
+    expect(copied.skipped ?? false).toBe(false);
+  });
+
+  // A page stated one appearance per object, in document order: a slide
+  // copied through it lost its disappears, its by-paragraph reveal, its media
+  // steps and the order of its builds, without a word. The page carries the
+  // whole timeline now, and data-build-order puts an appearance at a step.
+  it('carries the whole timeline, in its order, to a copied section and through reordered objects', async () => {
+    const workspace = await open(kind);
+    const original = slideById(await workspace.deck(), 'builds');
+    const page = await exportPage(workspace, 'builds');
+    expect(page).toContain('<script type="application/deckwerk-timeline">');
+    /** The timeline with objects named by their place in paint order, not their ids. */
+    const shape = (slide: Slide) => {
+      const rank = (id: string | null) => (id === null ? null : [...slide.elements]
+        .sort((a, b) => a.z - b.z).findIndex((element) => element.id === id));
+      return slide.timeline.map((entry) => [
+        entry.action.type, rank(entry.action.target), entry.action.value, entry.trigger.on, entry.trigger.delay, rank(entry.trigger.ref),
+      ]);
+    };
+
+    // A copy keeps its object ids: they are taken in this deck, so the copy's
+    // objects are renamed and every step must follow its object.
+    const copy = sections(page)[0].replace(/ data-slide-id="[^"]*"/, '');
+    await workspace.write('copy.html', withSections(await newPage(workspace, '<p>x</p>'), [copy]));
+    const inserted = landed(await apply(workspace, 'copy.html'), workspace).changes.inserted;
+    const copied = slideById(await workspace.deck(), inserted[0]);
+    expect(copied.timeline).toHaveLength(5);
+    expect(shape(copied)).toEqual(shape(original));
+    expect(validateDeckIntegrity(await workspace.deck())).toEqual([]);
+
+    // Objects painted in the other order change nothing about the builds;
+    // moving a step in the timeline block moves that step.
+    const objects = [...sections(page)[0].matchAll(/\n {2}<(?:div|video)\b[\s\S]*?(?=\n {2}<|\n<\/section>)/g)].map((match) => match[0]);
+    expect(objects).toHaveLength(4);
+    let reordered = page;
+    for (const object of objects) reordered = reordered.replace(object, () => '');
+    reordered = reordered.replace(/\n {2}<script type="application\/deckwerk-timeline">/, (open) => `${[...objects].reverse().join('')}${open}`);
+    await workspace.write('reordered.html', reordered);
+    const repainted = landed(await apply(workspace, 'reordered.html'), workspace);
+    expect(repainted.changes.replaced).toEqual(['builds']);
+    expect(slideById(await workspace.deck(), 'builds').timeline).toEqual(original.timeline);
+
+    const block = /<script type="application\/deckwerk-timeline">([\s\S]*?)<\/script>/.exec(await workspace.read('reordered.html'))!;
+    const entries = JSON.parse(block[1]) as unknown[];
+    [entries[0], entries[1]] = [entries[1], entries[0]];
+    await workspace.write('reordered.html', (await workspace.read('reordered.html'))
+      .replace(block[1], () => `\n${JSON.stringify(entries)}\n`));
+    expect(landed(await apply(workspace, 'reordered.html'), workspace).changes.replaced).toEqual(['builds']);
+    expect(slideById(await workspace.deck(), 'builds').timeline.map((entry) => entry.id))
+      .toEqual(['t-first', 't-second', 't-list', 't-play', 't-hide']);
+
+    // On a page written by hand, data-build-order says which step an
+    // appearance is, whatever the paint order.
+    await workspace.write('order.html', await newPage(workspace, [
+      '<h1 class="role-title">Order</h1>',
+      '<p class="role-body" data-build="click" data-build-order="2">Painted first, built second</p>',
+      '<p class="role-body" data-build="click" data-build-order="1">Painted second, built first</p>',
+    ].join('')));
+    const orderedId = landed(await apply(workspace, 'order.html'), workspace).changes.inserted[0];
+    const ordered = slideById(await workspace.deck(), orderedId);
+    const byText = (text: string) => ordered.elements.find((element) => element.type === 'text' && element.html.includes(text))!.id;
+    expect(ordered.timeline.map((entry) => entry.action.target))
+      .toEqual([byText('Painted second'), byText('Painted first')]);
+    await workspace.write('again.html', await exportPage(workspace, ordered.id));
+    expect(landed(await apply(workspace, 'again.html'), workspace).changes)
+      .toEqual({ replaced: [], inserted: [], deleted: [], moved: 0 });
   });
 
   it('refuses a page in which two sections claim one slide, and changes nothing', async () => {

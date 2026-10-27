@@ -70,6 +70,7 @@ import {
   pageStampOf,
   slidesFromMeasured,
   slidesToHtml,
+  TIMELINE_BLOCK_TYPE,
 } from '../shared/htmlSlides.js';
 import { PLAYER_TYPE_CSS } from '../shared/playerTypeCss.js';
 import { authoringPageHtml, type TextOverflow } from '../shared/htmlMeasure.js';
@@ -4722,7 +4723,9 @@ async function sanitizeServerHtml(
   const blocked: string[] = [];
   const assets: string[] = [];
   let html = source
-    .replace(/<script\b[^>]*>[\s\S]*?<\/script\s*>/gi, '')
+    // A section's timeline block (JSON in a script no browser runs) is kept,
+    // in exactly that form; every other script goes.
+    .replace(/<script\b[^>]*>[\s\S]*?<\/script\s*>/gi, (script) => (script.startsWith(`<script type="${TIMELINE_BLOCK_TYPE}">`) ? script : ''))
     .replace(/<(?:iframe|object|embed)\b[^>]*>[\s\S]*?<\/(?:iframe|object|embed)\s*>/gi, '')
     .replace(/\s+on[a-z]+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi, '')
     .replace(/\s+(?:src|href|poster)\s*=\s*(["'])javascript:[\s\S]*?\1/gi, '');

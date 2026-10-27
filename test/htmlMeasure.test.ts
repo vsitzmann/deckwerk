@@ -333,6 +333,35 @@ describe('compiling a saved authoring file in the editor', () => {
     expect(slides[1].name).toBe('Added');
   });
 
+  // What a section carries besides its objects: notes in an aside (maths and
+  // escaped dollars as written, not rendered) and the skip. Neither is an
+  // object. (jsdom lays nothing out, so the objects themselves measure empty
+  // here; the timeline block is covered where there is layout.)
+  it('reads a section\'s notes and skip, and makes no object of them', async () => {
+    const deck = emptyDeck();
+    const { slides } = await compileAuthoredHtml(deck, `
+      <section class="slide" data-skipped="true">
+        <p class="role-body" data-element-id="first" data-build="click">Shown first</p>
+        <p class="role-body" data-element-id="second" data-build="click">Shown second</p>
+        <aside class="notes">
+          Say $5, not \\$5.
+          Then stop.
+        </aside>
+        <script type="application/deckwerk-timeline">[
+          {"id":"b","trigger":{"on":"click","ref":null,"delay":0},"action":{"type":"appear","target":"second","value":null}},
+          {"id":"a","trigger":{"on":"click","ref":null,"delay":0},"action":{"type":"appear","target":"first","value":null}},
+          {"id":"c","trigger":{"on":"click","ref":null,"delay":0},"action":{"type":"disappear","target":"first","value":"dissolve"}}
+        ]</script>
+        <script>window.ran = true</script>
+      </section>
+    `, theme);
+    expect(slides).toHaveLength(1);
+    const [slide] = slides;
+    expect(slide.elements.some((element) => element.type === 'text' && element.html.includes('Then stop'))).toBe(false);
+    expect(slide.notes).toBe('Say $5, not \\$5.\nThen stop.');
+    expect(slide.skipped).toBe(true);
+  });
+
   it('warns when the browser drops inline declarations the compile still reads', async () => {
     // The all_HANDS regression: a regex edit truncated an entity-escaped font
     // stack, leaving an unterminated quote. The browser then swallowed every
@@ -373,17 +402,21 @@ describe('compiling a saved authoring file in the editor', () => {
     // Exported with a recorded scope, then edited: one slide dropped, one new
     // one added, and the order changed.
     const { transaction } = await authoredHtmlTransaction(deck, {
-      path: '/deck/edit/slide-1-middle.html',
-      contents: edited(deck.slides.filter((slide) => slide.id !== 'closing'), `
+      path: '/deck/edit/slide-1-closing.html',
+      contents: edited(deck.slides, `
+        <section class="slide" data-slide-id="closing"></section>
         <section class="slide" data-slide-id="fresh"></section>
         <section class="slide" data-slide-id="slide-1"></section>`),
     }, theme);
 
-    expect(transaction?.label).toBe('Added 1 slide · Updated 1 slide · Removed 1 slide · Reordered slides');
+    expect(transaction?.label).toBe('Added 1 slide · Updated 2 slides · Removed 1 slide · Reordered slides');
     const ops = transaction!.operations.map((operation) => operation.op);
     expect(ops).toContain('insertSlides');
     expect(ops).toContain('deleteSlide');
-    expect(ops).toContain('moveSlide');
+    // Only the slide that changed places moves.
+    expect(ops.filter((op) => op === 'moveSlide')).toHaveLength(1);
+    expect(applyAgentTransaction(deck, transaction!).slides.map((slide) => slide.id))
+      .toEqual(['closing', 'fresh', 'slide-1']);
   });
 
   it('can be saved again after it has added a slide', async () => {

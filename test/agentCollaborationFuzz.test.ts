@@ -28,8 +28,12 @@ import {
  * lists, maths with an escaped dollar, pictures, shapes, flex layouts, layout
  * slots, builds) and put it first, last or after a named slide; export slides
  * and edit them the way an agent with an HTML parser does — rewrite a phrase,
- * add, remove and restyle objects, toggle builds, reorder, delete and add
- * sections; re-save a page untouched; apply the same page twice; save
+ * add, remove and restyle objects, toggle builds, rewrite or clear a
+ * section's notes aside and toggle its skip, reorder, delete and add
+ * sections; export scattered slides by number and edit, reverse and add to
+ * them (they keep their places); copy a slide into a new page as its section
+ * without its id (notes, skip and every build step come along); re-save a
+ * page untouched; apply the same page twice; save
  * without applying and let the watcher sync it. The person's moves are what
  * people do in a session: notes, comments and replies to them, skipping a slide, rewriting a
  * phrase, adding and deleting slides — on a hosted deck over the WebSocket,
@@ -249,9 +253,13 @@ class Walk {
       for (let move = 0; move < moves; move++) {
         const objects = [...section.querySelectorAll(':scope > [data-element-id]')];
         const texts = [...section.querySelectorAll('[data-text-content]')];
-        const op = this.pick(['retext', 'retext', 'add', 'remove', 'restyle', 'build', 'effect', 'effect']);
+        const op = this.pick(['retext', 'retext', 'add', 'remove', 'restyle', 'build', 'effect', 'effect', 'notes', 'skip']);
         const holding = texts.filter((text) => [...markersOf(id)].some((marker) => text.textContent?.includes(marker)));
-        if (op === 'retext' && holding.length > 0) {
+        if (op === 'notes' || op === 'skip') {
+          // What the section carries besides its objects: the notes aside
+          // and the skip. The page's version is the one that lands.
+          edits.push(this.editSlideState(doc, section, op));
+        } else if (op === 'retext' && holding.length > 0) {
           const text = this.pick(holding);
           const old = [...markersOf(id)].find((marker) => text.innerHTML.includes(marker))!;
           const token = this.token();
@@ -415,6 +423,157 @@ class Walk {
           + `the deck has ${String(entry.action.value)}/${String(entry.action.duration)}`);
       }
     }
+  }
+
+  /** Rewrite a section's notes aside (adding one, or emptying it), or toggle its data-skipped; the model follows. */
+  editSlideState(doc: Document, section: Element, op: 'notes' | 'skip'): string {
+    const id = section.getAttribute('data-slide-id')!;
+    const model = this.slides.get(id)!;
+    if (op === 'skip') {
+      if (section.hasAttribute('data-skipped')) section.removeAttribute('data-skipped');
+      else section.setAttribute('data-skipped', 'true');
+      model.skipped = section.hasAttribute('data-skipped');
+      return `${model.skipped ? 'skip' : 'un-skip'} ${id} on the page`;
+    }
+    let aside = section.querySelector(':scope > aside.notes');
+    if (!aside) {
+      aside = doc.createElement('aside');
+      aside.className = 'notes';
+      section.appendChild(aside);
+    }
+    const notes = this.chance(0.2) ? '' : `Notes ${this.token()}`;
+    // Indented the way a person (or a serializer) writes an aside: the
+    // indentation and the blank lines around it are markup, not notes.
+    aside.textContent = notes ? `\n      ${notes}\n    ` : '';
+    model.notes = notes;
+    return `${notes ? 'rewrite' : 'clear'} the notes of ${id} on the page`;
+  }
+
+  /**
+   * Export scattered slides by number (`--slide 2,7,11`), edit inside them,
+   * sometimes trade their places or add a slide after one of them, and save.
+   * The slides keep their places in the deck; only what the page reorders
+   * trades them, and `moved` counts exactly the slides that moved.
+   */
+  async editScattered(): Promise<void> {
+    const places: number[] = [];
+    const want = this.pick([2, 3]);
+    for (let attempt = 0; attempt < 30 && places.length < want; attempt++) {
+      const index = Math.floor(this.next() * this.order.length);
+      if (places.every((other) => Math.abs(other - index) > 1)) places.push(index);
+    }
+    if (places.length < 2) return this.editPage();
+    places.sort((a, b) => a - b);
+    const scope = places.map((index) => this.order[index]);
+    const exported = await this.ws.run('inspect', '.', '--html', '--slide', places.map((index) => index + 1).join(','));
+    this.expect(exported.code === 0, `inspect failed: ${exported.stderr}`);
+    const dom = new JSDOM(exported.stdout);
+    const doc = dom.window.document;
+    const body = doc.body;
+    const sections = [...body.querySelectorAll(':scope > section')];
+    const edits: string[] = [];
+    for (const section of sections) {
+      const id = section.getAttribute('data-slide-id')!;
+      const markers = this.slides.get(id)!.markers;
+      const holding = [...section.querySelectorAll('[data-text-content]')]
+        .filter((text) => [...markers].some((marker) => text.textContent?.includes(marker)));
+      if (holding.length > 0 && this.chance(0.7)) {
+        const text = this.pick(holding);
+        const old = [...markers].find((marker) => text.innerHTML.includes(marker))!;
+        const token = this.token();
+        text.innerHTML = text.innerHTML.replace(old, token);
+        markers.delete(old);
+        this.gone.add(old);
+        markers.add(token);
+        edits.push(`retext ${id}`);
+      }
+      if (this.chance(0.3)) edits.push(this.editSlideState(doc, section, this.pick(['notes', 'skip'] as const)));
+    }
+    const permuted = this.chance(0.5);
+    if (permuted) {
+      for (const section of [...sections].reverse()) body.appendChild(section);
+      edits.push('reverse the sections');
+    }
+    let added: { section: Element; markers: string[] } | null = null;
+    if (this.chance(0.3)) {
+      const fresh = this.section();
+      const holder = doc.createElement('div');
+      holder.innerHTML = fresh.html;
+      const section = holder.firstElementChild!;
+      body.insertBefore(section, this.pick([...body.querySelectorAll(':scope > section'), null]));
+      added = { section, markers: fresh.markers };
+      edits.push('add a slide');
+    }
+    const file = `scattered-${++this.pages}.html`;
+    this.log(`edit scattered [${scope.join(', ')}] (slides ${places.map((index) => index + 1).join(',')}): ${edits.join('; ') || 'nothing'}`);
+    await this.ws.write(file, dom.serialize());
+    const reply = await this.apply(file);
+    const changes = this.landed(reply);
+    const authored = (reply.json.slides as Array<{ id: string }>).map((slide) => slide.id);
+    this.expect(changes.deleted.length === 0, `a scattered save deleted: ${JSON.stringify(changes)}`);
+    this.expect(changes.inserted.length === (added ? 1 : 0), `expected ${added ? 1 : 0} inserted, got ${JSON.stringify(changes)}`);
+    this.expect(changes.replaced.every((id) => scope.includes(id)), `replaced a slide outside the page: ${JSON.stringify(changes)}`);
+    this.expect(permuted ? changes.moved <= scope.length : changes.moved === 0,
+      `${permuted ? 'a reversed' : 'an unreordered'} scattered page moved ${changes.moved} slides`);
+
+    // The exported slides fill their own places in the page's order; a new
+    // section follows the slide of the section before it (or, first in the
+    // page, precedes the slide of the one after it).
+    const pageOrder = [...body.querySelectorAll(':scope > section')];
+    const kept = authored.filter((id) => scope.includes(id));
+    const newId = added ? authored[pageOrder.indexOf(added.section)] : null;
+    const next = this.order.map((id) => (scope.includes(id) ? kept[scope.indexOf(id)] : id));
+    if (newId && added) {
+      const at = pageOrder.indexOf(added.section);
+      const anchor = at > 0 ? next.indexOf(authored[at - 1]) + 1 : next.indexOf(authored[at + 1]);
+      next.splice(anchor, 0, newId);
+      this.slides.set(newId, { markers: new Set(added.markers), notes: '', skipped: false, comments: 0 });
+    }
+    this.order.splice(0, this.order.length, ...next);
+    this.lastPage = file;
+    const stamped = sectionIds(await this.ws.read(file));
+    this.expect(stamped.join() === authored.join(), `the page is stamped [${stamped}], the deck has [${authored}]`);
+  }
+
+  /**
+   * Copy a slide into a new page the way the brief says — its exported
+   * section with the slide id deleted, its phrases made new — and land it.
+   * The copy keeps the source's notes, skip and every build step.
+   */
+  async copySlide(): Promise<void> {
+    const sourceId = this.pick(this.order);
+    const source = this.slides.get(sourceId)!;
+    const sourceSlide = (await this.ws.deck()).slides.find((slide) => slide.id === sourceId)!;
+    const exported = await this.ws.run('inspect', '.', '--html', '--slide', sourceId);
+    this.expect(exported.code === 0, `inspect failed: ${exported.stderr}`);
+    const section = new JSDOM(exported.stdout).window.document.querySelector('body > section')!;
+    for (const attribute of ['data-slide-id', 'data-base', 'data-base-ids']) section.removeAttribute(attribute);
+    let copy = section.outerHTML;
+    const markers: string[] = [];
+    for (const marker of source.markers) {
+      const token = this.token();
+      copy = copy.split(marker).join(token);
+      markers.push(token);
+    }
+    const start = await this.ws.run('new', '.', '--count', '1');
+    this.expect(start.code === 0, `new failed: ${start.stderr}`);
+    const page = start.stdout.replace(
+      /<section class="slide" data-placeholder="true">\s*<h1 class="role-title">Title<\/h1>\s*<\/section>/, () => copy);
+    const anchorIndex = Math.floor(this.next() * this.order.length);
+    const after = this.chance(0.5) ? String(anchorIndex + 1) : null;
+    const file = `copy-${++this.pages}.html`;
+    this.log(`copy ${sourceId} into a new page (apply${after === null ? '' : ` --after ${after}`})`);
+    await this.ws.write(file, page);
+    const changes = this.landed(await this.apply(file, after === null ? [] : ['--after', after]));
+    this.expect(changes.inserted.length === 1 && changes.replaced.length === 0 && changes.deleted.length === 0,
+      `a copy did not land as one new slide: ${JSON.stringify(changes)}`);
+    const [id] = changes.inserted;
+    const copied = (await this.ws.deck()).slides.find((slide) => slide.id === id)!;
+    this.expect(copied.timeline.length === sourceSlide.timeline.length,
+      `the copy of ${sourceId} has ${copied.timeline.length} build steps, the slide ${sourceSlide.timeline.length}`);
+    this.order.splice(after === null ? this.order.length : anchorIndex + 1, 0, id);
+    this.slides.set(id, { markers: new Set(markers), notes: source.notes, skipped: source.skipped, comments: 0 });
+    this.lastPage = file;
   }
 
   /** Export slides and save the page as it came: nothing may change. */
@@ -754,9 +913,12 @@ function diffDecks(left: Deck, right: Deck): string {
 }
 
 const MOVES: Record<WorkspaceKind, Array<[keyof Walk & string, number]>> = {
-  offline: [['addPage', 4], ['editPage', 6], ['resaveUntouched', 2], ['reapply', 1], ['human', 3]],
-  desktop: [['addPage', 4], ['editPage', 6], ['resaveUntouched', 2], ['reapply', 1], ['human', 3]],
-  hosted: [['addPage', 4], ['editPage', 6], ['resaveUntouched', 2], ['reapply', 1], ['human', 3], ['raceAPerson', 2], ['rewriteDeckJson', 2]],
+  offline: [['addPage', 4], ['editPage', 6], ['editScattered', 2], ['copySlide', 2], ['resaveUntouched', 2], ['reapply', 1], ['human', 3]],
+  desktop: [['addPage', 4], ['editPage', 6], ['editScattered', 2], ['copySlide', 2], ['resaveUntouched', 2], ['reapply', 1], ['human', 3]],
+  hosted: [
+    ['addPage', 4], ['editPage', 6], ['editScattered', 2], ['copySlide', 2], ['resaveUntouched', 2], ['reapply', 1], ['human', 3],
+    ['raceAPerson', 2], ['rewriteDeckJson', 2],
+  ],
 };
 
 let ws: AgentWorkspace | null = null;

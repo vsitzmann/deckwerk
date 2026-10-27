@@ -26,6 +26,17 @@ describe('HTML import safety and fallback compatibility', () => {
     expect(result.report.blockedUrls.length).toBeGreaterThanOrEqual(3);
   });
 
+  it('keeps a section\'s timeline block, and only in exactly that form', () => {
+    const block = '<script type="application/deckwerk-timeline">[{"id":"t"}]</script>';
+    const result = sanitizeAuthoredHtml(`<!doctype html><html><head></head><body><section class="slide">
+      ${block}
+      <script type="application/deckwerk-timeline" src="x.js">steal()</script>
+      <script type="text/javascript">steal()</script></section></body></html>`);
+    expect(result.html).toContain(block);
+    expect(result.html).not.toContain('steal()');
+    expect(result.report.removedScripts).toBe(2);
+  });
+
   it('reports data URLs for extraction into deck assets', () => {
     const result = sanitizeAuthoredHtml('<section class="slide"><img src="data:image/png;base64,AAAA"></section>');
     expect(result.report.dataUrls).toEqual([{ mime: 'image/png', value: 'data:image/png;base64,AAAA' }]);

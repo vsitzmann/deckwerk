@@ -24,6 +24,9 @@ export function sanitizeAuthoredHtml(source: string): {
   };
 
   for (const node of document.querySelectorAll('script, object, embed, iframe')) {
+    // A section's timeline block is JSON in a script of a type no browser
+    // runs: data the compile reads, kept only in exactly that form.
+    if (isTimelineBlock(node)) continue;
     report.removedScripts += 1;
     node.remove();
   }
@@ -73,6 +76,17 @@ export function sanitizeAuthoredHtml(source: string): {
 
   const doctype = document.doctype ? '<!doctype html>\n' : '';
   return { html: doctype + document.documentElement.outerHTML, report };
+}
+
+/**
+ * `<script type="application/deckwerk-timeline">` and nothing else on the
+ * tag: a section's timeline as JSON (`htmlSlides.ts`), which no browser
+ * executes.
+ */
+function isTimelineBlock(node: Element): boolean {
+  return node.tagName.toLowerCase() === 'script'
+    && node.attributes.length === 1
+    && node.getAttribute('type') === 'application/deckwerk-timeline';
 }
 
 /**

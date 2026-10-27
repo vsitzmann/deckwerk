@@ -1462,6 +1462,22 @@ export function measureSlides(doc: Document): MeasuredSlide[] {
     };
   };
 
+  /**
+   * A section's own state that is not on the slide: `<aside class="notes">`
+   * (its speaker notes) and `<script type="application/deckwerk-timeline">`
+   * (its builds, when the objects' attributes cannot say them all).
+   */
+  const slideState = (child: HTMLElement): 'notes' | 'timeline' | null => {
+    const tag = child.tagName.toLowerCase();
+    if (tag === 'aside' && child.classList.contains('notes')) return 'notes';
+    if (tag === 'script' && child.getAttribute('type') === 'application/deckwerk-timeline') return 'timeline';
+    return null;
+  };
+  const stateOf = (root: HTMLElement, kind: 'notes' | 'timeline'): string | undefined => {
+    const holder = ([...root.children] as HTMLElement[]).find((child) => slideState(child) === kind);
+    return holder ? holder.textContent ?? '' : undefined;
+  };
+
   return roots.map((root) => {
     // Checked before anything below touches a node: assigning through
     // node.style re-serialises the attribute from the CSSOM, which would
@@ -1481,6 +1497,9 @@ export function measureSlides(doc: Document): MeasuredSlide[] {
     // with it, so dissolving the container does not silently drop the build.
     const collect = (node: HTMLElement, build: { spec: string | null }): void => {
       for (const child of [...node.children] as HTMLElement[]) {
+        // The slide's speaker notes and its timeline ride inside the section
+        // but are not on the slide, whatever a page's own CSS does to them.
+        if (node === root && slideState(child)) continue;
         if (hidden(child)) continue;
         if (isContent(child)) {
           if (!child.dataset.build && build.spec) {
@@ -1736,7 +1755,12 @@ export function measureSlides(doc: Document): MeasuredSlide[] {
     return {
       id: root.dataset.slideId ?? null,
       name: root.dataset.name ?? '',
-      notes: root.dataset.notes ?? '',
+      notes: stateOf(root, 'notes') ?? root.dataset.notes ?? '',
+      ...(stateOf(root, 'notes') === undefined && root.dataset.notes === undefined ? { notesAbsent: true } : {}),
+      ...(root.dataset.skipped !== undefined
+        ? { skipped: root.dataset.skipped.trim().toLowerCase() !== 'false' }
+        : {}),
+      ...(stateOf(root, 'timeline') !== undefined ? { timeline: stateOf(root, 'timeline') } : {}),
       background: { color: background, image: image ? image[1] : null },
       morphFromPrevious: root.dataset.morphFromPrevious === 'true',
       ...(root.dataset.layout !== undefined ? {

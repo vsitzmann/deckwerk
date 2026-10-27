@@ -1,5 +1,5 @@
 import type { AgentOperation } from './agent.js';
-import { MediaEffectSchema, MIRRORED_TEXT_STYLE_PROPERTIES, SlideSchema, STROKE_DASHES, STROKE_STYLES } from './deck.js';
+import { MediaEffectSchema, MIRRORED_TEXT_STYLE_PROPERTIES, SlideSchema, STROKE_DASHES, STROKE_STYLES, TimelineEntrySchema } from './deck.js';
 import type { Deck, MediaEffect, Slide, SlideElement, StrokeDash, StrokeStyle, TimelineEntry } from './deck.js';
 import { fitAutoTextElement } from './autoFit.js';
 import { KATEX_AUTO_RENDER_JS, KATEX_CSS, KATEX_JS } from './katexInline.js';
@@ -88,7 +88,14 @@ export interface MeasuredNode {
 export interface MeasuredSlide {
   id: string | null;
   name: string;
+  /** `<aside class="notes">` (or `data-notes`) as written; normalised by the compile. */
   notes: string;
+  /** The section has no notes aside (nor `data-notes`) at all, which is not the same as empty ones. */
+  notesAbsent?: boolean;
+  /** `data-skipped` on the section, when it says either way. */
+  skipped?: boolean;
+  /** The text of the section's `<script type="application/deckwerk-timeline">`, when it has one. */
+  timeline?: string;
   background: { color: string | null; image: string | null };
   morphFromPrevious: boolean;
   morphDuration?: number;
@@ -170,7 +177,14 @@ const SCOPE_RULES = `<!--
     * editing inside a section that has a data-slide-id - REPLACES that slide
     * adding a section with class "slide" and no data-slide-id - ADDS a slide
     * removing a section that was exported here - DELETES that slide
-    * reordering exported sections - MOVES those slides in the deck
+    * reordering exported sections - MOVES those slides in the deck, among
+      the places they hold now (slides exported from far apart stay apart)
+    * a new section lands right after the slide of the section before it
+
+  Each section also carries what is not drawn on the slide: data-skipped,
+  its speaker notes in an aside of class "notes", and - when the objects'
+  data-build attributes cannot say it all - its timeline as JSON in a
+  script of type application/deckwerk-timeline.
 
   This section list is the structural editing API. Do not search for delete,
   move or reorder commands or transaction operations; edit this file and save
@@ -298,6 +312,13 @@ export function renderAuthoredMath(
   renderMath: (el: Element, opts: unknown) => void,
 ): void {
   if (!doc.body) return;
+  // A section's speaker notes are words to say, not maths to render: set
+  // aside while the page renders, so `$5` in a note comes back as written.
+  const notes = [...doc.body.querySelectorAll('aside.notes')].map((aside) => {
+    const mark = doc.createComment('');
+    aside.replaceWith(mark);
+    return { mark, aside };
+  });
   const escapedDollar = '\uE000';
   const texts: Text[] = [];
   const walker = doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT);
@@ -343,6 +364,7 @@ export function renderAuthoredMath(
     });
     text.replaceWith(...pieces);
   }
+  for (const { mark, aside } of notes) mark.replaceWith(aside);
 }
 
 /**
@@ -419,6 +441,8 @@ export function authoringCss(canvas: { w: number; h: number }): string {
     overflow: hidden;
     box-sizing: border-box;
   }
+  /* A section's speaker notes ride inside it but are not on the slide. */
+  section.slide > aside.notes, [data-slide-id] > aside.notes { display: none; }
   /* Compiled geometry is measured from each object's border box, and the
      player uses the same model. Keep exported native objects on that model so
      preserving padding or borders does not make them grow on the next render. */
@@ -607,13 +631,7 @@ export function htmlSyncOperations(
   // because it was exported and then removed, never because it is merely absent.
   const exported = new Set(scope);
 
-  const positions = [...scopeSet]
-    .map((id) => deck.slides.findIndex((slide) => slide.id === id))
-    .filter((index) => index >= 0);
-  const insertionIndex = Math.min(...positions);
-  const outside = deck.slides.map((slide) => slide.id).filter((id) => !scopeSet.has(id));
-  const target = [...outside];
-  target.splice(Number.isFinite(insertionIndex) ? insertionIndex : target.length, 0, ...authoredIds);
+  const target = scopedOrder(deck, scopeSet, exported, authoredIds, existingIds);
   if (target.length === 0) throw new Error('An HTML edit cannot delete every slide in the deck');
 
   const operations: AgentOperation[] = [];
@@ -621,28 +639,129 @@ export function htmlSyncOperations(
     if (existingIds.has(slide.id)) replace(slide, operations);
   }
 
-  const inserted = slides.filter((slide) => !existingIds.has(slide.id));
-  // Insert before deleting so replacing the entire scope with new slides never
-  // transiently violates the invariant that a deck retains at least one slide.
-  if (inserted.length > 0) {
-    operations.push({
-      op: 'insertSlides',
-      afterSlideId: deck.slides[deck.slides.length - 1]?.id ?? null,
-      slides: inserted,
-    });
+  // Existing slides first, and only those that are out of place: a move for
+  // every slide in the deck read as "reordered" on a save that reordered
+  // nothing, and `moved` is the one number that tells an author it did.
+  const kept = new Set(target.filter((id) => existingIds.has(id)));
+  const current = deck.slides.map((slide) => slide.id).filter((id) => kept.has(id));
+  operations.push(...minimalMoves(current, target.filter((id) => kept.has(id))));
+
+  // New slides straight into their places, a run at a time, after the slide
+  // that precedes them there (already where it belongs) — and before any
+  // delete, so replacing the entire scope with new slides never transiently
+  // violates the invariant that a deck retains at least one slide.
+  const byId = new Map(slides.map((slide) => [slide.id, slide]));
+  for (let index = 0; index < target.length;) {
+    if (existingIds.has(target[index])) {
+      index++;
+      continue;
+    }
+    const run: Slide[] = [];
+    const afterSlideId = index === 0 ? null : target[index - 1];
+    while (index < target.length && !existingIds.has(target[index])) run.push(byId.get(target[index++])!);
+    operations.push({ op: 'insertSlides', afterSlideId, slides: run });
   }
   for (const id of exported) {
     if (!authoredIds.includes(id)) operations.push({ op: 'deleteSlide', slideId: id });
   }
+  return operations;
+}
 
-  const current = deck.slides.map((slide) => slide.id)
-    .filter((id) => !scopeSet.has(id) || authoredIds.includes(id))
-    .concat(inserted.map((slide) => slide.id));
-  if (current.join('\0') !== target.join('\0')) {
-    target.forEach((id, index) => operations.push({
-      op: 'moveSlide', slideId: id, afterSlideId: index === 0 ? null : target[index - 1],
-    }));
+/**
+ * The deck's order once a scoped page has landed.
+ *
+ * The slides the page governs keep the *places* they hold in the deck, and
+ * the page decides which of them goes where: its existing sections fill those
+ * places in the page's order, so a page that reorders nothing moves nothing
+ * and one that swaps two sections swaps exactly those two slides — however far
+ * apart they sit. (The page used to be one contiguous block dropped at the
+ * first slide's place, and a page exported as `--slide 2,39,77` silently
+ * pulled 39 and 77 up behind 2.) A section the page adds goes right after the
+ * slide of the section before it in the page; one with no section before it
+ * goes right before the slide of the first section after it; a page left with
+ * only new sections puts them where its first exported slide was. A deleted
+ * slide's place simply closes. For a contiguous export this is the block it
+ * always was.
+ */
+function scopedOrder(
+  deck: Deck,
+  governed: Set<string>,
+  exported: Set<string>,
+  authoredIds: string[],
+  existingIds: Set<string>,
+): string[] {
+  const keptInPage = authoredIds.filter((id) => existingIds.has(id));
+  /** New sections, keyed by the existing section they follow (null: before the first). */
+  const following = new Map<string | null, string[]>();
+  let previous: string | null = null;
+  for (const id of authoredIds) {
+    if (existingIds.has(id)) previous = id;
+    else following.set(previous, [...(following.get(previous) ?? []), id]);
   }
+  const leading = following.get(null) ?? [];
+  const order: string[] = [];
+  let slot = 0;
+  let placedLeading = false;
+  for (const { id } of deck.slides) {
+    if (!governed.has(id)) {
+      order.push(id);
+      continue;
+    }
+    // A governed slide the page dropped: its place closes, unless it is the
+    // first place and the page holds nothing else to anchor its new slides.
+    if (!keptInPage.includes(id)) {
+      if (!placedLeading && keptInPage.length === 0 && exported.has(id)) {
+        order.push(...leading);
+        placedLeading = true;
+      }
+      continue;
+    }
+    const next = keptInPage[slot++];
+    if (!placedLeading) {
+      order.push(...leading);
+      placedLeading = true;
+    }
+    order.push(next, ...(following.get(next) ?? []));
+  }
+  // An empty scope, nothing kept: the page's new slides go last.
+  if (!placedLeading) order.push(...leading);
+  return order;
+}
+
+/**
+ * `moveSlide` operations that turn `current` into `target` (the same ids),
+ * moving only the slides outside a longest run already in order — so a slide
+ * that is where it belongs is never reported as moved.
+ */
+function minimalMoves(current: string[], target: string[]): AgentOperation[] {
+  const rank = new Map(target.map((id, index) => [id, index]));
+  const ranks = current.map((id) => rank.get(id)!);
+  // Longest increasing subsequence of target ranks, by patience sorting.
+  const tails: number[] = [];
+  const tailAt: number[] = [];
+  const parent: number[] = new Array(ranks.length).fill(-1);
+  ranks.forEach((value, index) => {
+    let low = 0;
+    let high = tails.length;
+    while (low < high) {
+      const mid = (low + high) >> 1;
+      if (tails[mid] < value) low = mid + 1;
+      else high = mid;
+    }
+    tails[low] = value;
+    tailAt[low] = index;
+    parent[index] = low > 0 ? tailAt[low - 1] : -1;
+  });
+  const settled = new Set<string>();
+  for (let index = tails.length > 0 ? tailAt[tails.length - 1] : -1; index >= 0; index = parent[index]) {
+    settled.add(current[index]);
+  }
+  // In target order, each unsettled slide goes right after its predecessor
+  // there — which is by then already in place.
+  const operations: AgentOperation[] = [];
+  target.forEach((id, index) => {
+    if (!settled.has(id)) operations.push({ op: 'moveSlide', slideId: id, afterSlideId: index === 0 ? null : target[index - 1] });
+  });
   return operations;
 }
 
@@ -657,16 +776,40 @@ export function htmlSyncOperations(
  * an agent tidying a slide's wording un-skipped it, wiped its notes and closed
  * its review threads. Whatever the page cannot express comes from the slide it
  * replaces.
+ *
+ * An export now writes the notes, the skip and (when its attributes cannot
+ * say it) the whole timeline into each section, so a section copied to
+ * another deck keeps them. On a replace, the page's version of each counts
+ * only where the page changed it from what its export recorded (`state` in
+ * `data-base`); otherwise the slide's own stands, so neither a person's notes
+ * written meanwhile nor a page from before these were written is undone.
  */
 export function carrySlideState(previous: Slide, compiled: Slide, base?: SlideBase): Slide {
   // Somebody else changed this slide after the page was exported: merge
   // object by object rather than let the page's stale copy undo their work.
-  const concurrent = base !== undefined && slideBase(previous).slide !== base.slide
+  const concurrent = base?.slide && slideBase(previous).slide !== base.slide
     ? mergedWithConcurrentEdits(previous, compiled, base)
     : null;
   const next = structuredClone(concurrent?.slide ?? compiled);
-  if (!next.notes && previous.notes) next.notes = previous.notes;
-  if (next.skipped === undefined && previous.skipped !== undefined) next.skipped = previous.skipped;
+  const state = base?.state;
+  if (state) {
+    // The page states its notes and its skip, and recorded what they were
+    // when it was exported: one it left as it was keeps whatever the slide
+    // holds now (a person may have rewritten the notes meanwhile); one it
+    // changed is the page's. A section with no aside at all says nothing.
+    if (base?.notesAbsent || fingerprint(normalizeNotes(next.notes)) === state.notes) next.notes = previous.notes;
+    if ((next.skipped === true) === state.skipped || next.skipped === previous.skipped) {
+      if (previous.skipped === undefined) delete next.skipped;
+      else next.skipped = previous.skipped;
+    } else if (next.skipped !== true) {
+      delete next.skipped;
+    }
+  } else {
+    // A page from before notes and skips were written on it (or a section
+    // written by hand) says nothing about them by saying nothing.
+    if (!next.notes && previous.notes) next.notes = previous.notes;
+    if (next.skipped === undefined && previous.skipped !== undefined) next.skipped = previous.skipped;
+  }
   if (!next.comments?.length && previous.comments?.length) next.comments = structuredClone(previous.comments);
   // A page can say "true" but never an explicit "false": an absent attribute
   // and a stored `false` mean the same, and the stored form is the deck's.
@@ -676,8 +819,55 @@ export function carrySlideState(previous: Slide, compiled: Slide, base?: SlideBa
     next.layoutBackgroundInherited = previous.layoutBackgroundInherited;
   }
   next.elements = reconciledElements(previous, next.elements);
-  next.timeline = mergedTimeline(previous, next, concurrent?.theirBuilds);
+  const theirs = concurrent?.theirBuilds ?? new Set<string>();
+  // A section with its own timeline block states the whole timeline. When it
+  // still says what it said when exported, the slide's timeline (which a
+  // person may have changed since) stands and the attributes merge into it as
+  // always; when the page changed it, the page's order and steps are the
+  // timeline.
+  const pageStatesTimeline = base?.timelineBlock === true
+    && (!state || timelineFingerprint(compiled.timeline) !== state.timeline);
+  next.timeline = pageStatesTimeline
+    ? pageTimeline(previous, next, theirs)
+    : mergedTimeline(previous, { ...next, timeline: attributeBuilds(next.timeline) }, theirs);
+  if (base?.buildOrder?.size) next.timeline = withBuildOrder(next.timeline, base.buildOrder);
   return next;
+}
+
+/**
+ * The builds a page states on its objects' attributes: each object's first
+ * build of each kind (`pageBuildKind`) and a code block's line builds. What a
+ * timeline block adds beyond them is the order and every other step.
+ */
+function attributeBuilds(timeline: TimelineEntry[]): TimelineEntry[] {
+  const seen = new Set<string>();
+  return timeline.filter((entry) => {
+    if (entry.action.type === 'lines') return true;
+    const kind = pageBuildKind(entry);
+    if (!kind || seen.has(kind)) return false;
+    seen.add(kind);
+    return true;
+  });
+}
+
+/**
+ * The page's timeline, as its block and attributes state it — except for the
+ * objects kept as somebody else left them, which keep the builds they gave
+ * them, and any step left waiting on an object that is gone.
+ */
+function pageTimeline(previous: Slide, next: Slide, theirs: Set<string>): TimelineEntry[] {
+  const present = new Set(next.elements.map((element) => element.id));
+  const live = (entry: TimelineEntry) => present.has(entry.action.target)
+    && (!entry.trigger.ref || present.has(entry.trigger.ref));
+  const kept = next.timeline.filter((entry) => !theirs.has(entry.action.target) && live(entry));
+  const ids = new Set(kept.map((entry) => entry.id));
+  const theirSteps = previous.timeline.filter((entry) => theirs.has(entry.action.target) && live(entry));
+  return [...kept, ...theirSteps.map((entry) => ({ ...structuredClone(entry), id: uniqueId(entry.id, ids) }))];
+}
+
+/** A timeline's content for comparing what a page says with what it said: its steps, not their ids. */
+function timelineFingerprint(timeline: TimelineEntry[]): string {
+  return fingerprint(sortedJson(timeline.map(({ trigger, action }) => ({ trigger, action })))!);
 }
 
 /**
@@ -848,7 +1038,8 @@ function sortedJson(value: unknown): string | undefined {
  * triggered; the order of the steps, a by-paragraph reveal, and every entry
  * that is not an appearance come from the slide being replaced, for objects
  * still on it. Builds the page adds follow the existing ones, in document
- * order.
+ * order. (The same merge compiles a section's own timeline block with its
+ * attributes, the block standing in for the slide being replaced.)
  */
 function mergedTimeline(previous: Slide, compiled: Slide, theirs = new Set<string>()): TimelineEntry[] {
   const present = new Set(compiled.elements.map((element) => element.id));
@@ -978,13 +1169,44 @@ export interface ElementBase {
  * which would double the size of every export an agent reads.
  */
 export interface SlideBase {
-  /** Everything a page can say about the slide. */
+  /** Everything a page can say about the slide; empty when the page recorded nothing. */
   slide: string;
   /** The slide's own properties (name, background, layout, Morph). */
   props: string;
   /** Every object the slide held. */
   ids: string[];
   elements: Map<string, ElementBase>;
+  /**
+   * The notes, the skip and the timeline the page stated when it was exported
+   * (or last synced). Absent on pages from before a page stated them.
+   */
+  state?: StateBase;
+  /** The section carries its own timeline block. */
+  timelineBlock?: boolean;
+  /**
+   * The section has no notes aside at all. A page whose sections were
+   * rewritten wholesale keeps the slide's notes rather than wiping them; an
+   * empty aside is how a page clears them.
+   */
+  notesAbsent?: boolean;
+  /** `data-build-order` on the section's objects, by object id. */
+  buildOrder?: Map<string, number>;
+}
+
+/** What a page said about a slide's notes, skip and timeline (fingerprints). */
+export interface StateBase {
+  notes: string;
+  skipped: boolean;
+  timeline: string;
+}
+
+function stateBase(slide: Slide): string {
+  return `${fingerprint(normalizeNotes(slide.notes))}-${slide.skipped === true ? 1 : 0}-${timelineFingerprint(slide.timeline)}`;
+}
+
+function parseStateBase(value: string | undefined): StateBase | undefined {
+  const match = /^([0-9a-z]+)-([01])-([0-9a-z]+)$/.exec(value ?? '');
+  return match ? { notes: match[1], skipped: match[2] === '1', timeline: match[3] } : undefined;
 }
 
 const SLIDE_PROPS = ['name', 'background', 'layout', 'morphFromPrevious', 'morphDuration'] as const;
@@ -1078,7 +1300,7 @@ export function pageStampOf(slides: Slide[]): PageStamp {
   for (const slide of slides) {
     const base = slideBase(slide);
     stamp[slide.id] = {
-      slide: `${base.slide}.${base.props}`,
+      slide: `${base.slide}.${base.props}.${stateBase(slide)}`,
       ids: JSON.stringify(base.ids),
       elements: Object.fromEntries([...base.elements].map(([id, element]) =>
         [id, `${element.content}@${element.box.join(',')}`])),
@@ -1091,13 +1313,30 @@ export function pageStampOf(slides: Slide[]): PageStamp {
 export function pageBases(measured: MeasuredSlide[]): Map<string, SlideBase> {
   const bases = new Map<string, SlideBase>();
   for (const slide of measured) {
-    const [whole, props] = (slide.base ?? '').split('.');
-    if (!slide.id || !whole || !props) continue;
+    if (!slide.id) continue;
+    // What the page states besides its objects, recorded or not.
+    const buildOrder = new Map<string, number>();
+    for (const node of slide.nodes) {
+      const order = buildOrderOf(node);
+      if (node.elementId && order !== null) buildOrder.set(node.elementId, order);
+    }
+    const stated: Partial<SlideBase> = {
+      ...(slide.timeline !== undefined ? { timelineBlock: true } : {}),
+      ...(slide.notesAbsent ? { notesAbsent: true } : {}),
+      ...(buildOrder.size > 0 ? { buildOrder } : {}),
+    };
+    const unrecorded = { slide: '', props: '', ids: [], elements: new Map(), ...stated };
+    const [whole, props, state] = (slide.base ?? '').split('.');
+    if (!whole || !props) {
+      if (Object.keys(stated).length > 0) bases.set(slide.id, unrecorded);
+      continue;
+    }
     let ids: string[] = [];
     try {
       const parsed: unknown = JSON.parse(slide.baseIds ?? '[]');
       if (Array.isArray(parsed)) ids = parsed.filter((id): id is string => typeof id === 'string');
     } catch {
+      if (Object.keys(stated).length > 0) bases.set(slide.id, unrecorded);
       continue;
     }
     const elements = new Map<string, ElementBase>();
@@ -1107,7 +1346,8 @@ export function pageBases(measured: MeasuredSlide[]): Map<string, SlideBase> {
       if (!node.elementId || !match || !box || box.length !== 5 || box.some((value) => !Number.isFinite(value))) continue;
       elements.set(node.elementId, { content: match[1], box });
     }
-    bases.set(slide.id, { slide: whole, props, ids, elements });
+    const recorded = parseStateBase(state);
+    bases.set(slide.id, { slide: whole, props, ids, elements, ...(recorded ? { state: recorded } : {}), ...stated });
   }
   return bases;
 }
@@ -1341,6 +1581,9 @@ export function slideFromMeasured(
 ): Slide {
   const timeline: TimelineEntry[] = [];
   const elements: SlideElement[] = [];
+  /** The id each object the page names was given here: a copy's ids may be taken. */
+  const renamed = new Map<string, string>();
+  const buildOrder = new Map<string, number>();
 
   measured.nodes.forEach((node, index) => {
     const id = node.elementId
@@ -1349,22 +1592,127 @@ export function slideFromMeasured(
     const element = elementFromNode(node, id, index + 1);
     if (!element) return;
     elements.push(element);
+    if (node.elementId && !renamed.has(node.elementId)) renamed.set(node.elementId, id);
+    const order = buildOrderOf(node);
+    if (order !== null) buildOrder.set(id, order);
     const build = buildFromNode(node, id, timeline.length);
     if (build) timeline.push(build);
     timeline.push(...equationBuildsFromNode(node, id, timeline.length));
     if (element.type === 'code') timeline.push(...lineBuildsFromNode(node, id, timeline.length));
   });
 
-  return {
+  const slide: Slide = {
     id: opts.slideId,
     name: measured.name,
-    notes: measured.notes,
+    notes: normalizeNotes(measured.notes),
+    ...(measured.skipped !== undefined ? { skipped: measured.skipped } : {}),
     background: measured.background,
     ...(measured.morphFromPrevious ? { morphFromPrevious: true } : {}),
     ...(measured.morphDuration !== undefined ? { morphDuration: measured.morphDuration } : {}),
     elements,
     timeline,
   };
+  // The section's own timeline, when it carries one, is the order of the
+  // builds and every step its objects' attributes cannot state; what those
+  // attributes do state wins, exactly as it does over the deck's timeline
+  // when a page replaces a slide (`mergedTimeline`).
+  if (measured.timeline !== undefined) {
+    const stated = timelineFromBlock(measured.timeline, renamed, measured.id ?? measured.name);
+    slide.timeline = mergedTimeline({ ...slide, timeline: stated }, slide);
+  }
+  slide.timeline = withBuildOrder(slide.timeline, buildOrder);
+  return slide;
+}
+
+/** `data-build-order`: the step an object's appearance is, from 1. */
+function buildOrderOf(node: MeasuredNode): number | null {
+  const value = Number(node.dataset.buildOrder);
+  return node.dataset.buildOrder !== undefined && Number.isInteger(value) && value >= 1 ? value : null;
+}
+
+/**
+ * Put each object's appearance at the step its `data-build-order` names,
+ * the others keeping their order around them. Lowest first; on a tie, the
+ * order the timeline already had.
+ */
+function withBuildOrder(timeline: TimelineEntry[], order: Map<string, number>): TimelineEntry[] {
+  if (order.size === 0) return timeline;
+  const placed: Array<{ entry: TimelineEntry; step: number }> = [];
+  const rest: TimelineEntry[] = [];
+  const seen = new Set<string>();
+  for (const entry of timeline) {
+    const { type, target } = entry.action;
+    if (type === 'appear' && order.has(target) && !seen.has(target)) {
+      seen.add(target);
+      placed.push({ entry, step: order.get(target)! });
+    } else {
+      rest.push(entry);
+    }
+  }
+  placed.sort((a, b) => a.step - b.step);
+  let last = -1;
+  for (const { entry, step } of placed) {
+    const at = Math.max(Math.min(step - 1, rest.length), last + 1);
+    rest.splice(at, 0, entry);
+    last = at;
+  }
+  return rest;
+}
+
+/** The MIME type of a section's timeline block. */
+export const TIMELINE_BLOCK_TYPE = 'application/deckwerk-timeline';
+
+/**
+ * A section's `<script type="application/deckwerk-timeline">`: the slide's
+ * timeline as deck.json holds it, with each object named by the id its page
+ * gives it (`renamed` maps those to the ids this compile assigned).
+ */
+function timelineFromBlock(source: string, renamed: Map<string, string>, where: string): TimelineEntry[] {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(source.trim() || '[]');
+  } catch (error) {
+    throw new HtmlAuthoringError(`The timeline of slide ${where} is not valid JSON (${error instanceof Error ? error.message : String(error)}).`
+      + ` Its <script type="${TIMELINE_BLOCK_TYPE}"> holds a JSON array of timeline entries, as deck.json does.`);
+  }
+  if (!Array.isArray(parsed)) {
+    throw new HtmlAuthoringError(`The timeline of slide ${where} must be a JSON array of timeline entries.`);
+  }
+  return parsed.map((raw, index) => {
+    const result = TimelineEntrySchema.safeParse(raw);
+    if (!result.success) {
+      const issue = result.error.issues[0];
+      throw new HtmlAuthoringError(`Entry ${index + 1} of the timeline of slide ${where} is not a timeline entry:`
+        + ` ${issue.path.join('.') || 'entry'} ${issue.message}.`);
+    }
+    const entry = result.data;
+    const rename = (id: string) => renamed.get(id) ?? id;
+    return {
+      ...entry,
+      trigger: { ...entry.trigger, ref: entry.trigger.ref === null ? null : rename(entry.trigger.ref) },
+      action: { ...entry.action, target: rename(entry.action.target) },
+    };
+  });
+}
+
+/**
+ * Speaker notes as a page writes them: an aside indented with the markup
+ * around it. Line endings, the blank lines around the text and the common
+ * indentation are the markup's, not the note's.
+ */
+export function normalizeNotes(text: string): string {
+  const lines = text.replace(/\r\n?/g, '\n').split('\n');
+  const inline = lines.length > 1 && lines[0].trim() !== '';
+  while (lines.length > 0 && lines[0].trim() === '') lines.shift();
+  while (lines.length > 0 && lines[lines.length - 1].trim() === '') lines.pop();
+  // Text that starts on the aside's own line has no indentation to lose.
+  const indented = (inline ? lines.slice(1) : lines).filter((line) => line.trim() !== '');
+  const indent = indented.length > 0
+    ? Math.min(...indented.map((line) => /^[ \t]*/.exec(line)![0].length)) : 0;
+  return lines
+    .map((line, index) => (inline && index === 0 ? line : line.slice(Math.min(indent, /^[ \t]*/.exec(line)![0].length))))
+    .join('\n')
+    .replace(/[ \t]+$/, '');
 }
 
 export function elementFromNode(
@@ -1719,13 +2067,22 @@ export function slideToHtml(slide: Slide, canvas: { w: number; h: number }): str
   // What this slide is now, so a save of the page can tell its own edits
   // from edits somebody else makes meanwhile.
   const stamp = pageStampOf([slide])[slide.id];
-  const body = [...slide.elements]
+  const objects = [...slide.elements]
     .sort((a, b) => a.z - b.z)
     .map((element) => elementToHtml(
       element, builds.get(element.id), stamp.elements[element.id], equationBuildAttributes(slide, element.id),
       lineBuilds.get(element.id),
-    ))
-    .join('\n');
+    ));
+  // What is not on the slide rides inside its section, so a section copied
+  // to another deck carries it: the speaker notes, and the timeline whenever
+  // the objects' build attributes alone would not compile back to it — a
+  // disappear, a media step, a by-paragraph reveal, a second build of one
+  // object, or builds in an order other than the objects' paint order.
+  const body = [
+    ...objects,
+    ...(slide.notes ? [`  <aside class="notes">${escape(slide.notes)}</aside>`] : []),
+    ...(attributesStateTimeline(slide, objects) ? [] : [timelineBlock(slide.timeline)]),
+  ].join('\n');
 
   // Both halves, and as separate declarations rather than the `background`
   // shorthand: the shorthand would need parsing back out, and a slide that has
@@ -1744,9 +2101,55 @@ export function slideToHtml(slide: Slide, canvas: { w: number; h: number }): str
     + ` data-base="${stamp.slide}" data-base-ids="${escape(stamp.ids)}"`
     + (slide.name ? ` data-name="${escape(slide.name)}"` : '')
     + (slide.layout ? ` data-layout="${slide.layout}"` : '')
+    + (slide.skipped ? ' data-skipped="true"' : '')
     + (slide.morphFromPrevious ? ' data-morph-from-previous="true"' : '')
     + (slide.morphDuration !== undefined ? ` data-morph-duration="${slide.morphDuration}"` : '')
     + `${background}>\n${body}\n</section>\n`;
+}
+
+/**
+ * Whether the build attributes an export writes on a slide's objects compile
+ * back to exactly its timeline, in its order: what a section copied to
+ * another deck — with no slide to merge into — would land. Decided by
+ * compiling them, so it cannot drift from what a compile actually reads.
+ */
+function attributesStateTimeline(slide: Slide, objects: string[]): boolean {
+  if (slide.timeline.length === 0) return true;
+  const sorted = [...slide.elements].sort((a, b) => a.z - b.z);
+  const compiled: TimelineEntry[] = [];
+  sorted.forEach((element, index) => {
+    const node = { dataset: exportedDataset(objects[index]) } as MeasuredNode;
+    const build = buildFromNode(node, element.id, compiled.length);
+    if (build) compiled.push(build);
+    compiled.push(...equationBuildsFromNode(node, element.id, compiled.length));
+    if (element.type === 'code') compiled.push(...lineBuildsFromNode(node, element.id, compiled.length));
+  });
+  const steps = (timeline: TimelineEntry[]) => sortedJson(timeline.map((entry) => {
+    const { trigger, action } = TimelineEntrySchema.parse(entry);
+    return { trigger, action };
+  }));
+  return steps(compiled) === steps(slide.timeline);
+}
+
+/** The `data-*` attributes on an exported object's opening tag, as a dataset. */
+function exportedDataset(markup: string): Record<string, string> {
+  const open = /<[a-zA-Z][^>]*>/.exec(markup)?.[0] ?? '';
+  const dataset: Record<string, string> = {};
+  for (const match of open.matchAll(/\sdata-([a-z0-9-]+)(?:\s*=\s*"([^"]*)")?/g)) {
+    const key = match[1].replace(/-([a-z0-9])/g, (_dash, letter: string) => letter.toUpperCase());
+    dataset[key] = decodeHtmlAttribute(match[2] ?? '');
+  }
+  return dataset;
+}
+
+/**
+ * A section's timeline block: the slide's timeline exactly as deck.json
+ * holds it, one step per line, in order. JSON in a script of a type no
+ * browser runs; `<` escaped so nothing in it can end the script early.
+ */
+function timelineBlock(timeline: TimelineEntry[]): string {
+  const steps = timeline.map((entry) => `    ${JSON.stringify(entry).replace(/</g, '\\u003c')}`);
+  return `  <script type="${TIMELINE_BLOCK_TYPE}">\n  [\n${steps.join(',\n')}\n  ]\n  </script>`;
 }
 
 function elementToHtml(
