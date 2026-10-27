@@ -165,11 +165,17 @@ let linterPromise: Promise<HarperLinter> | null = null;
 /** Harper is ~15 MB of WebAssembly: load it the first time a box is edited. */
 function loadLinter(): Promise<HarperLinter> {
   linterPromise ??= (async () => {
-    const [{ LocalLinter, Dialect }, { binaryInlined }] = await Promise.all([
+    const [{ LocalLinter, WorkerLinter, Dialect }, { binaryInlined }] = await Promise.all([
       import('harper.js'),
       import('harper.js/binaryInlined'),
     ]);
-    const linter = new LocalLinter({ binary: binaryInlined, dialect: Dialect.American });
+    // Harper compiles its WebAssembly and builds its dictionary in setup(),
+    // about two seconds of work. On the page's own thread that froze the
+    // editor for those two seconds the first time anyone opened a text box
+    // (editingLatencyBrowser.test.ts), so it runs in a worker wherever there
+    // are workers.
+    const init = { binary: binaryInlined, dialect: Dialect.American };
+    const linter = typeof Worker === 'function' ? new WorkerLinter(init) : new LocalLinter(init);
     await linter.setup();
     const words = personalWords();
     if (words.length) await linter.importWords(words);

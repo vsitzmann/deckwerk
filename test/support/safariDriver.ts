@@ -9,14 +9,34 @@ import { createServer } from 'node:net';
  * GStreamer and proves nothing about it. So the Safari tier needs a Mac, with
  * Develop › Allow Remote Automation on (or `safaridriver --enable` once).
  *
- * The surface is deliberately the one the media budget suite needs and no
- * more: evaluate an expression, navigate, reload.
+ * The surface is deliberately the one the media budget and editing latency
+ * suites need and no more: evaluate an expression, navigate, reload, and
+ * real input — WebDriver actions, which Safari delivers as trusted events
+ * through its own event pipeline, as a person's clicks and keystrokes are.
  */
+
+/** Keys a test presses by name, as WebDriver spells them. */
+const WEBDRIVER_KEYS = {
+  ArrowDown: '\uE015',
+  ArrowUp: '\uE013',
+  End: '\uE010',
+  Escape: '\uE00C',
+  Enter: '\uE007',
+} as const;
+export type SafariKey = keyof typeof WEBDRIVER_KEYS;
 
 export interface SafariPage {
   evaluate<T>(expression: string): Promise<T>;
   goto(url: string): Promise<void>;
   reload(): Promise<void>;
+  /** Size the window, so layouts (the rail, the canvas) match a laptop's. */
+  setWindowSize(width: number, height: number): Promise<void>;
+  /** A real click, or two in quick succession, at the centre of the first node matching `selector`. */
+  click(selector: string, count?: 1 | 2): Promise<void>;
+  /** Real keystrokes, one key down and up per character. */
+  type(text: string): Promise<void>;
+  /** A real press of a named key. */
+  press(key: SafariKey): Promise<void>;
   close(): Promise<void>;
 }
 
@@ -93,6 +113,37 @@ export async function launchSafari(): Promise<SafariPage> {
     },
     async reload(): Promise<void> {
       await call('POST', `${session}/refresh`, {});
+    },
+    async setWindowSize(width: number, height: number): Promise<void> {
+      await call('POST', `${session}/window/rect`, { width, height });
+    },
+    async click(selector: string, count: 1 | 2 = 1): Promise<void> {
+      const found = await call<Record<string, string>>('POST', `${session}/element`, { using: 'css selector', value: selector });
+      const origin = { 'element-6066-11e4-a52e-4f735466cecf': Object.values(found)[0] };
+      const press = [{ type: 'pointerDown', button: 0 }, { type: 'pointerUp', button: 0 }];
+      await call('POST', `${session}/actions`, {
+        actions: [{
+          type: 'pointer', id: 'mouse', parameters: { pointerType: 'mouse' },
+          actions: [
+            { type: 'pointerMove', origin, x: 0, y: 0 },
+            ...press,
+            ...(count === 2 ? [{ type: 'pause', duration: 60 }, ...press] : []),
+          ],
+        }],
+      });
+    },
+    async type(text: string): Promise<void> {
+      for (const character of text) {
+        await call('POST', `${session}/actions`, {
+          actions: [{ type: 'key', id: 'keyboard', actions: [{ type: 'keyDown', value: character }, { type: 'keyUp', value: character }] }],
+        });
+      }
+    },
+    async press(key: SafariKey): Promise<void> {
+      const value = WEBDRIVER_KEYS[key];
+      await call('POST', `${session}/actions`, {
+        actions: [{ type: 'key', id: 'keyboard', actions: [{ type: 'keyDown', value }, { type: 'keyUp', value }] }],
+      });
     },
     async close(): Promise<void> {
       await call('DELETE', session).catch(() => null);

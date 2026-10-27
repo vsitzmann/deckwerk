@@ -1577,6 +1577,15 @@ body.panel-resizing iframe { pointer-events: none; }
   transform-origin: top left;
 }
 
+/* The slide being worked on is the one whose miniature changes while
+   someone types: each sync redraws the box in it. Unlayered, Safari repaints
+   every picture on the slide to redraw that box, scaling each full-size
+   bitmap down on the main thread (a slide of 29 photos made every keystroke
+   wait 150-300 ms). Its own layer confines the repaint to the box. Only the
+   active row: WebKit backs such a layer at the slide's full size, about
+   60 MB, so layering every thumbnail tripled the page's memory. */
+.rail-item.active > .rail-thumb > .rail-thumb-inner { will-change: transform; }
+
 /* Thumbnail-only rows: no title, no element count. */
 .rail-item {
   grid-template-areas: "num thumb";
@@ -2419,7 +2428,11 @@ input[type="range"] { accent-color: var(--accent); border: 0; background: transp
 .guide { background: var(--danger); }
 .measure { --measure-color: var(--danger); }
 .measure-size { --measure-color: var(--accent); }
-.marquee { border-color: var(--accent); background: var(--accent-soft); }
+/* The marquee and the tint on a box being typed into lie over slide content,
+   so they take a see-through wash of the accent, never --accent-soft: that is
+   an opaque swatch for buttons and rail rows, and over the slide it hid every
+   object the marquee swept and whatever sat behind the box being edited. */
+.marquee { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, transparent); }
 
 /* Timeline + status. */
 .step-block { border: 1px solid var(--line); background: transparent; }
@@ -2452,8 +2465,8 @@ input[type="range"] { accent-color: var(--accent); border: 0; background: transp
   #status[data-busy="true"]::before { animation-duration: 1400ms; }
 }
 
-/* The element being typed into. */
-.element.editing { outline-color: var(--accent); box-shadow: inset 0 0 0 100vmax var(--accent-soft); }
+/* The element being typed into (see the marquee above). */
+.element.editing { outline-color: var(--accent); box-shadow: inset 0 0 0 100vmax color-mix(in srgb, var(--accent) 14%, transparent); }
 
 /* Colour picker: theme palette and full RGBA controls open in one popover. */
 .field-color { flex-direction: row; align-items: center; gap: 8px; }
