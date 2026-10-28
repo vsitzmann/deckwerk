@@ -94,6 +94,15 @@ and nothing to install for collaborators. Point it at a folder of
 presentations; everyone who opens the address gets a file picker, then the
 full editor, with live cursors, selections and edits from everyone else.
 
+> [!CAUTION]
+> **Run the headless server behind a tailnet. Never expose it to the internet.**
+> It has no passwords or user accounts: anyone who can reach its port can open,
+> edit and download every presentation it serves. Don't forward the port, open
+> it in a cloud firewall, put it behind a public reverse proxy, or publish it
+> with `tailscale funnel`. See [Setting up a
+> tailnet](manual/06-headless-server.md#setting-up-a-tailnet) for a step-by-step
+> setup.
+
 ![The presentation picker](docs/images/collab-picker.png)
 
 ![Editing a deck in the browser](docs/images/collab-editor.png)

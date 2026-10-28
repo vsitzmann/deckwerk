@@ -6,13 +6,72 @@ lab workstation, a small team server, or a machine on a tailnet.
 
 ## Trust and access
 
+> [!CAUTION]
+> **Run the headless server behind a tailnet. Never expose it to the internet.**
+>
+> The server has no passwords and no user accounts. Anyone who can reach its
+> port can open, edit, rename and download every presentation in the library.
+> Even with `--access`, identity comes from Tailscale, so it protects you only
+> while the server is reachable through the tailnet alone. Do not forward its
+> port on a router, open it in a cloud firewall or security group, put it
+> behind a public reverse proxy, or publish it with `tailscale funnel`.
+> [Setting up a tailnet](#setting-up-a-tailnet) below shows how to keep it private.
+
 Only run the server on a network you trust. The headless server does not provide
 public-service security: there are no user accounts, access-control lists, or
-TLS termination. Anyone who can reach it can open and edit the presentations it
-exposes.
+TLS termination of its own. Anyone who can reach it can open and edit the
+presentations it exposes.
 
-Do not expose it directly to the public internet. A private local network or a
-tailnet is the intended environment.
+### Setting up a tailnet
+
+[Tailscale](https://tailscale.com) puts your machines on a private network (a
+*tailnet*) that only people you invite can join. It is free for small teams.
+
+1. **Install Tailscale on the server** and sign in:
+
+   ```bash
+   curl -fsSL https://tailscale.com/install.sh | sh
+   sudo tailscale up
+   ```
+
+   Open the printed URL to add the machine to your tailnet. In the admin
+   console (login.tailscale.com/admin), turn on **MagicDNS** so collaborators
+   can use the machine's name instead of a `100.x.y.z` address.
+
+2. **Invite collaborators.** Each person installs Tailscale on their own
+   computer from tailscale.com/download and joins the tailnet. Add them under
+   **Users → Invite users** in the admin console, or [share just this
+   machine](https://tailscale.com/kb/1084/sharing) with people outside your
+   tailnet.
+
+3. **Bind the server to the tailnet only**, never to `0.0.0.0` on a machine
+   with a public address. Either listen on the Tailscale address:
+
+   ```bash
+   npm run collab -- /path/to/shared-decks --host "$(tailscale ip -4)"
+   ```
+
+   or, for HTTPS and per-person access control, listen on loopback and let
+   `tailscale serve` publish it to the tailnet:
+
+   ```bash
+   npm run collab -- /path/to/shared-decks --host 127.0.0.1 --access you@example.com
+   tailscale serve --bg --https=443 http://127.0.0.1:5800
+   ```
+
+   [Local network or tailnet only](#local-network-or-tailnet-only) explains
+   both options.
+
+4. **Check it is private.** From a device that is *not* on the tailnet, for
+   example a phone on mobile data, open `http://<server-public-ip>:5800`. It
+   must not load. Then run `tailscale funnel status` on the server: it should
+   report no funnel. If the machine has a host firewall, keep port `5800`
+   closed to everything except the `tailscale0` interface.
+
+5. **Optionally restrict who on the tailnet can reach it.** With Tailscale
+   [access controls](https://tailscale.com/kb/1018/acls), you can limit port
+   `5800` (or `443` with `tailscale serve`) to a group, such as your lab,
+   rather than everyone on the tailnet.
 
 ## Prepare the presentations
 
