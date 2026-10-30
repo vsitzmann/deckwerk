@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { saveDeck } from '../src/main/deckStore.js';
+import { loadDeck, saveDeck } from '../src/main/deckStore.js';
 import { startCollabServer, type RunningCollabServer } from '../src/server/collabServer.js';
 import { emptyDeck } from '../src/shared/deck.js';
 import {
@@ -145,8 +145,18 @@ describe.skipIf(!electronBinary)('browser presentation pair', () => {
     expect(opened.presentation).toMatch(/^\d\d:\d\d$/);
     expect(opened.wall).not.toBe('--:--');
 
-    // Next: the audience advances, and the Speaker View follows it.
+    // Notes typed in the browser Speaker View travel through the collaboration
+    // bridge and stay attached to the slide when the show advances.
+    await speaker.click('.speaker-notes', 'Speaker View notes');
+    await speaker.typeKeys('Talk through the result');
     await speaker.click('.speaker-next-button', 'Speaker View next');
+    await eventually(
+      async () => (await loadDeck(deckDir)).slides[1]?.notes,
+      'Speaker View note did not reach the server',
+      (notes) => notes === 'Talk through the result',
+    );
+
+    // Next: the audience advances, and the Speaker View follows it.
     await eventually(
       async () => audience!.evaluate<{ slide: string | null }>(AUDIENCE_PROBE),
       'the audience did not advance when the speaker pressed Next',

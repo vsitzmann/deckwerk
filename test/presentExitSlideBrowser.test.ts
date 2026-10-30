@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { saveDeck } from '../src/main/deckStore.js';
+import { loadDeck, saveDeck } from '../src/main/deckStore.js';
 import { startCollabServer, type RunningCollabServer } from '../src/server/collabServer.js';
 import { emptyDeck, type Deck } from '../src/shared/deck.js';
 import {
@@ -152,8 +152,11 @@ describe.skipIf(!electronBinary || process.platform === 'win32')('leaving a desk
   let appProcess: ChildProcess | null = null;
   let editor: Cdp | null = null;
   let audience: Cdp | null = null;
+  let speaker: Cdp | null = null;
 
   afterEach(async () => {
+    speaker?.close();
+    speaker = null;
     audience?.close();
     audience = null;
     editor?.close();
@@ -227,5 +230,48 @@ describe.skipIf(!electronBinary || process.platform === 'win32')('leaving a desk
       'leaving the show did not land the editor on the slide it ended on',
       (id) => id === 's3',
     );
+  }, 120_000);
+
+  it('saves notes typed in Speaker View to the current slide', async () => {
+    workDir = await mkdtemp(join(tmpdir(), 'present-notes-desktop-'));
+    const appDir = join(workDir, 'app');
+    const profileDir = join(workDir, 'electron-profile');
+    const deckDir = join(workDir, 'talk');
+    await mkdir(appDir, { recursive: true });
+    await mkdir(profileDir, { recursive: true });
+    await materializeDesktopApp(appDir, 'deckwerk-present-notes-test');
+    await writeDeck(deckDir);
+
+    const app = await launchDesktopApp(appDir, [deckDir], { profileDir, cwd: appDir });
+    appProcess = app.process;
+    const editorTarget = await findTarget(app.debugPort, isEditorTarget, app.log, 30_000);
+    editor = await Cdp.connect(editorTarget.webSocketDebuggerUrl!);
+    await eventually(
+      async () => editor!.evaluate<boolean>(`document.querySelectorAll('[data-index][data-slide-id]').length === ${SLIDES.length}`),
+      'the editor did not open the deck',
+      (ready) => ready,
+    );
+    await editor.evaluate(`window.api.present(0, { speakerView: true })`);
+    const speakerTarget = await findTarget(
+      app.debugPort,
+      (candidate) => candidate.url.includes('/presenter/index.html'),
+      app.log,
+    );
+    speaker = await Cdp.connect(speakerTarget.webSocketDebuggerUrl!);
+    await eventually(
+      async () => speaker!.evaluate<boolean>(`!!document.querySelector('.speaker-notes')`),
+      'Speaker View did not open',
+      (ready) => ready,
+    );
+
+    await speaker.click('.speaker-notes');
+    await speaker.typeKeys('Presenter note');
+    await speaker.key('Tab', 9);
+    await eventually(
+      async () => (await loadDeck(deckDir)).slides[0]?.notes,
+      'Speaker View note was not saved',
+      (notes) => notes === 'Presenter note',
+    );
+    expect((await loadDeck(deckDir)).slides[1]?.notes).toBe('');
   }, 120_000);
 });

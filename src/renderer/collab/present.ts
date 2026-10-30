@@ -369,6 +369,13 @@ function mountSpeaker(): void {
     host: speakerHost,
     resolveSrc,
     onCommand: sendCommand,
+    onNotesChange: (slideId, notes) => {
+      if (!deck) return;
+      const slides = deck.slides.map((slide) => slide.id === slideId ? { ...slide, notes } : slide);
+      const nextDeck = { ...deck, slides };
+      bridge.localEdit(deck, nextDeck, 'Edit speaker notes');
+      applyDeck(nextDeck, null, 'session');
+    },
     // The browser cannot place a window on a display, so this swaps which
     // surface plays which role instead of moving either of them.
     swapLabel: 'Switch views',

@@ -38,6 +38,7 @@ export const IPC = {
   presentCursor: 'present:cursor',
   presentCommand: 'present:command',
   presentState: 'present:state',
+  presentNotesEdit: 'present:notesEdit',
   /** The show ended; carries the slide index it was on, for the editor to land on. */
   presentEnded: 'present:ended',
   trimOpen: 'trim:open',

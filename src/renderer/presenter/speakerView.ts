@@ -25,6 +25,7 @@ export interface SpeakerViewOptions {
   host: HTMLElement;
   resolveSrc: (src: string) => string;
   onCommand: (command: PresentationCommand) => void;
+  onNotesChange?: (slideId: string, notes: string) => void;
   /**
    * Whether to offer the audience/presenter role swap. The desktop moves its
    * two windows between displays; the browser cannot place windows, so it
@@ -77,7 +78,7 @@ const MARKUP = `
       </section>
       <section class="notes-panel" aria-label="Speaker notes">
         <h2>Notes</h2>
-        <div class="speaker-notes"></div>
+        <textarea class="speaker-notes" aria-label="Speaker notes for the current slide" placeholder="Notes for this slide…" spellcheck="true"></textarea>
       </section>
     </aside>
   </section>
@@ -114,7 +115,7 @@ export function createSpeakerView(options: SpeakerViewOptions): SpeakerView {
   const presentationTimer = pick('.speaker-presentation-timer');
   const slideTimer = pick('.speaker-slide-timer');
   const wallClock = pick('.speaker-wall-clock');
-  const notes = pick('.speaker-notes');
+  const notes = pick<HTMLTextAreaElement>('.speaker-notes');
   const swap = pick<HTMLButtonElement>('.speaker-swap');
   const end = pick<HTMLButtonElement>('.speaker-end');
   const overview = pick('.speaker-overview');
@@ -146,6 +147,32 @@ export function createSpeakerView(options: SpeakerViewOptions): SpeakerView {
   let overviewRange = '';
   let overviewMode: 'closed' | 'rail' | 'grid' = 'closed';
   let returnToRail = false;
+  let shownNotesSlideId: string | null = null;
+  let committingNotes = false;
+
+  function commitNotes(): void {
+    if (committingNotes) return;
+    const slide = deck?.slides.find((item) => item.id === shownNotesSlideId);
+    if (!slide || notes.value === slide.notes) return;
+    const value = notes.value;
+    committingNotes = true;
+    try {
+      options.onNotesChange?.(slide.id, value);
+      slide.notes = value;
+    } finally {
+      committingNotes = false;
+    }
+  }
+
+  notes.disabled = !options.onNotesChange;
+  notes.addEventListener('change', commitNotes);
+  notes.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      notes.blur();
+    }
+    event.stopPropagation();
+  });
 
   function preview(target: HTMLElement, slideIndex: number, step = 0): void {
     // Every advance throws this preview away and builds another. A video still
@@ -183,7 +210,12 @@ export function createSpeakerView(options: SpeakerViewOptions): SpeakerView {
     while (nextSlide <= lastSlide && deck.slides[nextSlide]?.skipped) nextSlide += 1;
     preview(nextHost, nextSlide <= lastSlide ? nextSlide : -1);
     position.textContent = presentationLabel(state, deck.slides.length);
-    notes.textContent = deck.slides[state.cursor.slide]?.notes ?? '';
+    const slide = deck.slides[state.cursor.slide];
+    if (shownNotesSlideId !== slide?.id) commitNotes();
+    if (shownNotesSlideId !== slide?.id || document.activeElement !== notes) {
+      notes.value = slide?.notes ?? '';
+    }
+    shownNotesSlideId = slide?.id ?? null;
     if (!overview.hidden) {
       const range = `${state.range?.start ?? 0}:${state.range?.end ?? deck.slides.length - 1}`;
       if (deck !== overviewDeck || range !== overviewRange) buildOverview();
@@ -321,6 +353,7 @@ export function createSpeakerView(options: SpeakerViewOptions): SpeakerView {
 
   return {
     setDeck(next) {
+      commitNotes();
       deck = next;
       if (next) prepareCodeBlocks(next);
       render();
@@ -354,6 +387,7 @@ export function createSpeakerView(options: SpeakerViewOptions): SpeakerView {
     isOverviewOpen: () => overviewMode !== 'closed',
     isGridOpen: () => overviewMode === 'grid',
     destroy() {
+      commitNotes();
       clearInterval(clock);
       clearOverview();
       theme?.remove();
