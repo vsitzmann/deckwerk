@@ -1570,7 +1570,16 @@ export function measureSlides(doc: Document): MeasuredSlide[] {
       })()
         : (node.querySelector(':scope > .text-body > [data-text-content]')
           ? authoredMarkup(node.querySelector(':scope > .text-body > [data-text-content]') as HTMLElement)
-          : independent ? independentTextHtml(node) : authoredMarkup(node)),
+          : (() => {
+            // A hand-written box in the export's shape — element wrapper
+            // around a lone `.text-body` — is the player's wrapper too. Kept,
+            // it nested a second `overflow: hidden` box inside the player's
+            // own, sized to the line boxes, which clipped descenders.
+            const only = node.children.length === 1 ? node.children[0] as HTMLElement : null;
+            const body = only?.classList.contains('text-body') && node.textContent === only.textContent
+              ? only : node;
+            return independent ? independentTextHtml(body) : authoredMarkup(body);
+          })()),
       preformatted: !verbatim && node.querySelector(':scope > .text-body > [data-text-content]') !== null,
       attrs: {
         src: node.getAttribute('src') ?? undefined,
