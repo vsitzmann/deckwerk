@@ -440,6 +440,29 @@ describe('slide-agent CLI', { timeout: 60_000 }, () => {
     expect(past.stderr).toMatch(/5 slides/);
   });
 
+  it('stores the text inside an authored .text-body, not the clipping wrapper itself', async () => {
+    // Agents author text boxes the way an export writes them: an element
+    // wrapper around a `.text-body`. The page's autofit CSS makes that body
+    // `overflow: hidden`, and the import baked it into the stored markup —
+    // a second clipping box inside the player's own, sized to the line boxes,
+    // which cut the descender off the "g" of a tight-leaded title.
+    const page = await cli('new');
+    const title = '<div class="element element-text kn-text role-title" data-autofit="true" '
+      + 'style="position:absolute; left:120px; top:260px; width:1680px; height:420px; '
+      + 'font-family:Georgia, serif; font-size:120px; line-height:1.05;">'
+      + '<div class="text-body"><p style="line-height:1.05;">Robot Learning?</p></div></div>';
+    const authored = page.stdout.replace(/<h1 class="role-title">Title<\/h1>/, title);
+    await writeFile(join(dir, 'edit', 'add.html'), authored, 'utf8');
+    const applied = await parsed('apply', '--html', join(dir, 'edit', 'add.html'));
+    expect(applied.code).toBe(EXIT_OK);
+
+    const stored = (await onDisk()).slides.find((slide) => slide.id === applied.json.changes.inserted[0])!
+      .elements.find((element) => element.type === 'text')!;
+    expect(stored.html).toContain('Robot Learning?');
+    expect(stored.html).not.toMatch(/overflow/);
+    expect(stored.html).toMatch(/^<p\b/);
+  });
+
   it('writes a blank authoring page that can only add slides', async () => {
     // Copying an export to author new slides deleted the slides it was copied
     // from: the copy inherited the scope marker. This is the file to copy
