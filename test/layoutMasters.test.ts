@@ -278,6 +278,47 @@ describe('re-synchronizing a deck with its masters', () => {
     expect(deck.slides[0].timeline).toEqual([]);
   });
 
+  // A slide copied onto a new page brings another slide's copy of a master
+  // object, under that slide's id; the new slide makes its own copy. The
+  // steps aimed at the old copy are the same object's and follow it (nightly
+  // agent fuzz, seed 20261030: a copied slide lost its build on the rule).
+  it('moves build steps aimed at a renamed copy of a master object onto the new copy', () => {
+    const deck = authoredDeck();
+    deck.layoutMasters!.standard.elements.push({
+      id: 'master-logo', type: 'shape', x: 40, y: 40, w: 120, h: 120, rot: 0, z: 5,
+      opacity: 1, class: [], style: {}, shape: 'rect', fill: '#123456', stroke: null,
+      strokeWidth: 0, radius: 0, path: null, pathSize: null,
+      arrowStart: false, arrowEnd: false, control: null,
+    });
+    syncDeckWithLayoutMasters(deck);
+    const slide = deck.slides[0];
+    const copy = slide.elements.find((element) => element.layoutMasterId === 'master-logo')!;
+    copy.id = 'another-slide--master--master-logo';
+    slide.timeline.push({
+      id: 'build-1',
+      trigger: { on: 'afterPrev', ref: null, delay: 300 },
+      action: { type: 'appear', target: copy.id, value: 'dissolve', duration: 800 },
+    }, {
+      id: 'build-2',
+      trigger: { on: 'mediaEnd', ref: copy.id, delay: 0 },
+      action: { type: 'appear', target: slotOf(deck, 'title').id, value: null },
+    });
+
+    syncSlideWithLayoutMaster(slide, 'standard', deck.layoutMasters!.standard);
+
+    const renamed = slide.elements.find((element) => element.layoutMasterId === 'master-logo')!;
+    expect(renamed.id).toBe(`${slide.id}--master--master-logo`);
+    expect(slide.timeline).toEqual([{
+      id: 'build-1',
+      trigger: { on: 'afterPrev', ref: null, delay: 300 },
+      action: { type: 'appear', target: renamed.id, value: 'dissolve', duration: 800 },
+    }, {
+      id: 'build-2',
+      trigger: { on: 'mediaEnd', ref: renamed.id, delay: 0 },
+      action: { type: 'appear', target: slotOf(deck, 'title').id, value: null },
+    }]);
+  });
+
   it('keeps build steps aimed at the slide’s own objects', () => {
     const deck = authoredDeck();
     deck.slides[0].timeline.push({
