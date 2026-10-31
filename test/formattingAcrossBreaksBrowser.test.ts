@@ -155,6 +155,42 @@ describe.skipIf(!electronBinary)('inline formatting across a line break', () => 
     expect(await session.outline()).toEqual(['ul', '- under', '- more']);
     expect(await session.liveProblems()).toEqual([]);
   });
+
+  // Found by the nightly list fuzz (seeds 20261031, 2026103101): on an empty
+  // line the caret's formats were read from a neighbouring line's word, so
+  // Return there opened a line in that word's bold and underline, and Cmd+B
+  // there switched bold "off" and typed plain.
+  const LOUD = '<p><span style="font-weight: 700; text-decoration-line: underline;">loud</span></p>';
+  for (const { where, html, empty } of [
+    { where: 'below', html: `<p><br></p>${LOUD}`, empty: 0 },
+    { where: 'above', html: `${LOUD}<p><br></p><p>plain</p>`, empty: 1 },
+  ]) {
+    it(`Return on an empty line takes no format from the line ${where} it`, { timeout: 120_000 }, async () => {
+      await session.reset(html);
+      await session.edit();
+      await session.caretInBlock(empty);
+      await session.cdp.key('Enter', 13);
+      await session.cdp.typeKeys('next');
+      const runs = await session.runs();
+      const shown = `${picture(runs).join(' ')} ${await session.markup()}`;
+      expect(runOf(runs, 'next'), shown)
+        .toMatchObject({ bold: false, italic: false, underline: false, block: empty + 1 });
+      expect(runOf(runs, 'loud'), shown).toMatchObject({ bold: true, underline: true });
+      expect(await session.liveProblems()).toEqual([]);
+    });
+
+    it(`Cmd+B on an empty line with a bold line ${where} it switches bold on`, { timeout: 120_000 }, async () => {
+      await session.reset(html);
+      await session.edit();
+      await session.caretInBlock(empty);
+      await toggle('bold');
+      await session.cdp.typeKeys('now');
+      const runs = await session.runs();
+      const shown = `${picture(runs).join(' ')} ${await session.markup()}`;
+      expect(runOf(runs, 'now'), shown).toMatchObject({ bold: true, underline: false, block: empty });
+      expect(await session.liveProblems()).toEqual([]);
+    });
+  }
 });
 
 describe.skipIf(!electronBinary)('typing "- " or "* " starts a bullet at once', () => {

@@ -175,6 +175,8 @@ export type TableSelection = {
 type TableBorderEdge = 'top' | 'right' | 'bottom' | 'left';
 export type TableBorderPreset = 'none' | 'vertical' | 'horizontal';
 export type TableBorderSettings = { color: string; width: number; drawing: boolean };
+/** A block property the selected paragraphs share (null: none declares it), or mixed. */
+export type SelectionBlockValue = { mixed: boolean; value: number | null };
 
 /**
  * The editing surface: the slide rendered by the player, with an interaction
@@ -623,6 +625,19 @@ function relativeRunFontSize(text: Text, root: HTMLElement): string | null {
 function leafTextBlocks(root: HTMLElement): HTMLElement[] {
   return [...root.querySelectorAll<HTMLElement>('p, li, div')]
     .filter((block) => !block.querySelector('p, li, div'));
+}
+
+/**
+ * What the selected paragraphs declare for one block property, NaN where a
+ * paragraph declares nothing. A paragraph spaced 2 beside one that follows
+ * the box is mixed, not "follows the box": reported as the latter, the field
+ * showed the 2 it computed at the caret, and typing 2 there changed nothing,
+ * so the plain paragraph never took it (nightly seed 20261031).
+ */
+function sharedBlockValue(values: number[]): SelectionBlockValue {
+  const declared = values.map((value) => (Number.isFinite(value) ? value : null));
+  const mixed = !declared.every((value) => value === declared[0]);
+  return { mixed, value: mixed ? null : declared[0] };
 }
 
 /**
@@ -5310,6 +5325,12 @@ export class EditorCanvas {
      * Chromium splits the paragraph and re-established on the line it opens.
      */
     let breakFormats: TypingFormats | null = null;
+    /**
+     * Whether the text being typed replaces a selection across lines: that
+     * joins blocks as a Backspace across them does, and the join copies the
+     * same computed style onto the moved text.
+     */
+    let typedOverLines = false;
     /** The fitted size the text being pasted was copied at, if it came from an auto-fit box. */
     let pastedFit: string | null = null;
     const onInput = (event?: Event) => {
@@ -5319,7 +5340,9 @@ export class EditorCanvas {
         breakFormats = null;
         this.carryTypingFormatsOntoLine(body, formats);
       }
-      if (typed && typed.inputType !== 'insertText' && !typed.inputType.endsWith('CompositionText')) {
+      const restructured = typed?.inputType === 'insertText' ? typedOverLines : true;
+      typedOverLines = false;
+      if (typed && restructured && !typed.inputType.endsWith('CompositionText')) {
         // Whenever Chromium restructures blocks it copies the computed layout
         // of the block it took apart onto what it made: a cut or Backspace
         // across a list item boundary wraps the moved text in a span wearing
@@ -5327,7 +5350,9 @@ export class EditorCanvas {
         // into a paragraph carrying that indent in pixels. Paste strips those
         // declarations on the way in; every other structural input has to as
         // well, or the box saves an indent no control can reach. Plain typing
-        // is left alone: it never restructures anything, and it is hot.
+        // is left alone: it never restructures anything, and it is hot. Typing
+        // over lines does (nightly list fuzz seed 2026103001: the joined words
+        // kept the size the box was fitted to before the join).
         stripLayoutDeclarations(body, { keepLineSpacing: true });
         // In an auto-fit box the computed style a join copies includes the
         // fitted size, which would freeze the moved text at it.
@@ -5425,6 +5450,12 @@ export class EditorCanvas {
       else if (offsets) this.restoreTextRange(body, offsets);
     };
     const onBeforeInput = (event: InputEvent) => {
+      if (event.inputType === 'insertText') {
+        const range = this.activeTextRange(body);
+        const blockOf = (node: Node) => (node instanceof Element ? node : node.parentElement)?.closest(TEXT_BLOCKS);
+        typedOverLines = Boolean(range && !range.collapsed
+          && blockOf(range.startContainer) !== blockOf(range.endContainer));
+      }
       if (event.inputType === 'insertParagraph' || event.inputType === 'insertLineBreak') {
         // What the author has switched on or off at the caret is what the
         // next line starts with — including a format switched *off* whose
@@ -6001,7 +6032,13 @@ export class EditorCanvas {
     return true;
   }
 
-  /** Text node whose authored style controls typing at a collapsed caret. */
+  /**
+   * Text node whose authored style controls typing at a collapsed caret, or
+   * null on a line with no text. Only the caret's own line counts: on an empty
+   * line the flat offset lands on a word of the line before or after, and
+   * Return there opened a line in that word's bold, italic and underline
+   * (nightly seed 20261031).
+   */
   private textNodeAtCaret(root: HTMLElement, range: Range): Text | null {
     if (range.startContainer instanceof Text) return range.startContainer;
     const offsets = this.textOffsetsForRange(root, range);
@@ -6009,13 +6046,20 @@ export class EditorCanvas {
     const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
     let cursor = 0;
     let previous: Text | null = null;
+    let found: Text | null = null;
     for (let current = walker.nextNode(); current; current = walker.nextNode()) {
       const text = current as Text;
-      if (offsets.start <= cursor + text.data.length) return text;
+      if (offsets.start <= cursor + text.data.length) {
+        found = text;
+        break;
+      }
       cursor += text.data.length;
       previous = text;
     }
-    return previous;
+    found ??= previous;
+    const start = range.startContainer instanceof Element ? range.startContainer : range.startContainer.parentElement;
+    const line = start?.closest(TEXT_BLOCKS);
+    return found && line && root.contains(line) && !line.contains(found) ? null : found;
   }
 
   /**
@@ -6712,13 +6756,14 @@ export class EditorCanvas {
     );
   }
 
-  /** Return a shared authored spacing for the paragraphs in the live selection. */
-  textSelectionParagraphSpacing(): number | null {
+  /**
+   * The spacing the paragraphs in the selection declare: one value (null when
+   * none declares any), or mixed. Null without a selection.
+   */
+  textSelectionParagraphSpacing(): SelectionBlockValue | null {
     const target = this.selectedTextBlocks(false);
     if (!target) return null;
-    const values = target.blocks.map((block) => Number.parseFloat(block.style.marginBottom));
-    if (values.some((value) => !Number.isFinite(value))) return null;
-    return values.every((value) => value === values[0]) ? values[0] : null;
+    return sharedBlockValue(target.blocks.map((block) => Number.parseFloat(block.style.marginBottom)));
   }
 
   /**
@@ -6733,13 +6778,14 @@ export class EditorCanvas {
     );
   }
 
-  /** The line spacing the paragraphs in the selection share, if they declare one. */
-  textSelectionLineHeight(): number | null {
+  /**
+   * The line spacing the paragraphs in the selection declare: one value (null
+   * when they all follow the box), or mixed. Null without a selection.
+   */
+  textSelectionLineHeight(): SelectionBlockValue | null {
     const target = this.selectedTextBlocks(false);
     if (!target) return null;
-    const values = target.blocks.map((block) => Number(block.style.lineHeight || Number.NaN));
-    if (values.some((value) => !Number.isFinite(value))) return null;
-    return values.every((value) => value === values[0]) ? values[0] : null;
+    return sharedBlockValue(target.blocks.map((block) => Number(block.style.lineHeight || Number.NaN)));
   }
 
   applyTextSelectionColor(value: string | null): boolean {
@@ -6874,7 +6920,11 @@ export class EditorCanvas {
     if (!range) return false;
     if (range.collapsed) {
       const caret = this.textNodeAtCaret(content, range);
-      return Boolean(caret && this.textNodeFormatState(caret, content, format));
+      if (caret) return this.textNodeFormatState(caret, content, format);
+      // A line with no text: what the caret sits in (an empty formatted run,
+      // or the bare line).
+      const start = range.startContainer instanceof Element ? range.startContainer : range.startContainer.parentElement;
+      return this.elementFormatState(start, content, format);
     }
     const offsets = this.textOffsetsForRange(content, range);
     const first = offsets ? this.textSlicesForOffsets(content, offsets)[0]?.text : null;

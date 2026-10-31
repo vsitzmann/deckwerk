@@ -171,6 +171,34 @@ describe.skipIf(!electronBinary)('line height follows the font size', () => {
     expect((await linePitch('alpha')).pitch).toBeCloseTo(40, 0);
   });
 
+  // Found by the nightly list fuzz (seed 20261031): over a paragraph spaced 2
+  // and one that is not, the field showed the 2 computed at the caret, so
+  // typing 2 there was no change and the plain paragraph never took it.
+  it('Line spacing over a spaced and a plain paragraph shows Mixed and spaces both', {
+    timeout: 120_000,
+  }, async () => {
+    await start('line-height-mixed');
+    await session.reset('<p style="line-height: 2;">alpha</p><p>beta</p>');
+    await session.edit();
+    await session.caretIn('alpha', 'start');
+    await session.cdp.chord('ArrowDown', 'ArrowDown', 40, SHIFT);
+    await session.cdp.chord('End', 'End', 35, SHIFT);
+    const shown = await eventually(async () => {
+      const field = await session.cdp.evaluate<{ value: string; placeholder: string } | null>(`(() => {
+        const input = [...document.querySelectorAll('#inspector .field-number')]
+          .find((node) => node.querySelector('span')?.textContent === 'Line spacing')?.querySelector('input');
+        return input ? { value: input.value, placeholder: input.placeholder } : null;
+      })()`);
+      return field?.placeholder === 'Mixed' ? field : null;
+    }, 'the Line spacing field never said Mixed for the two paragraphs');
+    expect(shown?.value).toBe('');
+    await setField('Line spacing', '2');
+    expect(await session.cdp.evaluate<string[]>(
+      `[...document.querySelectorAll('${CONTENT} p')].map((block) => block.style.lineHeight)`,
+    )).toEqual(['2', '2']);
+    expect((await linePitch('beta')).pitch).toBeCloseTo(56, 0);
+  });
+
   // The test above failed now and then on CI with 120px lines: font size 60.
   // The Line spacing commit's echo from the server landed between the 2 and
   // the 0 of "20" and rebuilt the panel. Chromium blurs a focused field it
