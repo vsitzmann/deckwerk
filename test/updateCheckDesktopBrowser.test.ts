@@ -40,7 +40,9 @@ afterEach(async () => {
   appProcess = null;
   await new Promise<void>((resolve) => (server ? server.close(() => resolve()) : resolve()));
   server = null;
-  if (workDir) await rm(workDir, { recursive: true, force: true });
+  // Chromium's helper processes can still be writing the profile as the
+  // main process exits, which fails a one-shot rmdir with ENOTEMPTY.
+  if (workDir) await rm(workDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
   workDir = '';
 });
 
