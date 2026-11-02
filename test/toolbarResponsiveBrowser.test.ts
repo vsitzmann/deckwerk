@@ -40,6 +40,16 @@ async function toolbarAt(
     document.querySelector('.bar-deck-name').textContent =
       'An intentionally long presentation name that exercises responsive toolbar measurement';
   })()`);
+  // The responsive pass runs a frame after the ResizeObserver reports the new
+  // width. Measure before it has and the previous width's classes are read as
+  // this one's: below the grid's minimum width nothing moves, so a stale
+  // layout still "fits" and the walk can step past the width where only
+  // Agent and Collaborate fold, straight to the one where Insert does too.
+  await editor!.cdp.evaluate(`new Promise((resolve) => {
+    let frames = 4;
+    const tick = () => (--frames ? requestAnimationFrame(tick) : resolve(true));
+    requestAnimationFrame(tick);
+  })`);
   return (await eventually(
     () => editor!.cdp.evaluate<ToolbarLayout>(`(() => {
       const toolbar = document.getElementById('toolbar');

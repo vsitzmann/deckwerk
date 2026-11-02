@@ -694,6 +694,17 @@ export class SlideRail {
     return thumb.clientWidth || thumb.getBoundingClientRect().width || THUMB_WIDTH;
   }
 
+  /** Rebuild every miniature: files they lacked when drawn have arrived (see EditorCanvas.forceRedraw). */
+  redrawThumbnails(): void {
+    for (const thumb of this.thumbCache.values()) {
+      this.thumbResizeObserver?.unobserve(thumb);
+      releasePreviewVideos(thumb);
+    }
+    this.thumbCache.clear();
+    this.rowCache.clear();
+    this.render();
+  }
+
   /** Re-decorate presence in place, without invalidating thumbnails. */
   refreshPresence(): void {
     for (const dots of this.host.querySelectorAll<HTMLElement>('.rail-presence')) {

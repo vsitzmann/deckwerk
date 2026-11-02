@@ -310,3 +310,20 @@ describe('applyOpsLenient merge rules', () => {
     expect(result.slides[0].elements[0].x).toBe(2);
   });
 });
+
+describe('replacing every slide', () => {
+  // A deck may not pass through having no slides: deleting the only slide
+  // before inserting its replacement was refused, leaving both.
+  it('inserts the new slides before deleting the last old one', () => {
+    const prev = deckWith(slide('old'));
+    const next = deckWith(slide('new-1'), slide('new-2'));
+    const ops = diffDecks(prev, next);
+    expect(applyOpsLenient(prev, ops).deck).toEqual(next);
+    expect(applyAgentOperations(prev, ops)).toEqual(next);
+  });
+
+  it('still deletes first when some slide survives', () => {
+    const ops = diffDecks(deckWith(slide('a'), slide('b')), deckWith(slide('b'), slide('c')));
+    expect(ops.map((op) => op.op)).toEqual(['deleteSlide', 'insertSlides']);
+  });
+});
