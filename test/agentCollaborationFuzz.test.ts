@@ -4,7 +4,7 @@ import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { JSDOM } from 'jsdom';
 import { validateDeckIntegrity } from '../src/shared/agent.js';
-import type { Deck, Slide } from '../src/shared/deck.js';
+import type { Deck, HtmlEl, Slide } from '../src/shared/deck.js';
 import { sameSlideContent } from '../src/shared/htmlSlides.js';
 import { electronBinary } from './support/browserSession.js';
 import { extraFuzzSeeds } from './support/fuzzSeeds.js';
@@ -244,7 +244,13 @@ class Walk {
     // What each object's markup was, so "touched" means changed on balance:
     // a build toggled on and off again is no edit, and the merge agrees.
     // (Attribute order aside: a parser that removes and re-adds an attribute moves it.)
-    const markupOf = (object: Element) => [...object.attributes].map((attr) => `${attr.name}=${attr.value}`)
+    // A build effect or duration on an object with no build says nothing (an
+    // effect given and the build then toggled off leaves one behind): the
+    // object is as exported, so a person's rewording of it stands (nightly
+    // seed 20261030).
+    const markupOf = (object: Element) => [...object.attributes]
+      .filter((attr) => object.hasAttribute('data-build') || !attr.name.startsWith('data-build-'))
+      .map((attr) => `${attr.name}=${attr.value}`)
       .sort().join(' ') + object.innerHTML;
     const exportedMarkup = new Map([...doc.querySelectorAll('[data-element-id]')]
       .map((object) => [object.getAttribute('data-element-id')!, markupOf(object)]));
@@ -588,6 +594,14 @@ class Walk {
       `a copy did not land as one new slide: ${JSON.stringify(changes)}`);
     const [id] = changes.inserted;
     const copied = (await this.ws.deck()).slides.find((slide) => slide.id === id)!;
+    // The fixture's two-primitive SVG stays an HTML region in a copy too, under
+    // the id the copy minted for it (nightly seeds 20261029, 20261030).
+    const regions = new Set(sourceSlide.elements
+      .filter((element) => element.type === 'html' && this.fixtureRegions.has(element.id))
+      .map((element) => (element as HtmlEl).html));
+    for (const element of copied.elements) {
+      if (element.type === 'html' && regions.has(element.html)) this.fixtureRegions.add(element.id);
+    }
     this.expect(copied.timeline.length === sourceSlide.timeline.length,
       `the copy of ${sourceId} has ${copied.timeline.length} build steps, the slide ${sourceSlide.timeline.length}`);
     this.order.splice(after === null ? this.order.length : anchorIndex + 1, 0, id);

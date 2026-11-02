@@ -23,6 +23,7 @@ import {
   type ListMarkerColorState,
 } from '@shared/paragraphs.js';
 import type {
+  SelectionBlockValue,
   TableBorderPreset,
   TableBorderSettings,
   TableSelection,
@@ -198,11 +199,11 @@ export class Inspector {
   /** Apply spacing after only the paragraphs covered by the live text selection. */
   onApplyTextSelectionParagraphSpacing?: (value: number | null) => boolean;
   /** Authored spacing shared by the paragraphs in the live text selection. */
-  textSelectionParagraphSpacing?: () => number | null;
+  textSelectionParagraphSpacing?: () => SelectionBlockValue | null;
   /** Set line spacing on only the paragraphs covered by the live text selection. */
   onApplyTextSelectionLineHeight?: (value: number | null) => boolean;
   /** Line spacing shared by the paragraphs in the live text selection. */
-  textSelectionLineHeight?: () => number | null;
+  textSelectionLineHeight?: () => SelectionBlockValue | null;
   onApplyTextSelectionColor?: (value: string | null) => boolean;
   onApplyTextSelectionAlignment?: (value: 'left' | 'center' | 'right' | 'justify') => boolean;
   /** Convert only the paragraphs covered by the live text selection. */
@@ -2654,10 +2655,16 @@ export class Inspector {
           ),
         );
         layout.content.appendChild(alignment);
+        // Paragraphs that disagree show nothing, so whatever is typed applies
+        // to all of them; a number shown there would be one paragraph's, and
+        // typing that same number would change nothing.
         const selectedParagraphSpacing = this.textSelectionParagraphSpacing?.() ?? null;
-        layout.content.appendChild(optionalNumberField(
+        const shownParagraphSpacing = selectedParagraphSpacing?.mixed
+          ? null
+          : selectedParagraphSpacing?.value ?? el.paragraphSpacing ?? null;
+        const paragraphSpacingField = optionalNumberField(
           'Paragraph spacing',
-          selectedParagraphSpacing ?? el.paragraphSpacing ?? null,
+          shownParagraphSpacing,
           (value) => {
             const spacing = Math.max(0, value);
             if (this.onApplyTextSelectionParagraphSpacing?.(spacing)) return;
@@ -2674,16 +2681,22 @@ export class Inspector {
           'px',
           {
             min: 0,
-            themeValue: (selectedParagraphSpacing ?? el.paragraphSpacing ?? null) === null
+            themeValue: shownParagraphSpacing === null && !selectedParagraphSpacing?.mixed
               ? computedTypography?.paragraphSpacing ?? null
               : null,
           },
-        ));
+        );
+        if (selectedParagraphSpacing?.mixed) {
+          paragraphSpacingField.querySelector('input')!.placeholder = 'Mixed';
+        }
+        layout.content.appendChild(paragraphSpacingField);
         // Editing with a selection, the control is the selected paragraphs'
         // spacing (as Paragraph spacing is); otherwise the box's.
         const selectedLineHeight = this.textSelectionLineHeight?.() ?? null;
-        const shownLineHeight = selectedLineHeight ?? boxLineSpacing(el);
-        layout.content.appendChild(lineSpacingField(
+        const shownLineHeight = selectedLineHeight?.mixed
+          ? null
+          : selectedLineHeight?.value ?? boxLineSpacing(el);
+        const lineHeightField = lineSpacingField(
           shownLineHeight,
           (value) => {
             if (this.onApplyTextSelectionLineHeight?.(value)) return;
@@ -2697,8 +2710,10 @@ export class Inspector {
               if (e.type === 'text') setWholeTextLineHeight(e, null);
             }, { label: 'Use theme line spacing' });
           },
-          shownLineHeight === null ? computedTypography?.lineHeight ?? null : null,
-        ));
+          shownLineHeight === null && !selectedLineHeight?.mixed ? computedTypography?.lineHeight ?? null : null,
+        );
+        if (selectedLineHeight?.mixed) lineHeightField.querySelector('input')!.placeholder = 'Mixed';
+        layout.content.appendChild(lineHeightField);
         wrap.append(typography.section, layout.section, this.textBoxSection(el));
         wrap.appendChild(this.shadowSection([el], 'text'));
         // A box shadow needs a box: it appears once the text has a fill or a border.

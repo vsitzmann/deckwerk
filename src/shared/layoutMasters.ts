@@ -171,9 +171,9 @@ export function syncSlideWithLayoutMaster(
   options: { forceBackground?: boolean; replaceStyle?: boolean } = {},
 ): void {
   slide.layout = layout;
-  const retiredCopies = new Set(slide.elements
+  const retiredCopies = new Map(slide.elements
     .filter((element) => element.layoutMasterId)
-    .map((element) => element.id));
+    .map((element) => [element.id, element.layoutMasterId!]));
   slide.elements = slide.elements.filter((element) => !element.layoutMasterId);
 
   for (const source of master.elements) {
@@ -213,13 +213,28 @@ export function syncSlideWithLayoutMaster(
   // A decoration the author removed from the master takes its per-slide copies
   // with it, so any build step aimed at one of them must go the same way --
   // every other deletion path prunes the timeline, and a step whose target no
-  // longer exists is a click that does nothing during the talk.
+  // longer exists is a click that does nothing during the talk. A copy that
+  // only changed its id -- a slide copied onto a new page gets copies named
+  // for itself -- is the same decoration, so its steps follow it. Pruned,
+  // they took the build off a copied slide whose master rule built in
+  // (nightly agent fuzz, seed 20261030).
   for (const element of slide.elements) retiredCopies.delete(element.id);
   if (retiredCopies.size > 0) {
-    slide.timeline = slide.timeline.filter((entry) => (
-      !retiredCopies.has(entry.action.target)
-      && !(entry.trigger.ref && retiredCopies.has(entry.trigger.ref))
-    ));
+    const copyOfMaster = new Map(slide.elements
+      .filter((element) => element.layoutMasterId)
+      .map((element) => [element.layoutMasterId!, element.id]));
+    const renamed = (id: string): string | null => {
+      const master = retiredCopies.get(id);
+      return master === undefined ? id : copyOfMaster.get(master) ?? null;
+    };
+    slide.timeline = slide.timeline.flatMap((entry) => {
+      const target = renamed(entry.action.target);
+      const ref = entry.trigger.ref ? renamed(entry.trigger.ref) : entry.trigger.ref;
+      // A step with no reference has nothing to lose; one whose reference went is gone.
+      if (target === null || (entry.trigger.ref && ref === null)) return [];
+      if (target === entry.action.target && ref === entry.trigger.ref) return [entry];
+      return [{ ...entry, action: { ...entry.action, target }, trigger: { ...entry.trigger, ref } }];
+    });
   }
 
   const inheritedAlready = slide.layoutBackgroundInherited === true;

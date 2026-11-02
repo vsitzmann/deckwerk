@@ -638,6 +638,41 @@ describe('inline text editing', () => {
       .toBe('<p>gammadelta<span style="font-size: 20px;">authored</span></p>');
   });
 
+  it('does not store the fitted size a join copies when typing replaces a selection into a sub-item', () => {
+    // Found by the nightly list fuzz (seed 2026103001): typing over a
+    // selection from an item into its own sub-item is an insertText that
+    // Chromium carries out, and its join wraps the moved text in the box's
+    // fitted size just as Backspace does.
+    const { store, canvas, host } = setup();
+    store.select(['text-1']);
+    store.updateSelected((el) => {
+      if (el.type === 'text') {
+        el.html = '<ul><li>gamma<ul><li>delta</li></ul></li></ul>';
+        el.autoFit = true;
+      }
+    });
+    canvas.beginTextEdit('text-1');
+    const body = bodyOf(host, 'text-1');
+    body.style.fontSize = '13.8px';
+    body.dataset.fittedFontSize = '13.8';
+    const [outer, inner] = [...body.querySelectorAll('li')].map((item) => item.firstChild!);
+    const range = document.createRange();
+    range.setStart(outer, 2);
+    range.setEnd(inner, 2);
+    window.getSelection()!.removeAllRanges();
+    window.getSelection()!.addRange(range);
+    const typing = new InputEvent('beforeinput', { inputType: 'insertText', data: 'x', bubbles: true, cancelable: true });
+    body.dispatchEvent(typing);
+    // The editor leaves this join to Chromium; what Chromium's join leaves.
+    expect(typing.defaultPrevented).toBe(false);
+    body.innerHTML = '<ul><li>gax<span style="font-size: 13.8px;">lta</span></li></ul>';
+    body.dispatchEvent(new InputEvent('input', { inputType: 'insertText', data: 'x', bubbles: true }));
+    body.dispatchEvent(new FocusEvent('blur'));
+
+    const saved = store.slide!.elements.find((element) => element.id === 'text-1')!;
+    expect(saved.type === 'text' && saved.html).toBe('<ul><li>gaxlta</li></ul>');
+  });
+
   it('does not store the fitted size a cut carried to the clipboard', () => {
     // Found by the list fuzz's short auto-fit box: text cut while the box was
     // fitted to 13.2px reached the clipboard wearing 13.2px, and pasted back

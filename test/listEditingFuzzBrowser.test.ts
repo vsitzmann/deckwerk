@@ -750,10 +750,17 @@ async function dashBullet(next: () => number, step: number, label: string): Prom
   // A fresh plain line: Return at the end of a paragraph. Inside a list the
   // browser continues the list instead, and "- " there is just text.
   await moveCaret(next, 'end');
+  // A click into a box holding nothing but an empty item leaves the caret on
+  // the box itself, before the list -- still that item's line, where Return
+  // and "- " act on the item (nightly seed 2026103101).
   const inList = await session.cdp.evaluate<boolean>(`(() => {
-    const node = window.getSelection()?.getRangeAt(0)?.startContainer;
+    const range = window.getSelection()?.getRangeAt(0);
+    let node = range?.startContainer;
+    if (node && node.nodeType === Node.ELEMENT_NODE && node.childNodes.length > 0) {
+      node = node.childNodes[Math.min(range.startOffset, node.childNodes.length - 1)];
+    }
     const holder = node && (node.nodeType === Node.TEXT_NODE ? node.parentElement : node);
-    return Boolean(holder && holder.closest('li'));
+    return Boolean(holder && (holder.closest('li') || holder.querySelector?.('li')));
   })()`);
   if (inList) return;
   // Return carries the formats in force at the end of the line onto the line
