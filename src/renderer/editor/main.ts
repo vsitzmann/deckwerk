@@ -1384,6 +1384,14 @@ canvas.contextActions = makeContextActions(shellDeps, clipboard);
 // Watch mode: the main process reloads the deck when deck.json changes on
 // disk (an agent, a git checkout, hand editing) and broadcasts it here. Our
 // own saves echo back identical content and are ignored by comparison.
+window.api.onPresentNotesEdit(({ slideId, notes }) => {
+  const slide = store.get().deck.slides.find((item) => item.id === slideId);
+  if (!slide || slide.notes === notes) return;
+  store.commit((deck) => {
+    const target = deck.slides.find((item) => item.id === slideId);
+    if (target) target.notes = notes;
+  }, { label: 'Edit speaker notes' });
+});
 window.api.onDeckState((session) => {
   const state = store.get();
   if (

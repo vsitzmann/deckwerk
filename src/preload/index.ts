@@ -204,6 +204,10 @@ const api = {
     on(IPC.presentCommand, fn),
   onPresentState: (fn: (state: PresentationState) => void): (() => void) =>
     on(IPC.presentState, fn),
+  editPresentNotes: (slideId: string, notes: string): void =>
+    ipcRenderer.send(IPC.presentNotesEdit, { slideId, notes }),
+  onPresentNotesEdit: (fn: (edit: { slideId: string; notes: string }) => void): (() => void) =>
+    on(IPC.presentNotesEdit, fn),
   onPresentEnded: (fn: (slideIndex: number) => void): (() => void) =>
     on(IPC.presentEnded, fn),
 

@@ -312,19 +312,44 @@ export class FormattingSession {
     await this.editor.click('#side-tabs button[data-panel="inspector"]', 'Props tab');
   }
 
+  /** Bare Xvfb can lose a drag and leave a caret; retry once and report it. */
   async beginSelectAll(id: string): Promise<void> {
+    const content = `${ON_CANVAS(id)} .text-content`;
+    await this.editor.call('Page.bringToFront');
+    await this.editor.evaluate('window.focus()');
     const editing = await this.editor.evaluate<boolean>(
-      `document.querySelector('${ON_CANVAS(id)} .text-content')?.isContentEditable === true`,
+      `document.querySelector('${content}')?.isContentEditable === true`,
     );
-    if (!editing) await this.editor.doubleClick(`${ON_CANVAS(id)} .text-content`, `${id} text`);
-    else await this.editor.click(`${ON_CANVAS(id)} .text-content`, `${id} reset caret`);
+    if (!editing) await this.editor.doubleClick(content, `${id} text`);
     await eventually(async () => this.editor.evaluate<boolean>(
-      `document.querySelector('${ON_CANVAS(id)} .text-content')?.isContentEditable === true`,
+      `document.querySelector('${content}')?.isContentEditable === true`,
     ), `${id} did not enter text editing`);
-    await this.editor.dragSelectText(`${ON_CANVAS(id)} .text-content`, `${id} text`);
-    await eventually(async () => this.editor.evaluate<boolean>(
-      `window.getSelection()?.isCollapsed === false`,
-    ), `${id} text was not selected`);
+    const selectionState = () => this.editor.evaluate<{ editing: boolean; caret: boolean; selected: boolean }>(`(() => {
+      const node = document.querySelector('${content}');
+      const selection = window.getSelection();
+      const inside = Boolean(selection?.rangeCount && node?.contains(selection.anchorNode));
+      return {
+        editing: node?.isContentEditable === true,
+        caret: inside && selection.isCollapsed && document.activeElement === node,
+        selected: inside && !selection.isCollapsed && selection.toString().trim().length > 0,
+      };
+    })()`);
+    for (let attempt = 0; ; attempt += 1) {
+      if (editing || attempt > 0) {
+        await this.editor.click(content, `${id} reset caret`);
+        await eventually(selectionState, `${id} reset click did not place a caret`, (now) => now.caret);
+      }
+      await this.editor.dragSelectText(content, `${id} text`);
+      const after = await eventually(selectionState, '', (now) => now.selected, 5_000)
+        .catch(() => selectionState());
+      if (after.selected) return;
+      if (after.editing && after.caret && attempt === 0) {
+        recordRecovery(`${id}: the drag over all text left a caret; dragged again`);
+        continue;
+      }
+      throw new Error(`${id} text was not selected: ${JSON.stringify(after)}\n`
+        + `canvas state: ${await textEditingState(this.editor, content)}`);
+    }
   }
 
   /**

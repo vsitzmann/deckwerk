@@ -1147,6 +1147,12 @@ function registerHandlers(): void {
     state.presentationState = presentation;
     state.presenter?.webContents.send(IPC.presentState, presentation);
   });
+  ipcMain.on(IPC.presentNotesEdit, (event, edit: { slideId: string; notes: string }) => {
+    const state = ownerOf(event.sender);
+    if (!state || event.sender !== state.presenter?.webContents) return;
+    if (typeof edit?.slideId !== 'string' || typeof edit.notes !== 'string') return;
+    if (!state.editor.isDestroyed()) state.editor.webContents.send(IPC.presentNotesEdit, edit);
+  });
 
   ipcMain.handle(IPC.trimOpen, (event, payload: { src: string; elementId: string }) => {
     const state = requireOwner(event);
