@@ -62,7 +62,7 @@ import { DecodedVideoPool, releaseDecodedVideo } from '../player/decodedVideoPoo
 import { ungateVideoLoad } from '../player/mediaLoadGate.js';
 import { openSlideLinkInNewTab, slideLinkFromEvent } from '../player/links.js';
 import { expandTimeline } from '@shared/timeline.js';
-import { mapTextOffset, mergeTextHtml } from '@shared/textMerge.js';
+import { mergeTextHtml } from '@shared/textMerge.js';
 import {
   BASELINE_RUN_FONT_SIZE, isRelativeFontSize, restoreKatexSourceHtml,
   pastedHtmlHasMedia, sanitizePastedTextHtml, stripFittedFontSize, stripLayoutDeclarations,
@@ -143,6 +143,7 @@ import { isWebBridgeAction } from '@shared/webBridge.js';
 import { reportSelectionViolations } from './selectionInvariants.js';
 import { COMPARE_CHIP_CLASS, compareChip } from './compareChip.js';
 import { KeptSelectionHighlight, TEXT_EDIT_PANEL_CHROME } from './keptSelection.js';
+import { rangeForBookmark, textBookmark, type TextBookmark } from './caretPath.js';
 import { prepareCodeBlocks, syncCodeBody } from '../player/codeRender.js';
 import { CODE_EDIT_CHROME, CodeEditor } from './codeEditing.js';
 import { CODE_LINE_HEIGHT, CODE_PADDING_EM, describeLines, isLineBuild } from '@shared/codeBlocks.js';
@@ -1047,7 +1048,7 @@ export class EditorCanvas {
   /** Re-enter this edit after a rebuild that was forced mid-session. */
   private pendingEditReentry: {
     elementId: string;
-    offsets: { start: number; end: number } | null;
+    bookmark: TextBookmark | null;
   } | null = null;
   /**
    * What a discarded session reverts to: the session-start html, moved
@@ -1409,7 +1410,7 @@ export class EditorCanvas {
     if (this.editingId) {
       this.pendingEditReentry = {
         elementId: this.editingId,
-        offsets: this.editingSelectionOffsets(),
+        bookmark: this.editingSelectionBookmark(),
       };
       if (this.finishTextEdit) this.finishTextEdit(true);
       else this.commitTextEdit();
@@ -1490,8 +1491,11 @@ export class EditorCanvas {
     const el = slide?.elements.find((candidate) => candidate.id === pending.elementId);
     if (!el || (el.type !== 'text' && el.type !== 'html')) return;
     this.beginTextEdit(pending.elementId);
-    if (this.editingId === pending.elementId && pending.offsets) {
-      this.restoreEditingSelection(pending.offsets);
+    if (this.editingId === pending.elementId && pending.bookmark) {
+      const body = this.slideLayer.querySelector<HTMLElement>(
+        `[data-element-id="${CSS.escape(pending.elementId)}"] .text-content`,
+      );
+      if (body) this.restoreTextBookmark(body, pending.bookmark);
     }
   }
 
@@ -1849,7 +1853,12 @@ export class EditorCanvas {
    * the other person's words. Either way the caret is carried through the
    * change by what was inserted or removed before it, not left at the same
    * numeric offset, which dropped the next keystrokes into the middle of the
-   * other person's word.
+   * other person's word — and by the block it is in (caretPath.ts), so it
+   * stays in its own bullet, an empty one included.
+   *
+   * Html that differs from the sync point only in how it is spelled (this
+   * session's own push coming back normalised, a tool re-serialising the
+   * box) changes nothing here: the live DOM is not touched at all.
    */
   private adoptRemoteEditedHtml(
     el: SlideElement & { type: 'text' | 'html' },
@@ -1877,29 +1886,28 @@ export class EditorCanvas {
       this.textEditStoreBase = el.html;
       return;
     }
-    const remote = local === domBase ? null : editingFormOf(el.html);
+    const incoming = editingFormOf(el.html);
+    if (incoming === domBase || incoming === editingFormOf(this.textEditStoreBase)) {
+      // The same content in another spelling — this session's own commit
+      // echoed back through the server, normalised on the way. The live DOM
+      // and the caret in it already are that content: nothing to do.
+      this.textEditStoreBase = el.html;
+      return;
+    }
+    const remote = local === domBase ? null : incoming;
     const merged = remote === null ? null : mergeTextHtml(domBase, remote, local);
     if (merged !== local) {
+      // Carried by block and offset within it, not by one flat offset: a
+      // flat offset cannot tell an empty bullet from the end of the bullet
+      // above or the start of the one below, and the caret jumped there.
       const range = this.activeTextRange(body);
-      const offsets = range ? this.textOffsetsForRange(body, range) : null;
-      // Flat text offsets cannot tell the end of one paragraph from the start
-      // of the next; a caret that sat at the end of its text stays there.
-      const affinity = range?.collapsed && range.startContainer instanceof Text
-        && range.startOffset > 0 && range.startOffset === range.startContainer.data.length
-        ? 'backward' : 'forward';
-      const before = body.textContent ?? '';
+      const bookmark = range ? textBookmark(body, TEXT_BLOCKS, range) : null;
       // A peer can send legacy generated KaTeX just as the session can start
       // with it; keep the live editing surface in authored delimiter form.
       body.innerHTML = merged === null
         ? normalizeParagraphHtml(restoreKatexSourceHtml(el.html), true)
         : normalizeParagraphHtml(merged, true);
-      if (offsets) {
-        const after = body.textContent ?? '';
-        this.restoreTextRange(body, {
-          start: mapTextOffset(before, after, offsets.start),
-          end: mapTextOffset(before, after, offsets.end),
-        }, affinity);
-      }
+      if (bookmark) this.restoreTextBookmark(body, bookmark);
     }
     this.textEditStoreBase = el.html;
     if (remote === null) {
@@ -4598,6 +4606,16 @@ export class EditorCanvas {
     return this.textOffsetsForRange(body, range);
   }
 
+  /** The active text selection by block (caretPath.ts), for a session a rebuild ends and reopens. */
+  private editingSelectionBookmark(): TextBookmark | null {
+    if (!this.editingId) return null;
+    const body = this.slideLayer.querySelector<HTMLElement>(
+      `[data-element-id="${CSS.escape(this.editingId)}"] .text-content`,
+    );
+    const range = body ? this.activeTextRange(body) : null;
+    return body && range ? textBookmark(body, TEXT_BLOCKS, range) : null;
+  }
+
   /** Re-select the given offsets inside the element being edited. */
   restoreEditingSelection(offsets: { start: number; end: number } | null): void {
     if (!this.editingId || !offsets) return;
@@ -5958,6 +5976,16 @@ export class EditorCanvas {
     const range = document.createRange();
     range.setStart(start.node, start.offset);
     range.setEnd(end.node, end.offset);
+    this.selectTextRange(root, range);
+  }
+
+  /** Put a selection taken before `root` was rewritten back, carried through the rewrite. */
+  private restoreTextBookmark(root: HTMLElement, bookmark: TextBookmark): void {
+    this.selectTextRange(root, rangeForBookmark(root, TEXT_BLOCKS, bookmark));
+  }
+
+  /** Make `range` the live selection and the session bookmark. */
+  private selectTextRange(root: HTMLElement, range: Range): void {
     this.textSelectionRange = range.cloneRange();
     // Asserting a live range inside a contenteditable MOVES FOCUS to it in
     // Chromium — no focus() call involved. While the author is in a panel
