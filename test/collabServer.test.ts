@@ -1,6 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { mkdir, mkdtemp, readdir, readFile, rm, stat, utimes, writeFile } from 'node:fs/promises';
-import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import WebSocket from 'ws';
@@ -642,10 +641,6 @@ describe('collab server', () => {
 
   /* --- self-contained web export ----------------------------------------- */
 
-  // The exported player is a build artefact (`npm run build:export`), so the
-  // full download is gated on it; the guard rails around it are not.
-  const webExportBundle = existsSync(join(process.cwd(), 'out', 'export', 'player.js'));
-
   const exportUrl = (query: string) =>
     `http://127.0.0.1:${server.port}/api/export/web?${query}`;
 
@@ -665,13 +660,13 @@ describe('collab server', () => {
     expect((await fetch(exportUrl('probe=1'))).status).toBe(400);
   });
 
-  it.skipIf(!webExportBundle)('answers the probe before any bytes move', async () => {
+  it('answers the probe before any bytes move', async () => {
     const response = await fetch(exportUrl(`deck=${DECK_ID}&probe=1`));
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ ok: true });
   });
 
-  it.skipIf(!webExportBundle)('exports the live session as a self-contained web bundle', async () => {
+  it('exports the live session as a self-contained web bundle', async () => {
     // An edit that has not been written to disk still belongs in the export:
     // the bundle is what everyone currently sees, not what was last saved.
     const { client, welcome } = await connect('Exporter');

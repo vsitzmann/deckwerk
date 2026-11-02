@@ -1,6 +1,6 @@
 import { join } from 'node:path';
 import { build } from 'vite';
-import { sharedBuild } from '../../src/cli/sharedBuild.js';
+import { sharedBuild } from '../../src/main/sharedBuild.js';
 
 export { sharedBuild };
 

@@ -873,7 +873,8 @@ slide-agent render ~/talks/millivid --selected \
 `--annotate` outlines every object and labels it with its element id, marking
 the selection in red. `--built` fires every build so the finished slide is
 captured rather than its opening state. Renders go through the same player the
-projector runs, and need `npm run build:export` once.
+projector runs, built from this checkout's own sources: the first render after
+a code change takes a second or two longer while it builds.
 
 ### Change the deck with a transaction — the fallback path
 

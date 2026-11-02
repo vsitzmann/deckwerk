@@ -22,9 +22,11 @@ export async function sharedBuild(options: {
   produce: (outDir: string, checkout: string) => Promise<void>;
   /** The checkout the inputs are relative to; the working directory by default. */
   checkout?: string;
+  /** `sourceHash` of the inputs, when the caller has it already. */
+  hash?: string;
 }): Promise<string> {
   const checkout = options.checkout ?? process.cwd();
-  const hash = await sourceHash(checkout, options.inputs);
+  const hash = options.hash ?? await sourceHash(checkout, options.inputs);
   const cacheRoot = join(tmpdir(), options.cacheName);
   const outDir = join(cacheRoot, hash);
   const ready = join(outDir, '.ready');
@@ -90,7 +92,8 @@ async function buildLockIsStale(lock: string): Promise<boolean> {
   }
 }
 
-async function sourceHash(checkout: string, inputs: string[]): Promise<string> {
+/** A hash of the content (and paths) of every file under `inputs`, relative to `checkout`. */
+export async function sourceHash(checkout: string, inputs: string[]): Promise<string> {
   const roots = inputs.map((input) => resolve(checkout, input));
   const files: string[] = [];
   for (const root of roots) {

@@ -1,13 +1,15 @@
 import { execFile } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { EXIT_OK, runAgentCli } from '../src/cli/agentCli.js';
-import { useCurrentExportPlayer } from '../src/cli/exportPlayer.js';
+import { EXPORT_PLAYER_INPUTS, SOURCE_STAMP, exportPlayerDir } from '../src/main/exportPlayer.js';
 import { renderSlidesToPng } from '../src/cli/renderSlides.js';
 import { getFfmpegPath } from '../src/main/ffmpeg.js';
+import { sourceHash } from '../src/main/sharedBuild.js';
 import { emptyDeck, parseDeck, type Slide, type SlideElement, type TimelineEntry } from '../src/shared/deck.js';
 import { electronBinary } from './support/browserSession.js';
 
@@ -21,10 +23,11 @@ import { electronBinary } from './support/browserSession.js';
  * before term builds existed: it refused the whole deck over the one build
  * it could not parse, and its KaTeX had no `\step`.
  *
- * So: the CLI renders through a player built from its own sources; a player
- * that meets a deck newer than itself leaves out what it cannot read instead
- * of showing nothing; and a player that cannot start at all is an error, not
- * a black PNG of every slide.
+ * So: anything running from a checkout uses a player stamped with the
+ * sources it is running (src/main/exportPlayer.ts); a player that meets a
+ * deck newer than itself leaves out what it cannot read instead of showing
+ * nothing; and a player that cannot start at all is an error, not a black
+ * PNG of every slide.
  */
 
 const execFileAsync = promisify(execFile);
@@ -162,8 +165,12 @@ describe.skipIf(!electronBinary)('equation term builds in slide-agent render', {
   });
 
   it('shows a deck newer than its player, leaving out only what it cannot read', async () => {
-    await useCurrentExportPlayer();
-    const player = process.env.DECKWERK_EXPORT_PLAYER_DIR!;
+    const player = await exportPlayerDir();
+    // Wherever it lives, it is whole (a build into a cache once left its
+    // code-highlight.js in out/export) and built from the sources running.
+    expect(existsSync(join(player, 'code-highlight.js'))).toBe(true);
+    expect((await readFile(join(player, SOURCE_STAMP), 'utf8')).trim())
+      .toBe(await sourceHash(process.cwd(), EXPORT_PLAYER_INPUTS));
     const deck = parseDeck({ ...emptyDeck('Newer'), slides: [
       slide('first', text('t-1', 'Still here')),
       slide('second', text('t-2', `$$a = \\step{1}{${BLOCK}}$$`)),
@@ -187,9 +194,8 @@ describe.skipIf(!electronBinary)('equation term builds in slide-agent render', {
   });
 
   it('fails a capture whose player cannot start, rather than writing black slides', async () => {
-    await useCurrentExportPlayer();
     const deck = parseDeck(emptyDeck('Broken'));
-    await bundle(process.env.DECKWERK_EXPORT_PLAYER_DIR!, { ...deck, canvas: 'wide' });
+    await bundle(await exportPlayerDir(), { ...deck, canvas: 'wide' });
     await expect(renderSlidesToPng({
       deckDir: work, deck, outDir: join(work, 'shots'), annotate: false, built: false, selectedElementIds: [],
       slides: [{ id: deck.slides[0].id, number: 1 }], bundleDir: work,

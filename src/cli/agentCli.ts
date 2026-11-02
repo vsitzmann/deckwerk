@@ -58,7 +58,6 @@ import { spawn } from 'node:child_process';
 import { htmlEditTransaction } from '../main/htmlAuthoring.js';
 import { termBuildProblems } from '@shared/equationTerms.js';
 import { unclosedMath } from '@shared/mathDelimiters.js';
-import { useCurrentExportPlayer } from './exportPlayer.js';
 import { checkWebPage, renderSlidesToPng } from './renderSlides.js';
 import { removeTempDir, tempDir, untilStopped } from './scratch.js';
 import { failureMessage } from '../main/writeFailure.js';
@@ -676,7 +675,6 @@ async function renderCommand(argv: string[], io: CliIo): Promise<number> {
     return EXIT_ERROR;
   }
 
-  await useCurrentExportPlayer(io.err);
   const { images, contactSheet, contactSheets } = await renderSlidesToPng({
     deckDir,
     deck,
@@ -716,7 +714,6 @@ async function previewCommand(argv: string[], io: CliIo): Promise<number> {
   const deckDir = resolveDeckDir(positional[0], io);
   const deck = await loadDeck(deckDir);
 
-  await useCurrentExportPlayer(io.err);
   const bundleDir = await tempDir('slide-agent-preview-');
   await exportDeck(deckDir, deck, bundleDir);
   const port = Number(options.get('port') ?? 0) || 0;
@@ -948,8 +945,7 @@ async function webCommand(argv: string[], io: CliIo): Promise<number> {
   if (!flags.has('no-poster')) {
     let shots: string | null = null;
     try {
-      await useCurrentExportPlayer(io.err);
-      shots = await tempDir('web-poster-');
+          shots = await tempDir('web-poster-');
       const { images } = await renderSlidesToPng({
         deckDir,
         deck: { ...deck, slides: [slide] },
