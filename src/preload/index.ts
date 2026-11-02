@@ -35,6 +35,11 @@ import type {
   PresentationState,
   PresentOptions,
   RasterResult,
+  RemoteDeckBinding,
+  RemoteDeckListing,
+  RemoteLocalCopy,
+  RemoteServerEntry,
+  RemoteServerInfo,
   RasterSaveRequest,
   RasterTarget,
   DisplayInfo,
@@ -182,6 +187,25 @@ const api = {
     ipcRenderer.send(IPC.agentResponse, response),
   getAgentPanelState: (): Promise<AgentPanelState> =>
     ipcRenderer.invoke(IPC.agentPanelGetState),
+
+  /** Deck servers (remoteDecks.ts): the list, the decks on one, opening one as a mirror. */
+  remoteServers: (): Promise<RemoteServerEntry[]> => ipcRenderer.invoke(IPC.remoteServers),
+  addRemoteServer: (url: string, name?: string): Promise<RemoteServerEntry & { info: RemoteServerInfo }> =>
+    ipcRenderer.invoke(IPC.remoteServerAdd, url, name),
+  removeRemoteServer: (id: string): Promise<void> => ipcRenderer.invoke(IPC.remoteServerRemove, id),
+  remoteListing: (serverId: string): Promise<RemoteDeckListing> => ipcRenderer.invoke(IPC.remoteListing, serverId),
+  openRemoteDeck: (
+    serverId: string,
+    deckId: string,
+    operationId?: string,
+    options?: { offline?: boolean },
+  ): Promise<DeckSession | null> => ipcRenderer.invoke(IPC.remoteOpen, serverId, deckId, operationId, options),
+  remoteLocalCopies: (serverId: string): Promise<RemoteLocalCopy[]> => ipcRenderer.invoke(IPC.remoteLocalCopies, serverId),
+  remoteBinding: (dir: string): Promise<RemoteDeckBinding | null> => ipcRenderer.invoke(IPC.remoteBinding, dir),
+  saveRemoteBaseline: (dir: string, baseline: { deck: Deck; themeCss: string; seq: number }): Promise<void> =>
+    ipcRenderer.invoke(IPC.remoteBaselineSave, dir, baseline),
+  syncRemoteFiles: (dir: string): Promise<void> => ipcRenderer.invoke(IPC.remoteFilesSync, dir),
+  fetchRemoteAssets: (dir: string, deck: Deck): Promise<string[]> => ipcRenderer.invoke(IPC.remoteAssetsFetch, dir, deck),
 
   /** Start sharing while keeping this native editor connected as the host. */
   startCollab: (opts: CollabStartRequest): Promise<AgentSessionConnection> =>

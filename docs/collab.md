@@ -89,6 +89,75 @@ is unrecoverable. Replacements are logged by id only. It rotates to
 is never mirrored, served or downloaded. `slide-agent history <deck folder>
 --deleted` reads it; the format is described in `AGENTS.md`.
 
+## Server decks on the desktop
+
+The desktop app edits decks that live on a standalone server, and keeps
+editing them when the connection drops.
+
+- **Connect.** Open → **+ Server…** (or the welcome screen's *Open from a
+  server*, or Open ▾ → *Connect to Server…*) takes an address:
+  `100.68.22.127` (port 5800 assumed), `host:port`, or an `https://` tailnet
+  URL. Servers are remembered per user (`remote-servers.json` in the app's
+  user data). Once one is known, **Open** shows one dialog with *This
+  computer* and a tab per server, browsing the server's folders like its web
+  picker; with none, Open goes straight to the folder picker as before.
+- **A mirror, not a window onto the server.** Opening a server deck makes (or
+  refreshes) an ordinary deck folder at
+  `~/.deckwerk/remote/<host>/<deck id>` (`DECKWERK_REMOTE_ROOT` overrides it)
+  and opens that in the ordinary editor, so offline editing, ffmpeg trims and a
+  local agent in `edit/` all work on it. `.deckwerk-remote/` beside the deck
+  records which server deck it mirrors and the **baseline**: the last server
+  state this machine saw (`base.json`, plus seq and theme in `sync.json`). The
+  editor writes the baseline right after the deck.json it belongs with, from
+  the same instant, so a crash never leaves a baseline newer than the deck.
+  Reopening the folder any way (Open, the command line) re-binds it. Files
+  come down six at a time — over a long route one stream is held to a
+  fraction of the line by the round trip — and a dropped connection is retried
+  per file, so one reset does not fail a 1.5 GB first open; an open that did
+  fail resumes, fetching only what is missing.
+- **Live.** The editor's own `CollabBridge` joins the room as an ordinary
+  peer, with live text sync on, presence and cursors. The editor's content
+  security policy only allows sockets to 127.0.0.1, so it connects through a
+  relay in the main process (`RemoteRelay` in `src/main/remoteDecks.ts`) that
+  only forwards to saved servers, behind a random token. The relay pings the
+  server every 10 s and drops the editor's socket when a beat goes unanswered,
+  so a route that died silently reads as offline in seconds. Files: the mirror
+  pulls what the server has (`/api/agent-mirror/files`, by sha256) and pushes
+  what lands in its own `assets/` (an import, a trim, a paint) — on open, on
+  every reconnect, and when `assets/` changes; a collaborator's new picture is
+  fetched when the deck that refers to it arrives, then redrawn.
+- **Offline.** The toolbar chip says *Offline · edits kept on this computer*;
+  editing continues and is saved to the mirror as usual. Clicking the chip
+  retries at once. A server that cannot be reached still has its tab in the
+  Open dialog: it lists the decks already copied to this computer
+  (`listMirrors`, from each mirror's `sync.json`), which open at once without
+  asking the server and connect when it is back. Online, the listing marks
+  those decks *on this computer*.
+- **Reconnect = three-way merge** (`src/shared/deckMerge.ts`) of the baseline,
+  the deck on screen and the server's deck. Per slide: changed on one side
+  only → that side; changed on both → merged object by object when the two
+  touched different objects (and different slide fields — notes, name,
+  builds…), otherwise a **conflict**; deleted on one side and changed on the
+  other → conflict; added on either side → kept, after its predecessor in its
+  own copy. Slide order is one item, a conflict only when both sides
+  rearranged differently. Deck settings and theme.css are one item each.
+  Comments always merge by id. With no conflict the merge is silent; with one,
+  the **Sync changes** dialog shows each conflicting slide as two miniatures,
+  *Your version* and *Server version*, to pick from (or *Keep all mine* /
+  *Take all from server*), and lists everything that merged automatically,
+  each still overridable to one side. The result goes up as one transaction
+  (`Synchronize offline edits`) on top of whatever the server holds by then.
+  If the link drops again while the dialog is open, the choice is kept and
+  sent on the next connection without asking again.
+- The **Collaborate** button is hidden for a server deck: it is already shared.
+
+Tests: `test/deckMerge.test.ts` (the merge, with a seeded property walk),
+`test/remoteDeckSync.test.ts` (an offline replica against a real server
+through a link it cuts, plus a seeded fuzz walk: `REMOTE_FUZZ_SEEDS`,
+`REMOTE_FUZZ_STEPS`), `test/remoteDecks.test.ts` (mirrors, files, the relay
+and its heartbeat) and `test/remoteDeckDesktopBrowser.test.ts` (the real
+desktop app end to end; `REMOTE_SHOTS=<dir>` keeps screenshots).
+
 ## Running a standalone server
 
 Build the browser client once (rebuild after pulling client changes):

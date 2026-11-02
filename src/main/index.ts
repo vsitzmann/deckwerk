@@ -77,6 +77,7 @@ import { loadDeckHistory, saveDeckHistory } from './deckHistoryStore.js';
 import { serializeSpeakerNotes, SPEAKER_NOTES_FILE } from '@shared/speakerNotes.js';
 import { originalDownloadName } from '@shared/media.js';
 import { copyFileStreamed } from './copyFileStreamed.js';
+import { closeRemoteDecks, registerRemoteDeckIpc, releaseRemoteMirror } from './remoteDeckIpc.js';
 import { HTML_EDIT_DIR, isAuthoringFileName, readSettledFile, writeHtmlScope } from './htmlAuthoring.js';
 import { AGENT_GUIDE_FILE, defaultLauncherPath, writeAgentGuide } from './agentGuide.js';
 import { replaceFileAtomically } from './agentRuntime.js';
@@ -319,6 +320,7 @@ function endBackgroundAgentSession(): Promise<void> {
 /** Give a window a document, and tell it which deck its assets now come from. */
 function setSession(state: DeckWindowState, dir: string, deck: Deck): DeckSession {
   const session: DeckSession = { dir, deck };
+  releaseRemoteMirror(state, dir);
   state.session = session;
   state.themeCss = null;
   state.lastSavedDeckJson = null;
@@ -415,6 +417,7 @@ function closeDocument(state: DeckWindowState): void {
     if (win && !win.isDestroyed()) win.close();
   }
   if (collabOwner === state) void endBackgroundAgentSession();
+  releaseRemoteMirror(state);
   forgetEditorWindow(state);
 }
 
@@ -653,11 +656,13 @@ app.on('before-quit', () => {
   for (const state of editorStates()) void state.agentRuntime.close();
   localAgents.close();
   void collabServer?.close();
+  void closeRemoteDecks();
 });
 
 function registerHandlers(): void {
   // The Media library: list the deck's assets, move unused ones to the Trash.
   registerDeckAssetIpc(requireSession);
+  registerRemoteDeckIpc({ requireOwner, requireSession, reportOperation, openDeckForRequester });
   ipcMain.handle(IPC.deckNew, async (event, operationId?: string): Promise<DeckSession | null> => {
     const res = await showSaveDialog({
       title: 'New deck',

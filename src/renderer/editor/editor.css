@@ -3994,6 +3994,83 @@ button.deck-picker-row.active { border-color: var(--accent); }
 .web-export-detail { margin: 0; min-height: 3.6em; color: var(--muted); font-size: 12px; line-height: 1.5; }
 .pdf-export-builds { padding: 8px 0 4px; }
 
+/* Open: this computer and the deck servers (openDialog.ts). */
+.open-dialog { width: min(640px, calc(100vw - 56px)); }
+.open-dialog-sources { grid-auto-columns: minmax(0, max-content); }
+.open-dialog-sources .segment-button { padding: 0 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.open-dialog-body { display: flex; flex-direction: column; gap: 10px; min-height: 220px; }
+.open-dialog-message { margin: 0; color: var(--muted); line-height: 1.5; }
+.open-dialog-message.is-error { color: var(--danger); }
+.open-dialog-choose, .open-dialog-body > button { align-self: flex-start; }
+.open-dialog-crumbs { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; color: var(--muted); }
+.open-dialog-crumb { border-color: transparent; background: transparent; padding: 2px 4px; }
+.open-dialog-crumb:disabled { opacity: 1; color: var(--text); }
+.open-dialog-list { display: flex; flex-direction: column; max-height: 50vh; overflow: auto; border: 1px solid var(--line); }
+.open-dialog-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 10px;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  background: transparent;
+  text-align: left;
+}
+.open-dialog-row:last-child { border-bottom: 0; }
+.open-dialog-row:hover:not(:disabled), .open-dialog-row:focus-visible { background: var(--accent-soft); }
+.open-dialog-row strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.open-dialog-row span { flex: none; color: var(--muted); }
+.open-dialog-row.is-folder strong { color: var(--accent-text); }
+.open-dialog-connect { display: flex; gap: 8px; align-items: flex-end; }
+.open-dialog-connect .field { flex: 1; margin-bottom: 0; }
+.open-dialog-spacer { flex: 1; }
+
+/* Sync changes after offline edits on both sides (mergeDialog.ts). */
+.merge-dialog { width: min(720px, calc(100vw - 56px)); }
+.merge-dialog-lead { margin: 0; color: var(--muted); line-height: 1.5; }
+.merge-dialog-bulk { display: flex; gap: 8px; }
+.merge-dialog-list { display: flex; flex-direction: column; gap: 10px; }
+.merge-item { display: flex; flex-direction: column; gap: 8px; padding: 10px; border: 1px solid var(--line); }
+.merge-item header { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: baseline; }
+.merge-item header span { color: var(--muted); }
+.merge-sides { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.merge-side {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-items: flex-start;
+  padding: 8px;
+  text-align: left;
+}
+.merge-side.is-chosen { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); background: var(--accent-soft); }
+.merge-side-label { font-weight: 600; }
+.merge-side.is-chosen .merge-side-label { color: var(--accent-text); }
+.merge-side-detail { color: var(--muted); overflow-wrap: anywhere; }
+/* The rail's slide ground: a slide without a background colour is white. */
+.merge-thumb { position: relative; overflow: hidden; max-width: 100%; border: 1px solid var(--line); background: #fff; pointer-events: none; }
+.merge-thumb > .rail-thumb-inner { overflow: hidden; }
+/* Drawn at canvas scale: 18px is about 2px in a 216px miniature. */
+.merge-thumb .merge-changed { outline: 18px solid var(--accent); outline-offset: 6px; }
+.merge-side-changes { margin: 0; padding: 0; list-style: none; color: var(--muted); font-size: 0.92em; overflow-wrap: anywhere; }
+.merge-side-changes li + li { margin-top: 2px; }
+.merge-thumb.is-gone { display: grid; place-items: center; background: var(--canvas-ground); color: var(--muted); }
+.merge-dialog-others summary { cursor: pointer; color: var(--muted); }
+.merge-dialog-others[open] summary { margin-bottom: 6px; }
+.merge-auto { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 4px 0; border-top: 1px solid var(--line); }
+.merge-auto > span { min-width: 0; color: var(--muted); }
+.merge-auto strong { color: var(--text); font-weight: 600; }
+.merge-auto-choice { flex: none; width: 180px; }
+.merge-dialog-status { flex: 1; align-self: center; color: var(--muted); }
+.merge-dialog-status.is-error { color: var(--danger); }
+
+/* A server deck's connection, in the status bar (main.ts). */
+.remote-status { display: inline-flex; gap: 6px; align-items: center; white-space: nowrap; }
+.remote-status::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--muted); }
+.remote-status[data-state="online"]::before { background: var(--green); }
+.remote-status[data-state="offline"]::before { background: var(--yellow); }
+.remote-status[data-state="error"]::before { background: var(--danger); }
+.remote-status button { padding: 0 6px; }
+
 /* Object names in the build, Morph and object lists carry colour swatches so
    two shapes of the same geometry are still told apart at a glance. */
 .build-element-row,

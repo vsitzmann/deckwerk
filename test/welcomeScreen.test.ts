@@ -25,7 +25,7 @@ describe('no-deck welcome screen', () => {
     new EditorCanvas(host, new EditorStore(emptyDeck()));
     const importKeynote = vi.fn();
     const screen = new WelcomeScreen(host, {
-      newPresentation: vi.fn(), openPresentation: vi.fn(), importKeynote, importPowerPoint: vi.fn(),
+      newPresentation: vi.fn(), openPresentation: vi.fn(), openFromServer: vi.fn(), importKeynote, importPowerPoint: vi.fn(),
     });
     const button = screen.element.querySelector<HTMLButtonElement>('[data-action="keynote"]')!;
     const down = new MouseEvent('pointerdown', {
@@ -40,9 +40,9 @@ describe('no-deck welcome screen', () => {
     expect(importKeynote).toHaveBeenCalledOnce();
   });
 
-  it('opens in welcome mode with all four presentation choices', () => {
+  it('opens in welcome mode with every presentation choice', () => {
     const screen = new WelcomeScreen(document.getElementById('canvas')!, {
-      newPresentation: vi.fn(), openPresentation: vi.fn(), importKeynote: vi.fn(), importPowerPoint: vi.fn(),
+      newPresentation: vi.fn(), openPresentation: vi.fn(), openFromServer: vi.fn(), importKeynote: vi.fn(), importPowerPoint: vi.fn(),
     });
 
     expect(screen.element.hidden).toBe(false);
@@ -51,6 +51,7 @@ describe('no-deck welcome screen', () => {
     expect([...screen.element.querySelectorAll('button')].map((button) => button.textContent)).toEqual([
       'New presentationStart with a title and body slide',
       'Open presentationOpen a folder containing deck.json',
+      'Open from a serverEdit a deck on a DeckWerk server, online or offline',
       'Import from KeynoteConvert a .key presentation into an editable deck',
       'Import from PowerPointConvert a .pptx presentation into an editable deck',
     ]);
@@ -58,16 +59,18 @@ describe('no-deck welcome screen', () => {
 
   it('routes every choice and leaves welcome mode only after a deck is adopted', () => {
     const actions = {
-      newPresentation: vi.fn(), openPresentation: vi.fn(), importKeynote: vi.fn(), importPowerPoint: vi.fn(),
+      newPresentation: vi.fn(), openPresentation: vi.fn(), openFromServer: vi.fn(), importKeynote: vi.fn(), importPowerPoint: vi.fn(),
     };
     const screen = new WelcomeScreen(document.getElementById('canvas')!, actions);
 
     screen.element.querySelector<HTMLButtonElement>('[data-action="new"]')!.click();
     screen.element.querySelector<HTMLButtonElement>('[data-action="open"]')!.click();
+    screen.element.querySelector<HTMLButtonElement>('[data-action="server"]')!.click();
     screen.element.querySelector<HTMLButtonElement>('[data-action="keynote"]')!.click();
     screen.element.querySelector<HTMLButtonElement>('[data-action="powerpoint"]')!.click();
     expect(actions.newPresentation).toHaveBeenCalledOnce();
     expect(actions.openPresentation).toHaveBeenCalledOnce();
+    expect(actions.openFromServer).toHaveBeenCalledOnce();
     expect(actions.importKeynote).toHaveBeenCalledOnce();
     expect(actions.importPowerPoint).toHaveBeenCalledOnce();
     expect(screen.element.hidden).toBe(false);

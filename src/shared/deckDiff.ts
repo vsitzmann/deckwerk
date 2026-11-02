@@ -27,12 +27,17 @@ export function diffDecks(prev: Deck, next: Deck): AgentOperation[] {
   const prevIds = new Set(prev.slides.map((slide) => slide.id));
   const nextIds = new Set(next.slides.map((slide) => slide.id));
 
-  for (const slide of prev.slides) {
-    if (!nextIds.has(slide.id)) ops.push({ op: 'deleteSlide', slideId: slide.id });
-  }
+  const deletes: AgentOperation[] = prev.slides
+    .filter((slide) => !nextIds.has(slide.id))
+    .map((slide) => ({ op: 'deleteSlide', slideId: slide.id }));
+  // A deck never has no slides, so replacing every slide must insert the new
+  // ones before deleting the last old one, or the apply refuses that delete.
+  const replacesEverySlide = deletes.length === prev.slides.length && next.slides.length > 0;
+  if (!replacesEverySlide) ops.push(...deletes);
 
   ops.push(...reorderOps(prev, next, prevIds));
   ops.push(...insertSlideOps(next, prevIds));
+  if (replacesEverySlide) ops.push(...deletes);
 
   const prevById = new Map(prev.slides.map((slide) => [slide.id, slide]));
   for (const nextSlide of next.slides) {

@@ -71,7 +71,79 @@ export const IPC = {
   agentSessionStart: 'agentSession:start',
   agentSessionEnd: 'agentSession:end',
   agentSessionState: 'agentSession:state',
+  /** Deck servers this desktop knows, and the decks on them (remoteDecks.ts). */
+  remoteServers: 'remote:servers',
+  remoteServerAdd: 'remote:serverAdd',
+  remoteServerRemove: 'remote:serverRemove',
+  remoteListing: 'remote:listing',
+  remoteOpen: 'remote:open',
+  /** The decks of one server already copied to this computer (open offline). */
+  remoteLocalCopies: 'remote:localCopies',
+  /** Is this open folder the mirror of a server deck? Then how to reach it. */
+  remoteBinding: 'remote:binding',
+  /** Persist the last server state the editor saw beside the mirror. */
+  remoteBaselineSave: 'remote:baselineSave',
+  /** Reconcile the mirror's files with the server now (on every reconnect). */
+  remoteFilesSync: 'remote:filesSync',
+  /** Fetch assets a server deck refers to that the mirror lacks. */
+  remoteAssetsFetch: 'remote:assetsFetch',
+  /** Main → editor: these deck-relative files just arrived in the mirror. */
+  remoteAssetsArrived: 'remote:assetsArrived',
 } as const;
+
+/** A deck server as the desktop lists it. */
+export interface RemoteServerEntry {
+  id: string;
+  url: string;
+  name: string;
+}
+
+export interface RemoteServerInfo {
+  origin: string;
+  /** Tailnet login on an access-controlled server; null on an open one. */
+  user: string | null;
+  userName: string | null;
+}
+
+/** A server deck with a copy on this computer, openable without the server. */
+export interface RemoteLocalCopy {
+  deckId: string;
+  title: string;
+  /** When this copy last matched the server. */
+  savedAt: string;
+}
+
+export interface RemoteDeckListing {
+  decks: Array<{
+    id: string;
+    title: string;
+    slides: number;
+    editedAt: string | null;
+    editors: number;
+    folder: string;
+    owner?: string;
+    role?: string;
+  }>;
+  folders: Array<{ path: string; name: string; parent: string; decks: number }>;
+}
+
+/**
+ * What the editor needs to run an open mirror folder as a live server deck:
+ * where the relay is, and the last server state the mirror recorded, which is
+ * the base of the merge if both sides changed while apart.
+ */
+export interface RemoteDeckBinding {
+  dir: string;
+  serverId: string | null;
+  server: string;
+  serverName: string;
+  deckId: string;
+  /** Relay socket on 127.0.0.1; null when the server is no longer in the list. */
+  wsUrl: string | null;
+  /** Display name for the hello. */
+  name: string;
+  baseline: { deck: Deck; themeCss: string; seq: number };
+}
 
 export interface AgentPanelMessage {
   id: string;

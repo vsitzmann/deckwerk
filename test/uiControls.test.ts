@@ -88,7 +88,8 @@ describe('shared editor controls', () => {
     for (const file of ['src/renderer/editor/main.ts', 'src/renderer/collab/main.ts']) {
       const source = readFileSync(join(process.cwd(), file), 'utf8');
       expect(source).toContain("barButton('New'");
-      expect(source).toContain("barButton('Open'");
+      // A plain button, or a split button whose main half is still one-click Open.
+      expect(source).toMatch(/barButton\('Open'|createToolbarSplitButton\('Open'/);
       expect(source).toContain("createToolbarPicker('Import…'");
       expect(source).toContain("label: 'Keynote…'");
       expect(source).toContain('createTextInsertPicker({');

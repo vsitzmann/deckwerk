@@ -1,6 +1,7 @@
 export interface WelcomeActions {
   newPresentation: () => void | Promise<void>;
   openPresentation: () => void | Promise<void>;
+  openFromServer: () => void | Promise<void>;
   importKeynote: () => void | Promise<void>;
   importPowerPoint: () => void | Promise<void>;
 }
@@ -25,13 +26,14 @@ export class WelcomeScreen {
     const title = document.createElement('h1');
     title.textContent = 'What would you like to present?';
     const detail = document.createElement('p');
-    detail.textContent = 'Create a deck, open a DeckWerk folder, or bring in an existing Keynote or PowerPoint presentation.';
+    detail.textContent = 'Create a deck, open a DeckWerk folder or a deck on a server, or bring in an existing Keynote or PowerPoint presentation.';
 
     const choices = document.createElement('div');
     choices.className = 'welcome-actions';
     choices.append(
       actionButton('New presentation', 'Start with a title and body slide', 'new', actions.newPresentation),
       actionButton('Open presentation', 'Open a folder containing deck.json', 'open', actions.openPresentation),
+      actionButton('Open from a server', 'Edit a deck on a DeckWerk server, online or offline', 'server', actions.openFromServer),
       actionButton('Import from Keynote', 'Convert a .key presentation into an editable deck', 'keynote', actions.importKeynote),
       actionButton('Import from PowerPoint', 'Convert a .pptx presentation into an editable deck', 'powerpoint', actions.importPowerPoint),
     );
