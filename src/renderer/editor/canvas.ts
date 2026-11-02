@@ -158,6 +158,7 @@ import {
   spacingGuides,
 } from './snapping.js';
 import { sameSlideDrawing, type EditorStore } from './store.js';
+import { deleteTableRows, insertTableRow } from './tableRows.js';
 
 export type TableSelection = {
   elementId: string;
@@ -8048,6 +8049,53 @@ export class EditorCanvas {
       if (recipient >= 0) widths[recipient] += removed;
       return widths;
     });
+    this.syncTableHeight(selected.elementId);
+  }
+
+  insertTableRow(after: boolean): void {
+    const table = this.activeTable();
+    const selected = this.tableSelection;
+    if (!table || !selected) return;
+    const selectedStart = Math.min(selected.row, selected.rowEnd);
+    const selectedEnd = Math.max(selected.row, selected.rowEnd);
+    const index = insertTableRow(table, after ? selectedEnd : selectedStart, after);
+    if (index < 0) return;
+    // The new row is selected — unless merged cells running through it
+    // cover every column, in which case the selection stays on the cells it
+    // was on, which have shifted down when the row went in above them.
+    const column = Math.min(selected.column, selected.columnEnd);
+    const created = table.rows[index];
+    if (created.cells.length > 0) {
+      selected.row = index;
+      selected.rowEnd = index;
+      selected.column = Math.min(column, created.cells.length - 1);
+      selected.columnEnd = selected.column;
+    } else if (!after) {
+      selected.row += 1;
+      selected.rowEnd += 1;
+    }
+    selected.mode = 'cell';
+    selected.rows = table.rows.length;
+    this.commitTableDom('Insert table row');
+    this.syncTableHeight(selected.elementId);
+  }
+
+  deleteTableRow(): void {
+    const table = this.activeTable();
+    const selected = this.tableSelection;
+    if (!table || !selected) return;
+    const start = Math.min(selected.row, selected.rowEnd);
+    const end = Math.max(selected.row, selected.rowEnd);
+    if (end - start + 1 >= table.rows.length) return;
+    const column = Math.min(selected.column, selected.columnEnd);
+    deleteTableRows(table, start, end);
+    selected.rows = table.rows.length;
+    selected.row = Math.min(start, selected.rows - 1);
+    selected.rowEnd = selected.row;
+    selected.column = Math.max(0, Math.min(column, (table.rows[selected.row]?.cells.length ?? 1) - 1));
+    selected.columnEnd = selected.column;
+    selected.mode = 'cell';
+    this.commitTableDom(start === end ? 'Delete table row' : 'Delete table rows');
     this.syncTableHeight(selected.elementId);
   }
 

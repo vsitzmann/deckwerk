@@ -25,8 +25,9 @@ import {
  *
  * The random walk then throws the rest of the vocabulary at it in a seeded
  * order — clicks, shift-clicks, double-clicks, cell drags, rail clicks,
- * typing, arrows, Tab, undo, select-all, delete, selecting a word, and
- * formatting from the sidebar's Font size field — and checks the same
+ * typing, arrows, Tab, undo, select-all, delete, selecting a word,
+ * formatting from the sidebar's Font size field, and inserting and deleting
+ * table rows and columns from the sidebar — and checks the same
  * invariants after every single step. The step list is reported on failure, so
  * a fault found here is a recipe, not a mystery.
  *
@@ -289,6 +290,14 @@ function stepsFor(state: SelectionState, next: () => number): Step[] {
       run: () => session.clickCell(row, column) });
     steps.push({ name: `drag cells 1,${column} to 3,${column}`,
       run: () => session.dragCells([1, column], [3, column]) });
+  }
+  if (state.table) {
+    // Table structure from the sidebar: the cell range it acts on must
+    // survive the rows and columns moving under it.
+    const action = pick(['Insert row above', 'Insert row below', 'Delete row',
+      'Insert before', 'Insert after', 'Delete column']);
+    steps.push({ name: `click "${action}" in the sidebar`,
+      run: () => session.clickPanelButton(action) });
   }
   return steps;
 }

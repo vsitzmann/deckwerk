@@ -1108,7 +1108,7 @@ describe('inline text editing', () => {
     expect((saved as { html: string }).html).toBe(body.innerHTML);
   });
 
-  it('selects table rows and columns, colours cells, and edits columns', () => {
+  it('selects table rows and columns, colours cells, and edits columns and rows', () => {
     const { store, canvas, host } = setup();
     store.select(['text-1']);
     store.updateSelected((element) => {
@@ -1135,6 +1135,15 @@ describe('inline text editing', () => {
     expect(canvas.tableSelectionInfo()?.columns).toBe(3);
     canvas.deleteTableColumn();
     expect(canvas.tableSelectionInfo()?.columns).toBe(2);
+
+    canvas.insertTableRow(true);
+    expect(canvas.tableSelectionInfo()).toMatchObject({ row: 1, rows: 3 });
+    canvas.insertTableRow(false);
+    expect(canvas.tableSelectionInfo()).toMatchObject({ row: 1, rows: 4 });
+    canvas.deleteTableRow();
+    expect(canvas.tableSelectionInfo()?.rows).toBe(3);
+    html = (store.slide!.elements.find((element) => element.id === 'text-1') as { html: string }).html;
+    expect(html.match(/<tr/g)).toHaveLength(3);
   });
 
   it('never stores the editor-only table selection highlight', () => {

@@ -239,6 +239,8 @@ export class Inspector {
   };
   onInsertTableColumn?: (after: boolean) => void;
   onDeleteTableColumn?: () => void;
+  onInsertTableRow?: (after: boolean) => void;
+  onDeleteTableRow?: () => void;
   /** Toggle crop-editing mode on the canvas for an image or video. */
   onToggleMask?: (elementId: string) => void;
   /** Which element is currently in mask mode, so the button can reflect it. */
@@ -2588,6 +2590,18 @@ export class Inspector {
             (remove as HTMLButtonElement).disabled = selected.columns <= 1;
             columns.appendChild(remove);
             table.content.appendChild(columns);
+            const rows = document.createElement('div');
+            rows.className = 'button-row table-row-buttons';
+            rows.append(
+              button('Insert row above', () => this.onInsertTableRow?.(false)),
+              button('Insert row below', () => this.onInsertTableRow?.(true)),
+            );
+            const removeRows = button('Delete row', () => this.onDeleteTableRow?.());
+            removeRows.classList.add('danger');
+            // Deleting every row would leave no table: at least one stays.
+            (removeRows as HTMLButtonElement).disabled = rowEnd - rowStart + 1 >= selected.rows;
+            rows.appendChild(removeRows);
+            table.content.appendChild(rows);
           }
           // Table actions operate on the cell selection owned by the live
           // contenteditable. None of these buttons needs focus; keeping the
