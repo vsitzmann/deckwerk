@@ -4063,8 +4063,9 @@ button.deck-picker-row.active { border-color: var(--accent); }
 .merge-dialog-status { flex: 1; align-self: center; color: var(--muted); }
 .merge-dialog-status.is-error { color: var(--danger); }
 
-/* A server deck's connection, in the status bar (main.ts). */
+/* A server deck's connection, in the toolbar beside its name (main.ts). */
 .remote-status { display: inline-flex; gap: 6px; align-items: center; white-space: nowrap; }
+.remote-status[hidden] { display: none; }
 .remote-status::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--muted); }
 .remote-status[data-state="online"]::before { background: var(--green); }
 .remote-status[data-state="offline"]::before { background: var(--yellow); }

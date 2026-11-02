@@ -1679,6 +1679,18 @@ export class EditorCanvas {
   }
 
   /**
+   * Draw the slide again from nothing. For files that arrived after the slide
+   * was drawn without them (a collaborator's new picture reaching this
+   * machine's copy of a server deck): an unchanged slide is otherwise never
+   * rebuilt, so its broken picture would stay broken.
+   */
+  forceRedraw(): void {
+    this.renderedSlide = null;
+    this.renderedSlideIndex = null;
+    this.render();
+  }
+
+  /**
    * Move paused clips onto the variant the server now names for them.
    *
    * A clip's streaming version can land while the canvas shows its original:
@@ -1695,18 +1707,6 @@ export class EditorCanvas {
    * version (videoMemory.ts) is rebuilt too, now that there is something to
    * read.
    */
-  /**
-   * Draw the slide again from nothing. For files that arrived after the slide
-   * was drawn without them (a collaborator's new picture reaching this
-   * machine's copy of a server deck): an unchanged slide is otherwise never
-   * rebuilt, so its broken picture would stay broken.
-   */
-  forceRedraw(): void {
-    this.renderedSlide = null;
-    this.renderedSlideIndex = null;
-    this.render();
-  }
-
   refreshMediaSources(srcs: Iterable<string>): void {
     const resolveSrc = (src: string) => window.api.assetUrl(src);
     const changed = new Set(srcs);
