@@ -688,12 +688,61 @@ export const DECK_VERSION = 1 as const;
  * path-annotated message rather than a raw ZodError dump.
  */
 export function parseDeck(raw: unknown): Deck {
-  const result = DeckSchema.safeParse(migrateVideoFragments(migrateDeckMorphDuration(renameRetiredFields(raw))));
+  const result = DeckSchema.safeParse(prepareDeck(raw));
   if (result.success) return result.data;
-  const details = result.error.issues
+  throw invalidDeck(result.error.issues);
+}
+
+function prepareDeck(raw: unknown): unknown {
+  return migrateVideoFragments(migrateDeckMorphDuration(renameRetiredFields(raw)));
+}
+
+function invalidDeck(issues: z.ZodIssue[]): Error {
+  const details = issues
     .map((i) => `  ${i.path.join('.') || '<root>'}: ${i.message}`)
     .join('\n');
-  throw new Error(`deck.json is not valid:\n${details}`);
+  return new Error(`deck.json is not valid:\n${details}`);
+}
+
+/**
+ * A deck to show, never to save: what `parseDeck` reads, except that an
+ * object or a build this version cannot read is left out rather than
+ * refusing the whole deck. Returns what it left out, one line each.
+ *
+ * A player is often older than the deck it shows — a web export's own copy,
+ * an app not yet updated opening a deck from a server — and one slide's
+ * newer build used to leave every slide of the talk black. The editor still
+ * parses strictly: dropping what it cannot read and then saving would lose it.
+ */
+export function parseDeckForPlayback(raw: unknown): { deck: Deck; dropped: string[] } {
+  const prepared = prepareDeck(raw);
+  const dropped: string[] = [];
+  // Each pass drops what the last one failed on; a timeline entry whose
+  // target went with its object is fine, the player skips missing targets.
+  for (let pass = 0; pass < 100; pass += 1) {
+    const result = DeckSchema.safeParse(prepared);
+    if (result.success) return { deck: result.data, dropped };
+    const slides = (prepared as { slides?: unknown }).slides;
+    const doomed = new Map<string, { list: unknown[]; index: number; what: string }>();
+    for (const issue of result.error.issues) {
+      const [root, slideIndex, field, index] = issue.path;
+      const slide = Array.isArray(slides) && typeof slideIndex === 'number'
+        ? slides[slideIndex] as Record<string, unknown> | undefined : undefined;
+      const list = root === 'slides' && slide && (field === 'elements' || field === 'timeline')
+        && typeof index === 'number' && Array.isArray(slide[field]) ? slide[field] as unknown[] : null;
+      if (!list || index as number >= list.length) throw invalidDeck(result.error.issues);
+      const id = (list[index as number] as { id?: unknown } | null)?.id;
+      const what = `slide ${(slideIndex as number) + 1}: ${field === 'elements' ? 'object' : 'build'}`
+        + `${typeof id === 'string' ? ` ${id}` : ''} (${issue.path.slice(4).join('.') || 'itself'}: ${issue.message})`;
+      doomed.set(`${slideIndex}.${field}.${index}`, { list, index: index as number, what });
+    }
+    // Highest index first, so splicing one leaves the others where they were.
+    for (const { list, index, what } of [...doomed.values()].sort((a, b) => b.index - a.index)) {
+      list.splice(index, 1);
+      dropped.push(what);
+    }
+  }
+  throw new Error('deck.json is not valid: too many unreadable objects and builds');
 }
 
 /**

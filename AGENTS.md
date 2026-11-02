@@ -252,7 +252,9 @@ there too — the list is a checklist, not an error. Scope it to the slides you
 are actually editing with `--slide <id|number|a-b>` (repeatable, or comma-separated) or
 `--selected`; structural `errors` stay deck-wide either way. It also lists
 `mathProblems`: text elements whose `$`/`$$` maths opens and never closes,
-which the slide shows as raw TeX (usually a `<` inside maths; see below).
+which the slide shows as raw TeX (usually a `<` inside maths; see below). And
+`buildProblems`: equation term builds with nothing to step through, because
+the equation marks no terms (`\step{1}{…}`) or not the one the build names.
 
 **Write semantic markup; put reusable classes in `theme.css`.** The walk bakes
 layout from any CSS, keeps a dissolving container's paint (background, border,
@@ -871,7 +873,8 @@ slide-agent render ~/talks/millivid --selected \
 `--annotate` outlines every object and labels it with its element id, marking
 the selection in red. `--built` fires every build so the finished slide is
 captured rather than its opening state. Renders go through the same player the
-projector runs, and need `npm run build:export` once.
+projector runs, built from this checkout's own sources: the first render after
+a code change takes a second or two longer while it builds.
 
 ### Change the deck with a transaction — the fallback path
 

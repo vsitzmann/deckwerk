@@ -2,12 +2,11 @@ import { existsSync } from 'node:fs';
 import { mkdir, mkdtemp, readdir, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { build } from 'vite';
 import { afterEach, describe, expect, it } from 'vitest';
 import { EXIT_ERROR, runAgentCli } from '../src/cli/agentCli.js';
 import { emptyDeck, parseDeck } from '../src/shared/deck.js';
+import { exportPlayerDir } from '../src/main/exportPlayer.js';
 import { electronBinary } from './support/browserSession.js';
-import { sharedBuild } from './support/collabClient.js';
 
 /**
  * A disk that fills up while the capture writes its PNGs.
@@ -21,20 +20,6 @@ import { sharedBuild } from './support/collabClient.js';
  */
 
 const ROOT = process.cwd();
-
-function exportPlayerDir(): Promise<string> {
-  return sharedBuild({
-    cacheName: 'slide-editor-vitest-export-player',
-    inputs: ['src', 'vite.export.config.ts', 'package-lock.json'],
-    produce: async (outDir, checkout) => {
-      await build({
-        configFile: join(checkout, 'vite.export.config.ts'),
-        logLevel: 'silent',
-        build: { outDir, emptyOutDir: true },
-      });
-    },
-  });
-}
 
 describe.runIf(electronBinary && existsSync('/dev/full'))('render when the output disk is full', { timeout: 180_000 }, () => {
   const saved = { TMPDIR: process.env.TMPDIR, player: process.env.DECKWERK_EXPORT_PLAYER_DIR, state: process.env.DECKWERK_STATE_DIR };

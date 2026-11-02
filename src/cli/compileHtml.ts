@@ -15,6 +15,7 @@ import {
 } from '@shared/htmlMeasure.js';
 import { PLAYER_TYPE_CSS } from '@shared/playerTypeCss.js';
 import { slidesFromMeasured, slidesToHtml, type MeasuredSlide } from '@shared/htmlSlides.js';
+import { termBuildWarnings } from '@shared/equationTerms.js';
 import { mathWarnings } from '@shared/mathDelimiters.js';
 import { loadTheme } from '../main/deckStore.js';
 import { electronChildEnv, electronFailure, headlessElectronArgs } from './electronDisplay.js';
@@ -41,7 +42,8 @@ export interface CompiledHtml {
   slides: Slide[];
   /**
    * Inline style the browser silently dropped (see `MeasuredSlide.warnings`)
-   * and maths a text element leaves unclosed (`mathWarnings`).
+   * maths a text element leaves unclosed (`mathWarnings`), and term builds
+   * with no terms to step through (`termBuildWarnings`).
    */
   warnings: string[];
   /**
@@ -79,7 +81,8 @@ export async function compileHtmlToSlides(request: CompileRequest): Promise<Comp
     const slides = slidesFromMeasured(request.deck, measured);
     return {
       slides,
-      warnings: [...measured.flatMap((slide) => slide.warnings ?? []), ...mathWarnings(slides, authored)],
+      warnings: [...measured.flatMap((slide) => slide.warnings ?? []), ...mathWarnings(slides, authored),
+        ...termBuildWarnings(slides)],
       measured,
       theme,
     };

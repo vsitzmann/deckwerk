@@ -1,5 +1,8 @@
-import { resolve } from 'node:path';
+import { writeFile } from 'node:fs/promises';
+import { join, resolve } from 'node:path';
 import { build, defineConfig, type Plugin } from 'vite';
+import { EXPORT_PLAYER_INPUTS, SOURCE_STAMP } from './src/main/exportPlayer.js';
+import { sourceHash } from './src/main/sharedBuild.js';
 
 /**
  * `code-highlight.js`, built beside player.js as a second classic script:
@@ -10,16 +13,23 @@ import { build, defineConfig, type Plugin } from 'vite';
  * (src/renderer/export/codeAssetsStandalone.ts).
  */
 function codeHighlightBundle(): Plugin {
+  // Beside this build's player.js, wherever that is: a build into a cache
+  // (src/main/exportPlayer.ts, the tests) once wrote it into the checkout's
+  // out/export instead, and its own player had no code highlighting.
+  let outDir = '';
   return {
     name: 'deckwerk-code-highlight-bundle',
     apply: 'build',
+    configResolved(config) {
+      outDir = resolve(config.root, config.build.outDir);
+    },
     async closeBundle() {
       await build({
         configFile: false,
         logLevel: 'warn',
         resolve: { alias: { '@shared': resolve(__dirname, 'src/shared') } },
         build: {
-          outDir: 'out/export',
+          outDir,
           emptyOutDir: false,
           lib: {
             entry: resolve(__dirname, 'src/renderer/export/codeHighlightBundle.ts'),
@@ -29,6 +39,36 @@ function codeHighlightBundle(): Plugin {
           },
         },
       });
+    },
+  };
+}
+
+/**
+ * Stamp the build with the hash of the sources it is built from, taken as
+ * the build starts. Code running from a checkout uses a player only when its
+ * stamp matches the sources it is running (src/main/exportPlayer.ts), so a
+ * player left over from an older checkout is never shown.
+ */
+function sourceStamp(): Plugin {
+  let outDir = '';
+  let hash: Promise<string> | null = null;
+  return {
+    name: 'deckwerk-export-source-stamp',
+    apply: 'build',
+    configResolved(config) {
+      outDir = resolve(config.root, config.build.outDir);
+    },
+    buildStart() {
+      hash = sourceHash(__dirname, EXPORT_PLAYER_INPUTS);
+    },
+    // After the code-highlight bundle: the stamp says the folder is complete.
+    closeBundle: {
+      // closeBundle hooks run in parallel unless told to wait their turn.
+      sequential: true,
+      order: 'post',
+      async handler() {
+        if (hash) await writeFile(join(outDir, SOURCE_STAMP), `${await hash}\n`, 'utf8');
+      },
     },
   };
 }
@@ -50,7 +90,7 @@ export default defineConfig({
       { find: '@shared', replacement: resolve(__dirname, 'src/shared') },
     ],
   },
-  plugins: [codeHighlightBundle()],
+  plugins: [codeHighlightBundle(), sourceStamp()],
   build: {
     outDir: 'out/export',
     emptyOutDir: true,

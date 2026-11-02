@@ -6,6 +6,7 @@ import type { WebExportQuality } from '@shared/ipc.js';
 import { loadTheme, resolveAsset } from './deckStore.js';
 import { encodeImageWebp, probeImage, probeMedia, transcodeVideoForWeb } from './ffmpeg.js';
 import { copyFileStreamed } from './copyFileStreamed.js';
+import { exportPlayerDir, exportPlayerUnavailableReason } from './exportPlayer.js';
 import { writeFileNamed } from './writeFailure.js';
 
 /**
@@ -23,37 +24,15 @@ import { writeFileNamed } from './writeFailure.js';
  */
 
 /**
- * Where the export player bundle lives, in dev and when packaged.
- *
- * `DECKWERK_EXPORT_PLAYER_DIR` names a built player folder outright: a test
- * exports with the player it built from this checkout's sources (never
- * whatever `out/` was last built by hand), or with a stub when the export is
- * meant to fail before anything loads it.
- */
-function playerBundleDir(): string {
-  const named = process.env.DECKWERK_EXPORT_PLAYER_DIR;
-  if (named) return named;
-  const candidates = [
-    join(import.meta.dirname, '../export'),
-    join(import.meta.dirname, '../../out/export'),
-    join(process.cwd(), 'out/export'),
-  ];
-  return candidates.find((dir) => existsSync(join(dir, 'player.js'))) ?? candidates[0];
-}
-
-/**
  * Why a web export cannot run right now, or null when it can.
  *
- * The export player is a build artefact rather than source, so a checkout that
- * has not run `npm run build:export` — or a server deployed without it — can
- * only find out by trying. Callers that hand the result straight to a browser
- * download need to know before they start writing bytes.
+ * The export player is a build artefact (src/main/exportPlayer.ts): a
+ * checkout builds its own on demand, but a server or app deployed without
+ * one can only find out by trying. Callers that hand the result straight to
+ * a browser download need to know before they start writing bytes.
  */
 export function webExportUnavailableReason(): string | null {
-  const playerJs = join(playerBundleDir(), 'player.js');
-  return existsSync(playerJs)
-    ? null
-    : `Export player bundle not found at ${playerJs}. Run: npm run build:export`;
+  return exportPlayerUnavailableReason();
 }
 
 export interface WebExportOptions {
@@ -136,7 +115,7 @@ export async function exportDeck(
 ): Promise<WebExportResult> {
   const unavailable = webExportUnavailableReason();
   if (unavailable) throw new Error(unavailable);
-  const bundleDir = playerBundleDir();
+  const bundleDir = await exportPlayerDir();
   const playerJs = join(bundleDir, 'player.js');
   const quality = options.quality ?? 'original';
   const profile = PROFILES[quality];

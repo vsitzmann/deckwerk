@@ -3,13 +3,12 @@ import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promi
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
-import { build } from 'vite';
 import { afterEach, describe, expect, it } from 'vitest';
 import { renderSlidesToPng } from '../src/cli/renderSlides.js';
 import { getFfmpegPath } from '../src/main/ffmpeg.js';
 import { emptyDeck, parseDeck, type Deck, type Slide, type SlideElement, type TimelineEntry } from '../src/shared/deck.js';
+import { exportPlayerDir } from '../src/main/exportPlayer.js';
 import { electronBinary } from './support/browserSession.js';
-import { sharedBuild } from './support/collabClient.js';
 
 /**
  * Static captures — `slide-agent render`, thumbnails — are pictures of a
@@ -35,21 +34,6 @@ afterEach(async () => {
   if (workDir) await rm(workDir, { recursive: true, force: true });
   workDir = '';
 });
-
-/** The export player, built from this checkout's sources (never `out/`). */
-function exportPlayerDir(): Promise<string> {
-  return sharedBuild({
-    cacheName: 'slide-editor-vitest-export-player',
-    inputs: ['src', 'vite.export.config.ts', 'package-lock.json'],
-    produce: async (outDir, checkout) => {
-      await build({
-        configFile: join(checkout, 'vite.export.config.ts'),
-        logLevel: 'silent',
-        build: { outDir, emptyOutDir: true },
-      });
-    },
-  });
-}
 
 /** A web-export bundle of `deck`, as `exportDeck` writes one, with no media. */
 async function bundle(deck: Deck, dir: string): Promise<void> {

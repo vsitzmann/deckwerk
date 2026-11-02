@@ -170,6 +170,41 @@ export function termBuildLabels(entry: TimelineEntry, slide: Slide): string[] {
   return target ? termLabels(target.html) : [];
 }
 
+/**
+ * Term builds that will do nothing on screen, one finding each: a `terms`
+ * build on an equation with no marked terms, or a build naming a term its
+ * equation does not mark. Either steps through nothing, so a click seems to
+ * do nothing and the deck looks broken while it is valid.
+ */
+export function termBuildProblems(slide: Slide): Array<{ entryId: string; elementId: string; message: string }> {
+  const problems: Array<{ entryId: string; elementId: string; message: string }> = [];
+  for (const entry of slide.timeline) {
+    const { type, target, term } = entry.action;
+    if (type !== 'terms' && !(isEmphasisType(type) && term !== undefined)) continue;
+    const add = (message: string): void => { problems.push({ entryId: entry.id, elementId: target, message }); };
+    const element = textTarget(slide, target);
+    if (!element) {
+      add(`a ${type} build on a term needs a text element with maths; ${target} is not one`);
+      continue;
+    }
+    const marked = termLabels(element.html);
+    if (term !== undefined && !marked.includes(term)) {
+      add(`the ${type} build names term "${term}", which ${target} does not mark`
+        + (marked.length > 0 ? ` (it marks ${marked.map((label) => `"${label}"`).join(', ')})` : ''));
+    } else if (marked.length === 0) {
+      add(`the ${type} build on ${target} has no terms to step through: mark them in the TeX `
+        + 'with \\step{1}{…} (or \\htmlClass{step-1}{…}), or use an appear build instead');
+    }
+  }
+  return problems;
+}
+
+/** `termBuildProblems` for every slide, as compile warnings. */
+export function termBuildWarnings(slides: Slide[]): string[] {
+  return slides.flatMap((slide) => termBuildProblems(slide)
+    .map((problem) => `slide ${slide.id}, build ${problem.entryId}: ${problem.message}`));
+}
+
 /** Per text element: which of its terms are not revealed yet, and the paint on the rest. */
 export interface TermState {
   hidden: Set<string>;

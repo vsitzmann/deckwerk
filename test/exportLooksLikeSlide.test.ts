@@ -24,13 +24,12 @@ import { writeHtmlScope } from '../src/main/htmlAuthoring.js';
  * — and once by opening the authoring file the way a browser does. Set
  * `EXPORT_PIXEL_EXHAUSTIVE=1` for the original every-slide release sweep.
  *
- * Needs the importer venv, the .key, Electron, and a built player bundle
- * (`npm run build:export`); skips politely without them.
+ * Needs the importer venv, the .key and Electron; skips politely without
+ * them. The player is built from this checkout's sources as the export runs.
  */
 
 const PYTHON = join(process.cwd(), '.venv-import/bin/python');
 const KEY = join(process.cwd(), 'example_presentations', '2606_bitter_lesson.key');
-const PLAYER_BUNDLE = join(process.cwd(), 'out', 'export', 'player.js');
 
 const electronPresent = (): boolean => {
   try {
@@ -41,8 +40,7 @@ const electronPresent = (): boolean => {
   }
 };
 
-const runnable = existsSync(PYTHON) && existsSync(KEY)
-  && existsSync(PLAYER_BUNDLE) && electronPresent();
+const runnable = existsSync(PYTHON) && existsSync(KEY) && electronPresent();
 
 /**
  * A slide is "the same" below this share of differing pixels. It is not zero
