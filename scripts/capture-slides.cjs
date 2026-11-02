@@ -41,6 +41,10 @@ app.whenReady().then(async () => {
   try {
     for (const slide of slides) {
       await win.loadFile(join(bundleDir, 'index.html'), { hash: String(slide.number) });
+      // A player that never started paints nothing: say why, rather than
+      // hand back a black PNG of every slide as if it were the deck.
+      const failed = await win.webContents.executeJavaScript(PLAYER_FAILURE);
+      if (failed !== null) throw new Error(`The slide player did not start: ${failed}`);
       // Fonts and layout need a beat to settle; a screenshot taken before
       // them shows a half-painted slide.
       await win.webContents.executeJavaScript('document.fonts.ready.then(() => true)');
@@ -80,6 +84,13 @@ app.whenReady().then(async () => {
     app.exit(1);
   }
 });
+
+/** Null once the page's Player is up, else what the page shows instead. */
+const PLAYER_FAILURE = `(() => {
+  if (window.__SLIDE_PLAYER__) return null;
+  const root = document.getElementById('root');
+  return (root && root.textContent.trim()) || 'no error shown; the page has no player';
+})()`;
 
 /**
  * Show every build step at once.

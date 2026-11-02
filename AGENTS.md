@@ -252,7 +252,9 @@ there too — the list is a checklist, not an error. Scope it to the slides you
 are actually editing with `--slide <id|number|a-b>` (repeatable, or comma-separated) or
 `--selected`; structural `errors` stay deck-wide either way. It also lists
 `mathProblems`: text elements whose `$`/`$$` maths opens and never closes,
-which the slide shows as raw TeX (usually a `<` inside maths; see below).
+which the slide shows as raw TeX (usually a `<` inside maths; see below). And
+`buildProblems`: equation term builds with nothing to step through, because
+the equation marks no terms (`\step{1}{…}`) or not the one the build names.
 
 **Write semantic markup; put reusable classes in `theme.css`.** The walk bakes
 layout from any CSS, keeps a dissolving container's paint (background, border,

@@ -1,8 +1,10 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from 'vitest';
-import { emptyDeck, parseDeck, type Slide, type SlideElement, type TimelineEntry } from '../src/shared/deck.js';
+import { emptyDeck, parseDeck, parseDeckForPlayback, type Slide, type SlideElement, type TimelineEntry } from '../src/shared/deck.js';
 import {
   initialTermStates,
+  termBuildProblems,
+  termBuildWarnings,
   termLabels,
   trustTermMarker,
 } from '../src/shared/equationTerms.js';
@@ -186,6 +188,74 @@ describe('term builds on the timeline', () => {
       expect(after.terms.size).toBe(0);
       expect(after.classes).toEqual(before.classes);
     }
+  });
+});
+
+describe('term builds that do nothing', () => {
+  // A terms build on an equation with no \step markers was valid, applied
+  // without a word, and on screen a click that did nothing.
+  it('names a terms build on an equation that marks no terms', () => {
+    const slide = slideWith([equation(String.raw`$$a = b + c$$`), equation(MOMENTUM, 'eq-2')], [
+      { id: 'b1', trigger: click, action: { type: 'terms', target: 'eq', value: 'color', color: '#b8b2a7' } },
+      { id: 'b2', trigger: click, action: { type: 'terms', target: 'eq-2', value: 'color' } },
+    ]);
+    expect(termBuildProblems(slide)).toEqual([
+      { entryId: 'b1', elementId: 'eq', message: expect.stringMatching(/no terms to step through.*\\step\{1\}/) },
+    ]);
+    expect(termBuildWarnings([slide])).toEqual([expect.stringMatching(/^slide .*, build b1: /)]);
+  });
+
+  it('names a build on a term the equation does not mark, and leaves whole-object emphases alone', () => {
+    const slide = slideWith([equation(), equation(String.raw`$$a$$`, 'plain')], [
+      { id: 'b1', trigger: click, action: { type: 'terms', target: 'eq', value: 'appear', term: '3' } },
+      { id: 'b2', trigger: click, action: { type: 'pulse', target: 'eq', value: null, term: 'force' } },
+      { id: 'b3', trigger: click, action: { type: 'pulse', target: 'eq', value: null, term: '2' } },
+      { id: 'b4', trigger: click, action: { type: 'pulse', target: 'plain', value: null } },
+    ]);
+    const problems = termBuildProblems(slide);
+    expect(problems.map((problem) => problem.entryId)).toEqual(['b1', 'b2']);
+    expect(problems[0].message).toMatch(/term "3".*marks "1", "2"/);
+  });
+
+  it('names a terms build whose target is not text', () => {
+    const slide = slideWith([equation()], [
+      { id: 'b1', trigger: click, action: { type: 'terms', target: 'gone', value: 'appear' } },
+    ]);
+    expect(termBuildProblems(slide)).toEqual([expect.objectContaining({ entryId: 'b1', elementId: 'gone' })]);
+  });
+});
+
+describe('a deck to show, from a newer version', () => {
+  // A player older than its deck refused the whole deck over one build it
+  // did not know, and every slide of the talk rendered black.
+  const newer = (): unknown => {
+    const deck = JSON.parse(JSON.stringify(emptyDeck('Newer'))) as {
+      slides: Array<{ id: string; elements: unknown[]; timeline: unknown[] }>;
+    };
+    deck.slides[0].elements = [equation(), { ...equation(), id: 'holo', type: 'hologram' }];
+    deck.slides[0].timeline = [
+      { id: 'b1', trigger: click, action: { type: 'appear', target: 'eq', value: null } },
+      { id: 'b2', trigger: click, action: { type: 'teleport', target: 'eq', value: null } },
+      { id: 'b3', trigger: click, action: { type: 'appear', target: 'holo', value: null } },
+    ];
+    return deck;
+  };
+
+  it('leaves out the objects and builds it cannot read, and names them', () => {
+    expect(() => parseDeck(newer())).toThrow(/not valid/);
+    const { deck, dropped } = parseDeckForPlayback(newer());
+    expect(deck.slides[0].elements.map((element) => element.id)).toEqual(['eq']);
+    expect(deck.slides[0].timeline.map((entry) => entry.id)).toEqual(['b1', 'b3']);
+    expect(dropped).toEqual([
+      expect.stringMatching(/^slide 1: object holo /),
+      expect.stringMatching(/^slide 1: build b2 \(action\.type: /),
+    ]);
+  });
+
+  it('reads a valid deck exactly as parseDeck does, and still refuses one with no slides to show', () => {
+    const deck = emptyDeck('Plain');
+    expect(parseDeckForPlayback(deck)).toEqual({ deck: parseDeck(deck), dropped: [] });
+    expect(() => parseDeckForPlayback({ ...deck, slides: 'none' })).toThrow(/not valid/);
   });
 });
 

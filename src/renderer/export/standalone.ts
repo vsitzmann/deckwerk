@@ -1,5 +1,5 @@
 import '../player/player.css';
-import { parseDeck } from '@shared/deck.js';
+import { parseDeckForPlayback } from '@shared/deck.js';
 import { bindPresentKeys } from '../player/keys.js';
 import { Player } from '../player/player.js';
 import { eventOnInteractiveWeb, slideLinkFromEvent } from '../player/links.js';
@@ -31,7 +31,18 @@ function boot(): void {
     return;
   }
 
-  const deck = parseDeck(window.__DECK__);
+  // What this player cannot read is left out, named in the console; a deck
+  // it cannot read at all says so on screen instead of going black.
+  let parsed: ReturnType<typeof parseDeckForPlayback>;
+  try {
+    parsed = parseDeckForPlayback(window.__DECK__);
+  } catch (error) {
+    root.textContent = `This deck cannot be shown: ${error instanceof Error ? error.message : String(error)}`;
+    root.style.cssText += ';color:#eee;font:16px/1.5 system-ui,sans-serif;padding:24px;white-space:pre-wrap';
+    throw error;
+  }
+  const { deck, dropped } = parsed;
+  for (const what of dropped) console.warn(`Left out what this player cannot read: ${what}`);
   const player = new Player({
     deck,
     container: root,

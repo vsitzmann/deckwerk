@@ -56,7 +56,9 @@ import { serveBundle } from './previewServer.js';
 import { exportDeck } from '../main/exportDeck.js';
 import { spawn } from 'node:child_process';
 import { htmlEditTransaction } from '../main/htmlAuthoring.js';
+import { termBuildProblems } from '@shared/equationTerms.js';
 import { unclosedMath } from '@shared/mathDelimiters.js';
+import { useCurrentExportPlayer } from './exportPlayer.js';
 import { checkWebPage, renderSlidesToPng } from './renderSlides.js';
 import { removeTempDir, tempDir, untilStopped } from './scratch.js';
 import { failureMessage } from '../main/writeFailure.js';
@@ -674,6 +676,7 @@ async function renderCommand(argv: string[], io: CliIo): Promise<number> {
     return EXIT_ERROR;
   }
 
+  await useCurrentExportPlayer(io.err);
   const { images, contactSheet, contactSheets } = await renderSlidesToPng({
     deckDir,
     deck,
@@ -713,6 +716,7 @@ async function previewCommand(argv: string[], io: CliIo): Promise<number> {
   const deckDir = resolveDeckDir(positional[0], io);
   const deck = await loadDeck(deckDir);
 
+  await useCurrentExportPlayer(io.err);
   const bundleDir = await tempDir('slide-agent-preview-');
   await exportDeck(deckDir, deck, bundleDir);
   const port = Number(options.get('port') ?? 0) || 0;
@@ -805,6 +809,16 @@ async function validateCommand(argv: string[], io: CliIo): Promise<number> {
   } catch {
     // The parse failure is already represented in `errors`.
   }
+  // A term build with nothing to step through: valid, and on screen a click
+  // that does nothing.
+  let buildProblems: Array<{ slideId: string; entryId: string; elementId: string; message: string }> = [];
+  try {
+    const deck = await loadDeck(deckDir);
+    buildProblems = deck.slides.flatMap((slide) => termBuildProblems(slide)
+      .map((problem) => ({ slideId: slide.id, ...problem })));
+  } catch {
+    // The parse failure is already represented in `errors`.
+  }
   if (wanted) {
     const filter = wanted;
     const keep = (slideId: string): boolean =>
@@ -812,6 +826,7 @@ async function validateCommand(argv: string[], io: CliIo): Promise<number> {
     importGaps = importGaps.filter((gap) => keep(gap.slideId));
     overflows = overflows.filter((overflow) => keep(overflow.slideId));
     mathProblems = mathProblems.filter((problem) => keep(problem.slideId));
+    buildProblems = buildProblems.filter((problem) => keep(problem.slideId));
   }
 
   io.out(jsonCompactArrays(
@@ -823,6 +838,7 @@ async function validateCommand(argv: string[], io: CliIo): Promise<number> {
       importGaps,
       overflows,
       mathProblems,
+      buildProblems,
     },
     ['overflows'],
   ));
@@ -932,6 +948,7 @@ async function webCommand(argv: string[], io: CliIo): Promise<number> {
   if (!flags.has('no-poster')) {
     let shots: string | null = null;
     try {
+      await useCurrentExportPlayer(io.err);
       shots = await tempDir('web-poster-');
       const { images } = await renderSlidesToPng({
         deckDir,
