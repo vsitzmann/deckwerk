@@ -575,9 +575,11 @@ export class CollabBridge {
         this.replayingHistory = true;
         try {
           const fromAgentApi = message.byClientId === 'agent-http';
+          // A deck.json somebody wrote on the server, merged in there.
+          const fromDisk = message.byClientId === 'disk';
           this.hooks.onDeckReplaced(
             ui,
-            fromAgentApi ? 'Agent edit' : mineIndex !== -1 ? message.label : `${message.label} (remote)`,
+            fromAgentApi ? 'Agent edit' : mineIndex !== -1 || fromDisk ? message.label : `${message.label} (remote)`,
             // Every applied agent draft is a deliberate revision, even when an
             // agent happens to reuse the same label. Never fold two of them
             // into one History snapshot.
@@ -585,7 +587,7 @@ export class CollabBridge {
               coalesce: false,
               description: describeAgentEdit(message.label, message.ops),
               agentChatId: message.agentChatId,
-            } : undefined,
+            } : fromDisk ? { coalesce: false } : undefined,
           );
         } finally {
           this.replayingHistory = false;
@@ -596,7 +598,12 @@ export class CollabBridge {
       case 'deck': {
         this.seq = message.seq;
         this.shadow = message.deck;
-        this.pending = [];
+        // A resync answers a transaction the server refused: what is pending
+        // will never be confirmed. Anything else (an agent's edit sent as a
+        // whole deck) was decided before the server saw what is still
+        // pending here, and it applies those on top when they arrive — so
+        // they stay on screen, replayed over the new deck, as a txn does.
+        if (message.reason === 'resync') this.pending = [];
         if (this.reconciling) return;
         if (message.reason !== 'agent-edit') {
           // A filesystem replacement/resync establishes a new base. Inverses
@@ -604,11 +611,13 @@ export class CollabBridge {
           this.undoStack = [];
           this.redoStack = [];
         }
-        this.hooks.onCleanChange(true);
+        if (this.pending.length === 0) this.hooks.onCleanChange(true);
+        let ui = message.deck;
+        for (const p of this.pending) ui = applyOpsLenient(ui, p.ops).deck;
         this.replayingHistory = true;
         try {
           if (message.reason === 'agent-edit') {
-            this.hooks.onDeckReplaced(message.deck, 'Agent edit', {
+            this.hooks.onDeckReplaced(ui, 'Agent edit', {
               coalesce: false,
               description: message.label
                 ?? 'The Agent updated the presentation through its deck authoring workspace.',
@@ -616,7 +625,7 @@ export class CollabBridge {
             });
           } else {
             this.hooks.onDeckReplaced(
-              message.deck,
+              ui,
               message.reason === 'resync' ? 'Server resync' : 'External edit',
               { coalesce: false, history: false },
             );

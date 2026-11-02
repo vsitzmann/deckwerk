@@ -551,9 +551,22 @@ exposed for console driving.
   reverts other people's work; if a peer deleted what you were about to
   restore, that part is skipped.
 - Persistence mirrors the desktop autosave: debounced whole-file writes of
-  `deck.json` by the server, which also watches the folder — an offline
-  `slide-agent apply`, a git checkout, or a hand edit broadcasts a resync to
-  every client.
+  `deck.json` by the server, which also watches the folder. A `deck.json`
+  written by anything else (a git checkout, a script, a hand edit) is merged
+  into the live deck three ways — the file, the live deck with edits not yet
+  saved, and whichever recent save the file was most likely written from
+  (`src/server/diskMerge.ts`) — and goes to every client as an ordinary
+  transaction, so nothing a client has not had confirmed, and nobody's undo
+  history, is lost. Where both changed the same object the live edit wins
+  and the file stays restorable from the deck's versions. A save never
+  writes over a change on disk it has not merged yet.
+- `slide-agent` does not write there at all. The server announces itself in
+  `.deckwerk-server.json` at the root of the folder it serves (loopback URL,
+  pid, a token), and the CLI sends changes to `/api/agent-host/context` and
+  `/api/agent-host/request`, the agent protocol the desktop editor answers
+  through files, answered against the live session (`src/cli/hostedDeck.ts`,
+  `src/main/agentHost.ts`). Desktop-hosted single-deck sessions do not
+  announce themselves: the desktop editor is live for its agents already.
 
 ## Media
 
@@ -595,8 +608,8 @@ would take, is in [Desktop → web feature parity](desktop-web-parity.md).
     deliberate deferral, not an oversight.
 - Do not open the same deck folder in the Electron app while the collab
   server is hosting it: both are debounced whole-file writers and will
-  overwrite each other. Use the browser client, or an offline
-  `slide-agent apply` (the watcher picks it up). The desktop app enforces the
+  overwrite each other. Use the browser client, or `slide-agent` on the
+  folder (it goes through the server). The desktop app enforces the
   same rule among its own windows: opening a deck a window already has open
   brings that window forward rather than opening it twice.
 - Timeline (build) edits are slide-granular: two people editing builds on the
