@@ -116,6 +116,7 @@ import {
   shouldShowAudienceWindow,
   swappedPresentationDisplays,
 } from './presentationDisplays.js';
+import { moveFullscreenWindow } from './fullscreenMove.js';
 import { registerDeckAssetIpc } from './deckAssetsIpc.js';
 import { registerUpdates } from './updates.js';
 
@@ -164,23 +165,7 @@ function moveFullscreenWindowToDisplay(
   win: BrowserWindow | null,
   display: Display,
 ): Promise<void> {
-  if (!win || win.isDestroyed()) return Promise.resolve();
-  const enterFullscreen = (): void => {
-    if (win.isDestroyed()) return;
-    win.setBounds(display.bounds);
-    win.setFullScreen(true);
-  };
-  if (!win.isFullScreen()) {
-    enterFullscreen();
-    return Promise.resolve();
-  }
-  return new Promise((resolve) => {
-    win.once('leave-full-screen', () => {
-      enterFullscreen();
-      resolve();
-    });
-    win.setFullScreen(false);
-  });
+  return moveFullscreenWindow(win, display.bounds);
 }
 
 function moveSpeakerWindowToDisplay(state: DeckWindowState, display: Display): Promise<void> {
@@ -226,10 +211,10 @@ async function swapPresentationDisplayRoles(state: DeckWindowState): Promise<voi
     presenterDisplayId: presenterTarget.id,
   };
   try {
-    await Promise.all([
-      moveSpeakerWindowToDisplay(state, presenterTarget),
-      moveAudienceWindowToDisplay(state, audienceTarget),
-    ]);
+    // One window at a time: macOS runs a fullscreen transition per Space and
+    // drops a second one started while the first is still animating.
+    await moveAudienceWindowToDisplay(state, audienceTarget);
+    await moveSpeakerWindowToDisplay(state, presenterTarget);
     if (state.presenter && !state.presenter.isDestroyed()) state.presenter.focus();
   } finally {
     state.swappingPresentationDisplays = false;
@@ -631,14 +616,13 @@ app.whenReady().then(async () => {
         audienceDisplayId: primary.id,
         presenterDisplayId: primary.id,
       };
-      void Promise.all([
-        moveSpeakerWindowToDisplay(state, primary),
-        moveAudienceWindowToDisplay(state, primary),
-      ]).then(() => {
-        if (state.presenter && !state.presenter.isDestroyed()) {
-          showSpeakerWindowAboveFullscreen(state.presenter);
-        }
-      });
+      void moveAudienceWindowToDisplay(state, primary)
+        .then(() => moveSpeakerWindowToDisplay(state, primary))
+        .then(() => {
+          if (state.presenter && !state.presenter.isDestroyed()) {
+            showSpeakerWindowAboveFullscreen(state.presenter);
+          }
+        });
     }
   });
 
