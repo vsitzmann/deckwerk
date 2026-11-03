@@ -4,7 +4,7 @@ import { randomUUID } from 'node:crypto';
 import { userInfo } from 'node:os';
 import { basename, dirname, extname, join, resolve, sep } from 'node:path';
 import { BrowserWindow, app, clipboard, ipcMain, screen, shell } from 'electron';
-import type { Display, IpcMainInvokeEvent, WebContents } from 'electron';
+import type { IpcMainInvokeEvent, WebContents } from 'electron';
 import { parseDeck, type Deck } from '@shared/deck.js';
 import type { DeckHistoryDocument } from '@shared/deckHistory.js';
 import {
@@ -164,21 +164,6 @@ localAgents.subscribe((state, participantId) => {
   if (editor && !editor.isDestroyed()) editor.webContents.send(IPC.agentPanelState, state);
 });
 
-function moveFullscreenWindowToDisplay(
-  win: BrowserWindow | null,
-  display: Display,
-): Promise<void> {
-  return moveFullscreenWindow(win, display.bounds);
-}
-
-function moveSpeakerWindowToDisplay(state: DeckWindowState, display: Display): Promise<void> {
-  return moveFullscreenWindowToDisplay(state.presenter, display);
-}
-
-function moveAudienceWindowToDisplay(state: DeckWindowState, display: Display): Promise<void> {
-  return moveFullscreenWindowToDisplay(state.present, display);
-}
-
 /** Hand Speaker View the show's current state once its page has loaded. */
 function sendStateWhenLoaded(state: DeckWindowState, win: BrowserWindow): void {
   win.webContents.once('did-finish-load', () => {
@@ -261,6 +246,7 @@ function swapPresentationDisplayRoles(state: DeckWindowState): void {
       step: show.cursor.step,
       startedAt: show.startedAt,
       slideStartedAt: show.slideStartedAt,
+      blanked: show.blanked === true,
     },
   });
   sendStateWhenLoaded(state, audience);
@@ -663,8 +649,10 @@ app.whenReady().then(async () => {
         audienceDisplayId: primary.id,
         presenterDisplayId: primary.id,
       };
-      void moveAudienceWindowToDisplay(state, primary)
-        .then(() => moveSpeakerWindowToDisplay(state, primary))
+      // One window at a time: macOS drops a fullscreen transition started
+      // while another window's is still animating (fullscreenMove.ts).
+      void moveFullscreenWindow(state.present, primary.bounds)
+        .then(() => moveFullscreenWindow(state.presenter, primary.bounds))
         .then(() => {
           if (state.presenter && !state.presenter.isDestroyed()) {
             showSpeakerWindowAboveFullscreen(state.presenter);
@@ -1160,7 +1148,10 @@ function registerHandlers(): void {
       return;
     }
     if (command.type === 'swapDisplays') {
-      swapPresentationDisplayRoles(state);
+      // Only the current Speaker View may switch. A second press of a
+      // double-click can reach the window that was Speaker View a moment ago
+      // and would otherwise switch straight back.
+      if (event.sender === state.presenter?.webContents) swapPresentationDisplayRoles(state);
       return;
     }
     state.present?.webContents.send(IPC.presentCommand, command);

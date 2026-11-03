@@ -253,7 +253,13 @@ export function createPresentWindow(
 export interface AudiencePageStart {
   slide: number;
   endSlide?: number;
-  resume?: { slide: number; step: number; startedAt: number; slideStartedAt: number };
+  resume?: {
+    slide: number;
+    step: number;
+    startedAt: number;
+    slideStartedAt: number;
+    blanked: boolean;
+  };
 }
 
 export function audiencePageQuery(start: AudiencePageStart): string {
@@ -264,6 +270,7 @@ export function audiencePageQuery(start: AudiencePageStart): string {
     query.set('resumeStep', String(start.resume.step));
     query.set('startedAt', String(start.resume.startedAt));
     query.set('slideStartedAt', String(start.resume.slideStartedAt));
+    if (start.resume.blanked) query.set('blanked', '1');
   }
   return `?${query.toString()}`;
 }

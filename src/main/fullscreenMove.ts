@@ -1,5 +1,7 @@
 /**
- * Move a fullscreen window to another display.
+ * Move a fullscreen window to another display: used when a display is
+ * unplugged mid-show and both windows fall back to the one left. (Switch
+ * displays does not move windows; it trades their pages, see index.ts.)
  *
  * A fullscreen window cannot simply be given new bounds: it has to leave
  * fullscreen, move, and enter fullscreen again. On macOS that is two animated
@@ -10,8 +12,7 @@
  *   window is left windowed, on its old display.
  * - A transition that macOS refuses (another window mid-transition, the
  *   window already on its way out) never fires its event at all. A caller
- *   that waits on the event forever never finishes, and "Switch displays"
- *   stays busy, ignoring every later press.
+ *   that waits on the event forever never finishes.
  *
  * So each step waits for its event *or* a deadline, lets the transition
  * settle before the next one, and checks the outcome instead of trusting it.

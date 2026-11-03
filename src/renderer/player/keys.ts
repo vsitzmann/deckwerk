@@ -11,6 +11,8 @@ export interface KeyHandlers {
   onNext?: () => void;
   onPrev?: () => void;
   onHome?: () => void;
+  /** Blank toggled from the keyboard, for a shell that reports it elsewhere. */
+  onBlank?: () => void;
   /** Video speed changed from the keyboard, for a shell that relays it elsewhere. */
   onVideoRate?: (change: VideoRateChange) => void;
 }
@@ -62,7 +64,8 @@ export function bindPresentKeys(
       case 'b':
       case 'B':
         e.preventDefault();
-        player.toggleBlank();
+        if (handlers.onBlank) handlers.onBlank();
+        else player.toggleBlank();
         break;
       case 'Escape':
         e.preventDefault();

@@ -2105,6 +2105,10 @@ export class Player {
     this.rateBadgeTimer = setTimeout(() => this.rateBadge?.classList.remove('visible'), 1200);
   }
 
+  isBlanked(): boolean {
+    return this.blanked;
+  }
+
   /** Blank the screen (the `B` key) without losing position. */
   toggleBlank(): boolean {
     this.blanked = !this.blanked;

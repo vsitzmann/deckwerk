@@ -49,6 +49,11 @@ function fourSlideDeck(): Deck {
 const SHOWN = `[...document.getElementById('root')?.querySelectorAll('[data-element-id^="t"]') ?? []]
   .map((node) => node.getAttribute('data-element-id'))`;
 const PAGE = `location.pathname.split('/').slice(-2, -1)[0]`;
+const STAGE_OPACITY = `document.querySelector('#root > .stage')?.style.opacity ?? ''`;
+const SWAP_BUTTON_CENTRE = `(() => {
+  const box = document.querySelector('.speaker-swap').getBoundingClientRect();
+  return { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+})()`;
 const SPEAKER_POSITION = `document.querySelector('.speaker-position')?.textContent ?? ''`;
 const ACTIVE_RAIL_SLIDE = `document.querySelector('[data-index][data-slide-id].active')?.getAttribute('data-slide-id') ?? null`;
 
@@ -56,6 +61,7 @@ let workDir = '';
 
 describe.skipIf(!electronBinary || process.platform === 'win32')('switching displays mid-show', () => {
   let appProcess: ChildProcess | null = null;
+  let debugPort = 0;
   const connections: Cdp[] = [];
 
   afterEach(async () => {
@@ -66,8 +72,9 @@ describe.skipIf(!electronBinary || process.platform === 'win32')('switching disp
     workDir = '';
   }, 30_000);
 
-  it('trades the two windows\' pages and carries the show on from the same slide', async () => {
-    workDir = await mkdtemp(join(tmpdir(), 'present-switch-displays-'));
+  /** The app on two displays, presenting: the projector's audience and the laptop's Speaker View. */
+  async function startShow(name: string): Promise<{ editor: Cdp; projectorWindow: Cdp; laptopWindow: Cdp }> {
+    workDir = await mkdtemp(join(tmpdir(), `${name}-`));
     const appDir = join(workDir, 'app');
     const profileDir = join(workDir, 'electron-profile');
     const deckDir = join(workDir, 'talk');
@@ -84,6 +91,7 @@ describe.skipIf(!electronBinary || process.platform === 'win32')('switching disp
       env: { DECKWERK_TEST_DISPLAYS: '2' },
     });
     appProcess = app.process;
+    debugPort = app.debugPort;
     const connect = async (url: string): Promise<Cdp> => {
       const connection = await Cdp.connect(url);
       connections.push(connection);
@@ -122,6 +130,11 @@ describe.skipIf(!electronBinary || process.platform === 'win32')('switching disp
       'Speaker View did not follow the show to the third slide',
       (text) => text.includes('3'),
     );
+    return { editor, projectorWindow, laptopWindow };
+  }
+
+  it('trades the two windows\' pages and carries the show on from the same slide', async () => {
+    const { editor, projectorWindow, laptopWindow } = await startShow('present-switch-displays');
 
     await laptopWindow.click('.speaker-swap', 'Switch displays');
 
@@ -181,7 +194,46 @@ describe.skipIf(!electronBinary || process.platform === 'win32')('switching disp
       'ending the show did not land the editor on the slide it ended on',
       (id) => id === 's4',
     );
-    const open = await (await fetch(`http://127.0.0.1:${app.debugPort}/json/list`)).json() as Array<{ url: string }>;
+    const open = await (await fetch(`http://127.0.0.1:${debugPort}/json/list`)).json() as Array<{ url: string }>;
     expect(open.filter((target) => /\/present(er)?\/index\.html/.test(target.url))).toEqual([]);
+  }, 120_000);
+
+  it('keeps the slide timer and Blank, and ignores the second press of a double-click', async () => {
+    const { projectorWindow, laptopWindow } = await startShow('present-switch-state');
+    // Let the slide timer run, and blank the projector with B.
+    await new Promise((resolve) => setTimeout(resolve, 2_200));
+    await projectorWindow.key('b', 66);
+    await eventually(
+      async () => projectorWindow.evaluate<string>(STAGE_OPACITY),
+      'B did not blank the audience',
+      (opacity) => opacity === '0',
+    );
+
+    // A double-click: the second press lands 200 ms later, on whatever the
+    // laptop's window shows by then.
+    const box = await laptopWindow.evaluate<{ x: number; y: number }>(SWAP_BUTTON_CENTRE);
+    await laptopWindow.clickAt(box.x, box.y);
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    await laptopWindow.clickAt(box.x, box.y);
+
+    await eventually(
+      async () => laptopWindow.evaluate<string>(PAGE),
+      'the Speaker View window did not become the audience',
+      (page) => page === 'present',
+    );
+    await eventually(
+      async () => projectorWindow.evaluate<string>(`${PAGE} + ' ' + (document.querySelector('.speaker-slide-timer')?.textContent ?? '')`),
+      'the new Speaker View restarted the slide timer',
+      (text) => /^presenter 00:0[2-9]/.test(text),
+    );
+    // Give a stray second press time to do damage before checking it did none.
+    await new Promise((resolve) => setTimeout(resolve, 1_500));
+    expect(await laptopWindow.evaluate<string>(PAGE), 'the second press switched back').toBe('present');
+    expect(await laptopWindow.evaluate<string[]>(SHOWN), 'the second press advanced the show').toEqual(['t3']);
+    expect(await laptopWindow.evaluate<string>(STAGE_OPACITY), 'Switch displays unblanked the audience').toBe('0');
+    expect(
+      await projectorWindow.evaluate<string>(`document.querySelector('.speaker-slide-timer')?.textContent ?? ''`),
+      'the slide timer restarted after the switch',
+    ).toMatch(/^00:0[3-9]/);
   }, 120_000);
 });
