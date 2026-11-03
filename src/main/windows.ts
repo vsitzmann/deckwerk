@@ -1,6 +1,7 @@
 import { join } from 'node:path';
 import { BrowserWindow, screen, shell } from 'electron';
 import type { Rectangle } from 'electron';
+import { presentationScreens } from './displays.js';
 import { chooseAudienceDisplay, chooseDisplayById } from './presentationDisplays.js';
 
 /**
@@ -211,8 +212,7 @@ export function createPresentWindow(
   endSlideIndex?: number,
   visible = true,
 ): BrowserWindow {
-  const displays = screen.getAllDisplays();
-  const primary = screen.getPrimaryDisplay();
+  const { displays, primary } = presentationScreens();
   const target = chooseDisplayById(displays, displayId, chooseAudienceDisplay(displays, primary));
 
   const win = new BrowserWindow({
@@ -241,10 +241,41 @@ export function createPresentWindow(
   });
   openWebLinksExternally(win);
   if (visible) win.once('ready-to-show', () => showFullscreenWindow(win));
-  const query = new URLSearchParams({ slide: String(cursorSlide) });
-  if (endSlideIndex !== undefined) query.set('endSlide', String(endSlideIndex));
-  loadRenderer(win, 'present', `?${query.toString()}`);
+  loadAudiencePage(win, { slide: cursorSlide, endSlide: endSlideIndex });
   return win;
+}
+
+/**
+ * Where an audience page starts. `slide`/`endSlide` are the talk's range as
+ * Present opened it; `resume` puts a page that takes over a running show
+ * (Switch displays) back at its exact build step with its timers intact.
+ */
+export interface AudiencePageStart {
+  slide: number;
+  endSlide?: number;
+  resume?: { slide: number; step: number; startedAt: number; slideStartedAt: number };
+}
+
+export function audiencePageQuery(start: AudiencePageStart): string {
+  const query = new URLSearchParams({ slide: String(start.slide) });
+  if (start.endSlide !== undefined) query.set('endSlide', String(start.endSlide));
+  if (start.resume) {
+    query.set('resumeSlide', String(start.resume.slide));
+    query.set('resumeStep', String(start.resume.step));
+    query.set('startedAt', String(start.resume.startedAt));
+    query.set('slideStartedAt', String(start.resume.slideStartedAt));
+  }
+  return `?${query.toString()}`;
+}
+
+/** Load (or reload) the audience player into a presentation window. */
+export function loadAudiencePage(win: BrowserWindow, start: AudiencePageStart): void {
+  loadRenderer(win, 'present', audiencePageQuery(start));
+}
+
+/** Load (or reload) Speaker View into a presentation window. */
+export function loadSpeakerPage(win: BrowserWindow): void {
+  loadRenderer(win, 'presenter');
 }
 
 /** Fullscreen control surface; the audience window remains fullscreen separately. */
@@ -252,8 +283,8 @@ export function createPresenterWindow(
   displayId?: number,
   visibleAboveFullscreen = false,
 ): BrowserWindow {
-  const primary = screen.getPrimaryDisplay();
-  const target = chooseDisplayById(screen.getAllDisplays(), displayId, primary);
+  const { displays, primary } = presentationScreens();
+  const target = chooseDisplayById(displays, displayId, primary);
   const win = new BrowserWindow({
     x: target.bounds.x,
     y: target.bounds.y,
@@ -271,13 +302,17 @@ export function createPresenterWindow(
       // rendering keeps producing frames with nothing on screen.
       offscreen: HEADLESS_TEST,
       preload: preload(), contextIsolation: true, nodeIntegration: false, sandbox: false,
+      // "Switch displays" can turn this window into the audience player in
+      // place, so it needs the same autoplay policy as the projector window.
+      autoplayPolicy: 'no-user-gesture-required',
     },
   });
+  openWebLinksExternally(win);
   win.once('ready-to-show', () => {
     if (visibleAboveFullscreen) showSpeakerWindowAboveFullscreen(win);
     else showFullscreenWindow(win);
   });
-  loadRenderer(win, 'presenter');
+  loadSpeakerPage(win);
   return win;
 }
 

@@ -27,9 +27,27 @@ let player: Player | null = null;
 let session: DeckSession | null = null;
 let range: PresentationRange | null = null;
 let themeLink: HTMLStyleElement | null = null;
-const startedAt = Date.now();
-let slideStartedAt = startedAt;
-let timedSlide = -1;
+/**
+ * A page that takes over a running show (Switch displays reloads the other
+ * window as the audience) resumes at the exact build step, with the talk's
+ * timers carried over rather than restarted.
+ */
+const resume = resumePoint(new URLSearchParams(location.search));
+const startedAt = resume?.startedAt ?? Date.now();
+let slideStartedAt = resume?.slideStartedAt ?? startedAt;
+let timedSlide = resume?.slide ?? -1;
+
+function resumePoint(params: URLSearchParams): {
+  slide: number; step: number; startedAt: number; slideStartedAt: number;
+} | null {
+  if (!params.has('resumeSlide')) return null;
+  const slide = Number(params.get('resumeSlide'));
+  const step = Number(params.get('resumeStep') ?? 0);
+  const started = Number(params.get('startedAt'));
+  const slideStarted = Number(params.get('slideStartedAt'));
+  if (![slide, step, started, slideStarted].every(Number.isFinite)) return null;
+  return { slide, step, startedAt: started, slideStartedAt: slideStarted };
+}
 
 async function applyTheme(): Promise<void> {
   const css = await window.api.loadTheme();
@@ -87,7 +105,12 @@ function start(nextSession: DeckSession): void {
       }
     }
   }
-  player.goToSlide(first, { play: true });
+  if (resume && slides[resume.slide]) {
+    // Resolved, not replayed: the audience already watched this step build.
+    player.goTo({ slide: resume.slide, step: resume.step }, { morph: false });
+  } else {
+    player.goToSlide(first, { play: true });
+  }
 
   bindPresentKeys(window, player, {
     onExit: () => window.close(),
