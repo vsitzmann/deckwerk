@@ -266,6 +266,9 @@ describe('text formatting from the inspector controls', () => {
     expect(tableLabels('.table-column-buttons button')).toEqual([
       'Insert before', 'Insert after', 'Delete column',
     ]);
+    expect(tableLabels('.table-row-buttons button')).toEqual([
+      'Insert row above', 'Insert row below', 'Delete row',
+    ]);
   });
 
   it('sets every horizontal alignment, repaints the canvas, and shows the pressed state', () => {
@@ -1276,6 +1279,126 @@ describe('text formatting from the inspector controls', () => {
     const cleared = document.createElement('div');
     cleared.innerHTML = textOf(store, 'text-1').html;
     expect([...cleared.querySelectorAll('td')].every((cell) => !cell.hasAttribute('style'))).toBe(true);
+  });
+
+  it('inserts rows above and below the selected rows through the inspector, each one undo', () => {
+    const original = '<table><tbody>'
+      + '<tr style="height: 50px"><td style="background-color: rgb(255, 0, 0); border-bottom: 2px solid rgb(0, 0, 255)">A</td><td>B</td></tr>'
+      + '<tr><td>C</td><td>D</td></tr></tbody></table>';
+    const { store, canvas, canvasHost, inspectorHost } = setup([
+      textElement('text-1', { html: original, table: { columnWidths: [3, 1], autoHeight: true } }),
+    ]);
+    canvas.beginTextEdit('text-1');
+    // A row drag across the first row.
+    const cells = contentOf(canvasHost, 'text-1').querySelectorAll('td');
+    cells[0].dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, pointerId: 12 }));
+    cells[1].dispatchEvent(new PointerEvent('pointermove', {
+      bubbles: true, cancelable: true, pointerId: 12,
+    }));
+    document.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, pointerId: 12 }));
+    expect(canvas.tableSelectionInfo()).toMatchObject({ mode: 'row', row: 0, rowEnd: 0 });
+
+    const rowButton = (label: string) => [...inspectorHost.querySelectorAll<HTMLButtonElement>(
+      '.table-row-buttons button',
+    )].find((button) => button.textContent === label)!;
+    const savedRows = () => {
+      const saved = document.createElement('div');
+      saved.innerHTML = textOf(store, 'text-1').html;
+      return [...saved.querySelectorAll('tr')];
+    };
+
+    rowButton('Insert row below').click();
+    let rows = savedRows();
+    expect(rows.map((row) => [...row.cells].map((cell) => cell.textContent)))
+      .toEqual([['A', 'B'], ['', ''], ['C', 'D']]);
+    // The new row is dressed like the row it was inserted below.
+    expect(rows[1].style.height).toBe('50px');
+    expect(rows[1].cells[0].style.backgroundColor).toBe('rgb(255, 0, 0)');
+    expect(rows[1].cells[0].style.borderBottom).toBe('2px solid rgb(0, 0, 255)');
+    expect(textOf(store, 'text-1').table?.columnWidths).toEqual([3, 1]);
+    expect(canvas.tableSelectionInfo()).toMatchObject({ mode: 'cell', row: 1, rows: 3 });
+    expect(canvas.isEditing()).toBe(true);
+
+    // One undo step, back to the markup the table was authored with.
+    canvas.endTextEditing();
+    store.undo();
+    expect(textOf(store, 'text-1').html).toBe(original);
+
+    canvas.beginTextEdit('text-1');
+    contentOf(canvasHost, 'text-1').querySelectorAll('td')[3]
+      .dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
+    rowButton('Insert row above').click();
+    rows = savedRows();
+    expect(rows.map((row) => [...row.cells].map((cell) => cell.textContent)))
+      .toEqual([['A', 'B'], ['', ''], ['C', 'D']]);
+    expect(rows[1].style.height).toBe('');
+    expect(rows[1].cells[0].style.backgroundColor).toBe('');
+    expect(canvas.tableSelectionInfo()).toMatchObject({ mode: 'cell', row: 1, column: 1, rows: 3 });
+    canvas.endTextEditing();
+    store.undo();
+    expect(textOf(store, 'text-1').html).toBe(original);
+  });
+
+  it('deletes the selected table rows through the inspector, never the last one', () => {
+    const original = '<table><thead><tr><th>H1</th><th>H2</th></tr></thead><tbody>'
+      + '<tr><td rowspan="2">M</td><td>B</td></tr>'
+      + '<tr><td>D</td></tr></tbody></table>';
+    const { store, canvas, canvasHost, inspectorHost } = setup([
+      textElement('text-1', { html: original }),
+    ]);
+    const rowButton = (label: string) => [...inspectorHost.querySelectorAll<HTMLButtonElement>(
+      '.table-row-buttons button',
+    )].find((button) => button.textContent === label)!;
+    const savedTableOf = () => {
+      const saved = document.createElement('div');
+      saved.innerHTML = textOf(store, 'text-1').html;
+      return saved.querySelector('table')!;
+    };
+    const select = (from: number, to: number) => {
+      const all = contentOf(canvasHost, 'text-1').querySelectorAll('td, th');
+      all[from].dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, pointerId: 13 }));
+      all[to].dispatchEvent(new PointerEvent('pointermove', {
+        bubbles: true, cancelable: true, pointerId: 13,
+      }));
+      document.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, pointerId: 13 }));
+    };
+    canvas.beginTextEdit('text-1');
+
+    // Every row selected: deleting would leave no table.
+    select(0, 4);
+    expect(canvas.tableSelectionInfo()).toMatchObject({ row: 0, rowEnd: 2, rows: 3 });
+    expect(rowButton('Delete row').disabled).toBe(true);
+
+    // The middle row starts the merge: the merged cell moves down, one row shorter.
+    select(2, 3);
+    expect(rowButton('Delete row').disabled).toBe(false);
+    rowButton('Delete row').click();
+    let table = savedTableOf();
+    expect([...table.rows].map((row) => [...row.cells].map((cell) => cell.textContent)))
+      .toEqual([['H1', 'H2'], ['M', 'D']]);
+    expect(table.rows[1].cells[0].hasAttribute('rowspan')).toBe(false);
+    canvas.endTextEditing();
+    store.undo();
+    expect(textOf(store, 'text-1').html).toBe(original);
+
+    // Deleting the header row drops <thead> and leaves the body.
+    canvas.beginTextEdit('text-1');
+    select(0, 1);
+    rowButton('Delete row').click();
+    table = savedTableOf();
+    expect(table.tHead).toBeNull();
+    expect([...table.rows].map((row) => [...row.cells].map((cell) => cell.textContent)))
+      .toEqual([['M', 'B'], ['D']]);
+    expect(table.rows[0].cells[0].rowSpan).toBe(2);
+    expect(canvas.tableSelectionInfo()).toMatchObject({ mode: 'cell', row: 0, rows: 2 });
+
+    // One row left: Delete row is disabled.
+    select(2, 2);
+    rowButton('Delete row').click();
+    expect(savedTableOf().rows).toHaveLength(1);
+    expect(rowButton('Delete row').disabled).toBe(true);
+    rowButton('Delete row').click();
+    expect(savedTableOf().rows).toHaveLength(1);
   });
 
   it('inserts and deletes the selected table column through the inspector', () => {

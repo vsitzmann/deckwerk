@@ -153,6 +153,8 @@ export function wireCanvasInspector(
     canvas.applyTableCellTextStyle(property, value);
   inspector.onInsertTableColumn = (after) => canvas.insertTableColumn(after);
   inspector.onDeleteTableColumn = () => canvas.deleteTableColumn();
+  inspector.onInsertTableRow = (after) => canvas.insertTableRow(after);
+  inspector.onDeleteTableRow = () => canvas.deleteTableRow();
   inspector.textComputedTypography = (elementId) => canvas.textComputedTypography(elementId);
   inspector.onToggleMask = (id) => canvas.toggleMaskMode(id);
   inspector.maskingElement = () => canvas.maskingElement();

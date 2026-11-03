@@ -11,7 +11,7 @@ import {
  * Production-browser regression for dragged table selection scopes and
  * structure edits (split from collabFormattingUndoTableTextBrowser.test.ts,
  * itself from the former omnibus): every dragged scope — cell, row, column,
- * rectangle — through every formatting control, plus column insert/delete,
+ * rectangle — through every formatting control, plus column and row insert/delete,
  * each undone back to the exact original. Kept in its own file because the
  * 4-scope × ~11-control matrix is ~44 real-input drag cycles, too many to
  * share one test's budget with the word/border coverage at CI's browser speed.
@@ -103,6 +103,9 @@ describe.skipIf(!electronBinary)('table selection scopes and structure in the co
       ['Column', 'Insert before', 6],
       ['Column', 'Insert after', 6],
       ['Column', 'Delete column', 2],
+      ['Row', 'Insert row above', 6],
+      ['Row', 'Insert row below', 6],
+      ['Row', 'Delete row', 2],
     ] as const) {
       await session.enterTable(scope);
       const actionSelector = await session.buttonId(action, `test-${action.replaceAll(' ', '-')}`);

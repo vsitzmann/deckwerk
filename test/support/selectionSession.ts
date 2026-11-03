@@ -323,6 +323,8 @@ export interface SelectionSession extends SidebarSelectionProbes {
   clickCell(row: number, column: number): Promise<void>;
   /** Real drag from one table cell to another: a spreadsheet range gesture. */
   dragCells(from: [number, number], to: [number, number]): Promise<void>;
+  /** Real click on a sidebar button, found by its visible label. */
+  clickPanelButton(label: string): Promise<void>;
   /** Real click on a slide rail row. */
   clickRail(index: number): Promise<void>;
   /** Real key press. */
@@ -577,6 +579,22 @@ function buildSession(cdp: Cdp): SelectionSession {
         cellSelector(to[0], to[1]),
         `cells ${from.join(',')} to ${to.join(',')}`,
       );
+      await wait(80);
+    },
+    async clickPanelButton(label) {
+      const id = `fuzz-panel-${label.replace(/\W+/g, '-')}`;
+      const found = await cdp.evaluate<boolean>(`(() => {
+        const button = [...document.querySelectorAll('.editor-inspector button')]
+          .find((node) => node.textContent?.trim() === ${JSON.stringify(label)}
+            && node.getClientRects().length > 0);
+        if (!button) return false;
+        button.id = ${JSON.stringify(id)};
+        return true;
+      })()`);
+      // Worded like the other missing-target errors: the walk skips a step
+      // whose control the current selection does not show.
+      if (!found) throw new Error(`no element matches the "${label}" button`);
+      await cdp.click(`#${id}`, label);
       await wait(80);
     },
     async clickRail(index) {

@@ -3274,9 +3274,12 @@ button.morph-object-hit.selected-source:hover:not(:disabled) {
 .canvas-host .editor-table-border-preview-left::after { left: 0; }
 .canvas-host .editor-table-border-preview-right::after { right: 0; }
 
-.table-column-buttons { flex-wrap: wrap; }
-.table-column-buttons button { flex: 1 1 calc(50% - 4px); }
-.table-column-buttons button.danger { color: var(--danger); }
+.table-column-buttons,
+.table-row-buttons { flex-wrap: wrap; }
+.table-column-buttons button,
+.table-row-buttons button { flex: 1 1 calc(50% - 4px); }
+.table-column-buttons button.danger,
+.table-row-buttons button.danger { color: var(--danger); }
 .table-border-buttons { flex-wrap: wrap; }
 .table-border-buttons button { flex: 1 1 calc(50% - 4px); }
 .table-border-buttons button[aria-pressed="true"] {
