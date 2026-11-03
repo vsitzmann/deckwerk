@@ -448,11 +448,21 @@ export class HumanPeer {
     this.socket.send(JSON.stringify(message));
   }
 
-  /** Change the deck as a person would, as one transaction; resolves once the server has it. */
-  async edit(label: string, change: (deck: Deck) => void): Promise<boolean> {
+  /**
+   * Change the deck as a person would, as one transaction; resolves once the
+   * server has it. `textBases` stamps text replacements with the html they
+   * were edited from, as the browser client's live text sync does, so the
+   * server merges them with concurrent typing in the same box.
+   */
+  async edit(label: string, change: (deck: Deck) => void, options: { textBases?: boolean } = {}): Promise<boolean> {
     const next = structuredClone(this.deck);
     change(next);
-    const ops = diffDecks(this.deck, parseDeck(next));
+    const ops = diffDecks(this.deck, parseDeck(next)).map((op) => {
+      if (!options.textBases || op.op !== 'replaceElement' || !('html' in op.element)) return op;
+      const before = this.deck.slides.find((slide) => slide.id === op.slideId)
+        ?.elements.find((element) => element.id === op.elementId);
+      return before && 'html' in before && typeof before.html === 'string' ? { ...op, baseHtml: before.html } : op;
+    });
     if (ops.length === 0) return false;
     const txnId = `human-${randomUUID()}`;
     const echoed = new Promise<void>((resolvePromise, reject) => {
