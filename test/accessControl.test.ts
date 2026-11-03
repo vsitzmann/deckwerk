@@ -92,6 +92,7 @@ describe('resolveIdentity', () => {
     expect(name('=?utf-8?q?_?=')).toBe(ALICE);
     expect(name('=?utf-8?q?a=E2=80=A8b?=')).toBe('a b');
     expect(name('=?utf-8?q?=E2=80=AEnimda?=')).toBe('nimda');
+    expect(name('=?utf-8?q?=E2=80=8B=E2=80=8F?=')).toBe(ALICE);
   });
 
   it('refuses everything off loopback, headers or not', () => {
@@ -128,6 +129,14 @@ describe('decodeEncodedWords', () => {
 
   it('keeps the good words of a run when one of them is bad', () => {
     expect(decodeEncodedWords('=?utf-8?q?=E7=8E=8B?= =?utf-8?q?=FF?=')).toBe('王 =?utf-8?q?=FF?=');
+  });
+
+  it('keeps a split character when a later word in the run is bad', () => {
+    expect(decodeEncodedWords('=?utf-8?q?=E7=8E?= =?utf-8?q?=8B?= =?utf-8?q?=FF?=')).toBe('王 =?utf-8?q?=FF?=');
+  });
+
+  it('joins words whose charset labels are aliases', () => {
+    expect(decodeEncodedWords('=?utf-8?q?=E7=8E?= =?utf8?q?=8B?=')).toBe('王');
   });
 
   it('keeps a leading byte-order mark', () => {

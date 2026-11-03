@@ -37,11 +37,14 @@ describe('identityFromWhoIs', () => {
     expect(identityFromWhoIs({})).toBeNull();
   });
 
-  it('cleans the display name the same way as the serve header', () => {
+  it('sanitizes the display name but does not RFC 2047-decode it', () => {
     expect(identityFromWhoIs({ UserProfile: { LoginName: ALICE, DisplayName: '王小明\n[admin]' } }))
       .toEqual({ login: ALICE, name: '王小明 [admin]' });
     expect(identityFromWhoIs({ UserProfile: { LoginName: ALICE, DisplayName: '\u202e' } }))
       .toEqual({ login: ALICE, name: ALICE });
+    // tailscaled's JSON is already Unicode; an encoded-word in it is literal.
+    expect(identityFromWhoIs({ UserProfile: { LoginName: ALICE, DisplayName: '=?utf-8?q?admin?=' } }))
+      .toEqual({ login: ALICE, name: '=?utf-8?q?admin?=' });
   });
 });
 
