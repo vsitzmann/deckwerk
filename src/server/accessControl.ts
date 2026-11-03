@@ -94,6 +94,86 @@ function headerValue(request: IncomingMessage, name: string): string {
   return (value ?? '').trim();
 }
 
+const ENCODED_WORD = /=\?([^?\s*]+)(?:\*[^?\s]*)?\?([bBqQ])\?([^?\s]*)\?=/g;
+
+function encodedWordBytes(encoding: string, text: string): Uint8Array | null {
+  if (encoding === 'b' || encoding === 'B') {
+    if (!/^[A-Za-z0-9+/]*={0,2}$/.test(text)) return null;
+    return Uint8Array.from(Buffer.from(text, 'base64'));
+  }
+  const bytes: number[] = [];
+  for (let i = 0; i < text.length; i += 1) {
+    const char = text[i];
+    if (char === '_') {
+      bytes.push(0x20);
+    } else if (char === '=') {
+      const hex = text.slice(i + 1, i + 3);
+      if (!/^[0-9A-Fa-f]{2}$/.test(hex)) return null;
+      bytes.push(parseInt(hex, 16));
+      i += 2;
+    } else {
+      const code = char.charCodeAt(0);
+      if (code > 0x7e) return null;
+      bytes.push(code);
+    }
+  }
+  return Uint8Array.from(bytes);
+}
+
+/**
+ * Decode RFC 2047 encoded-words (`=?utf-8?q?=E7=8E=8B?=`, `=?UTF-8?B?546L?=`).
+ *
+ * HTTP header values are ASCII, so `tailscale serve` sends a non-ASCII
+ * display name — 王小明, José — as encoded-words (Go's mime.QEncoding, which
+ * splits a long name into several words separated by spaces). Adjacent words
+ * are joined without the whitespace between them, as RFC 2047 §6.2 says, and
+ * their bytes are concatenated before decoding so a character split across
+ * two words survives. Anything that is not a well-formed encoded-word in a
+ * charset this runtime knows is left exactly as it was.
+ */
+export function decodeEncodedWords(value: string): string {
+  if (!value.includes('=?')) return value;
+  let out = '';
+  let last = 0;
+  // A run of adjacent encoded-words in one charset, not yet decoded.
+  let run: { charset: string; chunks: Uint8Array[]; raw: string } | null = null;
+  const flush = () => {
+    if (!run) return;
+    try {
+      const decoder = new TextDecoder(run.charset, { fatal: true });
+      out += decoder.decode(Buffer.concat(run.chunks));
+    } catch {
+      out += run.raw;
+    }
+    run = null;
+  };
+  for (const match of value.matchAll(ENCODED_WORD)) {
+    const index = match.index ?? 0;
+    const between = value.slice(last, index);
+    const charset = match[1].toLowerCase();
+    const bytes = encodedWordBytes(match[2], match[3]);
+    const adjacent = run !== null && /^[ \t\r\n]*$/.test(between);
+    if (!adjacent) {
+      flush();
+      out += between;
+    }
+    if (!bytes) {
+      flush();
+      if (adjacent) out += between;
+      out += match[0];
+    } else if (run && adjacent && run.charset === charset) {
+      run.chunks.push(bytes);
+      run.raw += between + match[0];
+    } else {
+      flush();
+      run = { charset, chunks: [bytes], raw: match[0] };
+    }
+    last = index + match[0].length;
+  }
+  flush();
+  return out + value.slice(last);
+}
+
 /**
  * Connections the server terminated TLS for on the tailnet address, with the
  * tailnet user tailscaled named for the peer (tailscaleIdentity.ts), or null
@@ -119,7 +199,9 @@ export function resolveIdentity(
   if (login) {
     return {
       login: normalizeLogin(login),
-      name: headerValue(request, 'tailscale-user-name') || login,
+      // Only the display name is decoded. The login is the authorization
+      // subject and stays byte-for-byte what serve sent.
+      name: decodeEncodedWords(headerValue(request, 'tailscale-user-name')).trim() || login,
     };
   }
   // Serve stamps every request it proxies with X-Forwarded-For, but only
@@ -313,7 +395,9 @@ export class UserDirectory {
           if (typeof user.login !== 'string' || !user.login) continue;
           this.users.set(normalizeLogin(user.login), {
             login: normalizeLogin(user.login),
-            name: typeof user.name === 'string' && user.name ? user.name : user.login,
+            // Names saved before identity headers were decoded can still be
+            // RFC 2047-encoded on disk; read them back as the real name.
+            name: typeof user.name === 'string' && user.name ? decodeEncodedWords(user.name) : user.login,
             lastSeen: typeof user.lastSeen === 'string' ? user.lastSeen : new Date(0).toISOString(),
           });
         }

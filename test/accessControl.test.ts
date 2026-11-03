@@ -12,6 +12,7 @@ import {
   canAccessDeck,
   canEditDeck,
   canManageDeck,
+  decodeEncodedWords,
   deckRoleFor,
   folderVisibleTo,
   normalizeLogin,
@@ -73,10 +74,44 @@ describe('resolveIdentity', () => {
       .toBeNull();
   });
 
+  it('decodes an RFC 2047-encoded display name from tailscale serve', () => {
+    // What serve sends for the Tailscale display name 王小明（Ming）.
+    expect(resolveIdentity(fakeRequest('127.0.0.1', {
+      'tailscale-user-login': ALICE,
+      'tailscale-user-name': '=?utf-8?q?=E7=8E=8B=E5=B0=8F=E6=98=8E=EF=BC=88Ming=EF=BC=89?=',
+      'x-forwarded-for': '100.64.0.7',
+    }), CONFIG)).toEqual({ login: ALICE, name: '王小明（Ming）' });
+  });
+
   it('refuses everything off loopback, headers or not', () => {
     for (const address of ['100.101.102.103', '192.168.1.20', '127.0.0.2', '::ffff:10.0.0.1', undefined]) {
       expect(resolveIdentity(fakeRequest(address, { 'tailscale-user-login': ADMIN }), CONFIG)).toBeNull();
       expect(resolveIdentity(fakeRequest(address, {}), CONFIG)).toBeNull();
+    }
+  });
+});
+
+describe('decodeEncodedWords', () => {
+  it('decodes Q and B encoded-words in any case', () => {
+    expect(decodeEncodedWords('=?utf-8?q?=E7=8E=8B=E5=B0=8F=E6=98=8E=EF=BC=88Ming=EF=BC=89?=')).toBe('王小明（Ming）');
+    expect(decodeEncodedWords('=?UTF-8?Q?Jos=C3=A9_Garc=C3=ADa?=')).toBe('José García');
+    expect(decodeEncodedWords('=?UTF-8?B?546L5bCP5piO?=')).toBe('王小明');
+    expect(decodeEncodedWords('=?iso-8859-1?q?Andr=E9?=')).toBe('André');
+  });
+
+  it('joins adjacent words, even when a character is split between them', () => {
+    // Go's mime.QEncoding splits a long name into space-separated words.
+    expect(decodeEncodedWords('=?utf-8?q?=E7=8E=8B=E5?= =?utf-8?q?=B0=8F?=')).toBe('王小');
+    expect(decodeEncodedWords('=?utf-8?q?a?=\r\n =?utf-8?q?b?=')).toBe('ab');
+  });
+
+  it('keeps the text around encoded-words', () => {
+    expect(decodeEncodedWords('Dr. =?utf-8?q?=E7=8E=8B?= (lab)')).toBe('Dr. 王 (lab)');
+  });
+
+  it('leaves plain names and malformed or unknown words untouched', () => {
+    for (const value of ['Alice A', 'a=?b', '=?utf-8?q?=ZZ?=', '=?no-such-charset?q?abc?=', '=?utf-8?x?abc?=', '=?utf-8?q?=FF?=']) {
+      expect(decodeEncodedWords(value)).toBe(value);
     }
   });
 });
@@ -314,6 +349,14 @@ describe('UserDirectory', () => {
     expect((await directory.all())[0].name).toBe('Alice A');
     await directory.note({ login: ALICE, name: 'Alice Renamed' });
     expect((await directory.all())[0].name).toBe('Alice Renamed');
+  });
+
+  it('reads back names saved while still RFC 2047-encoded as the real name', async () => {
+    const file = join(dir, 'users.json');
+    await writeFile(file, JSON.stringify([
+      { login: ALICE, name: '=?utf-8?q?=E7=8E=8B=E5=B0=8F=E6=98=8E=EF=BC=88Ming=EF=BC=89?=', lastSeen: new Date().toISOString() },
+    ]), 'utf8');
+    expect((await new UserDirectory(file).all())[0].name).toBe('王小明（Ming）');
   });
 
   it('flushes a fire-and-forget note that has not reached its file write yet', async () => {
