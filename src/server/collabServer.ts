@@ -75,7 +75,25 @@ import { stripScriptsKeepingTimeline } from '../shared/htmlSafety.js';
 import { PLAYER_TYPE_CSS } from '../shared/playerTypeCss.js';
 import { authoringPageHtml, type TextOverflow } from '../shared/htmlMeasure.js';
 import { deckRevision } from '../main/agentRuntime.js';
-import { applyAgentTransaction, importGaps as importGapsOf, validateDeckIntegrity, type AgentOperation } from '../shared/agent.js';
+import { assetChecker } from '../main/agentDeck.js';
+import {
+  AGENT_HOST_TOKEN_HEADER,
+  newAgentHostToken,
+  removeAgentHostMarker,
+  writeAgentHostMarker,
+} from '../main/agentHost.js';
+import {
+  AGENT_PROTOCOL_VERSION,
+  AgentRequestSchema,
+  applyAgentTransaction,
+  authoredScene,
+  importGaps as importGapsOf,
+  validateDeckIntegrity,
+  type AgentContext,
+  type AgentOperation,
+  type AgentRequest,
+  type AgentResponse,
+} from '../shared/agent.js';
 import { NativeEditRequestSchema, applyNativeEdits, nativeEditContract } from '../shared/nativeEdits.js';
 import { type Comment, type Deck, type Slide, type SlideElement } from '../shared/deck.js';
 import { commentsAt, commentsOperation, findComment, threadEdits, threadIdOf } from '../shared/comments.js';
@@ -1263,16 +1281,16 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
       announcedSrcs: new Set(),
     };
     session.watch({
-      onExternalDeck: (deck, seq) => broadcast(room, {
-        kind: 'deck',
+      // A change somebody wrote to deck.json, merged into the live deck: an
+      // ordinary transaction for every client, so an edit one has not had
+      // confirmed yet, or is still typing, survives it.
+      onExternalOps: (ops, seq, txnId, label) => broadcast(room, {
+        kind: 'txn',
         seq,
-        deck,
-        reason: options.agentMode ? 'agent-edit' : 'external-edit',
-        ...(options.agentMode
-          ? {
-              label: 'The Agent updated the deck through its file-based authoring workspace.',
-            }
-          : {}),
+        txnId,
+        byClientId: options.agentMode ? 'agent-http' : 'disk',
+        label: options.agentMode ? 'The Agent updated the deck through its file-based authoring workspace.' : label,
+        ops,
       }),
       onExternalTheme: (css) => broadcast(room, { kind: 'theme', css, byClientId: '' }),
     });
@@ -1560,6 +1578,224 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
     }
     return browserProbe.problem;
   };
+
+  /**
+   * Compile an authoring page against a room's live deck and apply what it
+   * changed as one transaction: the bridge's save of an `edit/` page, and
+   * `slide-agent apply --html` on a deck this server hosts. `after` takes a
+   * slide id or a 1-based number, `0` meaning first; absent, new slides go
+   * last.
+   */
+  /**
+   * `slide-agent` on this machine, for a deck under this server's root
+   * (main/agentHost.ts): the agent request protocol the desktop editor
+   * answers through files, answered here against the live session, so an
+   * agent's change is a transaction like anybody's and never a deck.json
+   * written beside the server.
+   */
+  const agentHost = options.hostedDeckId ? null : { token: newAgentHostToken(), sessionId: randomUUID() };
+
+  /** What the agent sees of a hosted deck: the live deck and what its person has selected. */
+  function hostedAgentContext(room: Room): AgentContext {
+    const deck = room.session.deck;
+    // The person the agent works for: the admin when there is one, otherwise
+    // whoever joined last, among those who may edit.
+    const editors = [...room.peers.values()].filter((peer) => peer.canEdit && peer.greeted);
+    const owner = editors.find((peer) => accessControl && peer.identity?.login === accessControl.admin)
+      ?? editors.at(-1);
+    const slideIds = new Set(deck.slides.map((slide) => slide.id));
+    const selectedSlideIds = new Set((owner?.state.selectedSlideIds ?? []).filter((id) => slideIds.has(id)));
+    const selectedElementIds = new Set(owner?.state.selectedElementIds ?? []);
+    const activeSlideId = owner?.state.activeSlideId && slideIds.has(owner.state.activeSlideId)
+      ? owner.state.activeSlideId
+      : deck.slides[0]?.id ?? null;
+    return {
+      version: AGENT_PROTOCOL_VERSION,
+      live: true,
+      sessionId: agentHost?.sessionId ?? '',
+      pid: process.pid,
+      updatedAt: new Date().toISOString(),
+      deckPath: room.session.dir,
+      deckRevision: deckRevision(deck),
+      activeSlideId,
+      activeSlideIndex: Math.max(0, deck.slides.findIndex((slide) => slide.id === activeSlideId)),
+      selectedSlideIds: [...selectedSlideIds],
+      selectedElementIds: [...selectedElementIds],
+      scenes: deck.slides.map((slide, index) =>
+        authoredScene(deck, slide, index, selectedSlideIds, selectedElementIds, activeSlideId)),
+    };
+  }
+
+  async function answerAgentRequest(deckId: string, agentRequest: AgentRequest, identity: Identity | null): Promise<AgentResponse> {
+    const room = await getRoom(deckId);
+    const reply = { version: AGENT_PROTOCOL_VERSION, id: agentRequest.id };
+    const author = httpAuthor(identity, { name: 'slide-agent' });
+    if (agentRequest.kind === 'dom') {
+      return {
+        ...reply, status: 'error', revision: deckRevision(room.session.deck),
+        message: 'The live DOM is only available in the desktop editor. Use plain inspect, or render a PNG.',
+      };
+    }
+    if (agentRequest.kind === 'htmlSync') {
+      const synced = await syncPageIntoRoom(deckId, agentRequest.contents, {
+        after: agentRequest.after === undefined ? undefined : agentRequest.after ?? '0',
+        label: agentRequest.label,
+        agentSession: null,
+        identity,
+        author,
+      });
+      if (synced.status !== 200) {
+        return {
+          ...reply, status: synced.status === 409 ? 'conflict' : 'error', revision: deckRevision(room.session.deck),
+          message: String(synced.body.error ?? 'the page could not be applied'),
+        };
+      }
+      return { ...reply, status: 'applied', revision: String(synced.body.revision), payload: synced.body };
+    }
+    const current = deckRevision(room.session.deck);
+    if (agentRequest.transaction.expectedRevision !== current) {
+      return {
+        ...reply, status: 'conflict', revision: current,
+        message: 'The deck changed since that revision was read; re-read it and try again.',
+      };
+    }
+    try {
+      // Strict first, as the editor does; the session applies the same
+      // operations leniently, and every client replays them.
+      const next = applyAgentTransaction(room.session.deck, agentRequest.transaction);
+      const errors = validateDeckIntegrity(next, await assetChecker(room.session.dir));
+      if (errors.length > 0) throw new Error(errors.join('\n'));
+    } catch (error) {
+      return { ...reply, status: 'error', revision: current, message: error instanceof Error ? error.message : String(error) };
+    }
+    const label = agentRequest.transaction.label.trim().slice(0, 200) || 'Agent edit';
+    const ops = agentRequest.transaction.operations;
+    const txnId = `agent-host-${randomUUID()}`;
+    const applied = room.session.applyOps(ops, { label, txnId, author });
+    broadcast(room, { kind: 'txn', seq: applied.seq, txnId, byClientId: 'agent-http', label, ops });
+    if (applied.skipped.length > 0) {
+      return {
+        ...reply, status: 'error', revision: deckRevision(applied.deck),
+        message: `Applied, but ${applied.skipped.length} operation(s) were skipped: ${applied.skipped.map((skip) => skip.reason).join('; ')}`,
+      };
+    }
+    return { ...reply, status: 'applied', revision: deckRevision(applied.deck) };
+  }
+
+  async function syncPageIntoRoom(
+    deckId: string,
+    html: string,
+    options: {
+      after?: string;
+      label?: string;
+      agentSession: string | null;
+      identity: Identity | null;
+      /** Who the change is attributed to; the bridge's agent by default. */
+      author?: EditAuthor;
+    },
+  ): Promise<{ status: number; body: Record<string, unknown> }> {
+    const result = (status: number, body: Record<string, unknown>) => ({ status, body });
+    const startedAt = Date.now();
+    const room = await getRoom(deckId);
+    const deck = room.session.deck;
+    const scope = htmlSlideScope(html);
+    // New slides go last unless `--after` names a slide (id or 1-based
+    // number); `--after 0` puts them first.
+    const afterRef = options.after?.trim();
+    let after: string | null = deck.slides.at(-1)?.id ?? null;
+    if (afterRef) {
+      const anchor = insertionAnchor(deck, afterRef);
+      if (anchor === undefined) return result(404, { error: `no slide ${afterRef}` });
+      after = anchor;
+    }
+    const target: HttpHtmlDraft['target'] = scope
+      ? { mode: 'replace', slideIds: scope }
+      : { mode: 'insert', afterSlideId: after };
+    const compiledDraft = await compileHtmlDraft(deckId, room, html, target, options.agentSession, startedAt);
+    if ('error' in compiledDraft) return result(400, { error: compiledDraft.error });
+    // People keep editing while a page compiles, and that is fine: the
+    // browser's layout depends only on the page, the theme and the canvas.
+    // What does depend on the rest of the deck — the ids new slides and
+    // objects are minted, the layout masters — is worked out again below
+    // against the deck as it is now, with nothing awaited between that and
+    // the apply. Answering 409 instead (and only for edits that happened to
+    // land after the compile) made a busy session drop an agent's saves.
+    const themeNow = await loadTheme(room.session.dir, room.session.deck.theme);
+    const live = room.session.deck;
+    if (themeNow !== compiledDraft.compiled.theme
+      || live.canvas.w !== deck.canvas.w || live.canvas.h !== deck.canvas.h) {
+      return result(409, {
+        error: 'the theme or the canvas changed while this page compiled, so its layout is stale; save it again',
+      });
+    }
+    if (afterRef) {
+      const anchor = insertionAnchor(live, afterRef);
+      if (anchor === undefined) return result(404, { error: `no slide ${afterRef}` });
+      after = anchor;
+    } else {
+      after = live.slides.at(-1)?.id ?? null;
+    }
+    // Review state the page cannot carry (notes, skip, comments, non-appear
+    // builds) and dropping replacements that change nothing are both
+    // htmlSyncOperations' job, shared with the desktop editor and the CLI.
+    let operations: AgentOperation[];
+    try {
+      compiledDraft.draft.slides = slidesFromMeasured(live, compiledDraft.compiled.measured);
+      compiledDraft.draft.revision = deckRevision(live);
+      operations = htmlSyncOperations(live, compiledDraft.draft.slides, scope, after,
+        pageBases(compiledDraft.compiled.measured));
+    } catch (error) {
+      return result(400, { error: String(error instanceof Error ? error.message : error) });
+    }
+    const label = options.label?.trim().slice(0, 200)
+      || htmlChangeLabel(html)
+      || htmlSyncHistoryLabel(operations);
+    const changes = htmlSyncSummary(operations);
+    let revision = compiledDraft.draft.revision;
+    if (operations.length > 0) {
+      // Strict validation first, as the editor does before its lenient replay.
+      try {
+        applyAgentTransaction(room.session.deck, { version: 1, expectedRevision: revision, label, operations });
+      } catch (error) {
+        return result(400, { error: String(error instanceof Error ? error.message : error) });
+      }
+      const bridge = options.agentSession ? localAgents?.linked(room.session.dir, options.agentSession) ?? null : null;
+      const txnId = `agent-sync-${randomUUID()}`;
+      const applied = room.session.applyOps(operations, {
+        label, txnId, author: options.author ?? httpAuthor(options.identity, agentAuthor(bridge, options.agentSession)),
+      });
+      revision = deckRevision(applied.deck);
+      broadcast(room, {
+        kind: 'txn', seq: applied.seq, txnId,
+        byClientId: bridge && bridge.clientId !== 'http' ? bridge.clientId : 'agent-http',
+        label, ops: operations,
+        agentChatId: agentChatId(deckId, options.agentSession) ?? undefined,
+      });
+    }
+    return result(200, {
+      status: 'applied',
+      applied: operations.length > 0,
+      revision,
+      changes,
+      slides: compiledDraft.draft.slides.map((slide) => ({
+        id: slide.id,
+        elements: slide.elements.map((element) => ({
+          id: element.id, type: element.type,
+          box: { x: element.x, y: element.y, w: element.w, h: element.h },
+        })),
+      })),
+      overflows: compiledDraft.draft.report.overflows ?? [],
+      // What the page now says its slides are, for the bridge to stamp into
+      // it: the next save of the same page is compared with this.
+      stamp: pageStampOf(compiledDraft.draft.slides),
+      ...(Array.isArray(compiledDraft.draft.report.warnings) && (compiledDraft.draft.report.warnings as unknown[]).length > 0
+        ? { warnings: compiledDraft.draft.report.warnings }
+        : {}),
+      draftId: compiledDraft.draft.id,
+    });
+
+  }
+
 
   /**
    * Compile authored HTML the way every HTML route does — sanitised, measured
@@ -1954,6 +2190,26 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
         etagSalt: served === absolute ? '' : 'rendition',
       });
       return;
+    }
+
+    if (path.startsWith('/api/agent-host/')) {
+      if (!agentHost || request.headers[AGENT_HOST_TOKEN_HEADER] !== agentHost.token) {
+        return respondJson(response, 403, { error: 'this route needs the token in the server\'s .deckwerk-server.json' });
+      }
+      if (!deckParam) return respondJson(response, 400, { error: 'missing deck' });
+      if (path === '/api/agent-host/context' && request.method === 'GET') {
+        return respondJson(response, 200, hostedAgentContext(await getRoom(deckParam)));
+      }
+      if (path === '/api/agent-host/request' && request.method === 'POST') {
+        let agentRequest: AgentRequest;
+        try {
+          agentRequest = AgentRequestSchema.parse(renameRetiredFields(JSON.parse((await readBody(request)).toString('utf8'))));
+        } catch (error) {
+          return respondJson(response, 400, { error: `not an agent request: ${error instanceof Error ? error.message : String(error)}` });
+        }
+        return respondJson(response, 200, await answerAgentRequest(deckParam, agentRequest, identity));
+      }
+      return respondJson(response, 404, { error: 'not found' });
     }
 
     // The feature cookbook: every editor capability with a minimal, valid
@@ -3142,107 +3398,15 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
     if (path === '/api/agent-mirror/sync-html' && request.method === 'POST') {
       if (!localAgents) return respondJson(response, 404, { error: 'local agents are not enabled' });
       if (!deckParam) return respondJson(response, 400, { error: 'missing deck' });
-      const startedAt = Date.now();
       const html = (await readBody(request)).toString('utf8');
       if (!html.trim()) return respondJson(response, 400, { error: 'missing html' });
-      const room = await getRoom(deckParam);
-      const deck = room.session.deck;
-      const scope = htmlSlideScope(html);
-      // New slides go last unless `--after` names a slide (id or 1-based
-      // number); `--after 0` puts them first.
-      const afterRef = url.searchParams.get('after')?.trim();
-      let after: string | null = deck.slides.at(-1)?.id ?? null;
-      if (afterRef) {
-        const anchor = insertionAnchor(deck, afterRef);
-        if (anchor === undefined) return respondJson(response, 404, { error: `no slide ${afterRef}` });
-        after = anchor;
-      }
-      const target: HttpHtmlDraft['target'] = scope
-        ? { mode: 'replace', slideIds: scope }
-        : { mode: 'insert', afterSlideId: after };
-      const compiledDraft = await compileHtmlDraft(deckParam, room, html, target, agentSessionParam, startedAt);
-      if ('error' in compiledDraft) return respondJson(response, 400, { error: compiledDraft.error });
-      // People keep editing while a page compiles, and that is fine: the
-      // browser's layout depends only on the page, the theme and the canvas.
-      // What does depend on the rest of the deck — the ids new slides and
-      // objects are minted, the layout masters — is worked out again below
-      // against the deck as it is now, with nothing awaited between that and
-      // the apply. Answering 409 instead (and only for edits that happened to
-      // land after the compile) made a busy session drop an agent's saves.
-      const themeNow = await loadTheme(room.session.dir, room.session.deck.theme);
-      const live = room.session.deck;
-      if (themeNow !== compiledDraft.compiled.theme
-        || live.canvas.w !== deck.canvas.w || live.canvas.h !== deck.canvas.h) {
-        return respondJson(response, 409, {
-          error: 'the theme or the canvas changed while this page compiled, so its layout is stale; save it again',
-        });
-      }
-      if (afterRef) {
-        const anchor = insertionAnchor(live, afterRef);
-        if (anchor === undefined) return respondJson(response, 404, { error: `no slide ${afterRef}` });
-        after = anchor;
-      } else {
-        after = live.slides.at(-1)?.id ?? null;
-      }
-      // Review state the page cannot carry (notes, skip, comments, non-appear
-      // builds) and dropping replacements that change nothing are both
-      // htmlSyncOperations' job, shared with the desktop editor and the CLI.
-      let operations: AgentOperation[];
-      try {
-        compiledDraft.draft.slides = slidesFromMeasured(live, compiledDraft.compiled.measured);
-        compiledDraft.draft.revision = deckRevision(live);
-        operations = htmlSyncOperations(live, compiledDraft.draft.slides, scope, after,
-          pageBases(compiledDraft.compiled.measured));
-      } catch (error) {
-        return respondJson(response, 400, { error: String(error instanceof Error ? error.message : error) });
-      }
-      const label = url.searchParams.get('label')?.trim().slice(0, 200)
-        || htmlChangeLabel(html)
-        || htmlSyncHistoryLabel(operations);
-      const changes = htmlSyncSummary(operations);
-      let revision = compiledDraft.draft.revision;
-      if (operations.length > 0) {
-        // Strict validation first, as the editor does before its lenient replay.
-        try {
-          applyAgentTransaction(room.session.deck, { version: 1, expectedRevision: revision, label, operations });
-        } catch (error) {
-          return respondJson(response, 400, { error: String(error instanceof Error ? error.message : error) });
-        }
-        const bridge = agentSessionParam ? localAgents.linked(room.session.dir, agentSessionParam) : null;
-        const txnId = `agent-sync-${randomUUID()}`;
-        const applied = room.session.applyOps(operations, {
-          label, txnId, author: httpAuthor(identity, agentAuthor(bridge, agentSessionParam)),
-        });
-        revision = deckRevision(applied.deck);
-        broadcast(room, {
-          kind: 'txn', seq: applied.seq, txnId,
-          byClientId: bridge && bridge.clientId !== 'http' ? bridge.clientId : 'agent-http',
-          label, ops: operations,
-          agentChatId: agentChatId(deckParam, agentSessionParam) ?? undefined,
-        });
-      }
-      respondJson(response, 200, {
-        status: 'applied',
-        applied: operations.length > 0,
-        revision,
-        changes,
-        slides: compiledDraft.draft.slides.map((slide) => ({
-          id: slide.id,
-          elements: slide.elements.map((element) => ({
-            id: element.id, type: element.type,
-            box: { x: element.x, y: element.y, w: element.w, h: element.h },
-          })),
-        })),
-        overflows: compiledDraft.draft.report.overflows ?? [],
-        // What the page now says its slides are, for the bridge to stamp into
-        // it: the next save of the same page is compared with this.
-        stamp: pageStampOf(compiledDraft.draft.slides),
-        ...(Array.isArray(compiledDraft.draft.report.warnings) && (compiledDraft.draft.report.warnings as unknown[]).length > 0
-          ? { warnings: compiledDraft.draft.report.warnings }
-          : {}),
-        draftId: compiledDraft.draft.id,
+      const synced = await syncPageIntoRoom(deckParam, html, {
+        after: url.searchParams.get('after') ?? undefined,
+        label: url.searchParams.get('label') ?? undefined,
+        agentSession: agentSessionParam,
+        identity,
       });
-      return;
+      return respondJson(response, synced.status, synced.body);
     }
 
     if (path === '/api/agent-mirror/file' && (request.method === 'GET' || request.method === 'PUT')) {
@@ -4369,6 +4533,24 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
   }
   unsubscribeSharedAgent = sharedAgent?.subscribe(emitSharedAgentState);
   void sweepMedia().catch(() => null);
+  // Announce this server to agents working in the folder it serves, at the
+  // address this machine reaches it on. A listener bound elsewhere is not
+  // reachable over loopback, and then there is nothing to announce.
+  const loopbackHost = host === '0.0.0.0' || host === '::' || host === '' || host === 'localhost'
+    ? '127.0.0.1'
+    : host === '127.0.0.1' || host === '::1' ? host : null;
+  const announced = agentHost && loopbackHost
+    ? await writeAgentHostMarker(rootDir, {
+      version: 1,
+      url: `http://${loopbackHost.includes(':') ? `[${loopbackHost}]` : loopbackHost}:${port}`,
+      token: agentHost.token,
+      pid: process.pid,
+      startedAt: new Date().toISOString(),
+    }).then(() => true, (error: unknown) => {
+      console.error(`could not announce the server to agents: ${String(error)}`);
+      return false;
+    })
+    : false;
 
   return {
     port,
@@ -4429,6 +4611,7 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
       for (const room of rooms.values()) await room.session.close();
       sharedAgent?.close();
       await userDirectory?.flush();
+      if (announced && agentHost) await removeAgentHostMarker(rootDir, agentHost.token).catch(() => undefined);
     },
   };
 }

@@ -58,6 +58,7 @@ import { spawn } from 'node:child_process';
 import { htmlEditTransaction } from '../main/htmlAuthoring.js';
 import { termBuildProblems } from '@shared/equationTerms.js';
 import { unclosedMath } from '@shared/mathDelimiters.js';
+import { findHostingServer, hostedContext, hostedLiveDeck, hostedRequest, type HostedDeck } from './hostedDeck.js';
 import { checkWebPage, renderSlidesToPng } from './renderSlides.js';
 import { removeTempDir, tempDir, untilStopped } from './scratch.js';
 import { failureMessage } from '../main/writeFailure.js';
@@ -413,7 +414,7 @@ async function applyCommand(argv: string[], io: CliIo): Promise<number> {
   // asking it explicitly returns what that did, and it answers a request for
   // the same document once — the CLI compiling alongside it used to insert
   // every new section twice. The editor stamps the ids itself.
-  const live = await readLiveAgentContext(deckDir);
+  const live = await liveContext(deckDir);
   if (live) {
     const response = await request(deckDir, {
       version: AGENT_PROTOCOL_VERSION,
@@ -449,9 +450,10 @@ async function applyCommand(argv: string[], io: CliIo): Promise<number> {
     // page) is stamped here, or applying it again would insert the slide a
     // second time. Never a file in edit/: the editor's watcher would take
     // this process's write for a save and compile the page again, later and
-    // against whatever the deck has become by then.
+    // against whatever the deck has become by then. A server hosting the
+    // deck watches no edit/ folder, so there every page is stamped here.
     const inEditDir = dirname(filePath) === join(deckDir, 'edit');
-    if (Array.isArray(outcome.slides) && !inEditDir) {
+    if (Array.isArray(outcome.slides) && (!inEditDir || hostedDecks.has(resolve(deckDir)))) {
       const authored = await readFile(filePath, 'utf8');
       if (authored === authoredBefore) {
         const adopted = adoptAuthoredIds(authored, outcome.slides as Slide[]) ?? authored;
@@ -595,7 +597,7 @@ async function inspectCommand(argv: string[], io: CliIo): Promise<number> {
   }
 
   if (flags.has('dom')) {
-    const live = await readLiveAgentContext(deckDir);
+    const live = await liveContext(deckDir);
     if (!live) {
       io.err('--dom needs the editor running; it renders the live DOM. Use plain inspect otherwise.');
       return EXIT_ERROR;
@@ -1465,7 +1467,7 @@ async function applyTransaction(
   io: CliIo,
   extra: Record<string, unknown> = {},
 ): Promise<number> {
-  const live = await readLiveAgentContext(deckDir);
+  const live = await liveContext(deckDir);
   const expectedRevision = draft.expectedRevision
     ?? live?.deckRevision
     ?? deckRevision(await loadDeck(deckDir));
@@ -1535,10 +1537,12 @@ export async function currentContext(
   const digest = opts.digest
     ? { outline: deckOutline(deck), style: deckStyleDigest(deck) }
     : {};
-  const live = await readLiveAgentContext(deckDir);
+  const live = await liveContext(deckDir);
   if (live) {
+    const host = hostedDecks.get(resolve(deckDir));
     return {
       ...live,
+      ...(host ? { hostedBy: host.url, hostedDeckId: host.deckId } : {}),
       ...digest,
       scenes: opts.scenes ? live.scenes : [],
       diskRevision,
@@ -1663,9 +1667,9 @@ const restoreSettleMs = (): number => Number(process.env.DECKWERK_RESTORE_SETTLE
  * prefix), or is a time, meaning the newest version at or before it. What the
  * deck holds now becomes a version first, so a restore is itself undoable.
  *
- * Written as deck.json beside the deck. A collab server hosting it adopts the
- * file for everyone (and records the replacement); a save of its own landing
- * in the same instant would overwrite it, so the write is checked and retried.
+ * A deck a collaboration server hosts is restored through the server, as one
+ * transaction. Otherwise the version is written as deck.json, checked and
+ * rewritten should anything save over it in the same instant.
  */
 async function restoreVersion(deckDir: string, wanted: string, io: CliIo): Promise<number> {
   const versions = await listDeckVersions(deckDir);
@@ -1692,18 +1696,47 @@ async function restoreVersion(deckDir: string, wanted: string, io: CliIo): Promi
   if (theme && (theme.file !== currentThemeFile || theme.css !== currentTheme)) {
     await saveTheme(deckDir, theme.file, theme.css);
   }
+  const reply = {
+    restored: chosen.id,
+    at: chosen.at.toISOString(),
+    slides: deck.slides.length,
+    previous: kept?.id ?? 'unchanged since the newest version',
+    undo: `slide-agent history <deck> --restore ${kept?.id ?? versions.at(-1)?.id ?? '<id>'}`,
+  };
+
+  // A deck a server hosts is restored through it, as one transaction from
+  // the live deck to the version: everyone in it sees the restore land, and
+  // nothing anybody types meanwhile is written over.
+  if (await liveContext(deckDir) && hostedDecks.has(resolve(deckDir))) {
+    const host = hostedDecks.get(resolve(deckDir))!;
+    for (let attempt = 0; attempt < 4; attempt++) {
+      const live = await hostedLiveDeck(host);
+      const response = await request(deckDir, {
+        version: AGENT_PROTOCOL_VERSION,
+        id: requestId(),
+        kind: 'transaction',
+        transaction: {
+          version: 1,
+          expectedRevision: deckRevision(live),
+          label: `Restore version ${chosen.id}`,
+          operations: diffDecks(live, deck),
+        },
+      });
+      if (response.status === 'applied') {
+        io.out(json({ ...reply, live: true, revision: response.revision }));
+        return EXIT_OK;
+      }
+      if (response.status !== 'conflict') throw new Error(response.message ?? 'The server could not restore that version.');
+    }
+    throw new Error('The deck kept changing while the restore was sent (someone is editing it right now). Try again.');
+  }
+
   let written = '';
   for (let attempt = 0; attempt < 4; attempt++) {
     written = await saveDeck(deckDir, deck);
     await new Promise((resolveWait) => setTimeout(resolveWait, restoreSettleMs()));
     if (await readFile(join(deckDir, DECK_FILE), 'utf8') === written) {
-      io.out(json({
-        restored: chosen.id,
-        at: chosen.at.toISOString(),
-        slides: deck.slides.length,
-        previous: kept?.id ?? 'unchanged since the newest version',
-        undo: `slide-agent history <deck> --restore ${kept?.id ?? versions.at(-1)?.id ?? '<id>'}`,
-      }));
+      io.out(json(reply));
       return EXIT_OK;
     }
   }
@@ -1837,8 +1870,35 @@ async function request(
   payload: Parameters<typeof writeAgentRequest>[1],
   timeoutMs?: number,
 ) {
+  const host = hostedDecks.get(resolve(deckDir));
+  if (host) return hostedRequest(host, payload, timeoutMs);
   const responsePath = await writeAgentRequest(deckDir, payload);
   return waitForAgentResponse(responsePath, timeoutMs);
+}
+
+/** The servers found hosting deck folders this run (cli/hostedDeck.ts), by folder. */
+const hostedDecks = new Map<string, HostedDeck>();
+
+/**
+ * Whoever holds the live deck for a folder: the desktop editor with it open,
+ * or a collaboration server hosting it. Either way the deck on disk trails
+ * the real document, and every change goes through `request` to them. Null
+ * when nobody does, and the folder on disk is the deck.
+ *
+ * A server that is running but does not answer is an error, never a reason
+ * to fall back to writing deck.json beside it.
+ */
+async function liveContext(deckDir: string): Promise<AgentContext | null> {
+  const desktop = await readLiveAgentContext(deckDir);
+  if (desktop) return desktop;
+  const host = await findHostingServer(deckDir);
+  if (!host) {
+    hostedDecks.delete(resolve(deckDir));
+    return null;
+  }
+  const context = await hostedContext(host);
+  hostedDecks.set(resolve(deckDir), host);
+  return context;
 }
 
 function requestId(): string {

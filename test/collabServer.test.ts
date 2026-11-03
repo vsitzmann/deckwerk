@@ -237,7 +237,7 @@ describe('collab server', () => {
     expect(txn.txnId).toBe('ghost');
   });
 
-  it('broadcasts a resync deck on genuine external writes but not on its own autosave', async () => {
+  it('merges a genuine external write in as a transaction, but not its own autosave', async () => {
     const a = await connect('A');
     a.client.send({
       kind: 'txn', txnId: 't1', baseSeq: 0, label: 'rename',
@@ -251,9 +251,14 @@ describe('collab server', () => {
 
     const external = parseDeck({ ...emptyDeck('External'), slides: [{ id: 'sX', name: 'X' }] });
     await saveDeck(deckDir, external);
-    const deckMsg = await a.client.nextOfKind('deck');
-    expect(deckMsg.reason).toBe('external-edit');
-    expect(deckMsg.deck.title).toBe('External');
+    // Not a whole deck that would drop what a client has not had confirmed:
+    // the difference, replayed like anybody's edit.
+    const merged = await a.client.nextOfKind('txn');
+    expect(merged.byClientId).toBe('disk');
+    expect(merged.ops).toContainEqual({ op: 'updateDeck', title: 'External' });
+    const live = await (await fetch(`http://127.0.0.1:${server.port}/api/deck?deck=${DECK_ID}`)).json() as { title: string; slides: Array<{ id: string }> };
+    expect(live.title).toBe('External');
+    expect(live.slides.map((slide) => slide.id)).toEqual(['sX']);
   });
 
   it('relays presence and cursor to other clients only, and peerLeft on disconnect', async () => {

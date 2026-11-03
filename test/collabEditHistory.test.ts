@@ -202,7 +202,8 @@ describe('the edit log', () => {
     const removed = deck.slides[2];
     deck.slides = deck.slides.slice(0, 2);
     await writeFile(join(deckDir, 'deck.json'), `${JSON.stringify(deck, null, 2)}\n`, 'utf8');
-    await client.waitFor((message) => message.kind === 'deck');
+    // Merged into the live deck, and sent on as an ordinary transaction.
+    await client.waitFor((message) => message.kind === 'txn' && message.byClientId === 'disk');
     const [entry] = await history();
     expect(entry).toMatchObject({
       kind: 'replace',

@@ -230,23 +230,27 @@ describe('a hosted deck keeps versions', () => {
 
     const restored = await cli('history', '--restore', opened.id);
     expect(restored.code, restored.stderr).toBe(0);
-    expect(restored.json).toMatchObject({ restored: opened.id, slides: 2 });
+    // Through the server hosting the deck, not deck.json written beside it.
+    expect(restored.json).toMatchObject({ restored: opened.id, slides: 2, live: true });
 
-    // Everyone connected gets the restored deck.
-    const update = await vincent.waitFor((message) => message.kind === 'deck'
-      && message.deck.slides.length === 2) as Extract<ServerMessage, { kind: 'deck' }>;
-    expect(update.deck.slides[0].elements[0]).toMatchObject({ html: 'Original title' });
-    expect(update.deck.slides[1].notes).toBe('Keep these notes.');
+    // Everyone connected gets the restore, as one transaction.
+    const update = await vincent.waitFor((message) => message.kind === 'txn'
+      && message.label === `Restore version ${opened.id}`) as Extract<ServerMessage, { kind: 'txn' }>;
+    expect(update.byClientId).toBe('agent-http');
+    const live = await (await fetch(`http://127.0.0.1:${server!.port}/api/deck?deck=${DECK_ID}`)).json() as Deck;
+    expect(live.slides).toHaveLength(2);
+    expect(live.slides[0].elements[0]).toMatchObject({ html: 'Original title' });
+    expect(live.slides[1].notes).toBe('Keep these notes.');
 
     // The state it replaced is a version too, so the restore can be undone.
     const previous = (await listDeckVersions(deckDir)).find((version) => version.id === restored.json.previous)!;
     const replaced = parseDeck((await readDeckVersion(previous)).deck);
     expect(replaced.slides.map((slide) => slide.id)).toEqual(['s1']);
     expect(replaced.slides[0].elements[0]).toMatchObject({ html: 'Agent title' });
-    // And the edit log says the deck was replaced on disk.
+    // And the edit log names the restore, by the agent that asked for it.
     await server!.flush();
     const log = parseEditHistory(await readFile(join(deckDir, HISTORY_FILE), 'utf8'));
-    expect(log.at(-1)).toMatchObject({ kind: 'replace' });
+    expect(log.at(-1)).toMatchObject({ kind: 'txn', label: `Restore version ${opened.id}`, author: { agent: true } });
   }, 20_000);
 
   it('restores the newest version at or before a time', async () => {

@@ -308,11 +308,13 @@ describe('collab server folders', () => {
       await writeFile(join(rootDir, 'loose', 'deck.json'), JSON.stringify({
         ...JSON.parse(await readFile(join(rootDir, 'loose', 'deck.json'), 'utf8')), title: 'Imported title',
       }), 'utf8');
-      // The session picks up the outside edit before the rename arrives.
-      await peer.next('deck', (message) => message.deck.title === 'Imported title');
+      // The session picks up the outside edit before the rename arrives,
+      // merged in as a transaction of its own.
+      await peer.next('txn', (message) => message.byClientId === 'disk'
+        && message.ops.some((op) => op.op === 'updateDeck' && op.title === 'Imported title'));
       const renamed = await api('/api/decks/rename?deck=loose&name=loose', { method: 'POST' });
       expect(renamed.body).toEqual({ id: 'loose', title: 'loose' });
-      const txn = await peer.next('txn');
+      const txn = await peer.next('txn', (message) => message.byClientId !== 'disk');
       expect(txn.ops).toEqual([{ op: 'updateDeck', title: 'loose' }]);
       expect(peer.messages.some((message) => message.kind === 'deckMoved')).toBe(false);
       peer.socket.terminate();
