@@ -98,8 +98,8 @@ const ENCODED_WORD = /=\?([^?\s*]+)(?:\*[^?\s]*)?\?([bBqQ])\?([^?\s]*)\?=/g;
 
 function encodedWordBytes(encoding: string, text: string): Uint8Array | null {
   if (encoding === 'b' || encoding === 'B') {
-    if (!/^[A-Za-z0-9+/]*={0,2}$/.test(text)) return null;
-    return Uint8Array.from(Buffer.from(text, 'base64'));
+    if (text.length % 4 !== 0 || !/^[A-Za-z0-9+/]*={0,2}$/.test(text)) return null;
+    return Buffer.from(text, 'base64');
   }
   const bytes: number[] = [];
   for (let i = 0; i < text.length; i += 1) {
@@ -117,7 +117,7 @@ function encodedWordBytes(encoding: string, text: string): Uint8Array | null {
       bytes.push(code);
     }
   }
-  return Uint8Array.from(bytes);
+  return Buffer.from(bytes);
 }
 
 /**
@@ -175,6 +175,16 @@ export function decodeEncodedWords(value: string): string {
 }
 
 /**
+ * A display name as people should see it: encoded-words decoded, and any
+ * control characters (which a header could never carry, but a decoded `=0A`
+ * can) turned into spaces so a name cannot break a log line or a label.
+ * Empty after that means "no name": the caller falls back to the login.
+ */
+export function cleanDisplayName(value: string): string {
+  return decodeEncodedWords(value).replace(/[\u0000-\u001f\u007f-\u009f]+/g, ' ').trim();
+}
+
+/**
  * Connections the server terminated TLS for on the tailnet address, with the
  * tailnet user tailscaled named for the peer (tailscaleIdentity.ts), or null
  * when it named nobody. Set before the connection's first request is handled.
@@ -201,7 +211,7 @@ export function resolveIdentity(
       login: normalizeLogin(login),
       // Only the display name is decoded. The login is the authorization
       // subject and stays byte-for-byte what serve sent.
-      name: decodeEncodedWords(headerValue(request, 'tailscale-user-name')).trim() || login,
+      name: cleanDisplayName(headerValue(request, 'tailscale-user-name')) || login,
     };
   }
   // Serve stamps every request it proxies with X-Forwarded-For, but only
@@ -397,7 +407,7 @@ export class UserDirectory {
             login: normalizeLogin(user.login),
             // Names saved before identity headers were decoded can still be
             // RFC 2047-encoded on disk; read them back as the real name.
-            name: typeof user.name === 'string' && user.name ? decodeEncodedWords(user.name) : user.login,
+            name: (typeof user.name === 'string' && cleanDisplayName(user.name)) || user.login,
             lastSeen: typeof user.lastSeen === 'string' ? user.lastSeen : new Date(0).toISOString(),
           });
         }

@@ -83,6 +83,15 @@ describe('resolveIdentity', () => {
     }), CONFIG)).toEqual({ login: ALICE, name: '王小明（Ming）' });
   });
 
+  it('keeps control characters a decoded name could smuggle in out of it', () => {
+    const name = (encoded: string) => resolveIdentity(fakeRequest('127.0.0.1', {
+      'tailscale-user-login': ALICE, 'tailscale-user-name': encoded,
+    }), CONFIG)?.name;
+    expect(name('=?utf-8?q?Bob=0A[admin]_granted?=')).toBe('Bob [admin] granted');
+    expect(name('=?utf-8?q?=00=0D?=')).toBe(ALICE);
+    expect(name('=?utf-8?q?_?=')).toBe(ALICE);
+  });
+
   it('refuses everything off loopback, headers or not', () => {
     for (const address of ['100.101.102.103', '192.168.1.20', '127.0.0.2', '::ffff:10.0.0.1', undefined]) {
       expect(resolveIdentity(fakeRequest(address, { 'tailscale-user-login': ADMIN }), CONFIG)).toBeNull();
@@ -110,7 +119,7 @@ describe('decodeEncodedWords', () => {
   });
 
   it('leaves plain names and malformed or unknown words untouched', () => {
-    for (const value of ['Alice A', 'a=?b', '=?utf-8?q?=ZZ?=', '=?no-such-charset?q?abc?=', '=?utf-8?x?abc?=', '=?utf-8?q?=FF?=']) {
+    for (const value of ['Alice A', 'a=?b', '=?utf-8?q?=ZZ?=', '=?no-such-charset?q?abc?=', '=?utf-8?x?abc?=', '=?utf-8?q?=FF?=', '=?utf-8?B?A?=', '=?utf-8?B?QUJ?=']) {
       expect(decodeEncodedWords(value)).toBe(value);
     }
   });
@@ -357,6 +366,12 @@ describe('UserDirectory', () => {
       { login: ALICE, name: '=?utf-8?q?=E7=8E=8B=E5=B0=8F=E6=98=8E=EF=BC=88Ming=EF=BC=89?=', lastSeen: new Date().toISOString() },
     ]), 'utf8');
     expect((await new UserDirectory(file).all())[0].name).toBe('王小明（Ming）');
+  });
+
+  it('falls back to the login for a saved name that decodes to nothing', async () => {
+    const file = join(dir, 'users.json');
+    await writeFile(file, JSON.stringify([{ login: ALICE, name: '=?utf-8?q?_?=' }]), 'utf8');
+    expect((await new UserDirectory(file).all())[0].name).toBe(ALICE);
   });
 
   it('flushes a fire-and-forget note that has not reached its file write yet', async () => {
