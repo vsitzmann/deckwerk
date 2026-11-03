@@ -71,7 +71,7 @@
    which put the light theme's near-black text on near-black. */
 :root[data-ui-theme="light"] .welcome-screen {
   background:
-    radial-gradient(circle at 50% 38%, rgb(5 136 255 / 10%), transparent 38%),
+    radial-gradient(circle at 50% 38%, color-mix(in oklch, var(--accent) 10%, transparent), transparent 38%),
     var(--canvas-ground);
 }
 :root[data-ui-theme="light"] .welcome-action {

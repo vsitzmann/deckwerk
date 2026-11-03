@@ -88,7 +88,7 @@ function lowestContrast(cdp: Cdp): Promise<Record<string, number>> {
 }
 
 describe.skipIf(!electronBinary)('welcome screen contrast (desktop app)', () => {
-  it('keeps the heading, card titles and descriptions readable in dark and light mode', {
+  it('keeps the heading, card titles and descriptions readable in dark and light mode, and hovered in light mode', {
     retry: 2,
     timeout: 120_000,
   }, async () => {
@@ -105,8 +105,11 @@ describe.skipIf(!electronBinary)('welcome screen contrast (desktop app)', () => 
     const target = await findTarget(app.debugPort, isEditorTarget, app.log, 30_000);
     editor = await Cdp.connect(target.webSocketDebuggerUrl!);
 
+    // Marks the document before a reload, so the wait below cannot be
+    // satisfied by the page that is about to go away.
     const showing = (theme: string) => eventually(
       () => editor!.evaluate<string | null>(`(() => {
+        if (window.__beforeReload) return null;
         const screen = document.querySelector('.welcome-screen');
         return screen && screen.getClientRects().length ? document.documentElement.dataset.uiTheme ?? null : null;
       })()`),
@@ -117,11 +120,25 @@ describe.skipIf(!electronBinary)('welcome screen contrast (desktop app)', () => 
     // The appearance choice is kept per machine; pin each in turn and reload,
     // the way a saved preference is picked up on launch.
     for (const theme of ['dark', 'light']) {
-      await editor.evaluate(`localStorage.setItem('deckwerk.uiTheme', ${JSON.stringify(theme)}); location.reload()`);
+      await editor.evaluate(
+        `window.__beforeReload = true; localStorage.setItem('deckwerk.uiTheme', ${JSON.stringify(theme)}); location.reload()`,
+      );
       await showing(theme);
-      const contrast = await lowestContrast(editor);
+      const resting = await lowestContrast(editor);
       for (const selector of TEXT) {
-        expect(contrast[selector], `${selector} in ${theme} mode`).toBeGreaterThanOrEqual(4.5);
+        expect(resting[selector], `${selector} in ${theme} mode`).toBeGreaterThanOrEqual(4.5);
+      }
+      // A card under the pointer takes its own hover ground. Only light mode's
+      // is held here: dark mode's hover ground predates these overrides.
+      if (theme !== 'light') continue;
+      await editor.hoverWithin('.welcome-action[data-action="new"]', 0.5, 0.5, 'the New presentation card');
+      await eventually(
+        () => editor!.evaluate<boolean>(`document.querySelector('.welcome-action[data-action="new"]').matches(':hover')`),
+        'the New presentation card under the pointer',
+      );
+      const hovered = await lowestContrast(editor);
+      for (const selector of ['.welcome-action strong', '.welcome-action span']) {
+        expect(hovered[selector], `${selector} hovered in light mode`).toBeGreaterThanOrEqual(4.5);
       }
     }
   });
