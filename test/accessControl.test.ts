@@ -90,6 +90,8 @@ describe('resolveIdentity', () => {
     expect(name('=?utf-8?q?Bob=0A[admin]_granted?=')).toBe('Bob [admin] granted');
     expect(name('=?utf-8?q?=00=0D?=')).toBe(ALICE);
     expect(name('=?utf-8?q?_?=')).toBe(ALICE);
+    expect(name('=?utf-8?q?a=E2=80=A8b?=')).toBe('a b');
+    expect(name('=?utf-8?q?=E2=80=AEnimda?=')).toBe('nimda');
   });
 
   it('refuses everything off loopback, headers or not', () => {
@@ -116,6 +118,20 @@ describe('decodeEncodedWords', () => {
 
   it('keeps the text around encoded-words', () => {
     expect(decodeEncodedWords('Dr. =?utf-8?q?=E7=8E=8B?= (lab)')).toBe('Dr. 王 (lab)');
+  });
+
+  it('keeps the whitespace beside a word it cannot decode', () => {
+    expect(decodeEncodedWords('=?no-such?q?a?= =?utf-8?q?b?=')).toBe('=?no-such?q?a?= b');
+    expect(decodeEncodedWords('=?utf-8?q?a?= =?no-such?q?b?=')).toBe('a =?no-such?q?b?=');
+    expect(decodeEncodedWords('=?utf-8?q?a?= =?utf-8?q?=ZZ?= =?utf-8?q?b?=')).toBe('a =?utf-8?q?=ZZ?= b');
+  });
+
+  it('keeps the good words of a run when one of them is bad', () => {
+    expect(decodeEncodedWords('=?utf-8?q?=E7=8E=8B?= =?utf-8?q?=FF?=')).toBe('王 =?utf-8?q?=FF?=');
+  });
+
+  it('keeps a leading byte-order mark', () => {
+    expect(decodeEncodedWords('=?utf-8?q?=EF=BB=BFBob?=')).toBe('\uFEFFBob');
   });
 
   it('leaves plain names and malformed or unknown words untouched', () => {
@@ -355,6 +371,9 @@ describe('UserDirectory', () => {
     const directory = new UserDirectory(join(dir, 'users.json'));
     await directory.note({ login: ALICE, name: 'Alice A' });
     await directory.note({ login: ALICE, name: ALICE }); // header missing: name fell back to the login
+    expect((await directory.all())[0].name).toBe('Alice A');
+    // The fallback is the login as serve sent it, before normalizing.
+    await directory.note({ login: ALICE, name: 'Alice@Tailnet.Example' });
     expect((await directory.all())[0].name).toBe('Alice A');
     await directory.note({ login: ALICE, name: 'Alice Renamed' });
     expect((await directory.all())[0].name).toBe('Alice Renamed');

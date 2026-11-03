@@ -133,55 +133,83 @@ function encodedWordBytes(encoding: string, text: string): Uint8Array | null {
  */
 export function decodeEncodedWords(value: string): string {
   if (!value.includes('=?')) return value;
-  let out = '';
+  // Split into literal text and encoded-words; a word's bytes are null when it
+  // is malformed.
+  type Word = { charset: string; bytes: Uint8Array | null; raw: string };
+  const parts: Array<string | Word> = [];
   let last = 0;
-  // A run of adjacent encoded-words in one charset, not yet decoded.
-  let run: { charset: string; chunks: Uint8Array[]; raw: string } | null = null;
-  const flush = () => {
-    if (!run) return;
-    try {
-      const decoder = new TextDecoder(run.charset, { fatal: true });
-      out += decoder.decode(Buffer.concat(run.chunks));
-    } catch {
-      out += run.raw;
-    }
-    run = null;
-  };
   for (const match of value.matchAll(ENCODED_WORD)) {
     const index = match.index ?? 0;
-    const between = value.slice(last, index);
-    const charset = match[1].toLowerCase();
-    const bytes = encodedWordBytes(match[2], match[3]);
-    const adjacent = run !== null && /^[ \t\r\n]*$/.test(between);
-    if (!adjacent) {
-      flush();
-      out += between;
-    }
-    if (!bytes) {
-      flush();
-      if (adjacent) out += between;
-      out += match[0];
-    } else if (run && adjacent && run.charset === charset) {
-      run.chunks.push(bytes);
-      run.raw += between + match[0];
-    } else {
-      flush();
-      run = { charset, chunks: [bytes], raw: match[0] };
-    }
+    parts.push(value.slice(last, index));
+    parts.push({ charset: match[1].toLowerCase(), bytes: encodedWordBytes(match[2], match[3]), raw: match[0] });
     last = index + match[0].length;
   }
+  parts.push(value.slice(last));
+
+  const decode = (charset: string, bytes: Uint8Array): string | null => {
+    try {
+      return new TextDecoder(charset, { fatal: true, ignoreBOM: true }).decode(bytes);
+    } catch {
+      return null;
+    }
+  };
+  // Decode a run of adjacent same-charset words together, so a character
+  // split across them survives; if that fails, decode each word on its own.
+  const decodeRun = (run: Word[]): Array<string | null> => {
+    const whole = decode(run[0].charset, Buffer.concat(run.map((word) => word.bytes as Uint8Array)));
+    if (whole !== null) return [whole, ...run.slice(1).map(() => '')];
+    return run.map((word) => decode(word.charset, word.bytes as Uint8Array));
+  };
+
+  // Each word's decoded text, or null to keep it raw.
+  const decoded = new Map<Word, string | null>();
+  let run: Word[] = [];
+  const flush = () => {
+    if (!run.length) return;
+    decodeRun(run).forEach((text, i) => decoded.set(run[i], text));
+    run = [];
+  };
+  for (let i = 1; i < parts.length; i += 2) {
+    const word = parts[i] as Word;
+    const prev = i >= 3 ? (parts[i - 2] as Word) : null;
+    const joined = prev !== null && run.length > 0 && run[run.length - 1] === prev
+      && /^[ \t\r\n]*$/.test(parts[i - 1] as string) && prev.charset === word.charset;
+    if (!joined) flush();
+    if (word.bytes) run.push(word);
+    else { flush(); decoded.set(word, null); }
+  }
   flush();
-  return out + value.slice(last);
+
+  // Whitespace between two adjacent words is dropped only when both decoded
+  // (RFC 2047 §6.2); next to a word kept raw it stays as it was.
+  let out = parts[0] as string;
+  for (let i = 1; i < parts.length; i += 2) {
+    const word = parts[i] as Word;
+    const text = decoded.get(word) ?? null;
+    out += text ?? word.raw;
+    const between = parts[i + 1] as string;
+    const next = parts[i + 2] as Word | undefined;
+    const bothDecoded = text !== null && next !== undefined && (decoded.get(next) ?? null) !== null;
+    if (!(bothDecoded && /^[ \t\r\n]*$/.test(between))) out += between;
+  }
+  return out;
 }
 
 /**
  * A display name as people should see it: encoded-words decoded, and any
- * control characters (which a header could never carry, but a decoded `=0A`
- * can) turned into spaces so a name cannot break a log line or a label.
+ * control characters and line separators (which a header could never carry,
+ * but a decoded `=0A` can) turned into spaces so a name cannot break a log
+ * line or a label, and bidi controls dropped. Used for every display name,
+ * whichever route it came by.
  * Empty after that means "no name": the caller falls back to the login.
  */
 export function cleanDisplayName(value: string): string {
-  return decodeEncodedWords(value).replace(/[\u0000-\u001f\u007f-\u009f]+/g, ' ').trim();
+  return decodeEncodedWords(value)
+    .replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/g, ' ')
+    // Bidi embeddings, overrides and isolates: they can make one name read
+    // as another (U+202E turns "nimda" into "admin").
+    .replace(/[\u202a-\u202e\u2066-\u2069]/g, '')
+    .trim();
 }
 
 /**
@@ -434,7 +462,7 @@ export class UserDirectory {
     const now = new Date();
     // A request without the display-name header falls back to the login; that
     // fallback must never overwrite a real name learned earlier.
-    const name = identity.name === identity.login && existing ? existing.name : identity.name;
+    const name = normalizeLogin(identity.name) === identity.login && existing ? existing.name : identity.name;
     // lastSeen is deliberately coarse (an hour) so routine traffic doesn't
     // rewrite the file on every request.
     const stale = !existing

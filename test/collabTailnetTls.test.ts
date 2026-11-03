@@ -36,6 +36,13 @@ describe('identityFromWhoIs', () => {
     expect(identityFromWhoIs({ UserProfile: { LoginName: 'tagged-devices' } })).toBeNull();
     expect(identityFromWhoIs({})).toBeNull();
   });
+
+  it('cleans the display name the same way as the serve header', () => {
+    expect(identityFromWhoIs({ UserProfile: { LoginName: ALICE, DisplayName: '王小明\n[admin]' } }))
+      .toEqual({ login: ALICE, name: '王小明 [admin]' });
+    expect(identityFromWhoIs({ UserProfile: { LoginName: ALICE, DisplayName: '\u202e' } }))
+      .toEqual({ login: ALICE, name: ALICE });
+  });
 });
 
 describe('collab server tailnet HTTPS listener', () => {
