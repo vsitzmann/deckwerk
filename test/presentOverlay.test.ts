@@ -440,12 +440,14 @@ describe('presenting with a second screen attached', () => {
     expect(query(overlayFrame()!.src).get('endSlide')).toBe('3');
   });
 
-  it('sends the audience to the laptop when the editor is on the external monitor', async () => {
+  it('keeps Speaker View on the laptop when the editor is on the external monitor', async () => {
+    // It used to go by the editor window: an editor left on the projector
+    // put the slides on the laptop and Speaker View on the projector.
     details.currentScreen = projector;
     await startPresenting('talk', 0, seed);
 
-    expect(fullscreenScreens).toEqual(['Built-in Retina Display']);
-    expect(opened[0].features).toBe('popup,left=1512,top=0,width=1920,height=1080');
+    expect(fullscreenScreens).toEqual(['Projector']);
+    expect(opened[0].features).toBe('popup,left=0,top=25,width=1512,height=957');
   });
 
   it('closes Speaker View when the show ends on the projector', async () => {
@@ -529,10 +531,12 @@ describe('presenting with a second screen attached', () => {
     releasePrompt();
     await started;
 
-    // Exactly today's Speaker View: audience in a pop-up, speaker in the tab.
+    // One-screen Speaker View: the audience in a window of its own — not a
+    // tab, which Chrome brings to the front over Speaker View — and the
+    // speaker in this tab.
     expect(fullscreenScreens).toEqual([null]);
     expect(opened).toHaveLength(1);
-    expect(opened[0].features).toBe('');
+    expect(opened[0].features).toMatch(/^popup,/);
     expect(query(opened[0].url).get('role')).toBeNull();
     expect(query(overlayFrame()!.src).get('role')).toBe('speaker');
   });

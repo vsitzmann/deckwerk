@@ -61,12 +61,28 @@ function sameScreen(a: ScreenArea, b: ScreenArea): boolean {
 }
 
 /**
- * The audience goes on a screen the editor is not on, an external one before
- * the laptop's own when there are three. Null when there is no other screen.
+ * Which screen shows the audience and which Speaker View. A laptop with
+ * another screen keeps Speaker View on its own panel and puts the audience on
+ * the other, wherever the editor window happened to be — the presenter is at
+ * the laptop. (It used to go by the editor window alone, so an editor left on
+ * the projector put Speaker View on the projector and the slides on the
+ * laptop.) Screens that do not say which is the laptop's: the audience goes on
+ * one the editor is not on, and Speaker View where the editor is. Null when
+ * there is no second screen.
  */
-export function chooseAudienceScreen<T extends ScreenArea>(screens: readonly T[], home: ScreenArea): T | null {
+export function chooseScreens<T extends ScreenArea>(screens: readonly T[], home: T): { audience: T; speaker: T } | null {
   const others = screens.filter((screen) => !sameScreen(screen, home));
-  return others.find((screen) => screen.isInternal === false) ?? others[0] ?? null;
+  if (others.length === 0) return null;
+  const laptop = screens.find((screen) => screen.isInternal === true);
+  if (laptop) {
+    const external = screens.filter((screen) => !sameScreen(screen, laptop));
+    // Of several external screens, one the editor is not on: with a desk
+    // monitor and a projector, the editor is on the monitor.
+    const audience = external.find((screen) => !sameScreen(screen, home)) ?? external[0];
+    if (audience) return { audience, speaker: laptop };
+  }
+  const audience = others.find((screen) => screen.isInternal === false) ?? others[0];
+  return { audience, speaker: home };
 }
 
 /** `window.open` features for a Speaker View that fills the presenter's screen. */
@@ -74,8 +90,24 @@ export function speakerWindowFeatures(home: ScreenArea): string {
   return `popup,left=${home.availLeft},top=${home.availTop},width=${home.availWidth},height=${home.availHeight}`;
 }
 
+/**
+ * `window.open` features for the audience of a Speaker View on one screen: a
+ * window of its own, not a tab. Chrome opened a bare `window.open` as a tab in
+ * the editor's window and brought it to the front, so the presenter saw the
+ * slides and Speaker View sat in the tab behind them. A 16:9 window over the
+ * lower right of the screen leaves Speaker View in view, and is the window to
+ * drag to a projector the browser cannot see.
+ */
+export function audienceWindowFeatures(home: ScreenArea): string {
+  const width = Math.round(home.availWidth * 0.45);
+  const height = Math.round((width * 9) / 16);
+  const left = home.availLeft + home.availWidth - width;
+  const top = home.availTop + Math.max(0, home.availHeight - height);
+  return `popup,left=${left},top=${top},width=${width},height=${height}`;
+}
+
 export type ScreenDecision<T extends ScreenArea> =
-  | { kind: 'two-screens'; audience: T; home: T }
+  | { kind: 'two-screens'; audience: T; speaker: T }
   | { kind: 'this-screen' }
   /** Fullscreen and pop-ups need a live click: start nothing and say so. */
   | { kind: 'present-again'; allowed: boolean };
@@ -92,6 +124,6 @@ export function decideAfterScreenDetails<T extends ScreenArea>(input: {
 }): ScreenDecision<T> {
   if (!input.activationLive) return { kind: 'present-again', allowed: input.details !== null };
   if (!input.details || !input.home) return { kind: 'this-screen' };
-  const audience = chooseAudienceScreen(input.details.screens, input.home);
-  return audience ? { kind: 'two-screens', audience, home: input.home } : { kind: 'this-screen' };
+  const chosen = chooseScreens(input.details.screens, input.home);
+  return chosen ? { kind: 'two-screens', ...chosen } : { kind: 'this-screen' };
 }

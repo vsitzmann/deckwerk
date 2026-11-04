@@ -16,13 +16,15 @@
  * lists the screens, and lets the click fullscreen an element on a chosen one
  * and then open a pop-up on another. With a second screen the overlay is the
  * *audience*, fullscreened onto the other screen, and the pop-up is Speaker
- * View, filling the screen the editor is on — automatically, for plain Present
- * too, as the desktop app does (presentScreens.ts decides which is which).
+ * View, filling the laptop's own screen (or the editor's, when the screens do
+ * not say which is the laptop's) — automatically, for plain Present too, as
+ * the desktop app does (presentScreens.ts decides which is which).
  */
 
 import type { Deck } from '@shared/deck.js';
 import { mediaVariantsSnapshot } from './mediaVariants.js';
 import {
+  audienceWindowFeatures,
   decideAfterScreenDetails,
   mayUseSecondScreen,
   planForPermission,
@@ -257,13 +259,14 @@ export async function startPresenting(
     presentOnThisScreen(deckId, slideIndex, seed, options);
     return;
   }
-  await presentOnTwoScreens(deckId, slideIndex, seed, options, decision.audience, decision.home);
+  await presentOnTwoScreens(deckId, slideIndex, seed, options, decision.audience, decision.speaker);
 }
 
 /**
- * The audience in this tab's overlay, fullscreen on the other screen; then
- * Speaker View as a pop-up filling the editor's screen. Chrome lets a click
- * that fullscreened onto another screen open that one pop-up as well.
+ * The audience in this tab's overlay, fullscreen on its screen; then Speaker
+ * View as a pop-up filling the presenter's (the laptop's, when there is one).
+ * Chrome lets a click that fullscreened onto another screen open that one
+ * pop-up as well.
  */
 async function presentOnTwoScreens(
   deckId: string,
@@ -271,7 +274,7 @@ async function presentOnTwoScreens(
   seed: (() => PresentSeed) | undefined,
   options: PresentOptions,
   audience: ScreenArea,
-  home: ScreenArea,
+  presenter: ScreenArea,
 ): Promise<void> {
   const frame = mountOverlay(deckId, slideIndex, seed, options, 'audience');
   try {
@@ -286,10 +289,21 @@ async function presentOnTwoScreens(
   const speaker = window.open(
     presentUrl(deckId, slideIndex, { endSlideIndex: options.endSlideIndex, role: 'speaker' }),
     `deckwerk-speaker-${deckId}`,
-    speakerWindowFeatures(home),
+    speakerWindowFeatures(presenter),
   );
   if (speaker) companionWindow = speaker;
   else options.onStatus?.(PRESENT_NEEDS_POPUP);
+}
+
+/** The screen this window is on, as far as every browser can say without asking. */
+function thisScreen(): ScreenArea {
+  const screen = window.screen as Screen & { availLeft?: number; availTop?: number };
+  return {
+    availLeft: screen.availLeft ?? 0,
+    availTop: screen.availTop ?? 0,
+    availWidth: screen.availWidth,
+    availHeight: screen.availHeight,
+  };
 }
 
 /** Today's single-screen presentation, synchronously inside the click. */
@@ -307,6 +321,7 @@ function presentOnThisScreen(
     const audience = window.open(
       presentUrl(deckId, slideIndex, { endSlideIndex: options.endSlideIndex }),
       `deckwerk-audience-${deckId}`,
+      audienceWindowFeatures(thisScreen()),
     );
     if (audience) {
       speakerView = true;
