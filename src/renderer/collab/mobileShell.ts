@@ -45,3 +45,19 @@ export function shellUrl(shell: 'mobile' | 'desktop', search: string = location.
   const query = params.toString();
   return `${shell === 'mobile' ? './mobile.html' : './'}${query ? `?${query}` : ''}`;
 }
+
+/**
+ * Lay the page out at the phone's own width. The editor page has no viewport
+ * tag — a phone that chose the editor gets it at desktop width, zoomed out —
+ * but with no deck open that page is only the deck list, which has a layout
+ * of its own for a narrow screen (editor.css, `.deck-picker`).
+ */
+export function fitViewportToDevice(): void {
+  let meta = document.querySelector<HTMLMetaElement>('meta[name="viewport"]');
+  if (!meta) {
+    meta = document.createElement('meta');
+    meta.name = 'viewport';
+    document.head.append(meta);
+  }
+  meta.content = 'width=device-width, initial-scale=1, viewport-fit=cover';
+}

@@ -53,6 +53,7 @@ export interface PickerAccess {
 
 function goTo(deckId: string): void {
   const params = new URLSearchParams(location.search);
+  params.delete('folder');
   params.set('deck', deckId);
   location.search = params.toString();
 }
@@ -349,6 +350,19 @@ function rowGroup(row: HTMLElement, buttons: HTMLElement[]): HTMLElement {
   actions.className = 'deck-picker-actions';
   actions.append(...buttons);
   wrapper.append(row, actions);
+  if (buttons.length > 0) {
+    // On a phone the buttons fold away behind this, one row at a time; on a
+    // wider screen it is hidden and the buttons always show (editor.css).
+    const more = document.createElement('button');
+    more.className = 'deck-picker-more';
+    more.textContent = '⋯';
+    more.title = 'Rename, move, share or delete';
+    more.setAttribute('aria-expanded', 'false');
+    more.addEventListener('click', () => {
+      more.setAttribute('aria-expanded', String(wrapper.classList.toggle('open')));
+    });
+    wrapper.insertBefore(more, actions);
+  }
   return wrapper;
 }
 

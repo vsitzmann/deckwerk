@@ -3935,6 +3935,71 @@ button.deck-picker-row.active { border-color: var(--accent); }
   color: var(--text);
   font: 500 11px var(--mono);
 }
+.deck-picker-more { display: none; }
+
+/* On a phone the picker is the whole page, and a row is a name with a line of
+   facts under it — size, last edit, who is in it, owner, access — instead of
+   seven columns. A row's buttons fold away behind its ⋯. */
+@media (max-width: 640px) {
+  .workflow-dialog.deck-picker {
+    --deck-picker-gutter: 12px;
+    width: 100vw;
+    height: 100vh;
+    height: 100dvh;
+    border: 0;
+    padding: env(safe-area-inset-top) env(safe-area-inset-right) 0 env(safe-area-inset-left);
+  }
+  .workflow-overlay:has(> .deck-picker) { padding: 0; }
+  .deck-picker-head { flex-wrap: wrap; gap: 6px; }
+  .deck-picker-head h2 { font-size: 12px; }
+  .deck-picker-trail { flex-basis: 100%; }
+  .deck-picker-columns { display: none; }
+  .deck-picker-list { padding-top: 6px; padding-bottom: 6px; }
+  .deck-picker-group { margin-top: 18px; padding: 0 10px 4px; }
+  .deck-picker-row-group { flex-wrap: wrap; gap: 0; border-bottom: 1px solid var(--line); }
+  .deck-picker-row {
+    display: flex;
+    min-height: 52px;
+    flex-wrap: wrap;
+    align-content: center;
+    gap: 3px 10px;
+    padding: 9px 10px;
+  }
+  .deck-picker-name { flex: 1 0 100%; font-size: 15px; }
+  /* Created: last edit says more on a small screen. */
+  .deck-picker-cell:nth-child(3), .deck-picker-cell:empty { display: none; }
+  .deck-picker-cell { max-width: 100%; }
+  .deck-picker-more {
+    display: block;
+    flex: none;
+    width: 44px;
+    min-height: 44px;
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--muted, #8a93a6);
+    font-size: 18px;
+  }
+  .deck-picker-row-group.open .deck-picker-more { color: var(--text); }
+  .deck-picker-actions { display: none; width: auto; }
+  .deck-picker-row-group.open .deck-picker-actions {
+    display: flex;
+    flex: 1 0 100%;
+    flex-wrap: wrap;
+    justify-content: flex-start;
+    gap: 6px;
+    padding: 0 10px 10px;
+  }
+  .deck-picker-actions .deck-picker-share { min-height: 36px; }
+  .deck-picker-crumb { min-height: 32px; }
+  .deck-picker-foot {
+    flex-wrap: wrap;
+    padding-bottom: max(12px, env(safe-area-inset-bottom));
+  }
+  .deck-picker-foot .deck-picker-progress { flex-basis: 100%; }
+  .deck-picker-foot .workflow-actions { flex: 1 0 100%; flex-wrap: wrap; justify-content: stretch; margin-left: 0; }
+  .deck-picker-foot .workflow-actions > * { flex: 1 1 auto; min-height: 40px; }
+}
 .share-dialog-body { display: flex; flex-direction: column; gap: 16px; }
 .share-dialog-owner { margin: 0; color: var(--muted, #8a93a6); }
 .share-dialog-visibility { display: flex; flex-direction: column; gap: 5px; }
