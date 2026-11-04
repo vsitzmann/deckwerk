@@ -3,7 +3,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { emptyDeck, parseDeck } from '../src/shared/deck.js';
 import { SlideRail } from '../src/renderer/editor/slideRail.js';
 import { EditorStore } from '../src/renderer/editor/store.js';
-import { shellUrl, wantsMobileShell } from '../src/renderer/collab/mobileShell.js';
+import { fitViewportToDevice, shellUrl, wantsMobileShell } from '../src/renderer/collab/mobileShell.js';
+import { showDeckPicker } from '../src/renderer/collab/deckPicker.js';
 import { peerLabel, remoteCandidates } from '../src/renderer/collab/remoteControl.js';
 import type { PresenceState } from '../src/shared/collab.js';
 
@@ -79,5 +80,42 @@ describe('whom the remote can go to', () => {
       peer({ clientId: 'audience', name: 'Vincent (presenting)', presenting: true }),
     ];
     expect(remoteCandidates(peers, new Set(['tab'])).map(peerLabel)).toEqual(['Ana', 'Vincent’s phone']);
+  });
+});
+
+describe('the deck list on a phone', () => {
+  afterEach(() => {
+    document.body.replaceChildren();
+    document.head.querySelector('meta[name="viewport"]')?.remove();
+    vi.unstubAllGlobals();
+  });
+
+  it('lays the page out at the phone\'s width, once', () => {
+    fitViewportToDevice();
+    fitViewportToDevice();
+    const metas = document.head.querySelectorAll<HTMLMetaElement>('meta[name="viewport"]');
+    expect(metas).toHaveLength(1);
+    expect(metas[0].content).toContain('width=device-width');
+  });
+
+  it('folds each row\'s buttons behind a ⋯', async () => {
+    const decks = [
+      { id: 'Talk', title: 'Talk', slides: 3, editedAt: null, editors: 0, folder: '', owner: 'me', canManage: true },
+      { id: 'Theirs', title: 'Theirs', slides: 2, editedAt: null, editors: 0, folder: '', owner: 'them', role: 'view' },
+    ];
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => new Response(JSON.stringify(url.startsWith('/api/decks') ? decks : []))));
+    showDeckPicker({ dismissable: false, onStatus: () => undefined, access: { user: 'me', name: 'Me', admin: false } });
+    await vi.waitFor(() => expect(document.querySelectorAll('.deck-picker-list .deck-picker-row-group')).toHaveLength(2));
+    const groups = [...document.querySelectorAll<HTMLElement>('.deck-picker-list .deck-picker-row-group')];
+    const toggles = groups.map((group) => group.querySelector<HTMLButtonElement>('.deck-picker-more'));
+    // Only rows with something to do get one.
+    expect(toggles.map((toggle) => toggle !== null)).toEqual([true, groups[1].querySelector('.deck-picker-share') !== null]);
+    toggles[0]!.click();
+    expect(groups[0].classList.contains('open')).toBe(true);
+    expect(toggles[0]!.getAttribute('aria-expanded')).toBe('true');
+    toggles[0]!.click();
+    expect(groups[0].classList.contains('open')).toBe(false);
+    // The column labels never get one.
+    expect(document.querySelector('.deck-picker-columns .deck-picker-more')).toBeNull();
   });
 });

@@ -369,6 +369,14 @@ agentButton.hidden = true;
 const presentButton = barButton('Present', () => present());
 presentButton.classList.add('primary');
 const more = createToolbarPicker('⋯', [
+  {
+    label: 'All presentations',
+    action: () => {
+      const deck = params.get('deck') ?? '';
+      const folder = deck.includes('/') ? deck.slice(0, deck.lastIndexOf('/')) : '';
+      location.assign(folder ? `./?folder=${encodeURIComponent(folder)}` : './');
+    },
+  },
   { label: 'Copy link', action: () => void copyText(location.href).then(() => toast('Link copied.'), () => toast(location.href)) },
   {
     label: 'Open in the editor',

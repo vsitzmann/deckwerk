@@ -75,7 +75,7 @@ import { createDeckNameField, type DeckNameField } from './deckNameField.js';
 import { AgentPanel } from '../editor/agentPanel.js';
 import { agentConnectPrompt } from './agentPrompt.js';
 import { RemoteReceiver } from './remoteControl.js';
-import { isPhone, rememberShell, shellUrl, wantsMobileShell } from './mobileShell.js';
+import { fitViewportToDevice, isPhone, rememberShell, shellUrl, wantsMobileShell } from './mobileShell.js';
 import { isPresenting, startPresenting } from './presentOverlay.js';
 import { rangeForSlideSelection } from '@shared/presentationRange.js';
 import { setRenderInvariantChecks } from '../editor/renderInvariants.js';
@@ -261,6 +261,8 @@ async function runOperation<T>(message: string, action: () => Promise<T>): Promi
 }
 
 if (!deckId) {
+  // Only the deck list shows, and on a phone it lays out for the phone.
+  if (isPhone() || wantsMobileShell()) fitViewportToDevice();
   el('status').textContent = 'Connecting…';
   void fetchServerConfig().then((config) => {
     if (config.hosted && config.deckId) {
@@ -277,6 +279,8 @@ if (!deckId) {
       dismissable: false,
       onStatus: (text) => { el('status').textContent = text; },
       access: config.access ?? null,
+      // The phone client's "All presentations" opens the list in its deck's folder.
+      folder: new URLSearchParams(location.search).get('folder') ?? undefined,
     });
   });
   throw new Error('no deck selected — showing picker');
