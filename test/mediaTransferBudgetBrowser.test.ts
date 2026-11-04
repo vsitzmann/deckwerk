@@ -461,11 +461,32 @@ function bytesTwice(records: Recorded[], phases?: string[]): string[] {
   return violations;
 }
 
-/** Round trips per file. A request the browser cancelled before any answer cost the link nothing. */
+/**
+ * Round trips per file. A request the browser cancelled before any answer
+ * cost the link nothing.
+ *
+ * Nor does a request that picks up inside what the file's previous,
+ * abandoned one had fetched: that is one download Chromium's media loader
+ * paused and resumed, not the file asked for again. On CI runners it did
+ * that four times in a third of a second for a clip a collaborator had just
+ * swapped in (0-, 263689-, 423374-, 523059-, 622744-: each where the last
+ * stopped), which failed this budget in 4 of 40 CI runs in Oct-Nov 2026
+ * and never on a workstation, even with its CPU throttled to a fifth. Bytes
+ * that do arrive twice are `bytesTwice`'s to catch.
+ */
 function overRequestBudget(records: Recorded[]): string[] {
   const violations: string[] = [];
   for (const [, served] of groupBy(records, (r) => `${r.deck}/${r.path}`)) {
-    const answered = served.filter((r) => r.status > 0).length;
+    let previous: Recorded | null = null;
+    let answered = 0;
+    for (const response of [...served].sort((a, b) => a.startedAt - b.startedAt)) {
+      if (response.status <= 0) continue;
+      const resumes = previous !== null && previous.abandoned && previous.content === response.content
+        && response.status === 206
+        && response.offset > previous.offset && response.offset <= previous.offset + previous.body;
+      if (!resumes) answered += 1;
+      previous = response;
+    }
     if (answered > REQUESTS_PER_FILE) {
       violations.push(`${where(served)}: ${answered} answered requests (budget ${REQUESTS_PER_FILE})\n${TransferLog.table(served)}`);
     }
