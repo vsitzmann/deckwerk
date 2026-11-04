@@ -118,12 +118,28 @@ function settle(key: string, dataUrl: string): void {
 }
 
 /**
+ * Whether a preview may load a clip to capture its frame when no provider
+ * cut one. The phone client turns this off: on a phone a clip is tens of
+ * megabytes over a mobile link and a decode on the one thread that also
+ * answers taps, and a remote that loaded the next slide's video before it
+ * sent the next click made a talk with large videos stall between slides.
+ * Its previews show the server's stills, or a blank frame where the server
+ * cannot cut one.
+ */
+let inPageCapture = true;
+
+export function setPreviewInPageCapture(allowed: boolean): void {
+  inPageCapture = allowed;
+}
+
+/**
  * Give a video built without a source (`deferVideoSrc`) its source back, so
  * it can load and be captured in the page. The fallback when no provider is
  * installed or the provider could not cut the frame.
  */
 function restoreDeferredSource(video: HTMLVideoElement): void {
   delete video.dataset.posterPending;
+  if (!inPageCapture) return;
   const src = video.dataset.gateAbortedSrc;
   if (!src || video.getAttribute('src')) return;
   video.preload = 'none';
@@ -251,6 +267,8 @@ export function freezePreviewVideos(root: ParentNode): void {
       swapInStill(video, cached);
       continue;
     }
+    // Not allowed to load the clip (setPreviewInPageCapture): it stays blank.
+    if (!inPageCapture && !video.getAttribute('src')) continue;
 
     const pending = waiting.get(key);
     if (pending) {

@@ -21,10 +21,11 @@ import { createToolbarPicker } from '../editor/exportPicker.js';
 import { applyStageScale, renderSlide, rewriteCssAssetUrls } from '../player/render.js';
 import { applyStaticSlideState } from '../player/staticState.js';
 import { revealImagesWhenDecoded } from '../player/imageDecode.js';
-import { freezePreviewVideos, releasePreviewVideos } from '../player/previewPoster.js';
+import { freezePreviewVideos, releasePreviewVideos, setPreviewInPageCapture } from '../player/previewPoster.js';
 import { CollabBridge } from './collabBridge.js';
 import { createConnectionNotice } from './connectionNotice.js';
 import { installNetApi } from './netApi.js';
+import { installWindowApiPosterProvider } from '../player/previewPosterProvider.js';
 import { createAgentPanelApi, type AgentPanelBrowserApi } from './agentPanelApi.js';
 import { agentConnectPrompt } from './agentPrompt.js';
 import { startPresenting } from './presentOverlay.js';
@@ -68,6 +69,12 @@ interface ServerConfig {
 }
 
 installNetApi({ deckId, saveTheme: () => {} });
+// Pictures of video slides are the server's stills, never the clip itself:
+// a phone loading a talk's videos to draw its previews was slow on every
+// slide that had one, and with the remote it held up the clicks. Presenting
+// from the phone plays them; that is another page.
+installWindowApiPosterProvider();
+setPreviewInPageCapture(false);
 const resolveSrc = (src: string): string => window.api.assetUrl(src);
 
 const store = new EditorStore(emptyDeck('Connecting…'));
@@ -366,6 +373,11 @@ const notesButton = barButton('Notes', () => togglePanel('notes'));
 notesButton.dataset.togglesPanel = 'notes';
 const agentButton = barButton('Agent', () => copyAgentPrompt());
 agentButton.hidden = true;
+// Shown while somebody presents this deck: the clicker, without the
+// presenter having to find this phone in a list first.
+const remoteButton = barButton('Remote', () => remote.request());
+remoteButton.title = 'Ask the presentation for its remote';
+remoteButton.hidden = true;
 const presentButton = barButton('Present', () => present());
 presentButton.classList.add('primary');
 const more = createToolbarPicker('⋯', [
@@ -387,7 +399,7 @@ const more = createToolbarPicker('⋯', [
   },
 ]);
 more.classList.add('m-more');
-el('m-bar').append(title, notesButton, commentsButton, agentButton, presentButton, more);
+el('m-bar').append(title, notesButton, commentsButton, agentButton, remoteButton, presentButton, more);
 
 function barButton(label: string, action: () => void): HTMLButtonElement {
   const button = document.createElement('button');
@@ -485,6 +497,7 @@ const bridge = new CollabBridge(wsUrl, undefined, {
     peers.clear();
     for (const peer of welcome.peers) peers.set(peer.clientId, peer);
     rail.refreshPresence();
+    renderRemoteButton();
     if (linkedComment) {
       const commentId = linkedComment;
       linkedComment = null;
@@ -499,11 +512,13 @@ const bridge = new CollabBridge(wsUrl, undefined, {
   onPeerPresence: (state) => {
     peers.set(state.clientId, state);
     rail.refreshPresence();
+    renderRemoteButton();
   },
   onPeerCursor: () => {},
   onPeerLeft: (clientId) => {
     peers.delete(clientId);
     rail.refreshPresence();
+    renderRemoteButton();
   },
   onThemeCss: (css) => setTheme(css),
   onStatus: () => {},
@@ -542,6 +557,7 @@ const bridge = new CollabBridge(wsUrl, undefined, {
 store.onLocalEdit = bridge.localEdit;
 bridge.setSurface({ device: 'phone' });
 
+const someonePresenting = (): boolean => [...peers.values()].some((peer) => peer.presenting);
 const remote = new RemoteReceiver({
   send: (message) => bridge.sendRemote(message),
   deck: () => store.get().deck,
@@ -549,7 +565,13 @@ const remote = new RemoteReceiver({
   themeCss: () => themeCss,
   resolveSrc,
   onStatus: toast,
+  presenting: someonePresenting,
+  onActiveChange: () => renderRemoteButton(),
 });
+
+function renderRemoteButton(): void {
+  remoteButton.hidden = !someonePresenting() || remote.active();
+}
 
 /** Where this person is, so the others see a phone on slide 12. */
 let lastPresence = '';

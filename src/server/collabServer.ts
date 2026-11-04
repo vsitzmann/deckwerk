@@ -4496,6 +4496,26 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
         case 'remote-end':
           endRemote(room, clientId, message.to);
           return;
+        case 'remote-request': {
+          // A person's own page asks; a presentation or an agent never does.
+          if (!peer.greeted || peer.agentFor || peer.state.agent || peer.state.presenting) return;
+          // One surface of one show: Speaker View and the audience are both
+          // presenting peers, and each would offer its own remote. Prefer the
+          // asker's own show (same login), then the most recent.
+          const shows = [...room.peers.entries()].filter(([id, other]) => id !== clientId && other.greeted && other.state.presenting);
+          const login = peer.identity?.login;
+          const [presenterId, presenter] = [...shows].reverse()
+            .find(([, other]) => login !== undefined && other.identity?.login === login) ?? shows.at(-1) ?? [];
+          if (!presenterId || !presenter) return;
+          send(presenter, {
+            kind: 'remote-request',
+            from: clientId,
+            name: peer.state.name,
+            ...(peer.state.device === 'phone' ? { device: 'phone' as const } : {}),
+            sameUser: Boolean(accessControl && login !== undefined && presenter.identity?.login === login),
+          });
+          return;
+        }
       }
     });
 

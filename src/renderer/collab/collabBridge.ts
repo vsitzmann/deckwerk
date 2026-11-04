@@ -663,6 +663,7 @@ export class CollabBridge {
       case 'remote-command':
       case 'remote-state':
       case 'remote-end':
+      case 'remote-request':
         this.hooks.onRemote?.(message);
         return;
       case 'ended':

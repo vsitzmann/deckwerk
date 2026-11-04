@@ -152,4 +152,57 @@ describe('the remote on the collab server', () => {
     expect(await phone.next('remote-end')).toMatchObject({ from: presenter.id });
     phone.socket.close();
   });
+
+  it('passes a phone\'s request for the remote to one presentation, and to nobody else', async () => {
+    const nobodyPresenting = await connect(server.port, { name: 'Early', device: 'phone' });
+    nobodyPresenting.send({ kind: 'remote-request' });
+    expect(await nobodyPresenting.quiet('remote-request')).toBe(true);
+
+    const audience = await connect(server.port, { name: 'Vincent (presenting)', presenting: true });
+    const speaker = await connect(server.port, { name: 'Vincent (presenting)', presenting: true });
+    const phone = await connect(server.port, { name: 'Ana', device: 'phone' });
+    phone.send({ kind: 'remote-request' });
+    // One surface of the show, the most recent: two would offer two remotes.
+    // Without sign-in nobody can vouch for who asks, so the presenter decides.
+    expect(await speaker.next('remote-request')).toEqual({
+      kind: 'remote-request', from: phone.id, name: 'Ana', device: 'phone', sameUser: false,
+    });
+    expect(await audience.quiet('remote-request')).toBe(true);
+    expect(phone.seen.some((message) => message.kind === 'remote-request')).toBe(false);
+
+    // A presentation does not ask another for its remote.
+    audience.send({ kind: 'remote-request' });
+    expect(await speaker.quiet('remote-request')).toBe(true);
+
+    // The presenter gives it, as to anyone: offer, answer, clicks.
+    speaker.send({ kind: 'remote-offer', to: phone.id });
+    await phone.next('remote-offer');
+    phone.send({ kind: 'remote-answer', to: speaker.id, accept: true });
+    await speaker.next('remote-answer');
+    phone.send({ kind: 'remote-command', to: speaker.id, command: { type: 'next' } });
+    expect(await speaker.next('remote-command')).toMatchObject({ from: phone.id });
+    for (const client of [nobodyPresenting, audience, speaker, phone]) client.socket.close();
+  });
+});
+
+describe('asking for the remote with sign-in on', () => {
+  it('vouches that the phone and the presentation are the same person', async () => {
+    const rootDir = await mkdtemp(join(tmpdir(), 'deckwerk-remote-access-'));
+    const dir = join(rootDir, 'talk');
+    await mkdir(dir, { recursive: true });
+    await saveDeck(dir, parseDeck({ ...emptyDeck('Talk'), slides: [{ id: 's1' }, { id: 's2' }] }));
+    await writeFile(join(dir, 'theme.css'), '', 'utf8');
+    // On loopback every connection is the admin: one login on both pages.
+    const server = await startCollabServer({ rootDir, port: 0, host: '127.0.0.1', accessControl: { admin: 'vincent@example.com' } });
+    try {
+      const presenter = await connect(server.port, { name: 'Vincent (presenting)', presenting: true });
+      const phone = await connect(server.port, { name: 'Vincent', device: 'phone' });
+      phone.send({ kind: 'remote-request' });
+      expect(await presenter.next('remote-request')).toMatchObject({ from: phone.id, sameUser: true });
+      for (const client of [presenter, phone]) client.socket.close();
+    } finally {
+      await server.close();
+      await rm(rootDir, { recursive: true, force: true });
+    }
+  });
 });
