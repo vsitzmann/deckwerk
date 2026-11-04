@@ -65,6 +65,8 @@ type RemoteStatus = 'offered' | 'granted';
 
 export class PresenterRemotes {
   private readonly remotes = new Map<string, RemoteStatus>();
+  /** People who asked for the remote and were not given it yet, marked in the list. */
+  private readonly requests = new Set<string>();
   private picker: HTMLElement | null = null;
   private pickerCleanup: (() => void) | null = null;
 
@@ -96,6 +98,21 @@ export class PresenterRemotes {
       case 'remote-end':
         if (this.remotes.delete(message.from)) this.options.onNotice?.(`${who} put the remote down.`);
         break;
+      case 'remote-request': {
+        const asker = peerLabel({ name: message.name, device: message.device });
+        if (this.remotes.get(message.from) === 'granted') return;
+        if (message.sameUser) {
+          // The presenter's own phone, as the server vouches: no question to
+          // answer mid-talk. Their phone takes it without asking again.
+          this.offer(message.from);
+          this.options.onNotice?.(`${asker} asked for the remote.`);
+          return;
+        }
+        // Somebody else: the presenter decides, in the list they give it from.
+        this.requests.add(message.from);
+        this.options.onNotice?.(`${asker} asks for the remote — press R to give it.`);
+        break;
+      }
       default:
         return;
     }
@@ -111,10 +128,12 @@ export class PresenterRemotes {
   peersChanged(): void {
     const here = new Set(this.options.peers().map((peer) => peer.clientId));
     for (const id of [...this.remotes.keys()]) if (!here.has(id)) this.remotes.delete(id);
+    for (const id of [...this.requests]) if (!here.has(id)) this.requests.delete(id);
     this.renderPicker();
   }
 
   offer(clientId: string): void {
+    this.requests.delete(clientId);
     this.remotes.set(clientId, 'offered');
     this.options.send({ kind: 'remote-offer', to: clientId });
     this.renderPicker();
@@ -210,7 +229,9 @@ export class PresenterRemotes {
       name.textContent = peerLabel(peer);
       const state = document.createElement('span');
       state.className = 'remote-picker-state';
-      state.textContent = status === 'granted' ? 'Has the remote' : status === 'offered' ? 'Asking…' : '';
+      state.textContent = status === 'granted' ? 'Has the remote'
+        : status === 'offered' ? 'Asking…'
+          : this.requests.has(peer.clientId) ? 'Asks for it' : '';
       const action = document.createElement('button');
       action.type = 'button';
       if (!status) action.className = 'primary';
@@ -239,7 +260,14 @@ export interface RemoteReceiverOptions {
   themeCss: () => string;
   resolveSrc: (src: string) => string;
   onStatus?: (text: string) => void;
+  /** Whether somebody is presenting this deck now: there is a remote to ask for. */
+  presenting?: () => boolean;
+  /** The remote view opened or closed. */
+  onActiveChange?: () => void;
 }
+
+/** How long an offer after asking for the remote counts as the answer to it. */
+const REQUEST_ANSWER_MS = 60_000;
 
 /** The keys a remote view answers, on a keyboard as on a clicker. */
 const REMOTE_KEYS: Record<string, PresentationCommand['type']> = {
@@ -256,6 +284,9 @@ export class RemoteReceiver {
   private view: SpeakerView | null = null;
   private teardown: Array<() => void> = [];
   private wakeLock: { release: () => Promise<void> } | null = null;
+  /** When this page last asked for the remote: an offer soon after is the answer, taken without asking. */
+  private requestedAt = 0;
+  private requestTimer = 0;
 
   constructor(private readonly options: RemoteReceiverOptions) {}
 
@@ -263,9 +294,41 @@ export class RemoteReceiver {
     return this.presenter !== null;
   }
 
+  /**
+   * Ask whoever is presenting this deck for the remote. The presenter's own
+   * phone gets it at once; anybody else once the presenter gives it.
+   */
+  request(): void {
+    if (this.presenter) return;
+    if (this.options.presenting && !this.options.presenting()) {
+      this.options.onStatus?.('Nobody is presenting this deck right now.');
+      return;
+    }
+    this.requestedAt = Date.now();
+    this.options.send({ kind: 'remote-request' });
+    this.options.onStatus?.('Asking the presentation for the remote…');
+    clearTimeout(this.requestTimer);
+    this.requestTimer = window.setTimeout(() => {
+      if (this.presenter || !this.requestedAt) return;
+      this.requestedAt = 0;
+      this.options.onStatus?.('No remote yet — the presenter has not given it.');
+    }, REQUEST_ANSWER_MS);
+  }
+
   handle(message: ServerRemoteMessage): void {
     switch (message.kind) {
       case 'remote-offer':
+        if (this.requestedAt && Date.now() - this.requestedAt < REQUEST_ANSWER_MS) {
+          // The answer to this page's own request: no second question.
+          this.requestedAt = 0;
+          clearTimeout(this.requestTimer);
+          this.offerDialog?.close();
+          this.offerDialog = null;
+          if (this.presenter) this.leave();
+          this.options.send({ kind: 'remote-answer', to: message.from, accept: true });
+          this.open(message.from);
+          return;
+        }
         this.ask(message.from, message.name);
         return;
       case 'remote-state':
@@ -399,6 +462,7 @@ export class RemoteReceiver {
     this.teardown.push(() => window.removeEventListener('resize', onResize));
     this.teardown.push(bindSwipe(host.querySelector<HTMLElement>('.speaker-current') ?? host, (type) => this.command({ type })));
     void this.holdScreenAwake();
+    this.options.onActiveChange?.();
   }
 
   private command(command: PresentationCommand): void {
@@ -426,6 +490,7 @@ export class RemoteReceiver {
     document.documentElement.classList.remove('remote-mode');
     void this.wakeLock?.release().catch(() => {});
     this.wakeLock = null;
+    this.options.onActiveChange?.();
   }
 
   /** A phone that dims and locks mid-talk is a remote that stopped working. */

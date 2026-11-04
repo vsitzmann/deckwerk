@@ -655,3 +655,18 @@ would. Every move goes back as `remote-state`. The server keeps the pairs
 (`Room.remotes`) and relays a command only along one the presenter offered
 and the remote accepted. `remote-end` from either side, or either socket
 closing, ends it. Nothing about it is persisted.
+
+The phone can also ask. While anyone presents the deck, the phone client's
+bar shows **Remote**, which sends `remote-request`. The server passes it to
+one surface of the show (the asker's own login first, then the most recent),
+with `sameUser` set when access control is on and both pages are the same
+login. A presentation offers its own person's phone the remote at once, and
+that phone takes an offer that answers its request without asking again.
+Anybody else is marked "Asks for it" in the presenter's list (R) for the
+presenter to give it.
+
+The remote view, like every preview on the phone, draws video slides from
+the server's stills (`/api/video-still`) and never loads a clip itself
+(`setPreviewInPageCapture(false)` in `mobile.ts`). A phone that loaded the
+next slide's video to paint its preview held up the clicks on every slide
+with a large clip.

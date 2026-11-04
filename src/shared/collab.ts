@@ -161,6 +161,8 @@ export const ClientRemoteCommandSchema = z.object({ kind: z.literal('remote-comm
 export const ClientRemoteStateSchema = z.object({ kind: z.literal('remote-state'), state: RemoteStateSchema });
 /** Either side → server: the remote is over between this peer and `to`. */
 export const ClientRemoteEndSchema = z.object({ kind: z.literal('remote-end'), to: z.string() });
+/** A person's page → server: ask whoever is presenting this deck for its remote. */
+export const ClientRemoteRequestSchema = z.object({ kind: z.literal('remote-request') });
 
 export const ClientMessageSchema = z.discriminatedUnion('kind', [
   ClientHelloSchema,
@@ -173,6 +175,7 @@ export const ClientMessageSchema = z.discriminatedUnion('kind', [
   ClientRemoteOfferSchema,
   ClientRemoteAnswerSchema,
   ClientRemoteCommandSchema,
+  ClientRemoteRequestSchema,
   ClientRemoteStateSchema,
   ClientRemoteEndSchema,
 ]);
@@ -316,6 +319,19 @@ export const ServerRemoteEndSchema = z.object({
   from: z.string(),
 });
 
+/**
+ * To a presentation: `from` asks for its remote. `sameUser` is the server's
+ * word that both are the same signed-in person (access control on, one login)
+ * — their own phone — whom the presentation hands the remote without asking.
+ */
+export const ServerRemoteRequestSchema = z.object({
+  kind: z.literal('remote-request'),
+  from: z.string(),
+  name: z.string(),
+  device: z.literal('phone').optional(),
+  sameUser: z.boolean(),
+});
+
 export const ServerMessageSchema = z.discriminatedUnion('kind', [
   ServerWelcomeSchema,
   ServerTxnSchema,
@@ -333,6 +349,7 @@ export const ServerMessageSchema = z.discriminatedUnion('kind', [
   ServerRemoteCommandSchema,
   ServerRemoteStateSchema,
   ServerRemoteEndSchema,
+  ServerRemoteRequestSchema,
 ]);
 
 /**
