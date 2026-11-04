@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
-import { mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, readFile, rm, stat, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, relative, resolve } from 'node:path';
 
@@ -14,6 +14,10 @@ import { join, relative, resolve } from 'node:path';
  * in the dozens, so without this every worker would rebuild the same thing —
  * or, worse, run against whatever stale build happened to be lying in the
  * checkout.
+ *
+ * Every source edit makes a new build, so a new one removes the builds nobody
+ * has used for `UNUSED_FOR_MS`. A cache hit refreshes `.ready`'s mtime, which
+ * keeps a build that another worktree still runs against.
  */
 export async function sharedBuild(options: {
   cacheName: string;
@@ -32,7 +36,7 @@ export async function sharedBuild(options: {
   const ready = join(outDir, '.ready');
   const lock = join(cacheRoot, `${hash}.lock`);
   await mkdir(cacheRoot, { recursive: true });
-  if (existsSync(ready)) return outDir;
+  if (existsSync(ready)) return markUsed(ready, outDir);
 
   for (;;) {
     try {
@@ -45,7 +49,7 @@ export async function sharedBuild(options: {
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
       for (let attempt = 0; attempt < 1800; attempt += 1) {
-        if (existsSync(ready)) return outDir;
+        if (existsSync(ready)) return markUsed(ready, outDir);
         if (!existsSync(lock)) break;
         if (await buildLockIsStale(lock)) {
           await rm(lock, { recursive: true, force: true });
@@ -60,14 +64,37 @@ export async function sharedBuild(options: {
   }
 
   try {
-    if (existsSync(ready)) return outDir;
+    if (existsSync(ready)) return markUsed(ready, outDir);
     await rm(outDir, { recursive: true, force: true });
     await mkdir(outDir, { recursive: true });
     await options.produce(outDir, checkout);
     await writeFile(ready, `${hash}\n`, 'utf8');
+    await removeUnusedBuilds(cacheRoot, hash);
     return outDir;
   } finally {
     await rm(lock, { recursive: true, force: true });
+  }
+}
+
+/** On `/tmp` as a small tmpfs, a few days of edits filled it. */
+const UNUSED_FOR_MS = 2 * 24 * 60 * 60 * 1000;
+
+async function markUsed(ready: string, outDir: string): Promise<string> {
+  const now = new Date();
+  await utimes(ready, now, now).catch(() => null);
+  return outDir;
+}
+
+async function removeUnusedBuilds(cacheRoot: string, current: string): Promise<void> {
+  const entries = await readdir(cacheRoot, { withFileTypes: true }).catch(() => []);
+  for (const entry of entries) {
+    if (!entry.isDirectory() || entry.name === current || entry.name.endsWith('.lock')) continue;
+    if (existsSync(join(cacheRoot, `${entry.name}.lock`))) continue;
+    const dir = join(cacheRoot, entry.name);
+    const used = await stat(join(dir, '.ready')).catch(() => stat(dir).catch(() => null));
+    if (used && Date.now() - used.mtimeMs > UNUSED_FOR_MS) {
+      await rm(dir, { recursive: true, force: true }).catch(() => null);
+    }
   }
 }
 
