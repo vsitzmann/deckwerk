@@ -225,6 +225,8 @@ export interface PresentationState {
   slideStartedAt: number;
   /** Inclusive bounds when presenting a multi-slide rail selection. */
   range?: { start: number; end: number };
+  /** The audience screen is blanked (B). Carried across Switch displays. */
+  blanked?: boolean;
 }
 
 export interface DisplayInfo {

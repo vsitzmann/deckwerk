@@ -35,7 +35,6 @@ export interface DeckWindowState {
   presenter: BrowserWindow | null;
   presentationState: PresentationState | null;
   presentationDisplays: { audienceDisplayId: number; presenterDisplayId: number } | null;
-  swappingPresentationDisplays: boolean;
   trim: BrowserWindow | null;
   raster: BrowserWindow | null;
   /** Every live window of this document, editor included. */
@@ -84,7 +83,6 @@ export function registerEditorWindow(editor: BrowserWindow): DeckWindowState {
     presenter: null,
     presentationState: null,
     presentationDisplays: null,
-    swappingPresentationDisplays: false,
     trim: null,
     raster: null,
     windows: new Set([editor]),

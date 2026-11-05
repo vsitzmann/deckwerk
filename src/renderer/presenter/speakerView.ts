@@ -27,9 +27,9 @@ export interface SpeakerViewOptions {
   onCommand: (command: PresentationCommand) => void;
   onNotesChange?: (slideId: string, notes: string) => void;
   /**
-   * Whether to offer the audience/presenter role swap. The desktop moves its
-   * two windows between displays; the browser cannot place windows, so it
-   * swaps the roles of the two surfaces in place instead. A shell with only
+   * Whether to offer the audience/presenter role swap. Both the desktop and
+   * the browser swap the roles of the two surfaces in place: each window keeps
+   * its display and loads the other's page. A shell with only
    * one surface passes false and the control is absent rather than inert.
    */
   canSwapDisplays?: boolean;
