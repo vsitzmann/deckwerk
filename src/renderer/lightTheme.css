@@ -66,3 +66,19 @@
 :root[data-ui-theme="light"] .object-list-row:hover:not(.locked) { background: rgb(31 35 48 / 5%); }
 :root[data-ui-theme="light"] .build-element-row.selected,
 :root[data-ui-theme="light"] .object-list-row.selected { background: var(--accent-soft); }
+
+/* Welcome screen: the dark theme paints its ground and cards dark outright,
+   which put the light theme's near-black text on near-black. */
+:root[data-ui-theme="light"] .welcome-screen {
+  background:
+    radial-gradient(circle at 50% 38%, color-mix(in oklch, var(--accent) 10%, transparent), transparent 38%),
+    var(--canvas-ground);
+}
+:root[data-ui-theme="light"] .welcome-action {
+  border-color: var(--line);
+  background: var(--panel);
+}
+:root[data-ui-theme="light"] .welcome-action:hover:not(:disabled) {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
