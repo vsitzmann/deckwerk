@@ -10,3 +10,4 @@ Categories=Office;Presentation;
 Keywords=slides;presentation;deck;talk;keynote;
 StartupNotify=true
 StartupWMClass=DeckWerk
+MimeType=x-scheme-handler/deckwerk;

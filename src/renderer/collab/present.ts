@@ -26,6 +26,8 @@ import { eventOnInteractiveWeb, slideLinkFromEvent } from '../player/links.js';
 import { selectionPreventsAdvance } from '../player/presentationPointer.js';
 import type { PresenceState, RemoteCommand, RemoteState } from '@shared/collab.js';
 import { bindSwipe, PresenterRemotes } from './remoteControl.js';
+import { SERVER_TUTORIAL_DECK_ID } from '@shared/tutorial.js';
+import { mountTutorialBar } from './tutorialBar.js';
 
 /**
  * The collab presentation page, in either of its two roles.
@@ -69,7 +71,7 @@ function hint(): HTMLElement {
 }
 
 function goFullscreen(): void {
-  if (embedded || document.fullscreenElement) return;
+  if (embedded || tutorialViewer || document.fullscreenElement) return;
   document.documentElement.requestFullscreen().then(() => {
     awaitingFullscreenGesture = false;
     hint().remove();
@@ -98,7 +100,14 @@ if (!deckId) {
   document.body.textContent = 'Missing ?deck= parameter.';
   throw new Error('missing deck');
 }
-const startSlide = Math.max(0, Number(params.get('slide') ?? '1') - 1);
+/**
+ * `slide` is a 1-based number, or a slide's id — the form a link into the
+ * tutorial takes (FEATURES.md), since ids survive slides being added. An id
+ * is resolved once the deck arrives (`applyDeck`).
+ */
+const slideParam = params.get('slide') ?? '1';
+const slideIdParam = /^\d+$/.test(slideParam) ? null : slideParam;
+const startSlide = slideIdParam ? 0 : Math.max(0, Number(slideParam) - 1);
 /**
  * Inclusive last slide, 1-based in the URL like `slide`. Present honours a
  * multi-slide rail selection: advancing past the end ends the show rather than
@@ -109,6 +118,13 @@ const range: PresentationRange | null = endParam !== null && Number.isFinite(Num
   ? { start: startSlide, end: Math.max(startSlide, Number(endParam) - 1) }
   : null;
 const agentViewer = params.get('agent') === '1';
+/**
+ * The deck server's shared tutorial, which nobody may edit: it reaches this
+ * page because the editor shell sends every view-only visitor here. It is
+ * read rather than projected, so it stays out of fullscreen, Escape goes back
+ * to the presentations, and a bar offers a copy of one's own to try it in.
+ */
+const tutorialViewer = deckId === SERVER_TUTORIAL_DECK_ID && !agentViewer;
 // Embedded: the editor tab mounted us in an iframe it already fullscreened, so
 // fullscreen is somebody else's job and exiting means telling the parent.
 const embedded = params.get('embed') === '1' && window.parent !== window;
@@ -207,6 +223,10 @@ function reportShownSlide(): void {
 }
 
 function exitPresentation(): void {
+  if (tutorialViewer && !embedded) {
+    location.href = '/';
+    return;
+  }
   remotes?.endAll();
   announceExit();
   bus?.close();
@@ -436,6 +456,10 @@ function applyDeck(nextDeck: Deck, nextThemeCss: string | null, source: 'seed' |
     speaker?.setTheme(nextThemeCss);
   }
   if (first) {
+    if (slideIdParam) {
+      const index = nextDeck.slides.findIndex((slide) => slide.id === slideIdParam);
+      if (index >= 0) openAt = { slide: index, step: 0 };
+    }
     // Which source got the deck on screen first. Worth having in the DOM: it is
     // the difference between painting immediately and waiting out a WebSocket
     // handshake, and it is otherwise invisible once the slide is up.
@@ -578,6 +602,7 @@ function remoteButton(className: string): HTMLButtonElement {
  */
 const launcher = remotes ? remoteButton('remote-launcher') : null;
 if (launcher) document.body.append(launcher);
+if (tutorialViewer && !embedded) mountTutorialBar(document.body);
 let launcherTimer = 0;
 window.addEventListener('pointermove', (event) => {
   if (!launcher || role !== 'audience' || event.pointerType === 'touch') return;

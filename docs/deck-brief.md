@@ -10,10 +10,10 @@ into editable slide objects. Don't read or edit `deck.json`.
 
     slide-agent render . --slide 8,9,10 --output /tmp/ctx     # PNGs
     slide-agent inspect . --html-body --slide 8-10            # same slides, as a range
+    slide-agent context .                                     # numbered as in the rail; activeSlideId is "this slide"
 
-Slides are numbered as in the editor's rail. Match the neighbours' fonts,
-colours, margins and title position; `theme.css` holds the deck's styles.
-`slide-agent comments . --unresolved` shows requests people left on slides.
+Match the neighbours' fonts, colours, margins and title position; `theme.css` holds the
+deck's styles. `slide-agent comments . --unresolved` shows requests people left on slides.
 Hosted decks have a chat too: `slide-agent chat .`, `say . "text"`, `chat . --wait`.
 
 ## Themes

@@ -109,6 +109,13 @@ import { injectWebBridgeRuntime } from '../shared/webBridge.js';
 import { deckAssetListing, restoreTrashedAssets, trashDeckAssets } from './assetTrash.js';
 import { CLIPBOARD_ID, ClipboardStash } from './clipboardStash.js';
 import { checkWebPage } from '../cli/renderSlides.js';
+import { installTutorial } from '../main/tutorial.js';
+import {
+  FEATURES_FILE,
+  SERVER_TUTORIAL_DECK_ID,
+  TUTORIAL_COPY_NAME,
+  type ServerTutorialInfo,
+} from '../shared/tutorial.js';
 import {
   canAccessDeck,
   canEditDeck,
@@ -384,6 +391,13 @@ export interface CollabServerOptions {
    * listener (`host`/`port`) stays as it is, for the machine itself.
    */
   tls?: CollabTlsOptions;
+  /**
+   * The shipped tutorial deck (`resources/tutorial`), to offer everyone a
+   * read-only copy of at `SERVER_TUTORIAL_DECK_ID` and a "Make my own copy"
+   * of it. Absent — every test and every hosted desktop session — means no
+   * tutorial at all. Ignored with `hostedDeckId`.
+   */
+  tutorialDir?: string;
 }
 
 export interface CollabTlsOptions {
@@ -416,6 +430,25 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
   const hostedDeckId = options.hostedDeckId;
   const agentMode = Boolean(options.agentMode);
   const localAgents = options.localAgents;
+  /**
+   * The shared tutorial: the shipped deck, rewritten at `<root>/~tutorial`
+   * whenever a new release ships a different one. It is read-only for
+   * everyone, the admin and agents included (`deckRoleOf`), never listed,
+   * and never moved, renamed, shared or trashed; a person who wants to try
+   * the steps makes their own copy (`/api/tutorial/copy`).
+   */
+  let tutorialSource: string | null = null;
+  if (options.tutorialDir && !hostedDeckId) {
+    try {
+      await installTutorial(options.tutorialDir, join(rootDir, SERVER_TUTORIAL_DECK_ID), { mode: 'replace' });
+      tutorialSource = resolve(options.tutorialDir);
+    } catch (error) {
+      console.warn(`  no tutorial: could not install ${options.tutorialDir}: ${error instanceof Error ? error.message : error}`);
+    }
+  }
+  const tutorialInfo: ServerTutorialInfo | null = tutorialSource
+    ? { deckId: SERVER_TUTORIAL_DECK_ID, featuresPath: `/tutorial/${FEATURES_FILE}` }
+    : null;
   /**
    * The wire copy of oversized video. Deck assets are whatever the author
    * had — 26 Mbit/s screen recordings, 100 MB exports — and no amount of
@@ -838,6 +871,8 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
       if (!entry.isDirectory()) continue;
       const childId = relative ? `${relative}/${entry.name}` : entry.name;
       const childDir = join(rootDir, childId);
+      // Offered by its own entry (`/api/tutorial`), not as somebody's deck.
+      if (childId === SERVER_TUTORIAL_DECK_ID) continue;
       if (isDeckDir(childDir)) {
         if (hostedDeckId && childId !== hostedDeckId) continue;
         const listed = await deckListEntry(childId, childDir, identity);
@@ -1076,6 +1111,10 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
 
   /** This identity's role on the deck, or null when it may not open it. */
   async function deckRoleOf(identity: Identity | null, deckId: string): Promise<DeckRole | null> {
+    // The shared tutorial is everyone's and nobody's to change: view-only
+    // here is what every write route, the WebSocket and the editor shell's
+    // redirect to the presentation page already honour.
+    if (deckId === SERVER_TUTORIAL_DECK_ID) return accessControl && !identity ? null : 'view';
     if (!accessControl) return 'owner';
     if (!identity) return null;
     let deckDir: string;
@@ -2252,8 +2291,73 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
           mode: 'local',
         } : null,
         urls: boundPort === null ? [] : reachableUrls(host, boundPort),
+        tutorial: tutorialInfo,
       });
       return;
+    }
+
+    // The shared tutorial: where it is, the feature reference agents read
+    // (askAgentPrompt points them here), and a copy of one's own to try it in.
+    if (path === '/api/tutorial' && request.method === 'GET') {
+      if (!tutorialInfo) return respondJson(response, 404, { error: 'this server has no tutorial' });
+      return respondJson(response, 200, tutorialInfo);
+    }
+    if (tutorialInfo && path === tutorialInfo.featuresPath && request.method === 'GET') {
+      let text: string;
+      try {
+        text = await readFile(join(tutorialSource!, FEATURES_FILE), 'utf8');
+      } catch {
+        return respondJson(response, 404, { error: 'no feature reference' });
+      }
+      response.writeHead(200, { 'content-type': 'text/markdown; charset=utf-8', 'cache-control': 'no-cache' });
+      response.end(text);
+      return;
+    }
+    if (path === '/api/tutorial/copy' && request.method === 'POST') {
+      if (!tutorialSource) return respondJson(response, 404, { error: 'this server has no tutorial' });
+      const folder = sanitizeFolderPath(url.searchParams.get('folder') ?? '');
+      if (folder === null) return respondJson(response, 400, { error: 'invalid folder' });
+      if (folder !== '' && (!(await folderVisible(identity, folder)) || isDeckDir(folderDirOf(folder)))) {
+        return respondJson(response, 404, { error: 'no such folder' });
+      }
+      // "DeckWerk tutorial", then "DeckWerk tutorial 2", … — claimed with a
+      // non-recursive mkdir, so two people copying at once get two decks.
+      let id: string | null = null;
+      let name = TUTORIAL_COPY_NAME;
+      let dir = '';
+      for (let n = 1; n <= 200 && !id; n++) {
+        name = n === 1 ? TUTORIAL_COPY_NAME : `${TUTORIAL_COPY_NAME} ${n}`;
+        const candidate = folder ? `${folder}/${name}` : name;
+        try {
+          dir = deckDirOf(candidate);
+        } catch {
+          return respondJson(response, 400, { error: 'the copy would not fit in that folder' });
+        }
+        if (existsSync(dir)) continue;
+        try {
+          await mkdir(dir);
+          id = candidate;
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+        }
+      }
+      if (!id) return respondJson(response, 409, { error: 'too many copies of the tutorial in that folder' });
+      try {
+        await installTutorial(tutorialSource, dir);
+        const deck = await loadDeck(dir);
+        // The picker shows a deck's title and its folder name as one name.
+        if (deck.title !== name) await saveDeck(dir, { ...deck, title: name });
+      } catch (error) {
+        await rm(dir, { recursive: true, force: true }).catch(() => undefined);
+        return respondJson(response, 500, { error: `could not copy the tutorial: ${error instanceof Error ? error.message : error}` });
+      }
+      // Private to whoever made it, like any new deck.
+      if (accessControl && identity) {
+        await writeDeckAccess(dir, {
+          owner: identity.login, visibility: 'private', sharedWith: [], publicRole: 'edit',
+        });
+      }
+      return respondJson(response, 200, { id, title: name });
     }
 
     // Removed authoring surface. Agents use slide-agent against a local deck
@@ -2515,6 +2619,9 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
     if (path === '/api/trash' && request.method === 'POST') {
       const target = url.searchParams.get('path') ?? '';
       if (!splitDeckPath(target)) return respondJson(response, 400, { error: 'missing or invalid path' });
+      if (target === SERVER_TUTORIAL_DECK_ID) {
+        return respondJson(response, 403, { error: 'the tutorial is part of DeckWerk and cannot be deleted' });
+      }
       let dir: string;
       try {
         dir = folderDirOf(target);
@@ -4255,6 +4362,11 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
         canEdit = role !== 'view';
         canComment = roleMayComment(role);
         if (userDirectory) void userDirectory.note(identity);
+      }
+      // Read-only for everyone, with or without access control.
+      if (deckId === SERVER_TUTORIAL_DECK_ID) {
+        canEdit = false;
+        canComment = false;
       }
       // A rename of this very deck may be landing right now; let it, then
       // look at what is on disk. A missing deck is answered here rather than

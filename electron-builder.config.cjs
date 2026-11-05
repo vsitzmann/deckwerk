@@ -52,7 +52,17 @@ module.exports = {
   // Every platform ships the frozen Keynote importer, which carries its own
   // Python. scripts/assert-importer-fresh.cjs fails the pack if it is missing
   // or stale, so this path is never allowed to be absent.
-  extraResources: [{ from: 'build/importers', to: 'importers' }],
+  // The tutorial deck and the feature reference agents read (FEATURES.md);
+  // the app copies it into the person's profile to open it. src/main/tutorial.ts.
+  extraResources: [
+    { from: 'build/importers', to: 'importers' },
+    { from: 'resources/tutorial', to: 'tutorial', filter: ['deck.json', 'theme.css', 'FEATURES.md', 'assets/**/*'] },
+  ],
+  // deckwerk://tutorial/<slide-id> opens the tutorial on a slide; an agent
+  // answering a question about a feature links the person there. macOS reads
+  // this from Info.plist and Linux from the .desktop file; Windows registers
+  // it at runtime (app.setAsDefaultProtocolClient).
+  protocols: [{ name: 'DeckWerk tutorial link', schemes: ['deckwerk'] }],
   beforePack: 'scripts/assert-importer-fresh.cjs',
   // Without a Developer ID the mac app is ad-hoc signed here instead, so it
   // still verifies and runs; see the script for why skipping signing broke it.

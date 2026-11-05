@@ -49,6 +49,8 @@ import type {
   VideoPosterRequest,
   VideoPosterResult,
   WebExportRequest,
+  ShowSlideRequest,
+  TutorialInfo,
 } from '@shared/ipc.js';
 
 /**
@@ -91,6 +93,15 @@ const api = {
   openDeck: (operationId?: string): Promise<DeckSession | null> =>
     ipcRenderer.invoke(IPC.deckOpen, operationId),
   getDeck: (): Promise<DeckSession | null> => ipcRenderer.invoke(IPC.deckGet),
+  /** Null when the tutorial opened in a window of its own (or was already open there). */
+  openTutorial: (operationId?: string, slideId?: string): Promise<DeckSession | null> =>
+    ipcRenderer.invoke(IPC.tutorialOpen, operationId, slideId),
+  tutorialInfo: (): Promise<TutorialInfo> => ipcRenderer.invoke(IPC.tutorialInfo),
+  /** Null when this installation has no tutorial to point an agent at. */
+  tutorialPrompt: (): Promise<string | null> => ipcRenderer.invoke(IPC.tutorialPrompt),
+  tutorialShippedDeck: (): Promise<Deck> => ipcRenderer.invoke(IPC.tutorialShippedDeck),
+  /** The slide a tutorial link asked this deck to open on, if any; asked once per open. */
+  takeShowSlide: (dir: string): Promise<string | null> => ipcRenderer.invoke(IPC.deckTakeShowSlide, dir),
   /** Null when the deck went to a window of its own instead of this one. */
   openDeckPath: (dir: string): Promise<DeckSession | null> =>
     ipcRenderer.invoke(IPC.deckOpenPath, dir),
@@ -250,6 +261,8 @@ const api = {
 
   onDeckState: (fn: (s: DeckSession) => void): (() => void) =>
     on(IPC.deckState, fn),
+  onShowSlide: (fn: (request: ShowSlideRequest) => void): (() => void) =>
+    on(IPC.deckShowSlide, fn),
   onThemeCss: (fn: (css: string) => void): (() => void) => on(IPC.themeCss, fn),
   onAgentRequest: (fn: (request: AgentRequest) => void): (() => void) =>
     on(IPC.agentRequest, fn),

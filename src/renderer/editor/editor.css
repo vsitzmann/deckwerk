@@ -3799,6 +3799,21 @@ button.morph-object-hit.selected-source:hover:not(:disabled) {
 .update-notes pre { white-space: pre-wrap; }
 .update-notes-text { white-space: pre-wrap; }
 .update-notes-empty { color: var(--muted); }
+/* Question? Ask your agent!: the prompt to paste, shown whole and selectable. */
+.confirm-dialog.ask-agent-dialog { width: min(600px, calc(100vw - 48px)); }
+.ask-agent-prompt {
+  margin: 0;
+  max-height: min(260px, 40vh);
+  overflow: auto;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  background: var(--bg);
+  color: var(--text);
+  font: 12px/1.5 var(--mono);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
 .paste-theme-description { margin: 0; color: var(--text); }
 .paste-theme-detail { margin: 0; color: var(--muted); line-height: 1.6; }
 .paste-theme-actions { flex-wrap: wrap; }

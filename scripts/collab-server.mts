@@ -2,18 +2,24 @@ import { resolve } from 'node:path';
 import { startCollabServer, defaultClientDir, importerProblems, mediaToolProblems } from '../src/server/collabServer.js';
 import { LocalAgentRegistry } from '../src/server/localAgents.js';
 import { headlessBrowserProblem } from '../src/cli/compileHtml.js';
+import { findShippedTutorial } from '../src/main/tutorial.js';
 
 /**
  * Collaborative editing server:
  *   npm run collab -- <decksRootDir> [--port 5800] [--host 0.0.0.0]
  *     [--no-local-agents] [--agent-name <name>] [--access <adminLogin>]
- *     [--keep-uploads-days <n>]
+ *     [--keep-uploads-days <n>] [--no-tutorial]
  *     [--tls-host <tailnet address> --tls-cert <cert.pem> --tls-key <key.pem>
  *      [--tls-port 9443] [--tailscale-socket <path>]]
  *
  * Every Keynote and PowerPoint upload is kept for --keep-uploads-days (30 by
  * default, 0 turns it off) under <decksRootDir>/.uploads/, so an import that
  * came out wrong can be debugged against the file that produced it.
+ *
+ * Everyone gets a read-only copy of DeckWerk's tutorial deck (from
+ * resources/tutorial in this checkout), kept at <decksRootDir>/~tutorial and
+ * refreshed when the checkout's tutorial changes, plus "Make my own copy".
+ * --no-tutorial leaves it out.
  *
  * By default every participant can bring their own agent: the browser's
  * Agent… button prints a `slide-agent connect` command that mirrors the deck
@@ -59,6 +65,7 @@ let tlsKey: string | null = null;
 let tlsHost: string | null = null;
 let tlsPort = 9443;
 let tailscaleSocket: string | undefined;
+let tutorialEnabled = true;
 for (let i = 0; i < args.length; i++) {
   if (args[i] === '--port') port = Number(args[++i]);
   else if (args[i] === '--host') host = args[++i];
@@ -71,6 +78,7 @@ for (let i = 0; i < args.length; i++) {
   else if (args[i] === '--tls-host') tlsHost = args[++i];
   else if (args[i] === '--tls-port') tlsPort = Number(args[++i]);
   else if (args[i] === '--tailscale-socket') tailscaleSocket = args[++i];
+  else if (args[i] === '--no-tutorial') tutorialEnabled = false;
   else if (!args[i].startsWith('-') && !rootDir) rootDir = args[i];
 }
 const tlsFlags = [tlsCert, tlsKey, tlsHost].filter((value) => value !== null).length;
@@ -79,7 +87,7 @@ if (!rootDir || Number.isNaN(port) || !(keepUploadsDays >= 0) || (accessAdmin !=
   process.stderr.write(
     'usage: npm run collab -- <decksRootDir> [--port 5800] [--host 0.0.0.0] '
     + '[--no-local-agents] [--agent-name <name>] '
-    + '[--access <adminLogin>] [--keep-uploads-days <n>] '
+    + '[--access <adminLogin>] [--keep-uploads-days <n>] [--no-tutorial] '
     + '[--tls-host <tailnet address> --tls-cert <cert.pem> --tls-key <key.pem> [--tls-port 9443] '
     + '[--tailscale-socket <path>]]\n',
   );
@@ -87,6 +95,9 @@ if (!rootDir || Number.isNaN(port) || !(keepUploadsDays >= 0) || (accessAdmin !=
 }
 
 const clientDir = defaultClientDir(resolve(import.meta.dirname, '..'));
+const tutorialDir = tutorialEnabled
+  ? findShippedTutorial({ searchFrom: [resolve(import.meta.dirname, '..'), process.cwd()] })
+  : null;
 if (accessAdmin && host !== '127.0.0.1' && host !== 'localhost' && host !== '::1') {
   process.stderr.write(
     'warning: --access trusts identity headers on loopback only. Bind --host 127.0.0.1 '
@@ -119,6 +130,7 @@ const server = await startCollabServer({
   localAgents,
   accessControl: accessAdmin ? { admin: accessAdmin } : undefined,
   keepUploadsDays,
+  ...(tutorialDir ? { tutorialDir } : {}),
   tls: tlsHost && tlsCert && tlsKey
     ? { host: tlsHost, port: tlsPort, certFile: tlsCert, keyFile: tlsKey, tailscaleSocket }
     : undefined,
@@ -130,6 +142,7 @@ process.stdout.write(`${JSON.stringify({
   accessControl: accessAdmin ? { admin: accessAdmin } : null,
   clientBundle: clientDir ?? null,
   localAgents: Boolean(localAgents),
+  tutorial: tutorialDir,
   urls: server.urls,
 })}\n`);
 if (!clientDir) {

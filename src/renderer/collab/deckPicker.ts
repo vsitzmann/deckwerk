@@ -14,6 +14,7 @@
  * folder with nothing shared inside it is simply not in the listing.
  */
 import { createToolbarPicker, type ToolbarPickerOption } from '../editor/exportPicker.js';
+import { fetchServerTutorial, openServerTutorial } from './tutorialBar.js';
 import { buildZip, type ZipInput } from '../../shared/zip.js';
 
 
@@ -641,11 +642,20 @@ export function showDeckPicker(opts: {
   // every format the server learns, and the dialog's footer does not. An
   // import only imports — who may open the result is the Share… dialog's
   // question, for every deck alike.
-  actions.append(createToolbarPicker(
+  const importPicker = createToolbarPicker(
     'Import…',
     importMenuEntries(report, folder),
     { escapeClipping: true },
-  ));
+  );
+  actions.append(importPicker);
+  // Beside the imports, where someone starting out looks for a way in: the
+  // server's tutorial, when it has one.
+  void fetchServerTutorial().then((tutorial) => {
+    if (!tutorial || !importPicker.isConnected) return;
+    const open = makeButton('Open the tutorial', openServerTutorial);
+    open.title = 'A deck with one hands-on slide per DeckWerk feature';
+    importPicker.before(open);
+  });
   if (opts.dismissable) {
     // Opened from an open deck, so leaving it must put you back where you
     // were rather than anywhere: Cancel, first in the footer's actions.

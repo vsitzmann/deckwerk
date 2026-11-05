@@ -577,14 +577,14 @@ ffprobe. Videos stream with HTTP Range support, so playback and seeking work
 in every tab. The inspector's non-destructive in/out trim sliders work
 unchanged — they write `start`/`end` on the element and sync like any edit.
 
-The desktop-only media features are the two destructive editors — "Edit w/
-ffmpeg…" trim-and-crop and "Rasterize & paint…" — whose buttons are hidden in
-the browser because nothing sets the inspector hooks that reveal them.
+The desktop-only media feature is the destructive "Rasterize & paint…"
+editor, whose button is hidden in the browser because nothing sets the
+inspector hook that reveals it. (The ffmpeg trim-and-crop window is retired on
+every platform: nothing opens it.)
 
 ## Not in the browser client (v1)
 
-The destructive "Edit w/ ffmpeg…" trim-and-crop and "Rasterize & paint…"
-media editors. Like the desktop app, there is no
+The destructive "Rasterize & paint…" media editor. Like the desktop app, there is no
 raw-CSS sidebar tab; theme.css is edited on disk (the server watcher
 broadcasts it) or through theme adoption. The full list, with what each one
 would take, is in [Desktop → web feature parity](desktop-web-parity.md).

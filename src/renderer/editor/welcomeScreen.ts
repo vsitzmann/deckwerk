@@ -4,6 +4,7 @@ export interface WelcomeActions {
   openFromServer: () => void | Promise<void>;
   importKeynote: () => void | Promise<void>;
   importPowerPoint: () => void | Promise<void>;
+  openTutorial: () => void | Promise<void>;
 }
 
 /** The intentional no-deck state shown before the user opens any presentation. */
@@ -26,7 +27,7 @@ export class WelcomeScreen {
     const title = document.createElement('h1');
     title.textContent = 'What would you like to present?';
     const detail = document.createElement('p');
-    detail.textContent = 'Create a deck, open a DeckWerk folder or a deck on a server, or bring in an existing Keynote or PowerPoint presentation.';
+    detail.textContent = 'Create a deck, open a DeckWerk folder or a deck on a server, or bring in an existing Keynote or PowerPoint presentation. New here? Start with the tutorial.';
 
     const choices = document.createElement('div');
     choices.className = 'welcome-actions';
@@ -36,6 +37,7 @@ export class WelcomeScreen {
       actionButton('Open from a server', 'Edit a deck on a DeckWerk server, online or offline', 'server', actions.openFromServer),
       actionButton('Import from Keynote', 'Convert a .key presentation into an editable deck', 'keynote', actions.importKeynote),
       actionButton('Import from PowerPoint', 'Convert a .pptx presentation into an editable deck', 'powerpoint', actions.importPowerPoint),
+      actionButton('Open the tutorial', 'Try every DeckWerk feature, one slide each', 'tutorial', actions.openTutorial),
     );
 
     screen.append(mark, title, detail, choices);
