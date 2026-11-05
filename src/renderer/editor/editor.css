@@ -1994,6 +1994,10 @@ input[type="range"] { accent-color: var(--accent); padding: 0; background: trans
 /* The row swallows its children's bottom margin, so it carries one itself —
    without it "Paragraph spacing" sat flush against the Align buttons. */
 .insp-type-sections .compact-field-row { margin-bottom: 6px; }
+/* A line's Start and End caps: a full-width strip each, one above the
+   other, since every arrowhead shape sits in the strip beside dot and bar. */
+.line-cap-fields { display: grid; gap: 6px; margin-bottom: 6px; }
+.line-cap-fields > .field { min-width: 0; margin-bottom: 0; }
 /* Font size can carry a "Fitted to N px" caption below it; aligning the row's
    cells at the end put Font weight's input level with that caption instead of
    with Font size's input. Align at the start so the labels and inputs line up

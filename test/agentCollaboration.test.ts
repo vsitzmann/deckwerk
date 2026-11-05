@@ -246,12 +246,42 @@ for (const kind of BACKENDS) describe.skipIf(!electronBinary)(`an agent working 
     // export box; the class's margin and object-position were not frozen in.
     for (const id of [
       'details-math', 'details-framed', 'details-clip', 'details-curve', 'details-brace', 'details-mirrored', 'details-arrow',
-      'details-pen', 'details-marker', 'details-region',
+      'details-pen', 'details-marker', 'details-heads', 'details-region',
     ]) {
       expect(element(after, id), id).toEqual(element(before, id));
     }
     expect(element(after, 'details-nudged')).toMatchObject({ x: 120, y: 420, w: 800, h: 80 });
     expect(after.morphFromPrevious).toBe(false);
+  });
+
+  it('lands an arrowhead shape the agent writes, takes one back to the triangle, and re-saves it as no change', async () => {
+    const workspace = await open(kind);
+    const before = slideById(await workspace.deck(), 'details');
+    const exported = await exportPage(workspace, 'details');
+    expect(exported).toContain('data-start-head="stealth"');
+    expect(exported).toContain('data-end-head="curved"');
+    // The agent makes the end an open chevron and the start a plain triangle,
+    // and gives the thick arrow beside it a curved head.
+    const page = exported
+      .replace('data-end-head="curved"', 'data-end-head="open"')
+      .replace(' data-start-head="stealth"', '')
+      .replace('data-arrow-size="36"', 'data-arrow-size="36" data-end-head="curved"');
+    await workspace.write('heads.html', page);
+    const result = landed(await apply(workspace, 'heads.html'), workspace);
+    expect(result.changes.replaced).toEqual(['details']);
+    const after = slideById(await workspace.deck(), 'details');
+    const element = (id: string) => after.elements.find((candidate) => candidate.id === id)!;
+    expect(element('details-heads')).toMatchObject({ arrowStart: true, arrowEnd: true, endHead: 'open' });
+    expect('startHead' in element('details-heads')).toBe(false);
+    expect(element('details-arrow')).toMatchObject({ arrowEnd: true, arrowSize: 36, endHead: 'curved' });
+    // Nothing else on the slide moved.
+    for (const other of before.elements.filter((e) => e.id !== 'details-heads' && e.id !== 'details-arrow')) {
+      expect(after.elements.find((e) => e.id === other.id), other.id).toEqual(other);
+    }
+    const againResult = await apply(workspace, 'heads.html');
+    const again = landed(againResult, workspace);
+    if (!againResult.json.idempotent) expect(again).toMatchObject({ applied: false, changes: { replaced: [] } });
+    expect(slideById(await workspace.deck(), 'details')).toEqual(after);
   });
 
   it('lands a mirror the agent writes as a flip, and folds a mirrored line into its ends', async () => {

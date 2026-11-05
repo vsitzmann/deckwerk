@@ -1,6 +1,6 @@
 import type { AgentOperation } from './agent.js';
-import { MediaEffectSchema, MIRRORED_TEXT_STYLE_PROPERTIES, SlideSchema, STROKE_DASHES, STROKE_STYLES, TimelineEntrySchema } from './deck.js';
-import type { Deck, MediaEffect, Slide, SlideElement, StrokeDash, StrokeStyle, TimelineEntry } from './deck.js';
+import { ARROW_HEADS, MediaEffectSchema, MIRRORED_TEXT_STYLE_PROPERTIES, SlideSchema, STROKE_DASHES, STROKE_STYLES, TimelineEntrySchema } from './deck.js';
+import type { ArrowHead, Deck, MediaEffect, Slide, SlideElement, StrokeDash, StrokeStyle, TimelineEntry } from './deck.js';
 import { fitAutoTextElement } from './autoFit.js';
 import { KATEX_AUTO_RENDER_JS, KATEX_CSS, KATEX_JS } from './katexInline.js';
 import {
@@ -1924,6 +1924,8 @@ function elementFromMeasured(
         ? { strokeDash: node.dataset.strokeDash as StrokeDash } : {}),
       ...(node.dataset.startCap === 'dot' || node.dataset.startCap === 'bar' ? { startCap: node.dataset.startCap } : {}),
       ...(node.dataset.endCap === 'dot' || node.dataset.endCap === 'bar' ? { endCap: node.dataset.endCap } : {}),
+      ...(arrowHeadNamed(node.dataset.startHead) ? { startHead: node.dataset.startHead as ArrowHead } : {}),
+      ...(arrowHeadNamed(node.dataset.endHead) ? { endHead: node.dataset.endHead as ArrowHead } : {}),
     };
   }
 
@@ -2381,6 +2383,8 @@ function elementToHtml(
         + (element.strokeDash ? ` data-stroke-dash="${element.strokeDash}"` : '')
         + (element.startCap ? ` data-start-cap="${element.startCap}"` : '')
         + (element.endCap ? ` data-end-cap="${element.endCap}"` : '')
+        + (element.startHead ? ` data-start-head="${element.startHead}"` : '')
+        + (element.endHead ? ` data-end-head="${element.endHead}"` : '')
         + attr('data-path', element.path)
         + (element.pathSize ? ` data-path-size="${element.pathSize.w},${element.pathSize.h}"` : '')
         // Paint effects live on the wrapper rather than the nested SVG. Give
@@ -2661,6 +2665,11 @@ function valignFrom(value: string | undefined): 'top' | 'middle' | 'bottom' {
 function shapeKind(value: string | undefined): 'rect' | 'ellipse' | 'line' | 'arrow' | 'path' | 'brace' {
   const kinds = ['rect', 'ellipse', 'line', 'arrow', 'path', 'brace'] as const;
   return kinds.find((kind) => kind === value) ?? 'rect';
+}
+
+/** An arrowhead other than the triangle, which a page says by saying nothing. */
+function arrowHeadNamed(value: string | undefined): boolean {
+  return value !== 'triangle' && (ARROW_HEADS as readonly string[]).includes(value ?? '');
 }
 
 /**

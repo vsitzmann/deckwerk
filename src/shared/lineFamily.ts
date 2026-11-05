@@ -1,4 +1,4 @@
-import type { ShapeEl, SlideElement } from './deck.js';
+import { ARROW_HEADS, type ArrowHead, type ShapeEl, type SlideElement } from './deck.js';
 import { parsePath, pathOnCanvas, setPathOnCanvas, type SubPath, type XY } from './pathNodes.js';
 
 /**
@@ -84,6 +84,41 @@ export function setCap(el: ShapeEl, end: LineEnd, cap: LineCap): void {
   el[flag] = cap === 'arrow';
   if (cap === 'dot' || cap === 'bar') el[field] = cap;
   else delete el[field];
+}
+
+/** The shape of the arrowhead on one end: the solid triangle unless another is named. */
+export function headOf(el: Pick<ShapeEl, 'startHead' | 'endHead'>, end: LineEnd): ArrowHead {
+  return (end === 'start' ? el.startHead : el.endHead) ?? 'triangle';
+}
+
+/**
+ * Name the shape of the arrowhead on one end. The triangle is said by saying
+ * nothing, so a deck that never chose a head is written as it always was.
+ */
+export function setHead(el: ShapeEl, end: LineEnd, head: ArrowHead): void {
+  const field = end === 'start' ? 'startHead' : 'endHead';
+  if (head === 'triangle') delete el[field];
+  else el[field] = head;
+}
+
+/**
+ * Everything an open end can carry, as one choice, the way Illustrator lists
+ * its arrowheads: no cap, an arrowhead of each shape, a dot or a bar.
+ */
+export const LINE_END_STYLES = ['none', ...ARROW_HEADS, 'dot', 'bar'] as const;
+export type LineEndStyle = (typeof LINE_END_STYLES)[number];
+
+/** What one end carries: its cap, and for an arrowhead, the head's shape. */
+export function endStyleOf(el: ShapeEl, end: LineEnd): LineEndStyle {
+  const cap = capOf(el, end);
+  return cap === 'arrow' ? headOf(el, end) : cap;
+}
+
+/** Give one end a cap, or an arrowhead of the named shape. A cap that is not an arrowhead keeps no head shape. */
+export function setEndStyle(el: ShapeEl, end: LineEnd, style: LineEndStyle): void {
+  const head = (ARROW_HEADS as readonly string[]).includes(style);
+  setCap(el, end, head ? 'arrow' : style as LineCap);
+  setHead(el, end, head ? style as ArrowHead : 'triangle');
 }
 
 /**
