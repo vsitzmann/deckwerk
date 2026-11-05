@@ -60,6 +60,7 @@ import { statusBarText } from './statusBar.js';
 import { BuildPreview } from './buildPreview.js';
 import { TimelinePanel } from './timelinePanel.js';
 import { WelcomeScreen } from './welcomeScreen.js';
+import { showConfirmDialog } from './confirmDialog.js';
 import { CollabBridge } from '../collab/collabBridge.js';
 import { PresenceOverlay } from '../collab/presenceOverlay.js';
 import { openEndCollaborationPopover } from '../collab/endCollaborationPopover.js';
@@ -295,6 +296,7 @@ const welcome = new WelcomeScreen(el('canvas'), {
   },
   importKeynote: importKeynotePresentation,
   importPowerPoint: importPowerPointPresentation,
+  openTutorial: () => openTutorial(),
 });
 const agentPanel = new AgentPanel({
   currentDeckPath: () => store.get().dir,
@@ -308,14 +310,12 @@ const agentPanel = new AgentPanel({
  */
 let pendingTrimElementId: string | null = null;
 
-const openTrim = (element: Extract<SlideElement, { type: 'video' }>) => {
-  pendingTrimElementId = element.id;
-  void window.api.openTrim({ src: element.src, elementId: element.id });
-};
 const openRaster = (element: Extract<SlideElement, { type: 'image' }>) => {
   void window.api.openRaster({ src: element.src, elementId: element.id });
 };
-wireCanvasInspector(canvas, inspector, openTrim, openRaster);
+// The ffmpeg trim window (src/renderer/trim) is retired: nothing opens it, so
+// neither the inspector nor the right-click menu offers "Edit w/ ffmpeg…".
+wireCanvasInspector(canvas, inspector, undefined, openRaster);
 
 /**
  * The agent's window into this editor: it publishes the computed selection to
@@ -512,6 +512,18 @@ async function placeSyncedSlides(
 
 
 let deckNameLabel: HTMLElement | null = null;
+let resetTutorialButton: HTMLButtonElement | null = null;
+/** The person's tutorial folder; null until known, or when none ships. */
+let tutorialDir: string | null = null;
+void window.api.tutorialInfo().then((info) => {
+  tutorialDir = info.available ? info.dir.replace(/[\\/]+$/, '') : null;
+  syncDeckNameLabel();
+}, (error: unknown) => console.error('Could not locate the tutorial:', error));
+
+function isTutorialOpen(): boolean {
+  const { dir } = store.get();
+  return tutorialDir !== null && dir !== null && dir.replace(/[\\/]+$/, '') === tutorialDir;
+}
 
 function barDivider(): HTMLElement {
   const divider = document.createElement('span');
@@ -529,6 +541,7 @@ function syncDeckNameLabel(): void {
   deckNameLabel.textContent = name;
   deckNameLabel.hidden = name === '';
   deckNameLabel.title = dir ?? '';
+  if (resetTutorialButton) resetTutorialButton.hidden = !isTutorialOpen();
 }
 
 function buildToolbar(): void {
@@ -560,6 +573,7 @@ function buildToolbar(): void {
     createToolbarSplitButton('Open', () => void openPresentation(), [
       { label: 'Open Folder…', action: () => void openLocalPresentation() },
       { label: 'Connect to Server…', action: () => void openPresentation({ start: 'connect' }) },
+      { label: 'Tutorial', action: () => void openTutorial() },
     ], { menuLabel: 'Open options' }),
     createToolbarPicker('Import…', importEntries),
     createToolbarPicker('Save As…', saveEntries, { deckOnly: true }),
@@ -571,6 +585,7 @@ function buildToolbar(): void {
         { label: 'New', action: newPresentation },
         { label: 'Open…', action: () => void openPresentation() },
         { label: 'Connect to Server…', action: () => void openPresentation({ start: 'connect' }) },
+        { label: 'Tutorial', action: () => void openTutorial() },
       ],
     },
     { label: 'Import', options: importEntries },
@@ -591,9 +606,16 @@ function buildToolbar(): void {
   remoteChip.addEventListener('click', () => {
     if (!remoteConnected) agentSessionBridge?.reconnectNow();
   });
+  resetTutorialButton = barButton('Reset tutorial', () => void resetTutorial());
+  resetTutorialButton.title = 'Put back the tutorial as DeckWerk ships it (undoable)';
+  resetTutorialButton.hidden = true;
   left.append(
-    createDeckWerkButton(),
+    createDeckWerkButton({
+      askAgentPrompt: () => window.api.tutorialPrompt(),
+      onStatus: setStatusMessage,
+    }),
     deckNameLabel,
+    resetTutorialButton,
     remoteChip,
     createHistoryButton(historyHost),
     barDivider(),
@@ -1217,6 +1239,49 @@ async function openPresentation(options: { start?: 'connect' } = {}): Promise<vo
   }
 }
 
+/** Open the person's copy of the tutorial, installing or updating it first. */
+async function openTutorial(slideId?: string): Promise<void> {
+  try {
+    await runOperation('Opening the tutorial…', async (operation) => {
+      const session = await window.api.openTutorial(operation.id, slideId);
+      if (session) await adopt(session.dir, session.deck, operation);
+    });
+  } catch (err) {
+    setStatusMessage(`Could not open the tutorial: ${err instanceof Error ? err.message : err}`);
+  }
+}
+
+/**
+ * Put back the tutorial as it ships, as one entry in the deck's history: Cmd+Z
+ * or History brings back whatever the person or their agent had done to it.
+ */
+async function resetTutorial(): Promise<void> {
+  if (!isTutorialOpen()) return;
+  const confirmed = await showConfirmDialog({
+    title: 'Reset tutorial',
+    description: 'Put back every tutorial slide as DeckWerk ships it? Slides you or your agent added are removed too. Undo, or History, brings everything back.',
+    confirmLabel: 'Reset',
+  });
+  if (!confirmed || !isTutorialOpen()) return;
+  try {
+    const shipped = await window.api.tutorialShippedDeck();
+    if (!isTutorialOpen()) return;
+    store.replaceWithHistory(shipped, 'Reset tutorial');
+    store.selectSlide(0);
+    setStatusMessage('Tutorial reset. Undo brings back what was there.');
+  } catch (err) {
+    setStatusMessage(`Could not reset the tutorial: ${err instanceof Error ? err.message : err}`);
+  }
+}
+
+/** Show a slide by id, if the open deck has it. */
+function showSlideById(slideId: string): boolean {
+  const index = store.get().deck.slides.findIndex((slide) => slide.id === slideId);
+  if (index < 0) return false;
+  store.selectSlide(index);
+  return true;
+}
+
 async function openLocalPresentation(): Promise<void> {
   try {
     await runOperation('Opening presentation…', async (operation) => {
@@ -1489,6 +1554,11 @@ async function adopt(
   operation?.update('Finishing initial display', 0.99);
   await operation?.waitForPaint();
   if (generation === adoptGeneration) await attachRemoteDeck(dir);
+  // A tutorial link (deckwerk://tutorial/<slide>) that opened this deck.
+  const linkedSlide = await window.api.takeShowSlide(dir).catch(() => null);
+  if (linkedSlide && generation === adoptGeneration && !showSlideById(linkedSlide)) {
+    setStatusMessage(`The tutorial has no slide ${linkedSlide}.`);
+  }
 }
 
 /* --- keyboard, clipboard, context menu: shared shell wiring --- */
@@ -1501,7 +1571,6 @@ const shellDeps: ShellDeps = {
   setStatusMessage,
   runOperation: (message, action) => runOperation(message, async () => action()),
   currentThemeCss: () => cssEditor.getValue(),
-  openTrim,
   openRaster,
   downloadOriginal: { label: 'Download original…', run: (element) => void saveOriginalAsset(element.src) },
   undo: () => {
@@ -1684,6 +1753,10 @@ window.api.onPresentNotesEdit(({ slideId, notes }) => {
     const target = deck.slides.find((item) => item.id === slideId);
     if (target) target.notes = notes;
   }, { label: 'Edit speaker notes' });
+});
+window.api.onShowSlide((request) => {
+  if (request.dir !== store.get().dir) return;
+  if (!showSlideById(request.slideId)) setStatusMessage(`The tutorial has no slide ${request.slideId}.`);
 });
 window.api.onDeckState((session) => {
   const state = store.get();

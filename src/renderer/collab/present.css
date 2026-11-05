@@ -42,3 +42,36 @@ html, body { margin: 0; height: 100%; background: #000; overflow: hidden; }
   font-size: 20px;
   line-height: 1;
 }
+
+/* The deck server's shared tutorial (tutorialBar.ts): read, not projected, so
+   a bar above the slide says what it is and offers a copy to try it in. The
+   stage starts below the bar rather than under it. */
+.tutorial-bar {
+  position: fixed;
+  z-index: 10000;
+  top: 0;
+  right: 0;
+  left: 0;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  height: 48px;
+  box-sizing: border-box;
+  padding: 0 14px;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel);
+  color: var(--text);
+  font-size: 13px;
+}
+.tutorial-bar-title { flex: none; font-weight: 600; }
+.tutorial-bar-status {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tutorial-bar button { flex: none; }
+body.tutorial-viewer #stage,
+body.tutorial-viewer #speaker { top: 48px; }

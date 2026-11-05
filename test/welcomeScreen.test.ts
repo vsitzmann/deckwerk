@@ -25,7 +25,7 @@ describe('no-deck welcome screen', () => {
     new EditorCanvas(host, new EditorStore(emptyDeck()));
     const importKeynote = vi.fn();
     const screen = new WelcomeScreen(host, {
-      newPresentation: vi.fn(), openPresentation: vi.fn(), openFromServer: vi.fn(), importKeynote, importPowerPoint: vi.fn(),
+      newPresentation: vi.fn(), openPresentation: vi.fn(), openFromServer: vi.fn(), importKeynote, importPowerPoint: vi.fn(), openTutorial: vi.fn(),
     });
     const button = screen.element.querySelector<HTMLButtonElement>('[data-action="keynote"]')!;
     const down = new MouseEvent('pointerdown', {
@@ -42,7 +42,7 @@ describe('no-deck welcome screen', () => {
 
   it('opens in welcome mode with every presentation choice', () => {
     const screen = new WelcomeScreen(document.getElementById('canvas')!, {
-      newPresentation: vi.fn(), openPresentation: vi.fn(), openFromServer: vi.fn(), importKeynote: vi.fn(), importPowerPoint: vi.fn(),
+      newPresentation: vi.fn(), openPresentation: vi.fn(), openFromServer: vi.fn(), importKeynote: vi.fn(), importPowerPoint: vi.fn(), openTutorial: vi.fn(),
     });
 
     expect(screen.element.hidden).toBe(false);
@@ -54,12 +54,13 @@ describe('no-deck welcome screen', () => {
       'Open from a serverEdit a deck on a DeckWerk server, online or offline',
       'Import from KeynoteConvert a .key presentation into an editable deck',
       'Import from PowerPointConvert a .pptx presentation into an editable deck',
+      'Open the tutorialTry every DeckWerk feature, one slide each',
     ]);
   });
 
   it('routes every choice and leaves welcome mode only after a deck is adopted', () => {
     const actions = {
-      newPresentation: vi.fn(), openPresentation: vi.fn(), openFromServer: vi.fn(), importKeynote: vi.fn(), importPowerPoint: vi.fn(),
+      newPresentation: vi.fn(), openPresentation: vi.fn(), openFromServer: vi.fn(), importKeynote: vi.fn(), importPowerPoint: vi.fn(), openTutorial: vi.fn(),
     };
     const screen = new WelcomeScreen(document.getElementById('canvas')!, actions);
 
@@ -68,11 +69,13 @@ describe('no-deck welcome screen', () => {
     screen.element.querySelector<HTMLButtonElement>('[data-action="server"]')!.click();
     screen.element.querySelector<HTMLButtonElement>('[data-action="keynote"]')!.click();
     screen.element.querySelector<HTMLButtonElement>('[data-action="powerpoint"]')!.click();
+    screen.element.querySelector<HTMLButtonElement>('[data-action="tutorial"]')!.click();
     expect(actions.newPresentation).toHaveBeenCalledOnce();
     expect(actions.openPresentation).toHaveBeenCalledOnce();
     expect(actions.openFromServer).toHaveBeenCalledOnce();
     expect(actions.importKeynote).toHaveBeenCalledOnce();
     expect(actions.importPowerPoint).toHaveBeenCalledOnce();
+    expect(actions.openTutorial).toHaveBeenCalledOnce();
     expect(screen.element.hidden).toBe(false);
 
     screen.setVisible(false);

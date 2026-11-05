@@ -22,6 +22,18 @@ export const IPC = {
   deckLoadTheme: 'deck:loadTheme',
   deckSaveTheme: 'deck:saveTheme',
   deckState: 'deck:state',
+  /** Open (and first install or update) the person's copy of the tutorial. */
+  tutorialOpen: 'tutorial:open',
+  /** Where the person's tutorial is, and whether this installation ships one. */
+  tutorialInfo: 'tutorial:info',
+  /** The "Question? Ask your agent!" prompt, with the tutorial installed for it. */
+  tutorialPrompt: 'tutorial:prompt',
+  /** The tutorial as it ships, for "Reset tutorial". */
+  tutorialShippedDeck: 'tutorial:shippedDeck',
+  /** Main → renderer: show this slide of the open deck (a tutorial link). */
+  deckShowSlide: 'deck:showSlide',
+  /** The slide a link asked for when it opened this deck, taken once. */
+  deckTakeShowSlide: 'deck:takeShowSlide',
   /** Synchronous, at preload time: which deck this window's assets come from. */
   deckKeyGet: 'deck:keyGet',
   deckKey: 'deck:key',
@@ -284,6 +296,20 @@ export interface DeckSessionSnapshot {
   dir: string;
   deck: Deck;
   themeCss: string;
+}
+
+/** The person's tutorial on this computer. */
+export interface TutorialInfo {
+  /** False when this installation does not ship the tutorial. */
+  available: boolean;
+  /** Absolute path of the person's copy (it may not exist until first opened). */
+  dir: string;
+}
+
+/** A tutorial link landing in a window that already shows that deck. */
+export interface ShowSlideRequest {
+  dir: string;
+  slideId: string;
 }
 
 /** History is returned with its owner so an overlapping deck switch is safe. */

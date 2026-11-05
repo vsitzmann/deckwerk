@@ -2,25 +2,46 @@ import { appearanceMenuSection } from '../uiTheme.js';
 import { interfaceSizeMenuSection } from '../uiScale.js';
 import { createToolbarPicker } from './exportPicker.js';
 import { updateMenuEntries } from './updateDialog.js';
+import { ASK_AGENT_LABEL, showAskAgentDialog } from './askAgentDialog.js';
 
 const ABOUT_DIALOG_ID = 'deckwerk-about';
 
 /**
  * The product wordmark at the leading edge of editor toolbars. It opens the
- * app menu: About, Check for Updates (desktop only), and the editor chrome's
+ * app menu: About, Check for Updates (desktop only), Question? Ask your agent!
+ * (when the host can say where its tutorial is), and the editor chrome's
  * appearance — settings that are set once rather than reached for while
  * editing, so they stay out of the toolbar.
  */
-export function createDeckWerkButton(): HTMLElement {
+export function createDeckWerkButton(options: {
+  /** The prompt for "Question? Ask your agent!"; null when there is no tutorial to point at. */
+  askAgentPrompt?: () => Promise<string | null>;
+  /** Where the dialog reports that the prompt was copied. */
+  onStatus?: (message: string) => void;
+} = {}): HTMLElement {
   const button = document.createElement('button');
   button.className = 'brand-button';
   button.textContent = 'DeckWerk';
   button.setAttribute('aria-label', 'DeckWerk menu');
   button.title = 'DeckWerk';
   const updates = updateMenuEntries();
+  const { askAgentPrompt, onStatus } = options;
+  const ask = askAgentPrompt
+    ? [{
+      label: ASK_AGENT_LABEL,
+      action: () => void askAgentPrompt().then(async (prompt) => {
+        if (!prompt) {
+          onStatus?.('This installation has no tutorial for an agent to read.');
+          return;
+        }
+        if (await showAskAgentDialog(prompt)) onStatus?.('Prompt copied: paste it into your agent, then ask your question.');
+      }, (error: unknown) => onStatus?.(`Could not prepare the prompt: ${error instanceof Error ? error.message : error}`)),
+    }]
+    : [];
   return createToolbarPicker('DeckWerk', [
     { label: 'About DeckWerk', action: showAboutDialog },
     ...updates,
+    ...ask,
     appearanceMenuSection(),
     interfaceSizeMenuSection(),
   ], { trigger: button });
