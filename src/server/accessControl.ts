@@ -94,6 +94,131 @@ function headerValue(request: IncomingMessage, name: string): string {
   return (value ?? '').trim();
 }
 
+const ENCODED_WORD = /=\?([^?\s*]+)(?:\*[^?\s]*)?\?([bBqQ])\?([^?\s]*)\?=/g;
+
+function encodedWordBytes(encoding: string, text: string): Uint8Array | null {
+  if (encoding === 'b' || encoding === 'B') {
+    if (text.length % 4 !== 0 || !/^[A-Za-z0-9+/]*={0,2}$/.test(text)) return null;
+    return Buffer.from(text, 'base64');
+  }
+  const bytes: number[] = [];
+  for (let i = 0; i < text.length; i += 1) {
+    const char = text[i];
+    if (char === '_') {
+      bytes.push(0x20);
+    } else if (char === '=') {
+      const hex = text.slice(i + 1, i + 3);
+      if (!/^[0-9A-Fa-f]{2}$/.test(hex)) return null;
+      bytes.push(parseInt(hex, 16));
+      i += 2;
+    } else {
+      const code = char.charCodeAt(0);
+      if (code > 0x7e) return null;
+      bytes.push(code);
+    }
+  }
+  return Buffer.from(bytes);
+}
+
+/**
+ * Decode RFC 2047 encoded-words (`=?utf-8?q?=E7=8E=8B?=`, `=?UTF-8?B?546L?=`).
+ *
+ * HTTP header values are ASCII, so `tailscale serve` sends a non-ASCII
+ * display name — 王小明, José — as encoded-words (Go's mime.QEncoding, which
+ * splits a long name into several words separated by spaces). Adjacent words
+ * are joined without the whitespace between them, as RFC 2047 §6.2 says, and
+ * their bytes are concatenated before decoding so a character split across
+ * two words survives. Anything that is not a well-formed encoded-word in a
+ * charset this runtime knows is left exactly as it was.
+ */
+export function decodeEncodedWords(value: string): string {
+  if (!value.includes('=?')) return value;
+  const words = [...value.matchAll(ENCODED_WORD)].map((match) => {
+    const start = match.index ?? 0;
+    return {
+      start,
+      end: start + match[0].length,
+      raw: match[0],
+      charset: canonicalCharset(match[1]),
+      bytes: encodedWordBytes(match[2], match[3]),
+    };
+  });
+  const onlySpace = (from: number, to: number) => /^[ \t\r\n]*$/.test(value.slice(from, to));
+
+  // texts[i]: what word i reads as, '' when an earlier word's decode took its
+  // bytes, or null to keep it raw. Adjacent words in one charset form a run
+  // and are decoded together, so a character split across them survives; when
+  // the whole run does not decode, its longest prefix that does is kept and
+  // the rest is tried again from the next word.
+  const texts: Array<string | null> = words.map(() => null);
+  for (let i = 0; i < words.length;) {
+    let runEnd = i + 1;
+    while (runEnd < words.length && words[i].bytes && words[runEnd].bytes
+      && words[runEnd].charset === words[i].charset && onlySpace(words[runEnd - 1].end, words[runEnd].start)) runEnd += 1;
+    let taken = 0;
+    for (let k = runEnd; k > i && words[i].bytes; k -= 1) {
+      const text = decodeBytes(words[i].charset, Buffer.concat(words.slice(i, k).map((word) => word.bytes as Buffer)));
+      if (text === null) continue;
+      texts[i] = text;
+      for (let j = i + 1; j < k; j += 1) texts[j] = '';
+      taken = k - i;
+      break;
+    }
+    i += Math.max(taken, 1);
+  }
+
+  // Whitespace between two adjacent words is dropped only when both decoded
+  // (RFC 2047 §6.2); beside a word kept raw it stays as it was.
+  let out = '';
+  let pos = 0;
+  words.forEach((word, i) => {
+    const decodedPair = i > 0 && texts[i - 1] !== null && texts[i] !== null;
+    if (!(decodedPair && onlySpace(pos, word.start))) out += value.slice(pos, word.start);
+    out += texts[i] ?? word.raw;
+    pos = word.end;
+  });
+  return out + value.slice(pos);
+}
+
+/** The WHATWG name for a charset label, so `utf8` and `UTF-8` join one run. */
+function canonicalCharset(label: string): string {
+  try {
+    return new TextDecoder(label).encoding;
+  } catch {
+    return label.toLowerCase();
+  }
+}
+
+function decodeBytes(charset: string, bytes: Uint8Array): string | null {
+  try {
+    return new TextDecoder(charset, { fatal: true, ignoreBOM: true }).decode(bytes);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * A display name made safe to show: control characters and line separators
+ * become spaces so a name cannot break a log line or a label, and bidi
+ * controls and invisible characters are dropped so one name cannot pass for
+ * another (U+202E turns "nimda" into "admin") or for nothing at all. Empty
+ * after that means "no name": the caller falls back to the login.
+ */
+export function sanitizeDisplayName(value: string): string {
+  return value
+    .replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/g, ' ')
+    .replace(/[\u061c\u200b-\u200f\u202a-\u202e\u2060-\u2064\u2066-\u2069\ufeff]/g, '')
+    .trim();
+}
+
+/**
+ * A display name from an ASCII-only source (the serve header, or users.json
+ * written before names were decoded): encoded-words decoded, then sanitized.
+ */
+export function cleanDisplayName(value: string): string {
+  return sanitizeDisplayName(decodeEncodedWords(value));
+}
+
 /**
  * Connections the server terminated TLS for on the tailnet address, with the
  * tailnet user tailscaled named for the peer (tailscaleIdentity.ts), or null
@@ -119,7 +244,9 @@ export function resolveIdentity(
   if (login) {
     return {
       login: normalizeLogin(login),
-      name: headerValue(request, 'tailscale-user-name') || login,
+      // Only the display name is decoded. The login is the authorization
+      // subject and stays byte-for-byte what serve sent.
+      name: cleanDisplayName(headerValue(request, 'tailscale-user-name')) || login,
     };
   }
   // Serve stamps every request it proxies with X-Forwarded-For, but only
@@ -313,7 +440,9 @@ export class UserDirectory {
           if (typeof user.login !== 'string' || !user.login) continue;
           this.users.set(normalizeLogin(user.login), {
             login: normalizeLogin(user.login),
-            name: typeof user.name === 'string' && user.name ? user.name : user.login,
+            // Names saved before identity headers were decoded can still be
+            // RFC 2047-encoded on disk; read them back as the real name.
+            name: (typeof user.name === 'string' && cleanDisplayName(user.name)) || user.login,
             lastSeen: typeof user.lastSeen === 'string' ? user.lastSeen : new Date(0).toISOString(),
           });
         }
@@ -340,7 +469,7 @@ export class UserDirectory {
     const now = new Date();
     // A request without the display-name header falls back to the login; that
     // fallback must never overwrite a real name learned earlier.
-    const name = identity.name === identity.login && existing ? existing.name : identity.name;
+    const name = normalizeLogin(identity.name) === identity.login && existing ? existing.name : identity.name;
     // lastSeen is deliberately coarse (an hour) so routine traffic doesn't
     // rewrite the file on every request.
     const stale = !existing

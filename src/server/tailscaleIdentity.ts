@@ -16,7 +16,7 @@
 
 import { request } from 'node:http';
 import type { Identity } from './accessControl.js';
-import { normalizeLogin } from './accessControl.js';
+import { normalizeLogin, sanitizeDisplayName } from './accessControl.js';
 
 export const DEFAULT_TAILSCALED_SOCKET = '/run/tailscale/tailscaled.sock';
 
@@ -74,6 +74,6 @@ export function identityFromWhoIs(whois: WhoIsResponse): Identity | null {
   if (!login || login === 'tagged-devices') return null;
   return {
     login: normalizeLogin(login),
-    name: whois.UserProfile?.DisplayName?.trim() || login,
+    name: sanitizeDisplayName(whois.UserProfile?.DisplayName ?? '') || login,
   };
 }
