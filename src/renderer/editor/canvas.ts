@@ -8699,6 +8699,7 @@ function sameStructure(a: Slide, b: Slide, ignoreHtml = false): boolean {
         x.strokeWidth !== y.strokeWidth || x.radius !== y.radius ||
         x.arrowStart !== y.arrowStart || x.arrowEnd !== y.arrowEnd || x.strokeStyle !== y.strokeStyle ||
         x.strokeDash !== y.strokeDash || x.startCap !== y.startCap || x.endCap !== y.endCap ||
+        x.startHead !== y.startHead || x.endHead !== y.endHead ||
         Boolean(x.control) !== Boolean(y.control)
       ) return false;
     }

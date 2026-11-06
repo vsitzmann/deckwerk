@@ -326,15 +326,16 @@ Shift+Tab indent lines while typing.
 ## Lines, arrows, curves and the pen {#lines-arrows}
 
 Tutorial slide: `slide-159`
-Also called: line, arrow, connector, curve, bezier, path, pen tool, pencil, freehand, draw, dashed line, arrowhead, caps, brush, marker
+Also called: line, arrow, connector, curve, bezier, path, pen tool, pencil, freehand, draw, dashed line, arrowhead, arrowhead shape, curved arrowhead, stealth arrow, open arrow, caps, brush, marker
 Where: Shape ▾ → Line / Arrow; Pen ▾ → Pen / Pencil; Props → Stroke
 
 **Shape ▾ → Line** or **Arrow** adds one; drag an end to move it (Shift for
 45° steps) and Cmd-drag its outline to bend it into a curve. Double-click a
 line, or select it and press Return, to edit its points: drag points and
 handles, click the outline to add a point, Delete removes one, Escape when
-done. **Props → Stroke** sets the **Start** and **End** caps (None, Arrow,
-Dot, Bar), the **Dash**, and the **Style**: Pen, Brush, Pencil or Marker.
+done. **Props → Stroke** sets the **Start** and **End** caps (None; an
+arrowhead: Arrow, Curved, Stealth or Open; Dot; Bar), the **Dash**, and the
+**Style**: Pen, Brush, Pencil or Marker.
 **Pen ▾ → Pen** (P): click for corners, drag for curves, click the first point
 to close, Return finishes an open line. **Pencil** (Shift+P) draws freehand.
 
