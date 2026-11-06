@@ -81,6 +81,14 @@ function plain(html: string): string {
 
 const centre = (el: Any) => ({ x: el.x + el.w / 2, y: el.y + el.h / 2 });
 
+/** A line's two ends: its box's left and right middle, turned about its centre. */
+function ends(el: Any): { start: { x: number; y: number }; end: { x: number; y: number } } {
+  const { x, y } = centre(el);
+  const dx = (Math.cos((el.rot * Math.PI) / 180) * el.w) / 2;
+  const dy = (Math.sin((el.rot * Math.PI) / 180) * el.w) / 2;
+  return { start: { x: x - dx, y: y - dy }, end: { x: x + dx, y: y + dy } };
+}
+
 /** Facts about written assets, read with PIL in the importer's own venv. */
 function pixels(src: string, at: [number, number][]): { size: [number, number]; mode: string; at: number[][] } {
   const stdout = execFileSync(PYTHON, ['-c', [
@@ -125,8 +133,8 @@ describe('the Keynote reference deck', () => {
   describe('as a whole', () => {
     it('imports every slide through the app wrapper with streaming progress', () => {
       expect(deck.slides.map((s) => s.name)).toContain('title-and-notes');
-      // 47 generated slides plus the Morph copy the Move build adds.
-      expect(deck.slides).toHaveLength(48);
+      // 48 generated slides plus the Morph copy the Move build adds.
+      expect(deck.slides).toHaveLength(49);
       expect(phases.some((p) => /^Decoding .+\.iwa \(\d+ of \d+\)$/.test(p.message))).toBe(true);
       expect(phases.some((p) => /^Converting slide \d+ of \d+$/.test(p.message))).toBe(true);
       const ratios = phases.map((p) => p.ratio).filter((r): r is number => r !== null);
@@ -295,7 +303,9 @@ describe('the Keynote reference deck', () => {
 
     it('turns a curve control point with its rotated group', () => {
       const [line] = ofType('rotated-group-connector', 'shape');
-      expect(line.control.x).toBeCloseTo(850, 1);
+      // The stored middle point (100, 50) is on the curve, so the control
+      // point is (100, 0) in the group, (800, 500) once it is turned.
+      expect(line.control.x).toBeCloseTo(800, 1);
       expect(line.control.y).toBeCloseTo(500, 1);
       expect(centre(line).x).toBeCloseTo(900, 1);
       expect(centre(line).y).toBeCloseTo(500, 1);
@@ -462,9 +472,40 @@ describe('the Keynote reference deck', () => {
       expect(straight.rot).toBeCloseTo(18.43, 1);
       expect(centre(straight)).toEqual({ x: expect.closeTo(350, 1), y: expect.closeTo(350, 1) });
       expect(straight.control ?? null).toBeNull();
-      // The middle point is the control point, mapped like the path.
-      expect(curved.control.x).toBeCloseTo(604.769 + 248.2454 * 332.5504 / 355.231, 1);
-      expect(curved.control.y).toBeCloseTo(426.272 + 150.64738 * 282.67462 / 371.35474, 1);
+      // The points are offsets from the position, unscaled, and the middle
+      // one is where the curve passes halfway: the control point is twice it
+      // less the middle of the ends.
+      const [x, y] = [604.769, 426.272];
+      expect(ends(curved).start).toEqual({ x: expect.closeTo(x, 1), y: expect.closeTo(y, 1) });
+      expect(ends(curved).end).toEqual({ x: expect.closeTo(x + 355.231, 1), y: expect.closeTo(y + 371.35474, 1) });
+      expect(curved.control.x).toBeCloseTo(x + 2 * 248.2454 - 355.231 / 2, 1);
+      expect(curved.control.y).toBeCloseTo(y + 2 * 150.64738 - 371.35474 / 2, 1);
+    });
+
+    it('routes connection lines from the objects they join, as Keynote does on opening', () => {
+      // A lecture slide's "Loss" arrows sat 60px beside their pictures:
+      // Keynote had moved the pictures without laying the lines out again,
+      // and draws them from the pictures, not from what the file stored.
+      const [stale, current, moved, turned] = ofType('connector-routing', 'shape')
+        .filter((el) => el.shape === 'arrow');
+      const near = (point: { x: number; y: number }, x: number, y: number) =>
+        expect(Math.hypot(point.x - x, point.y - y)).toBeLessThan(1);
+      // Stale and straight: from the red block's bottom to the green block's top.
+      near(ends(stale).start, 400, 500);
+      near(ends(stale).end, 400, 700);
+      expect(stale.control ?? null).toBeNull();
+      // Current: left where it is, cut where its frame says.
+      near(ends(current).start, 750, 356.25);
+      near(ends(current).end, 1050, 356.25);
+      near(current.control, 900, 243.75);
+      // Stale and curved: rerouted between the moved blocks with the same
+      // bend, and cut at their outlines.
+      near(ends(moved).start, 1400, 606.25);
+      near(ends(moved).end, 1700, 606.25);
+      near(moved.control, 1550, 493.75);
+      // A turned frame turns the line: Keynote's 90° anticlockwise points it up.
+      near(ends(turned).start, 1099.5, 1000.5);
+      near(ends(turned).end, 1099.5, 800.5);
     });
 
     it('draws pen-tool paths, and mirrors flipped ones', () => {

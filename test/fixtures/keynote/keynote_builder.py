@@ -669,11 +669,14 @@ class Container:
         natural: tuple[float, float],
         *,
         kind: str = "kTSDConnectionLineTypeQuadratic",
+        joins: tuple[int | None, int | None] = (None, None),
     ) -> int:
-        """TSD.ConnectionLineArchive: a two- or three-point polyline whose
-        middle point, if any, is the curve's control point."""
+        """TSD.ConnectionLineArchive: a two- or three-point polyline, in
+        offsets from the frame's position, whose middle point, if any, is the
+        point the curve passes halfway along. `joins` are the drawables its
+        ends are attached to."""
         steps = [("M", *points[0])] + [("L", *p) for p in points[1:]]
-        fields = {
+        fields: dict[str, Any] = {
             "super": {
                 "super": self._drawable(geo),
                 "style": ref(style),
@@ -690,6 +693,10 @@ class Container:
                 "strokePatternOffsetDistance": 0.0,
             }
         }
+        if joins[0] is not None:
+            fields["connectedFrom"] = ref(joins[0])
+        if joins[1] is not None:
+            fields["connectedTo"] = ref(joins[1])
         return self._attach(self.slide.add("TSD.ConnectionLineArchive", fields))
 
     def group(self, geo: dict[str, Any]) -> "GroupBuilder":

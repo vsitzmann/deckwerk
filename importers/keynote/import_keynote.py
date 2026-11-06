@@ -2698,23 +2698,42 @@ class Importer:
             return []
 
         kind = type_name(obj)
+
+        def drawn(elements: list[dict[str, Any]]) -> list[dict[str, Any]]:
+            # The drawables each element belongs to, innermost first, so that
+            # `_route_connectors` can find what a connection line joins.
+            for element in elements:
+                element.setdefault("_kn_drawable", []).append(obj_id)
+                # A text box may be resized to fit its words, but a line is
+                # cut back at the frame Keynote stored for it.
+                if (
+                    kind != "GroupArchive"
+                    and element["type"] == "text"
+                    and "_kn_frame" not in element
+                    and geometry is not None
+                    and box["w"] > 1
+                    and box["h"] > 1
+                ):
+                    element["_kn_frame"] = {"type": "frame", **box}
+            return elements
+
         try:
             geometry = find_geometry(obj)
             box = self._box(geometry, offset)
 
             if kind == "GroupArchive":
-                return self._convert_group(obj, z, box)
+                return drawn(self._convert_group(obj, z, box))
             if kind == "MovieArchive":
-                return self._wrap(self._convert_movie(obj, box, z), kind, box, z)
+                return drawn(self._wrap(self._convert_movie(obj, box, z), kind, box, z))
             if kind == "ImageArchive":
                 source = equation_source(obj)
                 if source is not None:
                     equation = self._convert_equation(obj, source, box, z)
                     if equation is not None:
-                        return [equation]
-                return self._wrap(self._convert_image_el(obj, box, z), kind, box, z)
+                        return drawn([equation])
+                return drawn(self._wrap(self._convert_image_el(obj, box, z), kind, box, z))
             if kind in ("ShapeInfoArchive", "PlaceholderArchive", "ConnectionLineArchive"):
-                return self._convert_shape(obj, box, z)
+                return drawn(self._convert_shape(obj, box, z))
 
             self.report.unsupported[kind] += 1
             return [self._placeholder(box, z, kind, "")]
@@ -2792,6 +2811,11 @@ class Importer:
                 if el.get("control"):
                     px, py = turned(el["control"]["x"], el["control"]["y"])
                     el["control"] = {"x": round(px, 2), "y": round(py, 2)}
+                frame = el.get("_kn_frame")
+                if frame:
+                    cx, cy = turned(frame["x"] + frame["w"] / 2, frame["y"] + frame["h"] / 2)
+                    frame["x"], frame["y"] = cx - frame["w"] / 2, cy - frame["h"] / 2
+                    frame["rot"] = _normalise_angle(float(frame["rot"]) + box["rot"])
         # Keynote diagrams commonly store nodes before their connecting lines,
         # but mask each connector below the filled node at paint time. Once the
         # group is flattened, reproduce that semantic layering: a native line
@@ -3551,32 +3575,56 @@ class Importer:
         # Connectors stay editable native lines/arrows. Curved connection lines
         # carry one native quadratic control point so their bend survives while
         # endpoints remain freely draggable in the editor.
+        #
+        # The path's points are canvas offsets from the line's position, not
+        # scaled to its frame: they run centre to centre between the objects
+        # the line connects, while the frame is only the part Keynote drew
+        # after clipping it at their outlines. Keynote also routes the line
+        # again from those objects whenever it opens the file, and the stored
+        # copy can be stale: on a lecture slide every "Loss" arrow sat 60px
+        # to the right of its picture. `_route_connectors` redoes that routing
+        # once the whole slide is converted.
         if is_connection and path_msg is not None:
             endpoints = _path_endpoints(path_msg)
             if endpoints is not None:
+                # A turned line's points are in its unturned frame.
+                theta = math.radians(box["rot"])
+                cos, sin = math.cos(theta), math.sin(theta)
+                centre_x = box["x"] + box["w"] / 2
+                centre_y = box["y"] + box["h"] / 2
+
+                def placed(point: tuple[float, float]) -> tuple[float, float]:
+                    dx = box["x"] + point[0] - centre_x
+                    dy = box["y"] + point[1] - centre_y
+                    return centre_x + dx * cos - dy * sin, centre_y + dx * sin + dy * cos
+
                 start, end = endpoints
-                start = flipped(start)
-                end = flipped(end)
-                sx = box["w"] / path_w
-                sy = box["h"] / path_h
-                start_abs = (
-                    box["x"] + (start[0] - min_x) * sx,
-                    box["y"] + (start[1] - min_y) * sy,
-                )
-                end_abs = (
-                    box["x"] + (end[0] - min_x) * sx,
-                    box["y"] + (end[1] - min_y) * sy,
-                )
+                start_abs = placed(flipped(start))
+                end_abs = placed(flipped(end))
                 control_abs = None
                 curve = _connection_curve(path_msg)
                 if curve is not None:
                     _, control, _ = curve
-                    control = flipped(control)
-                    control_abs = (
-                        box["x"] + (control[0] - min_x) * sx,
-                        box["y"] + (control[1] - min_y) * sy,
-                    )
-                return self._native_line(style, start_abs, end_abs, z, control_abs)
+                    control_abs = placed(flipped(control))
+                element = self._native_line(style, start_abs, end_abs, z, control_abs)
+                source = pathsource.connection_line_path_source
+                joined = (_ref(obj, "connected_from"), _ref(obj, "connected_to"))
+                # The part Keynote drew last time it laid the line out.
+                element["_kn_frame"] = {"type": "frame", **box}
+                element["_kn_connection"] = {
+                    "from": joined[0],
+                    "to": joined[1],
+                    "outsetFrom": float(getattr(source, "outset_from", 0.0) or 0.0),
+                    "outsetTo": float(getattr(source, "outset_to", 0.0) or 0.0),
+                    # Judged on Keynote's own frames: an imported text box
+                    # sized to its words has a different centre.
+                    "current": all(
+                        self._still_attached(obj, joined_id, point, box)
+                        for joined_id, point in zip(joined, (start_abs, end_abs))
+                        if joined_id is not None
+                    ),
+                }
+                return element
 
         # Sharp-cornered Keynote rectangles are commonly stored as ordinary
         # four-line bezier paths rather than scalar rectangle sources. Promote
@@ -3672,6 +3720,43 @@ class Importer:
         )
         self._apply_shape_paint(element, style)
         return element
+
+    def _still_attached(
+        self, line: Any, joined_id: int, point: tuple[float, float], box: dict[str, float]
+    ) -> bool:
+        """Whether a connection line's stored end still sits on the centre of
+        the object it joins, as it does once Keynote has laid it out.
+
+        Only comparable when both share a parent, and so a coordinate space,
+        and the object has a stored size: a text box sized to its words keeps
+        none, and its position need not be its centre. Otherwise the stored
+        line is trusted, as it was before lines were rerouted at all.
+        """
+        joined = self.objects.get(joined_id)
+        geometry = find_geometry(joined) if joined is not None else None
+        line_parent = find_in_super_chain(line, "parent")
+        joined_parent = find_in_super_chain(joined, "parent") if joined is not None else None
+        if (
+            geometry is None
+            or line_parent is None
+            or joined_parent is None
+            or line_parent.identifier != joined_parent.identifier
+        ):
+            return True
+        # `box` is the line's own frame: its position plus any group offset.
+        origin = find_geometry(line).position
+        x = float(geometry.position.x) + box["x"] - float(origin.x)
+        y = float(geometry.position.y) + box["y"] - float(origin.y)
+        w, h = float(geometry.size.width), float(geometry.size.height)
+        mask_id = _ref(joined, "mask")
+        mask = find_geometry(self.objects.get(mask_id)) if mask_id is not None else None
+        if mask is not None:
+            x += float(mask.position.x)
+            y += float(mask.position.y)
+            w, h = float(mask.size.width), float(mask.size.height)
+        if w <= 1 and h <= 1:
+            return True
+        return math.dist((x + w / 2, y + h / 2), point) <= 1.5
 
     def _apply_shape_paint(
         self, element: dict[str, Any], style: ShapeStyle
@@ -3859,6 +3944,8 @@ class Importer:
                     if element["type"] == "text":
                         element["_kn_role"] = role
             elements.extend(converted)
+
+        _route_connectors(elements)
 
         # Flattened group children must remain one contiguous paint block.
         # ``z + child_index`` overlaps later top-level z values and interleaves
@@ -4365,11 +4452,12 @@ def _connection_curve(
     """Return start/control/end for a curved Keynote connector.
 
     A quadratic connection line is stored as a 3-point polyline whose middle
-    point is the bezier CONTROL point — Keynote reconstructs the curve at draw
-    time. (Not a point on the curve: on reference.key slide 20, reading it as
-    on-curve derives controls outside the segment, one nearly coincident with
-    the arrow's endpoint, which flips the arrowhead tangent and renders the
-    head inverted.) Straight connectors have 2 points and are left alone.
+    point is the knob Keynote shows for dragging the bend: the point the
+    curve passes halfway along, not its control point. Read that way, the
+    curve clipped at the objects it joins fills exactly the frame Keynote
+    stored for it (within a pixel, on every up-to-date connector of a
+    500-slide lecture); read as the control point it bends too little, by
+    up to 38px. Straight connectors have 2 points and are left alone.
     """
     pts: list[tuple[float, float]] = []
     start: tuple[float, float] | None = None
@@ -4404,7 +4492,9 @@ def _connection_curve(
             return None
     if len(pts) != 3:
         return None
-    return pts[0], pts[1], pts[2]
+    start, knob, end = pts
+    control = (2 * knob[0] - (start[0] + end[0]) / 2, 2 * knob[1] - (start[1] + end[1]) / 2)
+    return start, control, end
 
 
 def _path_endpoints(
@@ -4418,6 +4508,263 @@ def _path_endpoints(
     if len(points) < 2:
         return None
     return points[0], points[-1]
+
+
+def _route_connectors(elements: list[dict[str, Any]]) -> None:
+    """Run each connection line between the objects it connects, as Keynote does.
+
+    Keynote does not draw a connection line from its stored path: every time
+    it lays a slide out, it runs the line from the centre of one connected
+    object to the centre of the other, carries the bend along, and draws only
+    the part outside both objects. When the objects moved without the line
+    being laid out again, the file keeps the old path, and drawing that put
+    the arrows of a lecture slide beside the pictures they came from.
+
+    Consumes the `_kn_drawable`, `_kn_frame` and `_kn_connection` marks the
+    conversion left.
+    """
+    owned: dict[int, list[dict[str, Any]]] = {}
+    for element in elements:
+        if "_kn_connection" in element:
+            continue
+        for drawable in element.get("_kn_drawable", []):
+            owned.setdefault(drawable, []).append(element)
+    for element in elements:
+        link = element.pop("_kn_connection", None)
+        if link is not None:
+            _route_connector(
+                element,
+                _connection_end(link["from"], owned),
+                _connection_end(link["to"], owned),
+                link["outsetFrom"],
+                link["outsetTo"],
+                element.get("_kn_frame") if link["current"] else None,
+            )
+    for element in elements:
+        element.pop("_kn_drawable", None)
+        element.pop("_kn_frame", None)
+
+
+ConnectionEnd = tuple[tuple[float, float], list[list[tuple[float, float]]]]
+
+
+def _connection_end(
+    drawable: int | None, owned: dict[int, list[dict[str, Any]]]
+) -> ConnectionEnd | None:
+    """Where a line attaches to a drawable: the centre of its frame, and the
+    outline the line is cut back to."""
+    elements = owned.get(drawable) if drawable is not None else None
+    if not elements:
+        return None
+    if any(el["_kn_drawable"][0] != drawable for el in elements):
+        # A group: its frame is the box around everything in it.
+        left = min(float(el["x"]) for el in elements)
+        top = min(float(el["y"]) for el in elements)
+        right = max(float(el["x"]) + float(el["w"]) for el in elements)
+        bottom = max(float(el["y"]) + float(el["h"]) for el in elements)
+        frame = {"type": "group", "x": left, "y": top, "w": right - left, "h": bottom - top, "rot": 0}
+    else:
+        # A filled label is a shape and a text box; the shape is the outline.
+        drawn = [el for el in elements if el.get("type") != "text"] or elements
+        frame = max(drawn, key=lambda el: float(el["w"]) * float(el["h"]))
+        frame = frame.get("_kn_frame") or frame
+    centre = (float(frame["x"]) + float(frame["w"]) / 2, float(frame["y"]) + float(frame["h"]) / 2)
+    return centre, _element_outline(frame)
+
+
+def _element_outline(element: dict[str, Any]) -> list[list[tuple[float, float]]]:
+    """An element's outline in canvas space, as closed polygons."""
+    w, h = float(element["w"]), float(element["h"])
+    size = element.get("pathSize")
+    if element.get("type") == "shape" and element.get("path") and size:
+        sx, sy = w / max(float(size["w"]), 1e-9), h / max(float(size["h"]), 1e-9)
+        rings = [[(x * sx, y * sy) for x, y in ring] for ring in _flatten_svg_path(element["path"])]
+    elif element.get("type") == "shape" and element.get("shape") == "ellipse":
+        rings = [[
+            (w / 2 + w / 2 * math.cos(math.tau * i / 48), h / 2 + h / 2 * math.sin(math.tau * i / 48))
+            for i in range(48)
+        ]]
+    else:
+        rings = [[(0.0, 0.0), (w, 0.0), (w, h), (0.0, h)]]
+    left, top = float(element["x"]), float(element["y"])
+    cx, cy = left + w / 2, top + h / 2
+    theta = math.radians(float(element.get("rot") or 0.0))
+    cos, sin = math.cos(theta), math.sin(theta)
+    return [
+        [(cx + (left + x - cx) * cos - (top + y - cy) * sin, cy + (left + x - cx) * sin + (top + y - cy) * cos)
+         for x, y in ring]
+        for ring in rings
+        if len(ring) >= 3
+    ]
+
+
+def _flatten_svg_path(data: str) -> list[list[tuple[float, float]]]:
+    """The subpaths of this importer's SVG path data (M, L, Q, C, Z) as polylines."""
+    tokens = data.split()
+    rings: list[list[tuple[float, float]]] = []
+    ring: list[tuple[float, float]] = []
+    current = (0.0, 0.0)
+    i = 0
+
+    def take(count: int) -> list[tuple[float, float]]:
+        nonlocal i
+        values = [float(v) for v in tokens[i : i + 2 * count]]
+        i += 2 * count
+        return [(values[k], values[k + 1]) for k in range(0, len(values), 2)]
+
+    while i < len(tokens):
+        command = tokens[i]
+        i += 1
+        if command == "M":
+            if len(ring) > 1:
+                rings.append(ring)
+            (current,) = take(1)
+            ring = [current]
+        elif command == "L":
+            (current,) = take(1)
+            ring.append(current)
+        elif command in ("Q", "C"):
+            points = [current] + take(2 if command == "Q" else 3)
+            for step in range(1, 9):
+                ring.append(_bezier_point(points, step / 8))
+            current = points[-1]
+        elif command == "Z":
+            if len(ring) > 1:
+                rings.append(ring)
+            ring = [current]
+        else:
+            return rings
+    if len(ring) > 1:
+        rings.append(ring)
+    return rings
+
+
+def _bezier_point(points: list[tuple[float, float]], t: float) -> tuple[float, float]:
+    """De Casteljau evaluation of a Bézier curve of any degree."""
+    while len(points) > 1:
+        points = [
+            ((1 - t) * a[0] + t * b[0], (1 - t) * a[1] + t * b[1])
+            for a, b in zip(points, points[1:])
+        ]
+    return points[0]
+
+
+def _inside(rings: list[list[tuple[float, float]]], point: tuple[float, float]) -> bool:
+    """Even-odd point-in-polygon over every ring."""
+    x, y = point
+    inside = False
+    for ring in rings:
+        for (x1, y1), (x2, y2) in zip(ring, ring[1:] + ring[:1]):
+            if (y1 > y) != (y2 > y) and x < (x2 - x1) * (y - y1) / (y2 - y1) + x1:
+                inside = not inside
+    return inside
+
+
+def _leaves_at(
+    curve: list[tuple[float, float]], outline: list[list[tuple[float, float]]], outset: float
+) -> float | None:
+    """Where a curve starting inside an outline crosses out of it, `outset`
+    further along, as a curve parameter. 0 when it starts outside; None
+    when it never leaves."""
+    if not _inside(outline, curve[0]):
+        return 0.0
+    steps = 512
+    outside = next(
+        (k for k in range(1, steps + 1) if not _inside(outline, _bezier_point(curve, k / steps))),
+        None,
+    )
+    if outside is None:
+        return None
+    lo, hi = (outside - 1) / steps, outside / steps
+    for _ in range(40):
+        mid = (lo + hi) / 2
+        if _inside(outline, _bezier_point(curve, mid)):
+            lo = mid
+        else:
+            hi = mid
+    if outset > 0:
+        edge = _bezier_point(curve, hi)
+        for k in range(steps + 1):
+            t = hi + (1 - hi) * k / steps
+            if math.dist(edge, _bezier_point(curve, t)) >= outset:
+                return t
+        return 1.0
+    return hi
+
+
+def _route_connector(
+    line: dict[str, Any],
+    source: ConnectionEnd | None,
+    target: ConnectionEnd | None,
+    outset_from: float,
+    outset_to: float,
+    drawn: dict[str, Any] | None = None,
+) -> None:
+    """Reroute a native line between its connected objects (see `_route_connectors`).
+
+    `drawn` is the frame Keynote stored for the line, the box around the part
+    it drew, given only while the line still runs between the objects'
+    centres. Then the line stays where it is, cut where that frame says,
+    gaps around strokes included. Otherwise the objects have moved: the
+    line is rerouted to them and cut at their outlines.
+    """
+    if source is None and target is None:
+        return
+    cx, cy = float(line["x"]) + float(line["w"]) / 2, float(line["y"]) + float(line["h"]) / 2
+    theta = math.radians(float(line.get("rot") or 0.0))
+    half = complex(math.cos(theta), math.sin(theta)) * float(line["w"]) / 2
+    start, end = complex(cx, cy) - half, complex(cx, cy) + half
+    control = line.get("control")
+    bend = complex(control["x"], control["y"]) if control else (start + end) / 2
+    if drawn is not None:
+        curve = [(p.real, p.imag) for p in (start, bend, end)]
+        # Outside the frame (grown by half a pixel: a straight line's frame
+        # has no width) is where the line runs inside the objects it joins.
+        frame = _element_outline(
+            {**drawn, "x": drawn["x"] - 0.5, "y": drawn["y"] - 0.5, "w": drawn["w"] + 1, "h": drawn["h"] + 1}
+        )
+        outside = [[(-1e6, -1e6), (1e6, -1e6), (1e6, 1e6), (-1e6, 1e6)]] + frame
+        t0 = _leaves_at(curve, outside, 0.0)
+        t1 = _leaves_at(curve[::-1], outside, 0.0)
+    else:
+        # The ends move to the objects' centres; the bend keeps its place
+        # relative to them.
+        new_start = complex(*source[0]) if source else start
+        new_end = complex(*target[0]) if target else end
+        if abs(end - start) > 1e-6:
+            bend = new_start + (bend - start) * (new_end - new_start) / (end - start)
+        else:
+            bend = (new_start + new_end) / 2
+        curve = [(p.real, p.imag) for p in (new_start, bend, new_end)]
+        t0 = _leaves_at(curve, source[1], outset_from) if source else 0.0
+        t1 = _leaves_at(curve[::-1], target[1], outset_to) if target else 0.0
+    t1 = None if t1 is None else 1.0 - t1
+    if t0 is None or t1 is None or t1 - t0 < 1e-3:
+        # The objects overlap: nothing of the line shows outside them, so
+        # keep it whole rather than collapse it to a point.
+        t0, t1 = 0.0, 1.0
+    a, b = _bezier_point(curve, t0), _bezier_point(curve, t1)
+    # The control point of the part between t0 and t1 (its blossom).
+    weights = ((1 - t0) * (1 - t1), (1 - t0) * t1 + t0 * (1 - t1), t0 * t1)
+    c = (
+        sum(w * p[0] for w, p in zip(weights, curve)),
+        sum(w * p[1] for w, p in zip(weights, curve)),
+    )
+    length = max(1.0, math.dist(a, b))
+    height = float(line["h"])
+    line.update(
+        {
+            "x": round((a[0] + b[0]) / 2 - length / 2, 2),
+            "y": round((a[1] + b[1]) / 2 - height / 2, 2),
+            "w": round(length, 2),
+            "rot": round(math.degrees(math.atan2(b[1] - a[1], b[0] - a[0])), 2),
+        }
+    )
+    # A bend within half a pixel of the chord is a straight line.
+    off_chord = abs((c[0] - a[0]) * (b[1] - a[1]) - (c[1] - a[1]) * (b[0] - a[0])) / length
+    line["control"] = (
+        {"x": round(c[0], 2), "y": round(c[1], 2)} if off_chord >= 0.5 else None
+    )
 
 
 def _scale_path(
