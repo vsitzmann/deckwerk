@@ -171,7 +171,8 @@ class Reference:
             self.z_order, self.group_offset, self.rotated_groups, self.rotated_group_connector,
             self.connectors_under_nodes, self.rotation_sign, self.flipped_crops, self.crops_and_circles,
             self.media_styles, self.image_formats, self.asset_reuse, self.missing_media, self.instant_alpha,
-            self.movies, self.shape_paint, self.outlines, self.rounded_cards, self.lines, self.connectors, self.pen_paths,
+            self.movies, self.shape_paint, self.outlines, self.rounded_cards, self.lines, self.connectors,
+            self.connector_routing, self.pen_paths,
             self.parametric_arrows, self.label_fills, self.autosize_anchors, self.rotated_labels,
             self.clamped_text, self.empty_text_boxes, self.paragraph_styles, self.line_spacing,
             self.run_styles, self.fonts, self.numbered_lists, self.list_counting, self.list_kinds,
@@ -393,10 +394,44 @@ class Reference:
         slide = self.slide("connectors", "Connection lines are native lines; a curve keeps its control point")
         line = deck.shape_style(stroke=stroke("#000000", 3), head=True, tail=False)
         slide.connection(geometry(200, 300, 300, 100), [(0, 0), (300, 100)], line, (300, 100))
-        # Keynote's numbers for a curved connector: the middle point is the
-        # control point, and the path is scaled from its natural size.
+        # Keynote's numbers for a curved connector. The points are offsets
+        # from the position, not scaled to the frame, and the middle one is
+        # where the curve passes halfway, not its control point.
         slide.connection(geometry(604.76904, 426.2716, 332.5504, 282.67462),
                          [(0, 0), (248.2454, 150.64738), (355.231, 371.35474)], line, (355.231, 371.35474))
+
+    def connector_routing(self):
+        """Keynote routes a connection line again from the objects it joins
+        every time it lays a slide out, so the path a file stores can be
+        stale: on a lecture slide every "Loss" arrow sat 60px to the right of
+        its picture. Only a line whose stored ends no longer sit on the
+        joined objects' centres is rerouted; one that still does is drawn
+        where its frame says Keynote cut it."""
+        deck = self.deck
+        slide = self.slide("connector-routing", "Connection lines follow the objects they join")
+        line = deck.shape_style(stroke=stroke("#000000", 3), head=True, tail=False)
+        # Stale and straight, like the lecture's: its ends were stored 61px
+        # right of and 50px below the blocks' centres (400, 400), (400, 750).
+        top = self.block(slide, 300, 300, 200, 200, RED)
+        bottom = self.block(slide, 300, 700, 200, 100, GREEN)
+        slide.connection(geometry(461, 551, 0, 63), [(0, -101), (0, 74), (0, 249)], line, (0, 350),
+                         joins=(top, bottom))
+        # Still current and curved: from the centre of one block to the
+        # centre of the other, passing 100px above them halfway. Its frame is
+        # the part outside both blocks.
+        left = self.block(slide, 650, 350, 100, 100, BLUE)
+        right = self.block(slide, 1050, 350, 100, 100, YELLOW)
+        slide.connection(geometry(750, 300, 300, 56.25), [(-50, 100), (150, 0), (350, 100)], line, (400, 100),
+                         joins=(left, right))
+        # The same curve, stale: both blocks have since moved 100px right
+        # and 100px up. Rerouted, it bends as before, cut at their outlines.
+        left = self.block(slide, 1300, 600, 100, 100, BLUE)
+        right = self.block(slide, 1700, 600, 100, 100, YELLOW)
+        slide.connection(geometry(1300, 650, 300, 56.25), [(-50, 100), (150, 0), (350, 100)], line, (400, 100),
+                         joins=(left, right))
+        # A line on its own whose frame is turned: its points are in the
+        # unturned frame.
+        slide.connection(geometry(1000, 900, 200, 0, 90), [(0, 0), (200, 0)], line, (200, 0))
 
     def pen_paths(self):
         slide = self.slide("pen-paths", "Pen-tool paths draw; flipped paths are mirrored")
