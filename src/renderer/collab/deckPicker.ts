@@ -31,6 +31,7 @@ interface DeckEntry {
   folder: string;
   owner?: string;
   visibility?: 'public' | 'private';
+  publicRole?: 'edit' | 'view';
   canManage?: boolean;
   sharedWithMe?: boolean;
   role?: 'owner' | 'edit' | 'view';
@@ -388,13 +389,21 @@ function groupOf(deck: DeckEntry, access: PickerAccess): string {
 
 const GROUP_ORDER = ['Your presentations', 'Shared with you', 'Public', 'Other private presentations (admin)'];
 
-/** Modal list of the server's decks, with New and Import at the bottom. */
+/**
+ * Modal list of the server's decks, with New and Import at the bottom.
+ *
+ * With access control on, a Private / Public only switch sits in the header.
+ * Public only is for auditing: every deck anyone on the server can open, from
+ * every folder at once. The picker opens on Private unless told otherwise.
+ */
 export function showDeckPicker(opts: {
   dismissable: boolean;
   onStatus: (text: string) => void;
   access?: PickerAccess | null;
   /** Folder to open the picker in; defaults to the current deck's. */
   folder?: string;
+  /** List only the public decks, from every folder. */
+  publicOnly?: boolean;
 }): void {
   const overlay = document.createElement('div');
   overlay.className = 'workflow-overlay';
@@ -453,11 +462,11 @@ export function showDeckPicker(opts: {
     return rowGroup(row, [rename, remove]);
   };
 
-  const deckRow = (deck: DeckEntry, folders: FolderEntry[]): HTMLElement => {
+  const deckRow = (deck: DeckEntry, folders: FolderEntry[], withFolder = false): HTMLElement => {
     const access = deck.role === 'view'
       ? 'view only'
-      : deck.visibility ? (deck.visibility === 'public' ? 'public' : 'private') : '';
-    const row = pickerRow('button', deck.title, [
+      : deck.visibility ? (deck.visibility === 'public' ? (deck.publicRole === 'view' ? 'public · view' : 'public') : 'private') : '';
+    const row = pickerRow('button', withFolder && deck.folder ? `${deck.folder} / ${deck.title}` : deck.title, [
       `${deck.slides} slide${deck.slides === 1 ? '' : 's'}`,
       deck.createdAt ? editedAgo(deck.createdAt) : '',
       deck.editedAt ? editedAgo(deck.editedAt) : '',
@@ -548,6 +557,54 @@ export function showDeckPicker(opts: {
     }
   };
 
+  const publicOnly = Boolean(opts.access && opts.publicOnly);
+  const scope = document.createElement('div');
+  scope.className = 'deck-picker-scope';
+  scope.setAttribute('role', 'group');
+  scope.setAttribute('aria-label', 'Which presentations to list');
+  for (const [label, hint, value] of [
+    ['Private', 'Every presentation you can open, folder by folder', false],
+    ['Public only', 'Only the presentations everyone on this server can open, from every folder', true],
+  ] as const) {
+    const button = document.createElement('button');
+    button.className = 'deck-picker-scope-button';
+    button.textContent = label;
+    button.title = hint;
+    button.setAttribute('aria-pressed', String(publicOnly === value));
+    button.addEventListener('click', () => {
+      if (publicOnly === value) return;
+      overlay.remove();
+      showDeckPicker({ ...opts, folder, publicOnly: value });
+    });
+    scope.append(button);
+  }
+
+  /** Every public deck on the server, wherever it is filed. */
+  const renderPublic = (decks: DeckEntry[], folders: FolderEntry[]) => {
+    const note = document.createElement('span');
+    note.className = 'deck-picker-crumb-sep';
+    note.textContent = 'Public presentations, from every folder';
+    trail.replaceChildren(note);
+    list.replaceChildren();
+    const open = decks.filter((deck) => deck.visibility === 'public');
+    const heading = (text: string) => {
+      const div = document.createElement('div');
+      div.className = 'deck-picker-group';
+      div.textContent = text;
+      list.appendChild(div);
+    };
+    if (open.length === 0) {
+      heading('Nothing is public. Only owners and the people they shared with can open each presentation.');
+      return;
+    }
+    for (const [label, role] of [['Public · anyone can edit', 'edit'], ['Public · anyone can view', 'view']] as const) {
+      const entries = open.filter((deck) => (deck.publicRole ?? 'edit') === role);
+      if (entries.length === 0) continue;
+      heading(label);
+      for (const deck of entries) list.appendChild(deckRow(deck, folders, true));
+    }
+  };
+
   void (async () => {
     const [decksResponse, foldersResponse] = await Promise.all([
       fetch('/api/decks'),
@@ -556,6 +613,10 @@ export function showDeckPicker(opts: {
     if (!decksResponse.ok) throw new Error(`listing failed (${decksResponse.status})`);
     const decks = await decksResponse.json() as DeckEntry[];
     const folders = foldersResponse.ok ? await foldersResponse.json() as FolderEntry[] : [];
+    if (publicOnly) {
+      renderPublic(decks, folders);
+      return;
+    }
     renderTrail(folders);
     list.replaceChildren();
     const here = decks.filter((deck) => deck.folder === folder);
@@ -676,6 +737,7 @@ export function showDeckPicker(opts: {
   const head = document.createElement('div');
   head.className = 'deck-picker-head';
   head.append(title, trail);
+  if (opts.access) head.append(scope);
   const columns = document.createElement('div');
   columns.className = 'deck-picker-columns';
   columns.append(rowGroup(pickerRow('div', 'Name', ['Size', 'Created', 'Last edit', 'Editing', 'Owner', 'Access']), []));

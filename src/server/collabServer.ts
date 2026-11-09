@@ -743,6 +743,8 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
     /** Present only with access control on. */
     owner?: string;
     visibility?: 'public' | 'private';
+    /** What `visibility: "public"` grants everyone else. */
+    publicRole?: 'edit' | 'view';
     canManage?: boolean;
     sharedWithMe?: boolean;
     role?: DeckRole;
@@ -832,6 +834,7 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
       if (!role) return null;
       listed.owner = access.owner;
       listed.visibility = access.visibility;
+      listed.publicRole = access.publicRole;
       listed.canManage = canManageDeck(identity.login, access, accessControl);
       listed.sharedWithMe = access.sharedWith.some((share) => share.login === identity.login);
       listed.role = role;
