@@ -3940,6 +3940,15 @@ button.deck-picker-row.active { border-color: var(--accent); }
 .deck-picker-crumb:disabled { opacity: 1; font-weight: 600; }
 .deck-picker-crumb-sep { color: var(--muted, #8a93a6); }
 .deck-picker-folder .deck-picker-name::before { content: '📁  '; }
+/* Private / Public only: the public view is for spotting what should not be public. */
+.deck-picker-scope { display: flex; flex: none; }
+.deck-picker-scope-button + .deck-picker-scope-button { margin-left: -1px; }
+.deck-picker-scope-button[aria-pressed="true"] {
+  position: relative;
+  border-color: var(--accent);
+  background: var(--accent-soft, transparent);
+  color: var(--accent-text, var(--accent));
+}
 /* Import progress. The toolbar's status line is behind this overlay, so an
    upload has to report itself here or it reports itself nowhere. */
 .deck-picker-progress {

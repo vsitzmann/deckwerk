@@ -374,6 +374,12 @@ describe('collab server view-only access', () => {
     return { status: response.status, body: await response.json().catch(() => null) as any };
   };
 
+  it('lists what a public deck lets everyone do, for the picker\'s Public only view', async () => {
+    const rows = (await api('/api/decks', { headers: asUser(ALICE) })).body as any[];
+    expect(rows.find((deck) => deck.id === 'readable')).toMatchObject({ visibility: 'public', publicRole: 'view' });
+    expect(rows.find((deck) => deck.id === 'alices-deck')).toMatchObject({ visibility: 'private' });
+  });
+
   it('reports the caller role on the deck named in /api/config', async () => {
     expect((await api('/api/config?deck=alices-deck', { headers: asUser(BOB) })).body.access)
       .toMatchObject({ user: BOB, deckRole: 'view' });
