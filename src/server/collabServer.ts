@@ -3544,16 +3544,30 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
       if (!relative.startsWith('assets/')) {
         return respondJson(response, 400, { error: 'only files under assets/ can be uploaded' });
       }
-      const body = await readBody(request);
-      if (existsSync(absolute)) {
-        const current = await readFile(absolute);
-        if (current.equals(body)) return respondJson(response, 200, { path: relative, status: 'unchanged' });
-        return respondJson(response, 409, { error: `${relative} already exists with different content` });
-      }
+      // Streamed to disk, never buffered (as /api/upload is): a desktop
+      // putting a whole talk on the server sends its clips several at a time,
+      // each hundreds of megabytes. The file lands beside its destination
+      // under a dot-name, which no listing, mirror or download ever shows,
+      // and takes its real name only once it is whole.
       await mkdir(dirname(absolute), { recursive: true });
-      const temporary = `${absolute}.${randomUUID()}.tmp`;
-      await writeFile(temporary, body);
-      await rename(temporary, absolute);
+      const temporary = join(dirname(absolute), `.upload-${randomUUID()}.tmp`);
+      const hash = createHash('sha256');
+      try {
+        await pipeline(request, async function* (source: AsyncIterable<Buffer>) {
+          for await (const chunk of source) {
+            hash.update(chunk);
+            yield chunk;
+          }
+        }, createWriteStream(temporary));
+        if (existsSync(absolute)) {
+          const same = (await sha256OfFile(absolute)) === hash.digest('hex');
+          if (same) return respondJson(response, 200, { path: relative, status: 'unchanged' });
+          return respondJson(response, 409, { error: `${relative} already exists with different content` });
+        }
+        await rename(temporary, absolute);
+      } finally {
+        await rm(temporary, { force: true });
+      }
       prepareArrival(room.session.dir, relative);
       respondJson(response, 200, { path: relative, status: 'written' });
       return;
@@ -5503,6 +5517,22 @@ const mirrorHashes = new Map<string, { size: number; mtimeMs: number; sha256: st
 
 export interface MirrorFileEntry { path: string; size: number; sha256: string }
 
+/** A file's content hash, read once per size and mtime. */
+async function sha256OfFile(absolute: string, known?: { size: number; mtimeMs: number }): Promise<string> {
+  const info = known ?? await stat(absolute);
+  const cached = mirrorHashes.get(absolute);
+  if (cached && cached.size === info.size && cached.mtimeMs === info.mtimeMs) return cached.sha256;
+  const sha256 = await new Promise<string>((resolvePromise, reject) => {
+    const hash = createHash('sha256');
+    createReadStream(absolute)
+      .on('data', (chunk) => hash.update(chunk))
+      .on('error', reject)
+      .on('end', () => resolvePromise(hash.digest('hex')));
+  });
+  mirrorHashes.set(absolute, { size: info.size, mtimeMs: info.mtimeMs, sha256 });
+  return sha256;
+}
+
 async function collectMirrorFiles(deckDir: string, themeFile: string): Promise<MirrorFileEntry[]> {
   // The mirror generates its own brief and helper; the deck's desktop-facing
   // AGENTS.md would send an agent looking for a CLI it does not have.
@@ -5521,21 +5551,7 @@ async function collectMirrorFiles(deckDir: string, themeFile: string): Promise<M
       else if (entry.isFile()) {
         const absolute = join(deckDir, relPath);
         const info = await stat(absolute);
-        const cached = mirrorHashes.get(absolute);
-        let sha256 = cached && cached.size === info.size && cached.mtimeMs === info.mtimeMs
-          ? cached.sha256
-          : null;
-        if (!sha256) {
-          sha256 = await new Promise<string>((resolvePromise, reject) => {
-            const hash = createHash('sha256');
-            createReadStream(absolute)
-              .on('data', (chunk) => hash.update(chunk))
-              .on('error', reject)
-              .on('end', () => resolvePromise(hash.digest('hex')));
-          });
-          mirrorHashes.set(absolute, { size: info.size, mtimeMs: info.mtimeMs, sha256 });
-        }
-        files.push({ path: relPath, size: info.size, sha256 });
+        files.push({ path: relPath, size: info.size, sha256: await sha256OfFile(absolute, info) });
       }
     }
   }

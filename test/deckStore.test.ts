@@ -1,3 +1,4 @@
+import { existsSync } from 'node:fs';
 import { access, mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
@@ -12,6 +13,7 @@ import {
   resolveAsset,
   saveDeck,
 } from '../src/main/deckStore.js';
+import { readRemoteLink, writeRemoteBaseline } from '../src/main/remoteDecks.js';
 
 describe('deck folder persistence', () => {
   const cleanup: string[] = [];
@@ -313,6 +315,28 @@ describe('copying a deck for Save As', () => {
 
     expect(copied.title).toBe('Original');
     expect((await loadDeck(join(root, 'Talks', '2026', 'Copy'))).title).toBe('Original');
+  });
+
+  it('leaves a server deck\'s sync state behind: the copy is a deck of its own, not a second mirror', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'deck-save-as-mirror-'));
+    cleanup.push(root);
+    const source = join(root, '2611_CORL');
+    const deck = await createDeck(source, 'CoRL keynote');
+    // What opening a server deck, or uploading this one, leaves beside it.
+    await writeRemoteBaseline(source, { server: 'http://lab:5800', deckId: 'talks/2611_CORL', title: deck.title },
+      { deck, themeCss: '', seq: 4 });
+    expect(await readRemoteLink(source)).not.toBeNull();
+
+    const target = join(root, '2612_NeurIPS');
+    await copyDeck(source, target);
+
+    // The copy once kept `.deckwerk-remote/`, so a talk forked with Save As
+    // went on syncing into the deck it was forked from.
+    expect(await readRemoteLink(target)).toBeNull();
+    expect(existsSync(join(target, '.deckwerk-remote'))).toBe(false);
+    expect((await loadDeck(target)).title).toBe('CoRL keynote');
+    // The original is still the mirror.
+    expect((await readRemoteLink(source))!.deckId).toBe('talks/2611_CORL');
   });
 
   it('refuses to write into the open deck, or into a subfolder of it', async () => {

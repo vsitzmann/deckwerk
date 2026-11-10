@@ -35,11 +35,14 @@ import type {
   PresentationState,
   PresentOptions,
   RasterResult,
+  RecentDeckEntry,
   RemoteDeckBinding,
-  RemoteDeckListing,
+  RemoteListingResult,
   RemoteLocalCopy,
   RemoteServerEntry,
   RemoteServerInfo,
+  RemoteUploadRequest,
+  RemoteUploadResult,
   RasterSaveRequest,
   RasterTarget,
   DisplayInfo,
@@ -204,7 +207,13 @@ const api = {
   addRemoteServer: (url: string, name?: string): Promise<RemoteServerEntry & { info: RemoteServerInfo }> =>
     ipcRenderer.invoke(IPC.remoteServerAdd, url, name),
   removeRemoteServer: (id: string): Promise<void> => ipcRenderer.invoke(IPC.remoteServerRemove, id),
-  remoteListing: (serverId: string): Promise<RemoteDeckListing> => ipcRenderer.invoke(IPC.remoteListing, serverId),
+  remoteServerInfo: (serverId: string): Promise<RemoteServerInfo> => ipcRenderer.invoke(IPC.remoteServerInfo, serverId),
+  remoteListing: (serverId: string): Promise<RemoteListingResult> => ipcRenderer.invoke(IPC.remoteListing, serverId),
+  /** Put the open deck (`dir`) on a server; its folder then mirrors the server deck. */
+  uploadDeckToServer: (dir: string, request: RemoteUploadRequest, operationId?: string): Promise<RemoteUploadResult> =>
+    ipcRenderer.invoke(IPC.remoteUpload, dir, request, operationId),
+  /** The decks opened last, newest first. */
+  recentDecks: (): Promise<RecentDeckEntry[]> => ipcRenderer.invoke(IPC.recentDecks),
   openRemoteDeck: (
     serverId: string,
     deckId: string,

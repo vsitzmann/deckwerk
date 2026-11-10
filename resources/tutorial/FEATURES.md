@@ -408,7 +408,8 @@ Where: the whole editor window
 Toolbar, left to right: the **DeckWerk** menu (About, Check for Updates…,
 Question? Ask your agent!, Appearance, Interface size), the deck's name,
 **History**, **File ▾** (New, Open…, Connect to Server…, Tutorial; Import:
-Keynote…, PowerPoint…; Save As…, Export PDF…, Export Web…); in the middle
+Keynote…, PowerPoint…; Save As…, Upload to Server…, Export PDF…, Export Web…);
+in the middle
 **Text ▾**, **Shape ▾**, **Pen**, **Table**, **Media**; on the right **Agent…**,
 **Collaborate** and **Present** (▾: Present in Speaker View). The slide rail is
 on the left, the inspector tabs **Props**, **Design** and **Build** on the
@@ -706,15 +707,28 @@ server keeps one read-only tutorial with **Make my own copy**.
 ## Server decks in the desktop app {#server-desktop}
 
 Tutorial slide: `slide-907`
-Also called: connect to server, open from server, offline, sync, merge, conflict, remote deck
-Where: File ▾ → Connect to Server…; start screen → Open from a server
+Also called: connect to server, open from server, offline, sync, merge, conflict, remote deck, upload to server, put a deck on the server, recents, recent presentations, open recent
+Where: File ▾ → Connect to Server…; start screen → Open from a server; File ▾ → Upload to Server…
 
-**Open presentation** has tabs for This computer, each server, and **+ Server…**
-(Server address, Connect). A server deck opens as a synced copy on this computer
-(`~/.deckwerk/remote/…`); the toolbar chip shows synced, syncing or **Offline ·
-edits kept on this computer**, and changes sync when the server is back. When
-both sides changed the same slide, **Sync changes** shows Your version and
-Server version: Keep all mine, Take all from server, or per change, then Sync.
+**Open presentation** has tabs for **Recents**, This computer, each server, and
+**+ Server…** (Server address, Connect). Recents lists the decks opened last,
+from this computer and from servers together; a server deck is marked with the
+server's name, a local one with This computer. A server deck opens as a synced
+copy on this computer (`~/.deckwerk/remote/…`); the toolbar chip shows synced,
+syncing or **Offline · edits kept on this computer**, and changes sync when the
+server is back. When the server cannot be reached, its tab says **You are
+offline** and lists the presentations that are available offline; they open
+straight away. When both sides changed the same slide, **Sync changes** shows
+Your version and Server version: Keep all mine, Take all from server, or per
+change, then Sync.
+
+To put a deck from this computer on a server, open it and choose **File ▾ →
+Upload to Server…** (with a wide window: **Save As… ▾ → Upload to Server…**).
+Pick the Folder and the Name and, on a server with sharing, who can open it
+(Restricted, or Everyone on this server: Can view / Can edit), then **Upload**.
+The deck's folder stays where it is and is kept in sync with the server from
+then on. A server must be connected first (Connect to Server…). **Save As… →
+Deck…** of a server deck makes a separate copy that does not sync.
 
 ## Your phone as a remote {#phone-remote}
 

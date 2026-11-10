@@ -78,6 +78,7 @@ import { serializeSpeakerNotes, SPEAKER_NOTES_FILE } from '@shared/speakerNotes.
 import { originalDownloadName } from '@shared/media.js';
 import { copyFileStreamed } from './copyFileStreamed.js';
 import { closeRemoteDecks, registerRemoteDeckIpc, releaseRemoteMirror } from './remoteDeckIpc.js';
+import { RecentDecks } from './recentDecks.js';
 import { HTML_EDIT_DIR, isAuthoringFileName, readSettledFile, writeHtmlScope } from './htmlAuthoring.js';
 import { AGENT_GUIDE_FILE, defaultLauncherPath, writeAgentGuide } from './agentGuide.js';
 import { findShippedTutorial, installTutorial, loadShippedTutorial } from './tutorial.js';
@@ -360,6 +361,12 @@ function setSession(state: DeckWindowState, dir: string, deck: Deck): DeckSessio
     console.error(`Could not write ${AGENT_GUIDE_FILE} in ${dir}:`, error);
   });
   void state.agentRuntime.open(dir);
+  // The tutorial has its own way in; Recents is for the person's own decks.
+  if (resolve(dir) !== resolve(userTutorialDir())) {
+    void recentDecks().note(dir, deck.title).catch((error) => {
+      console.error(`Could not remember ${dir} as recently opened:`, error);
+    });
+  }
   return session;
 }
 
@@ -431,6 +438,11 @@ function shippedTutorialDir(): string | null {
 function userTutorialDir(): string {
   return join(app.getPath('userData'), 'Tutorial');
 }
+
+let recents: RecentDecks | null = null;
+/** The decks opened last, for Open → Recents (recentDecks.ts). */
+const recentDecks = (): RecentDecks =>
+  recents ??= new RecentDecks(join(app.getPath('userData'), 'recent-decks.json'));
 
 /** The person's tutorial, installed or brought up to the shipped release. */
 async function preparedTutorial(): Promise<string> {
@@ -829,7 +841,9 @@ app.on('before-quit', () => {
 function registerHandlers(): void {
   // The Media library: list the deck's assets, move unused ones to the Trash.
   registerDeckAssetIpc(requireSession);
-  registerRemoteDeckIpc({ requireOwner, requireSession, reportOperation, openDeckForRequester });
+  registerRemoteDeckIpc({
+    requireOwner, requireSession, reportOperation, openDeckForRequester, recentDecks: recentDecks(),
+  });
   ipcMain.handle(IPC.deckNew, async (event, operationId?: string): Promise<DeckSession | null> => {
     const res = await showSaveDialog({
       title: 'New deck',
