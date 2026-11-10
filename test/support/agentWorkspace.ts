@@ -227,6 +227,11 @@ export function agentFixtureDeck(): Deck {
             id: 'details-marker', type: 'shape', shape: 'line', x: 1300, y: 500, w: 400, h: 2, strokeWidth: 20,
             stroke: '#ffcc00', strokeStyle: 'marker', endCap: 'bar', control: { x: 1500, y: 420 },
           },
+          // A head of its own shape on each end: a stealth start and a curved end.
+          {
+            id: 'details-heads', type: 'shape', shape: 'line', x: 1300, y: 640, w: 400, h: 2, strokeWidth: 6,
+            stroke: '#333333', arrowStart: true, arrowEnd: true, startHead: 'stealth', endHead: 'curved',
+          },
           {
             id: 'details-region', type: 'html', x: 800, y: 760, w: 300, h: 200,
             // As a browser serialises it, which is how the compile stores it.

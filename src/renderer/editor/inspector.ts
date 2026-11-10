@@ -10,7 +10,8 @@ import {
   STROKE_DASH_GLYPHS, STROKE_DASH_LABELS, STROKE_STYLE_GLYPHS, STROKE_STYLE_LABELS, strokeStyleOf,
 } from '@shared/strokeStyles.js';
 import {
-  LINE_CAPS, capOf, isClosedOutline, isLineFamily, openEnds, setCap, type LineCap, type LineEnd,
+  LINE_END_STYLES, capOf, endStyleOf, isClosedOutline, isLineFamily, openEnds, setEndStyle,
+  type LineEnd, type LineEndStyle,
 } from '@shared/lineFamily.js';
 import {
   paragraphsToList,
@@ -1199,16 +1200,18 @@ export class Inspector {
     // Caps go on open ends only: a closed outline has none.
     const capped = (['start', 'end'] as const).filter((end) => shapes.every((shape) => openEnds(shape)[end]));
     if (capped.length > 0) {
+      // One strip per end, a row each: every arrowhead shape sits beside the
+      // dot and the bar, so choosing one is a single click, as in Illustrator.
       const caps = document.createElement('div');
-      caps.className = 'compact-field-row line-cap-fields';
+      caps.className = 'line-cap-fields';
       for (const end of capped) {
         caps.appendChild(segmentedSelectField(
           end === 'start' ? 'Start' : 'End',
-          LINE_CAPS.map((cap) => ({ value: cap, title: LINE_CAP_LABELS[cap], icon: lineCapGlyph(cap, end) })),
-          shared((shape) => capOf(shape, end)) ?? '',
+          LINE_END_STYLES.map((style) => ({ value: style, title: LINE_END_LABELS[style], icon: lineEndGlyph(style, end) })),
+          shared((shape) => endStyleOf(shape, end)) ?? '',
           (value) => this.store.updateSelected((element) => {
-            if (element.type === 'shape') setCap(element, end, value as LineCap);
-          }, { label: `${end === 'start' ? 'Start' : 'End'} cap: ${LINE_CAP_LABELS[value as LineCap]}` }),
+            if (element.type === 'shape') setEndStyle(element, end, value as LineEndStyle);
+          }, { label: `${end === 'start' ? 'Start' : 'End'} cap: ${LINE_END_LABELS[value as LineEndStyle]}` }),
         ));
       }
       section.content.appendChild(caps);
@@ -3848,16 +3851,24 @@ const INDENT_GLYPHS = {
   in: '<path d="M6 3.5h6M6 7h6M6 10.5h6M2 5l2 2-2 2"/>',
 } as const;
 
-const LINE_CAP_LABELS: Record<LineCap, string> = { none: 'None', arrow: 'Arrow', dot: 'Dot', bar: 'Bar' };
+const LINE_END_LABELS: Record<LineEndStyle, string> = {
+  none: 'None', triangle: 'Arrow', curved: 'Curved arrow', stealth: 'Stealth arrow', open: 'Open arrow',
+  dot: 'Dot', bar: 'Bar',
+};
 
 /** Each cap on a short line, drawn at the end it is for. */
-function lineCapGlyph(cap: LineCap, end: LineEnd): string {
+function lineEndGlyph(style: LineEndStyle, end: LineEnd): string {
   const drawn = {
     none: '<path d="M2 7h10"/>',
-    arrow: '<path d="M2 7h7"/><path class="fill" d="M12.5 7 8.5 4.2v5.6z"/>',
+    // The four heads share one length, so that only their shapes differ: the
+    // curved head's sides bow in, the stealth's are straight.
+    triangle: '<path d="M2 7h6"/><path class="fill" d="M13.2 7 6.4 3.2v7.6z"/>',
+    curved: '<path d="M2 7h8"/><path class="fill" d="M13.2 7C10.8 6.1 7.8 4.6 6 3L7.5 7 6 11C7.8 9.4 10.8 7.9 13.2 7z"/>',
+    stealth: '<path d="M2 7h8"/><path class="fill" d="M13.2 7 6 3.2 8.8 7 6 10.8z"/>',
+    open: '<path d="M2 7h10.4"/><path d="M7.4 3.4 12.4 7 7.4 10.6"/>',
     dot: '<path d="M2 7h8"/><circle class="fill" cx="10.5" cy="7" r="2.2"/>',
     bar: '<path d="M2 7h9.5M11.5 3.5v7"/>',
-  }[cap];
+  }[style];
   return end === 'end' ? drawn : `<g transform="matrix(-1 0 0 1 14 0)">${drawn}</g>`;
 }
 

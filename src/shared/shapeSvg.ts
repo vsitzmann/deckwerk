@@ -1,7 +1,7 @@
-import type { SlideElement } from './deck.js';
+import type { ArrowHead, SlideElement } from './deck.js';
 import { braceDepthOf, bracePath } from './brace.js';
 import { strokeDashAttrs, strokeStyleOf, styledPathSvg } from './strokeStyles.js';
-import { capOf, type LineCap } from './lineFamily.js';
+import { capOf, headOf, type LineCap } from './lineFamily.js';
 import {
   parsePath, pathLength, pathPrefix, runFromCubics, segmentCount, segmentOf, serializePath, splitCubic,
   cubicAt, type Cubic, type SubPath,
@@ -147,7 +147,7 @@ function lineSvg(el: Shape, stroke: string, paint: string, progress = 1): string
   // The tail behind each head's base, and where the line stops inside it.
   const width = Math.min(Math.max(el.strokeWidth, 0), size);
   const tail = Math.min(Math.max(el.strokeWidth, 0), 2);
-  const trim = size + tail / 2;
+  const trims = [0, 0];
   const heads: string[] = [];
   let t0 = 0;
   let t1 = 1;
@@ -162,7 +162,10 @@ function lineSvg(el: Shape, stroke: string, paint: string, progress = 1): string
     const base = at(paramAtDistance(at, from, size));
     const axis = unit({ x: tip.x - base.x, y: tip.y - base.y })
       ?? unit(quadraticTangent(p0, p1, p2, from)) ?? { x: 1, y: 0 };
-    heads.push(headPath(tip, { x: tip.x - axis.x, y: tip.y - axis.y }, size, width, tail));
+    const outline = arrowHead(headOf(el, from ? 'end' : 'start'), tip, axis, size, width, tail);
+    heads.push(outline.d);
+    const trim = outline.trim;
+    trims[from] = trim;
     const away = from ? 1 : -1;
     ends[from] = {
       point: { x: tip.x - axis.x * trim, y: tip.y - axis.y * trim },
@@ -172,11 +175,11 @@ function lineSvg(el: Shape, stroke: string, paint: string, progress = 1): string
   };
   if (startHead) {
     head(0);
-    t0 = paramAtDistance(at, 0, trim);
+    t0 = paramAtDistance(at, 0, trims[0]);
   }
   if (endHead) {
     head(1);
-    t1 = paramAtDistance(at, 1, trim);
+    t1 = paramAtDistance(at, 1, trims[1]);
   }
   const n = (value: number): string => String(Math.round(value * 100) / 100 + 0);
   const pt = (p: XY): string => `${n(p.x)} ${n(p.y)}`;
@@ -299,9 +302,9 @@ function pathSvg(
     if (cap === 'arrow') {
       const base = backAlong(run, size);
       const axis = unit({ x: tip.x - base.point.x, y: tip.y - base.point.y }) ?? { x: 1, y: 0 };
-      caps.push(`<path class="arrowhead" d="${headPath(tip, { x: tip.x - axis.x, y: tip.y - axis.y }, size, width, tail)}"`
-        + ` fill="${stroke}" stroke="none"/>`);
-      const cut = trimEnd(run, size + tail / 2, axis);
+      const drawn = arrowHead(headOf(el, atStart ? 'start' : 'end'), tip, axis, size, width, tail);
+      caps.push(`<path class="arrowhead" d="${drawn.d}" fill="${stroke}" stroke="none"/>`);
+      const cut = trimEnd(run, drawn.trim, axis);
       trimmed[index] = atStart ? reverseRun(cut) : cut;
       return;
     }
@@ -403,21 +406,122 @@ function trimEnd(run: SubPath, distance: number, axis: XY): SubPath {
  * for the line's end to sit in.
  */
 function headPath(tip: XY, back: XY, size: number, width: number, tail: number): string {
-  const dx = tip.x - back.x;
-  const dy = tip.y - back.y;
-  const length = Math.hypot(dx, dy) || 1;
-  const ux = dx / length;
-  const uy = dy / length;
-  const n = (value: number): string => String(Math.round(value * 100) / 100 + 0);
-  // A point `along` back from the tip and `across` to its left (negative: right).
-  const pt = (along: number, across: number): string =>
-    `${n(tip.x - ux * along - uy * across)} ${n(tip.y - uy * along + ux * across)}`;
+  const pt = headFrame(tip, back);
   const half = size / 2;
   const neck = width / 2;
   const outline = tail > 0 && neck > 0
     ? [pt(0, 0), pt(size, half), pt(size, neck), pt(size + tail, neck), pt(size + tail, -neck), pt(size, -neck), pt(size, -half)]
     : [pt(0, 0), pt(size, half), pt(size, -half)];
   return `M ${outline.join(' L ')} Z`;
+}
+
+/**
+ * A head's own frame: a point `along` back from the tip toward `back` and
+ * `across` to its left (negative: right), written as path coordinates.
+ */
+function headFrame(tip: XY, back: XY): (along: number, across: number) => string {
+  const dx = tip.x - back.x;
+  const dy = tip.y - back.y;
+  const length = Math.hypot(dx, dy) || 1;
+  const ux = dx / length;
+  const uy = dy / length;
+  const n = (value: number): string => String(Math.round(value * 100) / 100 + 0);
+  return (along, across) => `${n(tip.x - ux * along - uy * across)} ${n(tip.y - uy * along + ux * across)}`;
+}
+
+/** How deep a stealth head's base cuts back toward its tip, as a share of its length. */
+const NOTCH_DEPTH = 0.3;
+
+/**
+ * The curved head, in shares of its length measured back from the tip and
+ * out from the axis: each side one cubic from the tip to its barb, bowed in
+ * toward the axis (its handles at `c1` and `c2`), so the tip is needle-sharp
+ * and the barbs sweep back; the base a straight notch from each barb to a
+ * centre a fifth of the length in. It is a little wider than it is long.
+ * The numbers were read off the vector outline of a reference arrowhead in
+ * a published figure.
+ */
+const CURVED_HEAD = {
+  half: 0.5564,
+  notch: 0.7988,
+  c1: { along: 0.3326, across: 0.1231 },
+  c2: { along: 0.7445, across: 0.3336 },
+} as const;
+
+/**
+ * An arrowhead of the given shape, pointing along `axis` with its tip on
+ * `tip`: its outline, filled in the line's ink, and how far back from the
+ * tip the line stops (`trim`). Every shape is `size` long, so `arrowSize`
+ * means the same whichever is chosen, and the line always stops inside ink
+ * — never in the open — so the two cannot part by a hairline:
+ *
+ * - `triangle` is as wide as it is long and carries a line-wide tail behind
+ *   its base for the line's square end to sit in (`headPath`).
+ * - `curved` (`CURVED_HEAD`) has concave sides and a notched base, and
+ *   `stealth` straight sides and a deeper notch. The line runs on between
+ *   the barbs to the base, where the head is wider than the line, so its
+ *   corners never show past the head's sides. A head too small for its
+ *   notch is a triangle.
+ * - `open` is two arms meeting at the tip, as thick as the line (thinner
+ *   only on a line too heavy for its head), cut square to the axis at the
+ *   base. The line runs in between them to their inner edges. A head too
+ *   small to keep its arms apart is a triangle.
+ *
+ * Where the line meets the head, the outline leaves the base at the line's
+ * two edges and runs back along them for the same short tail the triangle
+ * has, so the line overlaps the head only by half that tail. A see-through
+ * stroke therefore darkens no more under these heads than under a triangle.
+ */
+function arrowHead(
+  kind: ArrowHead, tip: XY, axis: XY, size: number, width: number, tail: number,
+): { d: string; trim: number } {
+  const back = { x: tip.x - axis.x, y: tip.y - axis.y };
+  const triangle = { d: headPath(tip, back, size, width, tail), trim: size + tail / 2 };
+  const pt = headFrame(tip, back);
+  const half = size / 2;
+  const neck = width / 2;
+  // The line-wide tail from where the line's edges cross the base at
+  // `along`: back `tail` along one edge, across, and forward along the other.
+  const stub = (along: number): string[] => tail > 0 && neck > 0
+    ? [pt(along, neck), pt(along + tail, neck), pt(along + tail, -neck), pt(along, -neck)]
+    : [pt(along, 0)];
+  if (kind === 'curved') {
+    const barb = size * CURVED_HEAD.half;
+    // A line nearly as wide as the head would cross the base at its barbs.
+    if (neck > barb * 0.8) return triangle;
+    const middle = size * CURVED_HEAD.notch;
+    // Where the line's edges cross the straight base, barb to centre.
+    const along = middle + (size - middle) * (neck / barb);
+    const handle = (h: { along: number; across: number }, side: number): string =>
+      pt(size * h.along, side * size * h.across);
+    const d = `M ${pt(0, 0)} C ${handle(CURVED_HEAD.c1, 1)} ${handle(CURVED_HEAD.c2, 1)} ${pt(size, barb)}`
+      + ` L ${stub(along).join(' L ')} L ${pt(size, -barb)}`
+      + ` C ${handle(CURVED_HEAD.c2, -1)} ${handle(CURVED_HEAD.c1, -1)} ${pt(0, 0)} Z`;
+    return { d, trim: along + tail / 2 };
+  }
+  if (kind === 'stealth') {
+    // The base's centre may come no closer to the tip than where the head
+    // is a line's width wide (and half a tail), so the line's edges cross
+    // the base and never the head's sides.
+    const notch = Math.min(size * NOTCH_DEPTH, size - width - tail / 2);
+    if (notch < Math.max(0.5, size * 0.05)) return triangle;
+    // Straight from each barb to the base's centre, `notch` in from the barbs.
+    const along = size - notch + notch * (neck / half);
+    const outline = [pt(0, 0), pt(size, half), ...stub(along), pt(size, -half)];
+    return { d: `M ${outline.join(' L ')} Z`, trim: along + tail / 2 };
+  }
+  if (kind === 'open') {
+    // The arms keep their own proportion on a line heavy for its head.
+    const arm = Math.min(width, size / 6);
+    // Where the arms' inner edges meet, and where they are a line apart.
+    const inner = arm * Math.hypot(size, half) / half;
+    const along = inner + neck * (size / half);
+    if (!(arm > 0) || along > size * 0.9) return triangle;
+    const barb = (size - inner) * (half / size);
+    const outline = [pt(0, 0), pt(size, half), pt(size, barb), ...stub(along), pt(size, -barb), pt(size, -half)];
+    return { d: `M ${outline.join(' L ')} Z`, trim: along + tail / 2 };
+  }
+  return triangle;
 }
 
 function quadraticPoint(p0: XY, p1: XY, p2: XY, t: number): XY {

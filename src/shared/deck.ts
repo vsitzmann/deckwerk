@@ -329,6 +329,15 @@ export type StrokeStyle = (typeof STROKE_STYLES)[number];
 export const STROKE_DASHES = ['dashed', 'dotted'] as const;
 export type StrokeDash = (typeof STROKE_DASHES)[number];
 
+/**
+ * The shapes an arrowhead comes in: `triangle`, the solid head every arrow
+ * always had; `curved`, its sides bowed in so the tip is needle-sharp and the
+ * barbs sweep back, over a notched base; `stealth`, straight sides and a
+ * deeper notch; and `open`, a chevron of two strokes as wide as the line.
+ */
+export const ARROW_HEADS = ['triangle', 'curved', 'stealth', 'open'] as const;
+export type ArrowHead = (typeof ARROW_HEADS)[number];
+
 const ShapeElement = BaseElement.extend({
   type: z.literal('shape'),
   shape: z.enum(['rect', 'ellipse', 'line', 'arrow', 'path', 'brace']),
@@ -374,6 +383,13 @@ const ShapeElement = BaseElement.extend({
    * than the line is wide: at that size the line simply ends in a point.
    */
   arrowSize: z.number().positive().optional(),
+  /**
+   * The shape of the arrowhead on each end (see `ARROW_HEADS`), drawn only
+   * where `arrowStart`/`arrowEnd` puts one. Absent is the solid triangle;
+   * read and write them through `headOf`/`setHead` in lineFamily.ts.
+   */
+  startHead: z.enum(ARROW_HEADS).optional(),
+  endHead: z.enum(ARROW_HEADS).optional(),
   /**
    * How an open line ends, when not in an arrowhead (`arrowStart` and
    * `arrowEnd` say where those are, and an arrowhead wins): `dot`, a round
