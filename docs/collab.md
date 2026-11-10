@@ -98,9 +98,18 @@ editing them when the connection drops.
   server*, or Open ▾ → *Connect to Server…*) takes an address:
   `100.68.22.127` (port 5800 assumed), `host:port`, or an `https://` tailnet
   URL. Servers are remembered per user (`remote-servers.json` in the app's
-  user data). Once one is known, **Open** shows one dialog with *This
-  computer* and a tab per server, browsing the server's folders like its web
-  picker; with none, Open goes straight to the folder picker as before.
+  user data). Once one is known, **Open** shows one dialog with *Recents*,
+  *This computer* and a tab per server, browsing the server's folders like its
+  web picker; with none, Open goes straight to the folder picker as before.
+- **Recents.** The first tab lists the decks opened last (`recent-decks.json`
+  in the user data, `src/main/recentDecks.ts`; the tutorial is left out), from
+  this computer and from servers together. Each row says which it is: *This
+  computer* with the folder it is in, or the server's name, in the accent
+  colour, with the folder it is filed in there. Whether a folder mirrors a
+  server deck is read from the folder when the list is shown, so a deck
+  uploaded since it was last opened is listed as the server deck it now is. A
+  recent deck opens by its folder, without asking any server: a server deck's
+  copy opens at once, online or not, and connects once it is open.
 - **A mirror, not a window onto the server.** Opening a server deck makes (or
   refreshes) an ordinary deck folder at
   `~/.deckwerk/remote/<host>/<deck id>` (`DECKWERK_REMOTE_ROOT` overrides it)
@@ -110,11 +119,33 @@ editing them when the connection drops.
   state this machine saw (`base.json`, plus seq and theme in `sync.json`). The
   editor writes the baseline right after the deck.json it belongs with, from
   the same instant, so a crash never leaves a baseline newer than the deck.
-  Reopening the folder any way (Open, the command line) re-binds it. Files
+  Reopening the folder any way (Open, the command line) re-binds it. **Save
+  As** leaves `.deckwerk-remote/` behind: the copy is a deck of its own, not a
+  second mirror writing into the deck it was copied from. Files
   come down six at a time — over a long route one stream is held to a
   fraction of the line by the round trip — and a dropped connection is retried
   per file, so one reset does not fail a 1.5 GB first open; an open that did
   fail resumes, fetching only what is missing.
+- **Upload.** A deck that lives on this computer goes the other way with
+  **Save As… → Upload to Server…** (File → Upload to Server… in the compact
+  toolbar; absent for a deck that is already a server deck). The dialog asks
+  for the server, one of its folders and a name (the folder's name, cleaned as
+  the server will clean it, and refused while a deck or folder there has it),
+  and, on an `--access` server, who can open it: *Restricted* (the server's
+  default for anything new) or *Everyone on this server*, to view or to edit.
+  `uploadDeck` (`src/main/remoteDecks.ts`) sends deck.json, the stylesheet
+  and whatever else the two point at outside `assets/` as a deck archive to
+  `/api/import-deck`, then binds the folder — the one the deck is in, not a
+  copy under `~/.deckwerk/remote` — by writing `.deckwerk-remote/` into it,
+  and only then streams the files under `assets/` up, three at a time, those
+  the slides show first. A connection that drops among them leaves a mirror
+  with uploads outstanding, which the next sync sends; nothing else in the
+  folder (raw footage, exports) is uploaded. The window then joins the deck
+  as if it had been opened from the server. `linked-folders.json` in the
+  mirror root remembers folders that mirror a deck from outside it, most
+  recently used first — any such folder is added when it is opened — so the
+  Open dialog lists that copy as available offline and opens it rather than
+  downloading a second one.
 - **Live.** The editor's own `CollabBridge` joins the room as an ordinary
   peer, with live text sync on, presence and cursors. The editor's content
   security policy only allows sockets to 127.0.0.1, so it connects through a
@@ -129,10 +160,16 @@ editing them when the connection drops.
 - **Offline.** The toolbar chip says *Offline · edits kept on this computer*;
   editing continues and is saved to the mirror as usual. Clicking the chip
   retries at once. A server that cannot be reached still has its tab in the
-  Open dialog: it lists the decks already copied to this computer
-  (`listMirrors`, from each mirror's `sync.json`), which open at once without
-  asking the server and connect when it is back. Online, the listing marks
-  those decks *on this computer*.
+  Open dialog: *You are offline. The following presentations are available
+  offline and will be synced whenever you are online again:* and the decks
+  already copied to this computer (`listMirrors`, from each mirror's
+  `sync.json`), which open at once without asking the server and connect when
+  it is back. With no network at all that list is shown immediately; otherwise
+  it appears after 1.2 s without an answer (*Still looking for …*), since an
+  unreachable server can take the whole 15 s request timeout to be told from
+  a slow one, and is replaced by the server's listing if that arrives. The
+  tab asks again when the system reports the network back. Online, the
+  listing marks those decks *available offline*.
 - **Reconnect = three-way merge** (`src/shared/deckMerge.ts`) of the baseline,
   the deck on screen and the server's deck. Per slide: changed on one side
   only → that side; changed on both → merged object by object when the two
@@ -154,9 +191,11 @@ editing them when the connection drops.
 Tests: `test/deckMerge.test.ts` (the merge, with a seeded property walk),
 `test/remoteDeckSync.test.ts` (an offline replica against a real server
 through a link it cuts, plus a seeded fuzz walk: `REMOTE_FUZZ_SEEDS`,
-`REMOTE_FUZZ_STEPS`), `test/remoteDecks.test.ts` (mirrors, files, the relay
-and its heartbeat) and `test/remoteDeckDesktopBrowser.test.ts` (the real
-desktop app end to end; `REMOTE_SHOTS=<dir>` keeps screenshots).
+`REMOTE_FUZZ_STEPS`), `test/remoteDecks.test.ts` (mirrors, files, uploading a
+local deck, the relay and its heartbeat), `test/recentDecks.test.ts`,
+`test/openDialog.test.ts` and `test/uploadDialog.test.ts` (the two dialogs
+against a scripted desktop) and `test/remoteDeckDesktopBrowser.test.ts` (the
+real desktop app end to end; `REMOTE_SHOTS=<dir>` keeps screenshots).
 
 ## Running a standalone server
 

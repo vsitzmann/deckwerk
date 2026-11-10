@@ -3,6 +3,8 @@ export interface ToolbarPickerOption {
   action: () => void;
   /** Makes the entry one of a radio group, ticked while this returns true. */
   checked?: () => boolean;
+  /** Leaves the entry out of the menu while this returns true (asked each time it opens). */
+  hidden?: () => boolean;
 }
 
 export interface ToolbarPickerSection {
@@ -88,6 +90,7 @@ export function createToolbarPicker(
     menu.className = `shape-menu${config.escapeClipping ? ' shape-menu-fixed' : ''}`;
     menu.setAttribute('role', 'menu');
     const appendOption = (option: ToolbarPickerOption, parent: HTMLElement): void => {
+      if (option.hidden?.()) return;
       const item = document.createElement('button');
       item.type = 'button';
       item.className = 'shape-menu-item';

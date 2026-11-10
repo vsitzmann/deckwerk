@@ -88,8 +88,11 @@ export const IPC = {
   remoteServers: 'remote:servers',
   remoteServerAdd: 'remote:serverAdd',
   remoteServerRemove: 'remote:serverRemove',
+  remoteServerInfo: 'remote:serverInfo',
   remoteListing: 'remote:listing',
   remoteOpen: 'remote:open',
+  /** Put the open deck on a server; its folder becomes the copy that stays in sync. */
+  remoteUpload: 'remote:upload',
   /** The decks of one server already copied to this computer (open offline). */
   remoteLocalCopies: 'remote:localCopies',
   /** Is this open folder the mirror of a server deck? Then how to reach it. */
@@ -102,6 +105,8 @@ export const IPC = {
   remoteAssetsFetch: 'remote:assetsFetch',
   /** Main → editor: these deck-relative files just arrived in the mirror. */
   remoteAssetsArrived: 'remote:assetsArrived',
+  /** The decks opened last, from this computer and from servers (recentDecks.ts). */
+  recentDecks: 'recent:list',
 } as const;
 
 /** A deck server as the desktop lists it. */
@@ -138,6 +143,40 @@ export interface RemoteDeckListing {
     role?: string;
   }>;
   folders: Array<{ path: string; name: string; parent: string; decks: number }>;
+}
+
+/** A server's answer to "what is on you": its decks, or that it cannot be reached right now. */
+export type RemoteListingResult =
+  | { reachable: true; listing: RemoteDeckListing }
+  | { reachable: false; reason: string };
+
+/** Where the open deck goes on a server, and who may open it there. */
+export interface RemoteUploadRequest {
+  serverId: string;
+  /** The deck's name on the server; the server cleans it. */
+  name: string;
+  /** The server folder to file it in; '' is the top level. */
+  folder: string;
+  /** Only on an access-controlled server; absent leaves it open to the uploader alone. */
+  access?: { visibility: 'private' | 'public'; publicRole?: 'view' | 'edit' };
+}
+
+export interface RemoteUploadResult {
+  deckId: string;
+  /** How many files went up with it. */
+  uploaded: number;
+  /** What did not get through; files that are missing follow on the next sync. */
+  problem: string | null;
+}
+
+/** A deck opened lately, for Open → Recents. */
+export interface RecentDeckEntry {
+  dir: string;
+  title: string;
+  /** ISO time of the last open. */
+  openedAt: string;
+  /** Set when the folder is this computer's copy of a server deck. */
+  server: { name: string; url: string; deckId: string } | null;
 }
 
 /**

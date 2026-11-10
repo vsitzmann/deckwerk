@@ -6,30 +6,41 @@ import { parseDeck, type Deck } from '@shared/deck.js';
 import {
   IPC,
   type DeckSession,
+  type RecentDeckEntry,
   type RemoteDeckBinding,
-  type RemoteDeckListing,
+  type RemoteListingResult,
   type RemoteLocalCopy,
   type RemoteServerEntry,
   type RemoteServerInfo,
+  type RemoteUploadRequest,
+  type RemoteUploadResult,
 } from '@shared/ipc.js';
 import type { DeckWindowState } from './deckWindows.js';
+import type { RecentDecks } from './recentDecks.js';
 import {
+  HttpError,
+  LinkedFolders,
   MirrorAssetUploader,
   RemoteClient,
   RemoteRelay,
   SavedServers,
   bindingFor,
   fetchMissingAssets,
+  isInside,
   listMirrors,
   prepareMirror,
+  readRemoteLink,
   readRemoteState,
+  uploadDeck,
   writeRemoteBaseline,
 } from './remoteDecks.js';
 
 /**
  * IPC for server decks (remoteDecks.ts): the servers this desktop knows, the
- * decks on them, opening one as a mirror, and keeping an open mirror's
- * baseline and files in step while the editor's own bridge syncs the deck.
+ * decks on them, opening one as a mirror, putting a local deck on one, and
+ * keeping an open mirror's baseline and files in step while the editor's own
+ * bridge syncs the deck. Also the list of decks opened last, which says of
+ * each whether it is such a mirror.
  */
 
 interface RemoteIpcDeps {
@@ -37,6 +48,7 @@ interface RemoteIpcDeps {
   requireSession: (event: { sender: WebContents }) => DeckSession;
   reportOperation: (event: IpcMainInvokeEvent, id: unknown, message: string, ratio?: number | null) => void;
   openDeckForRequester: (state: DeckWindowState, dir: string, deck: Deck, event: IpcMainInvokeEvent) => DeckSession | null;
+  recentDecks: RecentDecks;
 }
 
 /** Where mirrors live: ~/.deckwerk/remote, or DECKWERK_REMOTE_ROOT (tests). */
@@ -47,6 +59,9 @@ export function remoteMirrorRoot(): string {
 let servers: SavedServers | null = null;
 const savedServers = (): SavedServers =>
   servers ??= new SavedServers(join(app.getPath('userData'), 'remote-servers.json'));
+
+/** Folders outside the mirror root that mirror a server deck (an upload made them so). */
+const linkedFolders = (): LinkedFolders => new LinkedFolders(join(remoteMirrorRoot(), 'linked-folders.json'));
 
 const relay = new RemoteRelay(async (origin) => (await savedServers().list()).some((s) => s.url === origin));
 let relayStarted: Promise<void> | null = null;
@@ -70,7 +85,7 @@ export async function closeRemoteDecks(): Promise<void> {
 }
 
 export function registerRemoteDeckIpc(deps: RemoteIpcDeps): void {
-  const { requireOwner, requireSession, reportOperation, openDeckForRequester } = deps;
+  const { requireOwner, requireSession, reportOperation, openDeckForRequester, recentDecks } = deps;
 
   const clientFor = async (serverId: string): Promise<RemoteClient> =>
     new RemoteClient((await savedServers().get(serverId)).url);
@@ -102,8 +117,20 @@ export function registerRemoteDeckIpc(deps: RemoteIpcDeps): void {
     await savedServers().remove(id);
   });
 
-  ipcMain.handle(IPC.remoteListing, async (_event, serverId: string): Promise<RemoteDeckListing> =>
-    (await clientFor(serverId)).listing());
+  ipcMain.handle(IPC.remoteServerInfo, async (_event, serverId: string): Promise<RemoteServerInfo> =>
+    (await clientFor(serverId)).info());
+
+  // A server that cannot be reached is an answer, not a failure: the Open
+  // dialog then offers the copies on this computer. One that answers with a
+  // refusal (no access) still throws, and is shown as the error it is.
+  ipcMain.handle(IPC.remoteListing, async (_event, serverId: string): Promise<RemoteListingResult> => {
+    try {
+      return { reachable: true, listing: await (await clientFor(serverId)).listing() };
+    } catch (error) {
+      if (error instanceof HttpError) throw error;
+      return { reachable: false, reason: error instanceof Error ? error.message : String(error) };
+    }
+  });
 
   ipcMain.handle(
     IPC.remoteOpen,
@@ -118,15 +145,48 @@ export function registerRemoteDeckIpc(deps: RemoteIpcDeps): void {
       if (!options?.offline) reportOperation(event, operationId, `Connecting to ${new URL(client.origin).host}`, 0);
       const { dir, deck } = await prepareMirror(client, remoteMirrorRoot(), deckId, (message, fraction) => {
         reportOperation(event, operationId, message, fraction ?? null);
-      }, { offline: Boolean(options?.offline) });
+      }, { offline: Boolean(options?.offline), linked: linkedFolders() });
       reportOperation(event, operationId, 'Opening the presentation', 0.95);
       return openDeckForRequester(requireOwner(event), dir, deck, event);
     },
   );
 
+  ipcMain.handle(
+    IPC.remoteUpload,
+    async (event, dir: string, request: RemoteUploadRequest, operationId?: string): Promise<RemoteUploadResult> => {
+      const session = requireSession(event);
+      if (resolve(dir) !== resolve(session.dir)) throw new Error('That presentation is no longer open in this window');
+      const client = await clientFor(request.serverId);
+      return uploadDeck(client, session.dir, {
+        name: String(request.name ?? ''),
+        folder: String(request.folder ?? ''),
+        access: request.access,
+        linked: linkedFolders(),
+      }, (message, fraction) => reportOperation(event, operationId, message, fraction ?? null));
+    },
+  );
+
   ipcMain.handle(IPC.remoteLocalCopies, async (_event, serverId: string): Promise<RemoteLocalCopy[]> => {
-    const copies = await listMirrors(remoteMirrorRoot(), (await savedServers().get(serverId)).url);
+    const copies = await listMirrors(remoteMirrorRoot(), (await savedServers().get(serverId)).url, linkedFolders());
     return copies.map(({ deckId, title, savedAt }) => ({ deckId, title, savedAt }));
+  });
+
+  ipcMain.handle(IPC.recentDecks, async (): Promise<RecentDeckEntry[]> => {
+    const [decks, saved] = await Promise.all([recentDecks.list(), savedServers().list()]);
+    return Promise.all(decks.map(async (deck): Promise<RecentDeckEntry> => {
+      const link = await readRemoteLink(deck.dir);
+      return {
+        dir: deck.dir,
+        // A server deck's title is whatever it was at the last sync, not at the last open.
+        title: link?.title || deck.title,
+        openedAt: deck.openedAt,
+        server: link && {
+          name: saved.find((s) => s.url === link.server)?.name ?? new URL(link.server).host,
+          url: link.server,
+          deckId: link.deckId,
+        },
+      };
+    }));
   });
 
   ipcMain.handle(IPC.remoteBinding, async (event, dir: string): Promise<RemoteDeckBinding | null> => {
@@ -137,6 +197,11 @@ export function registerRemoteDeckIpc(deps: RemoteIpcDeps): void {
       return null;
     }
     const saved = (await savedServers().list()).find((s) => s.url === remote.state.server) ?? null;
+    // A mirror kept somewhere of the person's choosing (an uploaded talk,
+    // perhaps moved since): remember where, so Open finds this copy.
+    if (!isInside(remoteMirrorRoot(), mirror)) {
+      await linkedFolders().add(mirror).catch((error) => console.error(`Could not remember ${mirror}:`, error));
+    }
     let wsUrl: string | null = null;
     if (saved) {
       await startRelay();

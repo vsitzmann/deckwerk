@@ -75,6 +75,7 @@ import { setSlideColorSource } from './colorPicker.js';
 import { slideColors } from '@shared/slideColors.js';
 import type { RemoteDeckBinding } from '@shared/ipc.js';
 import { showOpenDialog, type OpenChoice } from './openDialog.js';
+import { showUploadDialog } from './uploadDialog.js';
 import { reconcileOffline } from './remoteSync.js';
 
 applyUiTheme();
@@ -292,7 +293,7 @@ const welcome = new WelcomeScreen(el('canvas'), {
   openPresentation: () => openPresentation(),
   openFromServer: async () => {
     const servers = await window.api.remoteServers().catch(() => []);
-    await openPresentation(servers.length > 0 ? {} : { start: 'connect' });
+    await openPresentation({ start: servers.length > 0 ? 'server' : 'connect' });
   },
   importKeynote: importKeynotePresentation,
   importPowerPoint: importPowerPointPresentation,
@@ -558,8 +559,15 @@ function buildToolbar(): void {
     { label: 'Keynote…', action: () => void importKeynotePresentation() },
     { label: 'PowerPoint…', action: () => void importPowerPointPresentation() },
   ];
+  // A server deck is already where an upload would put it.
+  const uploadEntry = {
+    label: 'Upload to Server…',
+    action: () => void uploadToServer(),
+    hidden: () => remoteBinding !== null,
+  };
   const saveEntries = [
     { label: 'Deck…', action: () => void saveAsPresentation() },
+    uploadEntry,
     {
       label: 'Lossy export',
       options: [
@@ -593,6 +601,7 @@ function buildToolbar(): void {
       label: 'Save and export',
       options: [
         { label: 'Save As…', action: () => void saveAsPresentation() },
+        uploadEntry,
         { label: 'Export PDF…', action: () => void exportPdf() },
         { label: 'Export Web…', action: () => void exportWeb() },
       ],
@@ -1214,10 +1223,11 @@ async function newPresentation(): Promise<void> {
 }
 
 /**
- * Open: with a deck server known, one dialog covers this computer and the
- * servers; without one, straight to the system folder picker as always.
+ * Open: with a deck server known, one dialog covers the decks opened last,
+ * this computer and the servers; without one, straight to the system folder
+ * picker as always.
  */
-async function openPresentation(options: { start?: 'connect' } = {}): Promise<void> {
+async function openPresentation(options: { start?: 'connect' | 'server' } = {}): Promise<void> {
   let choice: OpenChoice | null;
   try {
     const servers = await window.api.remoteServers();
@@ -1228,6 +1238,21 @@ async function openPresentation(options: { start?: 'connect' } = {}): Promise<vo
   }
   if (!choice) return;
   if (choice.kind === 'local') return openLocalPresentation();
+  if (choice.kind === 'folder') {
+    // A recent deck is a folder on this computer either way. One that is the
+    // copy of a server deck connects once it is open, and syncs then.
+    const { dir, title } = choice;
+    try {
+      await runOperation(`Opening “${title}”…`, async (operation) => {
+        operation.update(`Reading ${dir.split(/[\\/]/).pop() ?? dir}/deck.json`);
+        const session = await window.api.openDeckPath(dir);
+        if (session) await adopt(session.dir, session.deck, operation);
+      });
+    } catch (err) {
+      setStatusMessage(`Open failed: ${err instanceof Error ? err.message : err}`);
+    }
+    return;
+  }
   const { serverId, deckId, title, offline } = choice;
   try {
     await runOperation(`Opening “${title}”…`, async (operation) => {
@@ -1236,6 +1261,57 @@ async function openPresentation(options: { start?: 'connect' } = {}): Promise<vo
     });
   } catch (err) {
     setStatusMessage(`Open failed: ${err instanceof Error ? err.message : err}`);
+  }
+}
+
+/** The folder an upload is under way for, from its dialog opening to the last file. */
+let uploadingDir: string | null = null;
+
+/**
+ * Put the open deck on a server. Its folder stays where it is and becomes the
+ * copy that stays in sync (remoteDecks.ts), so the editor goes live on it as
+ * soon as the upload is done.
+ */
+async function uploadToServer(): Promise<void> {
+  const dir = store.get().dir;
+  if (!dir) return;
+  if (remoteBinding) {
+    setStatusMessage(`This presentation is already on ${remoteBinding.serverName}, as ${remoteBinding.deckId}.`);
+    return;
+  }
+  if (activeSessionMode) {
+    setStatusMessage('End collaboration before uploading this presentation to a server.');
+    return;
+  }
+  // A second upload of the same folder would make a second deck of it.
+  if (uploadingDir === dir) {
+    setStatusMessage('This presentation is already being uploaded.');
+    return;
+  }
+  uploadingDir = dir;
+  try {
+    if ((await window.api.remoteServers()).length === 0) {
+      setStatusMessage('Connect to a server first (Connect to Server…), then upload.');
+      return;
+    }
+    const choice = await showUploadDialog(window.api, { name: dir.replace(/[\\/]+$/, '').split(/[\\/]/).pop() ?? '' });
+    if (!choice || store.get().dir !== dir) return;
+    const { serverName, ...request } = choice;
+    const result = await runOperation(`Uploading to ${serverName}…`, async (operation) => {
+      operation.update('Saving deck.json and theme.css');
+      await cssEditor.flush();
+      await save();
+      return window.api.uploadDeckToServer(dir, request, operation.id);
+    });
+    // The folder mirrors the server deck now: join it, as reopening would.
+    if (store.get().dir === dir) await attachRemoteDeck(dir);
+    setStatusMessage(result.problem
+      ? `On ${serverName} as ${result.deckId}, and this folder stays in sync with it — but ${result.problem}. Files still to go follow when the server is reachable.`
+      : `Uploaded to ${serverName} as ${result.deckId}. This folder now stays in sync with it.`);
+  } catch (err) {
+    setStatusMessage(`Upload failed: ${err instanceof Error ? err.message.replace(/^Error invoking remote method '[^']+': (Error: )?/, '') : err}`);
+  } finally {
+    if (uploadingDir === dir) uploadingDir = null;
   }
 }
 

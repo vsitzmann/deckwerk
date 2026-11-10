@@ -4113,9 +4113,50 @@ button.deck-picker-row.active { border-color: var(--accent); }
 .open-dialog-row strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
 .open-dialog-row span { flex: none; color: var(--muted); }
 .open-dialog-row.is-folder strong { color: var(--accent-text); }
+/* Recents: where each deck lives, said the way the toolbar's server chip says it. */
+.open-dialog-row.is-recent { justify-content: flex-start; align-items: baseline; }
+.open-dialog-row.is-recent strong { flex: 1; min-width: 0; }
+.open-dialog-row.is-recent .open-dialog-detail {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 60%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.open-dialog-row .open-dialog-origin {
+  display: inline-flex;
+  flex: 0 0 128px;
+  gap: 6px;
+  align-items: center;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font: 10.5px var(--mono);
+}
+.open-dialog-origin::before {
+  content: "";
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border: 1px solid var(--muted);
+  border-radius: 50%;
+}
+.open-dialog-row[data-origin="server"] .open-dialog-origin { color: var(--accent-text, var(--accent)); }
+.open-dialog-row[data-origin="server"] .open-dialog-origin::before { border-color: var(--accent); background: var(--accent); }
 .open-dialog-connect { display: flex; gap: 8px; align-items: flex-end; }
 .open-dialog-connect .field { flex: 1; margin-bottom: 0; }
 .open-dialog-spacer { flex: 1; }
+
+/* Upload to server: where a local deck goes, and who may open it there (uploadDialog.ts). */
+.upload-dialog { width: min(520px, calc(100vw - 56px)); }
+.upload-dialog .field { margin-bottom: 0; }
+.upload-dialog-message { margin: 0; color: var(--muted); line-height: 1.5; }
+.upload-dialog-note { min-height: 3em; }
+.upload-dialog-note.is-error { color: var(--danger); }
+.upload-dialog-access { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.upload-dialog-access[hidden], .upload-dialog .field[hidden] { display: none; }
 
 /* Sync changes after offline edits on both sides (mergeDialog.ts). */
 .merge-dialog { width: min(720px, calc(100vw - 56px)); }

@@ -1,17 +1,19 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { createReadStream, createWriteStream, existsSync, watch, type FSWatcher } from 'node:fs';
 import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
-import { createServer, type IncomingMessage, type Server } from 'node:http';
+import { createServer, request as httpRequest, type IncomingMessage, type Server } from 'node:http';
+import { request as httpsRequest } from 'node:https';
 import type { Duplex } from 'node:stream';
 import { Readable, Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
-import { dirname, join, relative, sep } from 'node:path';
+import { basename, dirname, join, relative, resolve, sep } from 'node:path';
 import { WebSocket, WebSocketServer, type RawData } from 'ws';
 import { parseDeck, type Deck } from '../shared/deck.js';
 import { renameRetiredFields } from '../shared/fieldAliases.js';
 import { deckReferencedAssets } from '../shared/mediaIndex.js';
 import type { RemoteDeckBinding, RemoteDeckListing, RemoteServerInfo } from '../shared/ipc.js';
-import { saveDeck, saveTheme } from './deckStore.js';
+import { buildZip, type ZipInput } from '../shared/zip.js';
+import { REMOTE_STATE_DIR, loadDeck, loadTheme, saveDeck, saveTheme } from './deckStore.js';
 
 /**
  * Server decks on the desktop.
@@ -25,6 +27,11 @@ import { saveDeck, saveTheme } from './deckStore.js';
  * the three-way merge that runs when a connection comes back after edits on
  * both sides (shared/deckMerge.ts, CollabBridge's OfflineSync).
  *
+ * A mirror normally lives under ~/.deckwerk/remote, made by opening a server
+ * deck. A deck that started on this computer goes the other way (`uploadDeck`):
+ * the server gets a copy, and the folder it came from, wherever it is, becomes
+ * the mirror (`LinkedFolders` remembers where).
+ *
  * Live editing is the browser's protocol, spoken by the editor's own
  * CollabBridge. The editor's content security policy only lets it open
  * sockets to this machine, so it talks to a relay here (`RemoteRelay`) that
@@ -34,7 +41,7 @@ import { saveDeck, saveTheme } from './deckStore.js';
  * Nothing in this file imports Electron; index.ts wires it to IPC.
  */
 
-export const REMOTE_STATE_DIR = '.deckwerk-remote';
+export { REMOTE_STATE_DIR };
 const STATE_FILE = 'sync.json';
 const BASE_FILE = 'base.json';
 const BRIDGE_HEADERS = { 'x-deckwerk-bridge': '1' };
@@ -143,16 +150,20 @@ export class RemoteClient {
       throw new Error(`Could not reach ${this.origin}: ${describeNetworkError(error)}`);
     }
     if (!response.ok) {
-      const body = await response.text().catch(() => '');
-      let message = body.slice(0, 300);
-      try {
-        message = (JSON.parse(body) as { error?: string }).error ?? message;
-      } catch {
-        // not JSON
-      }
-      throw new HttpError(response.status, `${this.origin} answered ${response.status}${message ? `: ${message}` : ''}`);
+      throw new HttpError(response.status, this.refusal(response.status, await response.text().catch(() => '')));
     }
     return response;
+  }
+
+  /** What the server said when it refused, in a sentence. */
+  private refusal(status: number, body: string): string {
+    let message = body.slice(0, 300);
+    try {
+      message = (JSON.parse(body) as { error?: string }).error ?? message;
+    } catch {
+      // not JSON
+    }
+    return `${this.origin} answered ${status}${message ? `: ${message}` : ''}`;
   }
 
   private async json<T>(path: string, params: Record<string, string> = {}): Promise<T> {
@@ -210,22 +221,91 @@ export class RemoteClient {
     }
   }
 
-  /** `unchanged` when the server already has it, `conflict` when it has a different file there. */
-  async upload(deckId: string, path: string, absolute: string): Promise<'written' | 'unchanged' | 'conflict'> {
-    try {
-      const response = await this.request('/api/agent-mirror/file', { deck: deckId, path }, {
+  /**
+   * `unchanged` when the server already has it, `conflict` when it has a
+   * different file there. The file is streamed from disk, never read whole: a
+   * talk's clips are hundreds of megabytes and several go up at once.
+   * `onBytes` hears each chunk's length as it leaves, for progress.
+   */
+  async upload(
+    deckId: string,
+    path: string,
+    absolute: string,
+    onBytes?: (bytes: number) => void,
+  ): Promise<'written' | 'unchanged' | 'conflict'> {
+    const { size } = await stat(absolute);
+    const url = new URL(this.url('/api/agent-mirror/file', { deck: deckId, path }));
+    const { status, body } = await new Promise<{ status: number; body: string }>((settle, reject) => {
+      const fail = (error: unknown): void => {
+        reject(new Error(`Could not reach ${this.origin}: ${describeNetworkError(error)}`));
+      };
+      const source = createReadStream(absolute);
+      const outgoing = (url.protocol === 'https:' ? httpsRequest : httpRequest)(url, {
         method: 'PUT',
-        body: await readFile(absolute),
-        signal: AbortSignal.timeout(30 * 60_000),
+        headers: { ...BRIDGE_HEADERS, 'content-length': String(size), 'content-type': 'application/octet-stream' },
+      }, (response) => {
+        const refused = (response.statusCode ?? 0) >= 300;
+        // A refusal can arrive before the file has gone up (no access, a
+        // different file already there): stop sending the rest.
+        if (refused) {
+          source.unpipe(outgoing);
+          source.destroy();
+        }
+        const chunks: Buffer[] = [];
+        response.on('data', (chunk: Buffer) => chunks.push(chunk));
+        response.on('error', fail);
+        response.on('end', () => {
+          settle({ status: response.statusCode ?? 0, body: Buffer.concat(chunks).toString('utf8') });
+          if (refused) outgoing.destroy();
+        });
       });
-      const body = await response.json() as { status?: string };
-      return body.status === 'unchanged' ? 'unchanged' : 'written';
-    } catch (error) {
-      if (error instanceof HttpError && error.status === 409) return 'conflict';
-      throw error;
+      // Only silence has a deadline: a clip can take minutes, a dead line says nothing.
+      outgoing.setTimeout(UPLOAD_IDLE_MS, () => {
+        outgoing.destroy(Object.assign(new Error('timed out'), { name: 'TimeoutError' }));
+      });
+      outgoing.on('error', fail);
+      source.on('data', (chunk) => onBytes?.(chunk.length));
+      source.on('error', (error) => outgoing.destroy(error));
+      source.pipe(outgoing);
+    });
+    if (status === 409) return 'conflict';
+    if (status < 200 || status >= 300) throw new HttpError(status, this.refusal(status, body));
+    try {
+      return (JSON.parse(body) as { status?: string }).status === 'unchanged' ? 'unchanged' : 'written';
+    } catch {
+      return 'written';
     }
   }
+
+  /**
+   * Make a new deck on the server from a deck archive (shared/zip.ts) and
+   * return its id. The server cleans the name, so the id is its answer, not
+   * `folder/name` as asked.
+   */
+  async createFromArchive(name: string, folder: string, archive: Uint8Array<ArrayBuffer>): Promise<string> {
+    const response = await this.request('/api/import-deck', { name, folder }, {
+      method: 'POST',
+      headers: { 'content-type': 'application/zip' },
+      body: archive,
+      signal: AbortSignal.timeout(5 * 60_000),
+    });
+    const { id } = await response.json() as { id?: string };
+    if (!id) throw new Error(`${this.origin} did not say where it put the presentation`);
+    return id;
+  }
+
+  /** Who may open a deck (an access-controlled server only; the owner or the admin may say). */
+  async setAccess(deckId: string, access: { visibility: 'private' | 'public'; publicRole?: 'view' | 'edit' }): Promise<void> {
+    await this.request('/api/access', { deck: deckId }, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(access),
+    });
+  }
 }
+
+/** How long an upload may send nothing, or hear nothing back, before the line counts as dead. */
+const UPLOAD_IDLE_MS = 120_000;
 
 export class HttpError extends Error {
   constructor(readonly status: number, message: string) {
@@ -234,7 +314,9 @@ export class HttpError extends Error {
 }
 
 function describeNetworkError(error: unknown): string {
-  const cause = (error as { cause?: { code?: string; message?: string } })?.cause;
+  // fetch wraps the socket's error as `cause`; node:http hands it over as it is.
+  const cause = (error as { cause?: { code?: string; message?: string } })?.cause
+    ?? (error as { code?: string; message?: string } | undefined);
   if (error instanceof Error && error.name === 'TimeoutError') return 'no answer (timed out)';
   if (cause?.code === 'ECONNREFUSED') return 'nothing is listening there';
   if (cause?.code === 'ENOTFOUND') return 'unknown host';
@@ -275,15 +357,85 @@ export async function readRemoteState(dir: string): Promise<{ state: RemoteSyncS
   return { state, base };
 }
 
+/**
+ * Which server deck a folder mirrors, from its sync state alone: no deck is
+ * read, so this is cheap enough to ask of every folder a list shows. Null for
+ * a folder that is not an openable copy (no state, or a first download that
+ * never finished and so left no deck.json).
+ */
+export async function readRemoteLink(dir: string): Promise<RemoteSyncState | null> {
+  try {
+    const state = JSON.parse(await readFile(join(dir, REMOTE_STATE_DIR, STATE_FILE), 'utf8')) as RemoteSyncState;
+    if (state.version !== 1 || typeof state.server !== 'string' || typeof state.deckId !== 'string') return null;
+    return existsSync(join(dir, 'deck.json')) ? state : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Deck folders outside the mirror root that mirror a server deck: a talk
+ * uploaded from Documents stays in Documents. Each folder says which deck it
+ * mirrors itself (`.deckwerk-remote/`); this only remembers where to look,
+ * most recently used first, so the Open dialog lists such a copy and opens it
+ * rather than downloading a second one.
+ */
+export class LinkedFolders {
+  constructor(private readonly file: string) {}
+
+  async list(): Promise<string[]> {
+    try {
+      const raw = JSON.parse(await readFile(this.file, 'utf8')) as { folders?: unknown };
+      return Array.isArray(raw.folders) ? raw.folders.filter((dir): dir is string => typeof dir === 'string') : [];
+    } catch {
+      return [];
+    }
+  }
+
+  /** Remember `dir`, ahead of the others: the copy used last is the one to open. */
+  async add(dir: string): Promise<void> {
+    const folder = resolve(dir);
+    const folders = await this.list();
+    if (folders[0] === folder) return;
+    await atomicWrite(this.file, `${JSON.stringify({ folders: [folder, ...folders.filter((d) => d !== folder)] }, null, 2)}\n`);
+  }
+
+  /** The linked folders that still mirror a deck, with what each mirrors. A folder that stopped is forgotten. */
+  async mirrors(): Promise<Array<{ dir: string; state: RemoteSyncState }>> {
+    const folders = await this.list();
+    const found: Array<{ dir: string; state: RemoteSyncState }> = [];
+    for (const dir of folders) {
+      const state = await readRemoteLink(dir);
+      if (state) found.push({ dir, state });
+    }
+    if (found.length !== folders.length) {
+      await atomicWrite(this.file, `${JSON.stringify({ folders: found.map((entry) => entry.dir) }, null, 2)}\n`).catch(() => undefined);
+    }
+    return found;
+  }
+}
+
+/** Whether `dir` is inside `root` (a mirror in its usual place needs no remembering). */
+export function isInside(root: string, dir: string): boolean {
+  const path = relative(resolve(root), resolve(dir));
+  return path !== '' && !path.startsWith('..') && !path.startsWith(sep) && !/^[a-zA-Z]:/.test(path);
+}
+
 export interface LocalMirror { deckId: string; title: string; savedAt: string; dir: string }
 
 /**
  * The decks of `origin` already copied to this computer, found by their sync
  * state: what the Open dialog offers when the server cannot be reached.
- * Reads only each sync.json, never a deck.
+ * Reads only each sync.json, never a deck. A deck with a copy both in a
+ * linked folder and under the mirror root is listed once, as the linked one.
  */
-export async function listMirrors(root: string, origin: string): Promise<LocalMirror[]> {
+export async function listMirrors(root: string, origin: string, linked?: LinkedFolders): Promise<LocalMirror[]> {
   const found: LocalMirror[] = [];
+  const add = (dir: string, state: RemoteSyncState): void => {
+    if (state.server !== origin || found.some((mirror) => mirror.deckId === state.deckId)) return;
+    found.push({ deckId: state.deckId, title: state.title || state.deckId, savedAt: state.savedAt, dir });
+  };
+  for (const { dir, state } of await linked?.mirrors() ?? []) add(dir, state);
   async function walk(dir: string, depth: number): Promise<void> {
     let entries;
     try {
@@ -292,14 +444,9 @@ export async function listMirrors(root: string, origin: string): Promise<LocalMi
       return;
     }
     if (entries.some((entry) => entry.isDirectory() && entry.name === REMOTE_STATE_DIR)) {
-      try {
-        const state = JSON.parse(await readFile(join(dir, REMOTE_STATE_DIR, STATE_FILE), 'utf8')) as RemoteSyncState;
-        if (state.version === 1 && state.server === origin && existsSync(join(dir, 'deck.json'))) {
-          found.push({ deckId: state.deckId, title: state.title || state.deckId, savedAt: state.savedAt, dir });
-        }
-      } catch {
-        // A copy whose first download never finished: not openable offline.
-      }
+      // A copy whose first download never finished has no state: not openable offline.
+      const state = await readRemoteLink(dir);
+      if (state) add(dir, state);
       return;
     }
     if (depth >= 8) return;
@@ -355,10 +502,15 @@ export async function prepareMirror(
   root: string,
   deckId: string,
   progress: MirrorProgress = () => {},
-  /** `offline`: the server is known to be unreachable; open the copy without asking it. */
-  options: { offline?: boolean } = {},
+  /**
+   * `offline`: the server is known to be unreachable; open the copy without asking it.
+   * `linked`: folders elsewhere that mirror a server deck; one of this deck is the copy to open.
+   */
+  options: { offline?: boolean; linked?: LinkedFolders } = {},
 ): Promise<{ dir: string; deck: Deck; fresh: boolean }> {
-  const dir = mirrorDirFor(root, client.origin, deckId);
+  const elsewhere = (await options.linked?.mirrors() ?? [])
+    .find(({ state }) => state.server === client.origin && state.deckId === deckId);
+  const dir = elsewhere?.dir ?? mirrorDirFor(root, client.origin, deckId);
   const existing = await readRemoteState(dir).catch(() => null);
   if (existing && existsSync(join(dir, 'deck.json'))) {
     if (existing.state.server !== client.origin || existing.state.deckId !== deckId) {
@@ -483,16 +635,205 @@ export async function syncMirrorFiles(
     report();
   });
   if (wanted.length > 0) report(true);
+  const mine = (await localAssetFiles(dir)).filter((path) => !remotePaths.has(path));
+  const { uploaded, conflicts } = await uploadAssets(client, dir, deckId, mine, progress);
+  return { downloaded, uploaded, conflicts };
+}
+
+/**
+ * Send files of the mirror up, a few at a time, saying how far along it is
+ * in files and bytes. Fewer streams than a download takes: an uplink is the
+ * narrow direction, and the server writes each arriving file to its disk.
+ * `span` is the stretch of the caller's progress bar the uploads fill.
+ */
+export async function uploadAssets(
+  client: RemoteClient,
+  dir: string,
+  deckId: string,
+  paths: string[],
+  progress: MirrorProgress = () => {},
+  span: [from: number, to: number] = [0.9, 0.9],
+): Promise<{ uploaded: string[]; conflicts: string[] }> {
   const uploaded: string[] = [];
   const conflicts: string[] = [];
-  const mine = (await localAssetFiles(dir)).filter((path) => !remotePaths.has(path));
-  for (const [index, path] of mine.entries()) {
-    progress(`Uploading ${path} (${index + 1} of ${mine.length})`, 0.9);
-    const result = await client.upload(deckId, path, join(dir, path));
-    if (result === 'conflict') conflicts.push(path);
-    else if (result === 'written') uploaded.push(path);
+  if (paths.length === 0) return { uploaded, conflicts };
+  const sizes = new Map<string, number>();
+  for (const path of paths) sizes.set(path, (await stat(join(dir, path))).size);
+  const totalBytes = [...sizes.values()].reduce((sum, size) => sum + size, 0);
+  let bytes = 0;
+  let done = 0;
+  let lastReport = 0;
+  const active: string[] = [];
+  const report = (force = false): void => {
+    const now = Date.now();
+    if (!force && now - lastReport < 250) return;
+    lastReport = now;
+    const share = totalBytes ? Math.min(1, bytes / totalBytes) : done / paths.length;
+    progress(
+      `Uploading ${active.at(-1) ?? 'files'} (${done} of ${paths.length} files, `
+        + `${formatBytes(Math.min(bytes, totalBytes))} of ${formatBytes(totalBytes)})`,
+      span[0] + (span[1] - span[0]) * share,
+    );
+  };
+  await inParallel(paths, UPLOAD_STREAMS, async (path) => {
+    active.push(path);
+    report();
+    try {
+      const result = await withRetries(async () => {
+        let sent = 0;
+        try {
+          return await client.upload(deckId, path, join(dir, path), (chunk) => {
+            sent += chunk;
+            bytes += chunk;
+            report();
+          });
+        } catch (error) {
+          bytes -= sent;
+          throw error;
+        }
+      });
+      if (result === 'conflict') conflicts.push(path);
+      else if (result === 'written') uploaded.push(path);
+    } finally {
+      active.splice(active.indexOf(path), 1);
+    }
+    done++;
+    report();
+  });
+  report(true);
+  return { uploaded, conflicts };
+}
+
+const UPLOAD_STREAMS = 3;
+
+// ---------------------------------------------------------------- uploading a local deck
+
+export interface UploadDeckOptions {
+  /** What to call the deck on the server; the server cleans the name and has the last word. */
+  name: string;
+  /** The server folder to file it in; '' is the top level. */
+  folder: string;
+  /** Who may open it, on an access-controlled server. Absent: as the server makes it (only the uploader). */
+  access?: { visibility: 'private' | 'public'; publicRole?: 'view' | 'edit' };
+  /** Where to remember the folder, so the Open dialog finds this copy. */
+  linked?: LinkedFolders;
+}
+
+export interface UploadedDeck {
+  deckId: string;
+  /** How many files went up. */
+  uploaded: number;
+  /**
+   * What did not get through, when the line dropped partway. The deck is on
+   * the server and the folder mirrors it, so the next sync sends the files.
+   */
+  problem: string | null;
+}
+
+/** An archive is held in memory at both ends; media belongs in assets/, which is streamed. */
+const ARCHIVE_LIMIT = 256 * 1024 ** 2;
+
+/**
+ * Put a deck that lives on this computer on a server, and make its folder
+ * the mirror of the result — where it is, not a second copy.
+ *
+ * The deck and its stylesheet go first, as a deck archive the server unpacks
+ * into a new deck; the folder is bound to it the moment the server has it,
+ * and only then do the files under assets/ go up. A connection that drops
+ * after that therefore leaves a mirror with uploads outstanding, which every
+ * later sync resumes, rather than a deck on the server that nothing here
+ * knows about. What did not get through is reported, not thrown.
+ */
+export async function uploadDeck(
+  client: RemoteClient,
+  dir: string,
+  options: UploadDeckOptions,
+  progress: MirrorProgress = () => {},
+): Promise<UploadedDeck> {
+  const bound = await readRemoteLink(dir);
+  if (bound) throw new Error(`This presentation is already on ${new URL(bound.server).host}, as ${bound.deckId}`);
+  progress(`Reading ${basename(dir)}/deck.json`, 0.01);
+  const deck = await loadDeck(dir);
+  const archive = await deckArchive(dir, deck);
+
+  progress(`Creating “${options.name}” on ${new URL(client.origin).host}`, 0.03);
+  const deckId = await client.createFromArchive(options.name, options.folder, archive);
+
+  // Bound at once, from what was sent: nothing between the server having the
+  // deck and this folder knowing so can fail for want of a connection.
+  progress(`Linking ${basename(dir)} to ${deckId}`, 0.06);
+  const where = { server: client.origin, deckId, title: deck.title };
+  await writeRemoteBaseline(dir, where, { deck, themeCss: await loadTheme(dir, deck.theme), seq: 0 });
+  await options.linked?.add(dir);
+
+  const problems: string[] = [];
+  const reason = (error: unknown): string => (error instanceof Error ? error.message : String(error));
+  try {
+    // The baseline proper is what the server made of it. Where that differs
+    // from the deck here (another version's defaults), the first connection
+    // merges, rather than the server's reading replacing this one unseen.
+    const [served, themeCss] = await Promise.all([client.deck(deckId), client.theme(deckId)]);
+    await writeRemoteBaseline(dir, { ...where, title: served.title }, { deck: served, themeCss, seq: 0 });
+  } catch {
+    // Unreachable already: the deck as sent is a sound baseline too.
   }
-  return { downloaded, uploaded, conflicts };
+  if (options.access) {
+    try {
+      await client.setAccess(deckId, options.access);
+    } catch (error) {
+      problems.push(`who can open it could not be set, so it is still restricted to you (${reason(error)})`);
+    }
+  }
+  let uploaded = 0;
+  try {
+    const there = new Set((await client.files(deckId)).map((file) => file.path));
+    // What the slides show goes first: the deck is usable before a folder's leftovers have gone up.
+    const shown = new Set(referencedAssets(deck));
+    const mine = (await localAssetFiles(dir)).filter((path) => !there.has(path))
+      .sort((a, b) => Number(shown.has(b)) - Number(shown.has(a)) || a.localeCompare(b));
+    const result = await uploadAssets(client, dir, deckId, mine, progress, [0.08, 0.98]);
+    uploaded = result.uploaded.length;
+  } catch (error) {
+    problems.push(`not every file went up (${reason(error)})`);
+  }
+  return { deckId, uploaded, problem: problems.join('; ') || null };
+}
+
+/**
+ * The part of a deck folder that travels as an archive: deck.json, the
+ * stylesheet, and whatever else the two point at outside assets/ (a
+ * hand-kept font or figure). Not the folder's other contents — a talk folder
+ * collects raw footage and exports that are nobody's to publish.
+ */
+async function deckArchive(dir: string, deck: Deck): Promise<Uint8Array<ArrayBuffer>> {
+  const names = new Set<string>(['deck.json']);
+  const themeFile = join(dir, deck.theme);
+  const themeCss = existsSync(themeFile) ? await readFile(themeFile, 'utf8') : '';
+  const pointedAt = [
+    ...deckReferencedAssets(deck),
+    ...[...themeCss.matchAll(/url\(\s*['"]?([^'")]+?)['"]?\s*\)/g)].map((match) => match[1].replace(/[?#].*$/, '')),
+  ];
+  for (const path of pointedAt) {
+    const parts = path.split('/');
+    if (path.startsWith('assets/') || /^[a-z][a-z0-9+.-]*:/i.test(path) || path.startsWith('/')) continue;
+    if (parts.some((part) => part === '' || part === '..' || part.startsWith('.'))) continue;
+    const info = await stat(join(dir, path)).catch(() => null);
+    if (info?.isFile()) names.add(path);
+  }
+  const files: ZipInput[] = [];
+  let total = 0;
+  for (const name of names) {
+    const data = await readFile(join(dir, name));
+    total += data.length;
+    if (total > ARCHIVE_LIMIT) {
+      throw new Error(
+        `${basename(dir)} keeps more than ${formatBytes(ARCHIVE_LIMIT)} of what its slides show outside assets/ `
+          + `(${name}). Move those files into assets/ and upload again.`,
+      );
+    }
+    files.push({ name, data });
+  }
+  return buildZip(files);
 }
 
 /** Fetch every asset `deck` refers to that the mirror does not have yet. */

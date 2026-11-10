@@ -18,7 +18,9 @@ import { OfflineReplica } from './support/offlineReplica.js';
  * The real desktop app editing a deck on a real deck server, through a link
  * the test cuts: opened from the Open dialog, edited live by typing, edited
  * offline on both sides, merged through the merge dialog, reopened after a
- * quit while offline, and fed a picture a collaborator added.
+ * quit while offline, and fed a picture a collaborator added. And the other
+ * way round: a deck made on this computer uploaded to the server from the
+ * editor, its folder kept in sync from then on, and found again under Recents.
  */
 
 const DECK_ID = 'lab/talk';
@@ -113,8 +115,8 @@ async function quit(): Promise<void> {
 }
 
 /** A browser-style collaborator talking to the server directly. */
-async function peer(): Promise<OfflineReplica> {
-  const r = new OfflineReplica(`ws://127.0.0.1:${server!.port}/ws?deck=${encodeURIComponent(DECK_ID)}`, {
+async function peer(deckId = DECK_ID): Promise<OfflineReplica> {
+  const r = new OfflineReplica(`ws://127.0.0.1:${server!.port}/ws?deck=${encodeURIComponent(deckId)}`, {
     name: 'Peer', plain: true,
   });
   replicas.push(r.connect());
@@ -137,9 +139,16 @@ async function chipState(cdp: Cdp, state: string, what: string): Promise<void> {
   await eventually(() => chip(cdp), what, (value) => value?.state === state, 20_000);
 }
 
-async function mirroredDeck(): Promise<Deck> {
-  return parseDeck(JSON.parse(await readFile(join(mirror(), 'deck.json'), 'utf8')));
+async function deckIn(dir: string): Promise<Deck> {
+  return parseDeck(JSON.parse(await readFile(join(dir, 'deck.json'), 'utf8')));
 }
+
+const mirroredDeck = (): Promise<Deck> => deckIn(mirror());
+
+/** The folder of the deck the window has open. */
+const openDir = (cdp: Cdp) => cdp.evaluate<string | null>('window.api.getDeck().then((session) => session?.dir ?? null)');
+
+const railCount = (cdp: Cdp) => cdp.evaluate<number>(`document.querySelectorAll('.rail-item').length`);
 
 /** Go to a slide by its rail row, then type at the end of its title. */
 async function typeAtEndOfTitle(cdp: Cdp, slideId: string, elementId: string, text: string): Promise<void> {
@@ -274,6 +283,10 @@ describe('desktop editing a server deck', () => {
     await eventually(() => cdp.evaluate<boolean>(`Boolean(document.querySelector(${JSON.stringify(row)}))`),
       'the copies on this computer', Boolean, 20_000);
     expect(await cdp.evaluate<string>(`document.querySelector(${JSON.stringify(row)}).textContent`)).toMatch(/Server talk.*last synced/);
+    expect(await cdp.evaluate<string>(`document.querySelector('.open-dialog-offline-lead').textContent`)).toBe(
+      `You are offline: 127.0.0.1:${link!.port} cannot be reached. The following presentations are available offline `
+      + 'and will be synced whenever you are online again:',
+    );
     await shot(cdp, '9-offline-open');
     await cdp.click(row, 'the copy of the deck');
     await chipState(cdp, 'offline', 'the copy to open offline');
@@ -288,6 +301,146 @@ describe('desktop editing a server deck', () => {
     await chipState(cdp, 'online', 'back online');
     const other = await peer();
     await other.until(() => html(other.deck, 't1').includes('on the plane'), 'the offline edit on the server', 20_000);
+  }, 180_000);
+
+  it('uploads a deck from this computer, keeps its folder in sync, and finds it again under Recents', async () => {
+    // Two decks that live on this computer: a talk to put on the server, and a draft that stays here.
+    const localDir = join(workDir, 'talks', '2611_CORL');
+    const draftDir = join(workDir, 'talks', 'draft');
+    const corl = parseDeck({ ...talk(), title: 'CoRL keynote' });
+    corl.slides[1].elements.push({ id: 'pic', type: 'image', x: 0, y: 600, w: 200, h: 200, src: 'assets/pixel.png' } as never);
+    await mkdir(join(localDir, 'assets'), { recursive: true });
+    await saveDeck(localDir, corl);
+    await writeFile(join(localDir, 'theme.css'), '.role-title { font-family: Arial, sans-serif; color: #114; }\n');
+    await writeFile(join(localDir, 'assets', 'pixel.png'), PNG);
+    await mkdir(draftDir, { recursive: true });
+    await saveDeck(draftDir, parseDeck({ ...talk(), title: 'A draft' }));
+
+    // The draft is opened once, so Recents has a deck of each kind to show later.
+    editor = await launch([draftDir]);
+    await eventually(() => railCount(editor!), 'the draft to open', (count) => count === 3);
+    await quit();
+
+    editor = await launch([localDir]);
+    const cdp = editor;
+    await eventually(() => railCount(cdp), 'the local deck to open', (count) => count === 3);
+    expect(await chip(cdp)).toBeNull();
+    await cdp.evaluate(`window.api.addRemoteServer(${JSON.stringify(serverUrl())}).then(() => true)`);
+
+    // Save As… → Upload to Server… (in the File menu when the toolbar is compact).
+    const compact = await cdp.evaluate<boolean>(`[...document.querySelectorAll('.shape-menu-trigger')]
+      .some((trigger) => trigger.textContent.trim() === 'File' && trigger.getClientRects().length > 0)`);
+    await cdp.clickByText('.shape-menu-trigger', compact ? 'File' : 'Save As…');
+    await cdp.clickByText('.shape-menu-item', 'Upload to Server…');
+    await eventually(() => cdp.evaluate<string[]>(
+      `[...(document.querySelector('.upload-dialog [name="folder"]')?.options ?? [])].map((option) => option.value)`),
+    'the server folders in the upload dialog', (folders) => folders.includes('lab'));
+    expect(await cdp.evaluate<string>(`document.querySelector('.upload-dialog [name="name"]').value`)).toBe('2611_CORL');
+    await cdp.evaluate(`(() => {
+      const folder = document.querySelector('.upload-dialog [name="folder"]');
+      folder.value = 'lab';
+      folder.dispatchEvent(new Event('change', { bubbles: true }));
+    })()`);
+    expect(await cdp.evaluate<string>(`document.querySelector('.upload-dialog-note').textContent`)).toBe(
+      `It will be “lab/2611_CORL” on 127.0.0.1:${link!.port}. Everyone who can reach this server can open and change it.`,
+    );
+    await shot(cdp, '10-upload-dialog');
+    await cdp.clickByText('.upload-dialog button', 'Upload');
+
+    // The deck is on the server, and this window is live on it.
+    await chipState(cdp, 'online', 'the uploaded deck to go live');
+    await shot(cdp, '11-uploaded');
+    const onServer = join(rootDir, 'lab', '2611_CORL');
+    expect((await deckIn(onServer)).title).toBe('CoRL keynote');
+    expect(await readFile(join(onServer, 'assets', 'pixel.png'))).toEqual(PNG);
+    expect(await cdp.evaluate<string>(`document.getElementById('status').textContent`))
+      .toMatch(/Uploaded to 127\.0\.0\.1:\d+ as lab\/2611_CORL\. This folder now stays in sync with it\./);
+    // Its folder is where it was, and is the copy that syncs: no second one under the mirror root.
+    expect(await openDir(cdp)).toBe(localDir);
+    expect(existsSync(join(localDir, '.deckwerk-remote', 'sync.json'))).toBe(true);
+    expect(existsSync(mirrorDirFor(remoteRoot, serverUrl(), 'lab/2611_CORL'))).toBe(false);
+
+    // In sync both ways, live.
+    const other = await peer('lab/2611_CORL');
+    expect(other.deck!.slides).toHaveLength(3);
+    await typeAtEndOfTitle(cdp, 's1', 't1', ' from the laptop');
+    await other.until(() => html(other.deck, 't1').includes('from the laptop'), 'typing here to reach the server', 20_000);
+    other.edit('Peer', setHtml('t2', 'From the server'));
+    await eventually(async () => html(await deckIn(localDir), 't2'), 'the peer edit in the local folder',
+      (value) => value === 'From the server', 20_000);
+
+    // …and across an offline stretch.
+    link!.cut();
+    await chipState(cdp, 'offline', 'offline');
+    await typeAtEndOfTitle(cdp, 's3', 't3', ' on the plane');
+    await eventually(async () => html(await deckIn(localDir), 't3'), 'the offline edit in the local folder',
+      (value) => value.includes('on the plane'), 20_000);
+    link!.restore();
+    await cdp.click('.remote-status', 'retry now');
+    await other.until(() => html(other.deck, 't3').includes('on the plane'), 'the offline edit to reach the server', 20_000);
+
+    // A server deck has nowhere to be uploaded to: the entry is gone.
+    await cdp.clickByText('.shape-menu-trigger', compact ? 'File' : 'Save As…');
+    expect(await cdp.evaluate<string[]>(`[...document.querySelectorAll('.shape-menu-item')].map((item) => item.textContent)`))
+      .not.toContain('Upload to Server…');
+    await cdp.key('Escape', 27);
+    // The server's own tab knows this folder as its copy of the deck, and opens it rather than a second download.
+    const serverId = await cdp.evaluate<string>('window.api.remoteServers().then((servers) => servers[0].id)');
+    expect(await cdp.evaluate<string[]>(
+      `window.api.remoteLocalCopies(${JSON.stringify(serverId)}).then((copies) => copies.map((copy) => copy.deckId))`,
+    )).toEqual(['lab/2611_CORL']);
+    expect(await cdp.evaluate<string | null>(
+      `window.api.openRemoteDeck(${JSON.stringify(serverId)}, 'lab/2611_CORL').then((session) => session?.dir ?? null)`,
+    )).toBe(localDir);
+    await quit();
+
+    // Next launch: Open starts on Recents, with the server deck and the local one told apart.
+    editor = await launch();
+    const again = editor;
+    await eventually(() => again.evaluate<boolean>(`Boolean(document.querySelector('[data-action="open"]')?.getClientRects().length)`),
+      'the welcome screen');
+    await again.click('[data-action="open"]', 'Open presentation');
+    await eventually(() => again.evaluate<number>(`document.querySelectorAll('.open-dialog-row.is-recent').length`),
+      'the recent decks', (count) => count === 2);
+    expect(await again.evaluate<string[]>(`[...document.querySelectorAll('.open-dialog [role="tab"]')]
+      .map((tab) => tab.textContent + (tab.getAttribute('aria-selected') === 'true' ? ' *' : ''))`))
+      .toEqual(['Recents *', 'This computer', `127.0.0.1:${link!.port}`, '+ Server…']);
+    expect(await again.evaluate<string[][]>(`[...document.querySelectorAll('.open-dialog-row.is-recent')]
+      .map((row) => [row.dataset.origin, row.querySelector('.open-dialog-origin').textContent, row.querySelector('strong').textContent])`))
+      .toEqual([
+        ['server', `127.0.0.1:${link!.port}`, 'CoRL keynote'],
+        ['local', 'This computer', 'A draft'],
+      ]);
+    // The two kinds do not look alike: the server one carries the accent.
+    const [serverMark, localMark] = await again.evaluate<string[]>(`[...document.querySelectorAll('.open-dialog-row.is-recent .open-dialog-origin')]
+      .map((mark) => getComputedStyle(mark).color + ' / ' + getComputedStyle(mark, '::before').backgroundColor)`);
+    expect(serverMark).not.toBe(localMark);
+    await shot(again, '12-recents');
+
+    await again.click('.open-dialog-row.is-recent[data-origin="server"]', 'the uploaded deck under Recents');
+    await chipState(again, 'online', 'the recent server deck to connect');
+    expect(await openDir(again)).toBe(localDir);
+    expect(html(await deckIn(localDir), 't1')).toContain('from the laptop');
+  }, 240_000);
+
+  it('opens a recent server deck while the server cannot be reached', async () => {
+    editor = await launch();
+    await openFromServer(editor);
+    await chipState(editor, 'online', 'the deck to connect');
+    await quit();
+
+    link!.cut();
+    editor = await launch();
+    const cdp = editor;
+    await eventually(() => cdp.evaluate<boolean>(`Boolean(document.querySelector('[data-action="open"]')?.getClientRects().length)`),
+      'the welcome screen');
+    await cdp.click('[data-action="open"]', 'Open presentation');
+    const row = '.open-dialog-row.is-recent[data-origin="server"]';
+    await eventually(() => cdp.evaluate<boolean>(`Boolean(document.querySelector(${JSON.stringify(row)}))`), 'the recent server deck');
+    await cdp.click(row, 'the recent server deck');
+    await chipState(cdp, 'offline', 'the copy to open offline');
+    expect(await railCount(cdp)).toBe(3);
+    expect(await openDir(cdp)).toBe(mirror());
   }, 180_000);
 
   it('fetches a picture a collaborator added and draws it', async () => {

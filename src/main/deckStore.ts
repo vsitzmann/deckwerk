@@ -27,6 +27,8 @@ import { convertHeicToPng } from './heic.js';
 
 export const DECK_FILE = 'deck.json';
 export const ASSETS_DIR = 'assets';
+/** Beside a deck that mirrors a server deck: which one, and the last server state seen (remoteDecks.ts). */
+export const REMOTE_STATE_DIR = '.deckwerk-remote';
 
 /**
  * Extensions a save dialog can plausibly hand us for a *new deck folder*.
@@ -201,7 +203,10 @@ export async function createDeck(dir: string, title?: string): Promise<Deck> {
 /**
  * Copy a complete deck folder without overwriting an existing destination.
  * A collaboration server's edit log (history.jsonl) and versions (.versions/)
- * stay behind: they record the original's edits, not the copy's.
+ * stay behind: they record the original's edits, not the copy's. So does the
+ * link to a server deck (.deckwerk-remote/): a copy that kept it would be a
+ * second mirror, and every edit to a talk forked this way would land in the
+ * talk it was forked from.
  */
 export async function copyDeck(sourceDir: string, targetDir: string): Promise<Deck> {
   const source = resolve(sourceDir);
@@ -212,9 +217,9 @@ export async function copyDeck(sourceDir: string, targetDir: string): Promise<De
   }
   if (existsSync(target)) throw new Error(`A file or folder already exists at ${target}`);
 
-  const logs = new Set([...HISTORY_FILES, VERSIONS_DIR].map((name) => join(source, name)));
+  const stayBehind = new Set([...HISTORY_FILES, VERSIONS_DIR, REMOTE_STATE_DIR].map((name) => join(source, name)));
   await cp(source, target, {
-    recursive: true, force: false, errorOnExist: true, filter: (path) => !logs.has(resolve(path)),
+    recursive: true, force: false, errorOnExist: true, filter: (path) => !stayBehind.has(resolve(path)),
   });
   return loadDeck(target);
 }
