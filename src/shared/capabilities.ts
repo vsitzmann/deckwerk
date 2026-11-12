@@ -243,6 +243,7 @@ export function capabilities(): Capability[] {
       when: 'Any result clip. This editor exists for this.',
       notes: [
         'start/end are seconds; end: null means the end of the file. Looping honours them.',
+        'playbackRate (data-playback-rate) plays the clip faster or slower: 2 is twice as fast, 0.5 half speed; leave it out for normal speed. start/end stay in the file’s own seconds. A sync group plays at its clock clip’s speed, so give every member the same one.',
         'autoplay/loop/muted default to true — a slide video normally plays itself. Set autoplay: false when a build starts it on a click instead.',
         'controls: true hands the audience a scrubber; normally leave it off.',
         'poster is a still shown before playback begins; null lets the first frame stand in.',

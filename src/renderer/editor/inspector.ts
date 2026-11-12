@@ -1,6 +1,6 @@
 import { codeTypeSection } from './codeInspector.js';
 import {
-  STROKE_DASHES, STROKE_STYLES, type Deck, type MediaEffect, type ShapeEl, type Slide, type SlideElement, type StrokeDash,
+  MAX_VIDEO_SPEED, MIN_VIDEO_SPEED, STROKE_DASHES, STROKE_STYLES, videoSpeed, type Deck, type MediaEffect, type ShapeEl, type Slide, type SlideElement, type StrokeDash,
   type StrokeStyle,
 } from '@shared/deck.js';
 import { braceDepthOf } from '@shared/brace.js';
@@ -789,6 +789,39 @@ export class Inspector {
    * which also loops between them — the native `loop` attribute cannot, since
    * it always restarts at zero.
    */
+  /**
+   * How fast the selected videos play, as a multiple of normal speed. Empty
+   * means normal speed. A synced clip's partners take the same speed: the
+   * group plays from one clock, so a partner at another speed could not
+   * stay on its frame.
+   */
+  private videoSpeedField(videos: Array<Extract<SlideElement, { type: 'video' }>>): HTMLElement {
+    const setSpeed = (value: number): void => {
+      const speed = Math.min(MAX_VIDEO_SPEED, Math.max(MIN_VIDEO_SPEED, value));
+      const selection = this.store.get().selection;
+      const groups = new Set(videos.map((video) => video.syncGroup).filter(Boolean));
+      const slideIndex = this.store.get().slideIndex;
+      this.store.commit((deck) => {
+        for (const element of deck.slides[slideIndex]?.elements ?? []) {
+          if (element.type !== 'video') continue;
+          if (!selection.has(element.id) && !(element.syncGroup && groups.has(element.syncGroup))) continue;
+          if (speed === 1) delete element.playbackRate;
+          else element.playbackRate = speed;
+        }
+      }, { label: 'Change video speed' });
+    };
+    const field = numberField('Speed', commonValue(videos.map(videoSpeed)), setSpeed, {
+      step: 0.25,
+      unit: '× normal',
+      placeholder: 'Mixed',
+      onClear: () => setSpeed(1),
+    });
+    field.classList.add('video-speed-field');
+    field.title = 'Playback speed: 2 plays twice as fast, 0.5 at half speed. '
+      + 'The file is untouched; the trim stays in the file\'s own seconds.';
+    return field;
+  }
+
   private trimSection(el: Extract<SlideElement, { type: 'video' }>): HTMLElement {
     const trim = optionSection('Trim', 'video-trim-options');
     const wrap = trim.content;
@@ -1871,6 +1904,9 @@ export class Inspector {
         ), VIDEO_FLAG_SHORT[key]));
       }
       playback.content.appendChild(flags);
+      playback.content.appendChild(this.videoSpeedField(
+        media.filter((element): element is Extract<SlideElement, { type: 'video' }> => element.type === 'video'),
+      ));
       // Real next to simulated, before next to after: one clock while presenting.
       const groups = media.map((element) => (element.type === 'video' ? element.syncGroup ?? null : null));
       const shared = groups[0] !== null && groups.every((group) => group === groups[0]);
@@ -2074,6 +2110,7 @@ export class Inspector {
           ));
         }
         playback.content.appendChild(flags);
+        playback.content.appendChild(this.videoSpeedField([el]));
         if (el.syncGroup) {
           const partners = this.store.slide?.elements.filter((other) =>
             other.id !== el.id && other.type === 'video' && other.syncGroup === el.syncGroup).length ?? 0;

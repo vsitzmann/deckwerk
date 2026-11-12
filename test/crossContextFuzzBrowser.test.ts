@@ -30,9 +30,10 @@ import { sidebarSelectionProbes } from './support/selectionSession.js';
  * the selection from the sidebar, panning and zooming the view with a
  * plain mouse and the keyboard (each time also showing or hiding the
  * rulers), picking up the pen to put it down again or to draw a line
- * that is undone, a freehand Pencil stroke (Shift+P) that is undone, and
+ * that is undone, a freehand Pencil stroke (Shift+P) that is undone,
  * a line from the Shape menu whose points are opened with a double-click
- * and bent with Cmd/Ctrl-drag, then undone.
+ * and bent with Cmd/Ctrl-drag, then undone, and builds added in the Build
+ * tab, picked together with Shift or Cmd/Ctrl and deleted with a key.
  *
  * After EVERY step five oracles run: the whole-editor invariant set from
  * selectionSession, keystroke routing via per-step nonce strings, an element
@@ -158,7 +159,7 @@ type OpName =
   | 'rail hop' | 'undo' | 'redo' | 'undo round-trip' | 'delete selection'
   | 'cmd+a' | 'click with stray hover' | 'rail multi-delete' | 'stack key' | 'spelling fix'
   | 'size from sidebar' | 'flip from sidebar' | 'viewport gesture' | 'pen abandoned' | 'pen line undone'
-  | 'pencil stroke undone' | 'line bent and undone';
+  | 'pencil stroke undone' | 'line bent and undone' | 'build multi-delete';
 
 interface Violation { seed: number; step: number; op: OpName; oracle: string; detail: string }
 
@@ -448,6 +449,7 @@ function chooseOp(next: () => number, pre: CrossState): OpName {
     add('pen line undone', 1);
     add('pencil stroke undone', 1);
     add('line bent and undone', 1);
+    if (targets.length >= 2) add('build multi-delete', 1);
   }
   return pick(next, ops);
 }
@@ -799,6 +801,61 @@ async function performOp(
     case 'viewport gesture':
       await viewportGesture(next, pre, flag);
       return 'same';
+    case 'build multi-delete': {
+      // Two objects get a build each in the Build tab; both builds are picked
+      // in the build order (Shift, or Cmd/Ctrl, on the second row) and a
+      // deletion key removes them -- the builds only, never the objects the
+      // window's own Delete would take. Two undos restore the deck.
+      const before = await session.deckSnapshot();
+      const timeline = () => session.cdp.evaluate<string[]>('window.store.slide.timeline.map((entry) => entry.id)');
+      const builds = await timeline();
+      const [first, second] = [...targets].sort(() => next() - 0.5);
+      // Objects first: picking one ends a multi-slide rail selection, which
+      // leaves only Props and Design open.
+      await session.click(first);
+      await session.shiftClick(second);
+      await session.cdp.click('#side-tabs button[data-panel="timeline"]', 'Build tab');
+      await session.cdp.clickByText('.build-elements-section .panel-action', 'Add animation', 'Add animation');
+      await wait(120);
+      const added = (await timeline()).filter((id) => !builds.includes(id));
+      if (added.length !== 2) {
+        flag('census', `Add animation on two objects added ${added.length} builds`);
+        await session.cdp.click('#side-tabs button[data-panel="inspector"]', 'Props tab');
+        return 'resync';
+      }
+      const row = (id: string) => `.build-overview-row[data-entry-id="${id}"]`;
+      await session.cdp.click(row(added[0]), 'the first new build');
+      await session.cdp.clickModified(row(added[1]), next() < 0.5 ? SHIFT : MOD, 'the second new build');
+      await wait(80);
+      const picked = await session.cdp.evaluate<string[]>(
+        `[...document.querySelectorAll('.build-overview-row.selected')].map((row) => row.dataset.entryId)`);
+      if (picked.length !== 2 || !added.every((id) => picked.includes(id))) {
+        flag('routing', `picking two builds picked [${picked.join(', ')}], not [${added.join(', ')}]`);
+      }
+      if (next() < 0.5) await session.key('Backspace', 8);
+      else await session.key('Delete', 46);
+      await wait(150);
+      const left = await timeline();
+      if (added.some((id) => left.includes(id))) flag('census', `a deletion key left picked builds: [${left.join(', ')}]`);
+      const ids = (await session.state()).elements;
+      for (const id of pre.elements) {
+        if (!ids.includes(id)) flag('census', `deleting picked builds deleted the object ${id}`);
+      }
+      await session.cdp.click('#side-tabs button[data-panel="inspector"]', 'Props tab');
+      await session.clickEmpty();
+      await session.chord('z', 'KeyZ', 90, MOD);
+      await session.chord('z', 'KeyZ', 90, MOD);
+      await wait(250);
+      const after = await session.deckSnapshot();
+      if (after !== before) {
+        flag('undoRoundTrip', `two undos did not restore the objects; diff: ${firstDiff(before, after)}`);
+      }
+      const restored = await timeline();
+      if (restored.join('|') !== builds.join('|')) {
+        flag('undoRoundTrip', `two undos left the builds [${restored.join(', ')}], not [${builds.join(', ')}]`);
+      }
+      return 'resync';
+    }
     case 'rail multi-delete': {
       // Select both slides in the rail with real clicks, then a deletion key.
       // More than one slide must never go without a confirmation: Escape

@@ -5050,6 +5050,10 @@ button.cthread-where:disabled { cursor: default; opacity: 1; }
 .video-playback-options > .panel-action { width: auto; margin: 0; padding: 0 10px; height: 26px; font-size: 10.5px; white-space: nowrap; }
 /* A synced group's length: a strip of its own, the width of the panel. */
 .video-playback-options > .sync-length-field { grid-column: 1 / -1; margin: 2px 0 0; }
+/* Speed: a labelled number of its own row, under the flag strip. */
+.video-playback-options > .video-speed-field { grid-column: 1 / -1; margin: 2px 0 0; }
+/* Several videos have no preview button: the flag strip takes the whole row. */
+.video-playback-options > .video-checkbox-grid:first-child { grid-column: 1 / -1; }
 .video-checkbox-grid {
   display: grid;
   grid-auto-flow: column;
@@ -5265,6 +5269,8 @@ button.ghost:hover:not(:disabled) { color: var(--text); background: transparent;
   border: 1px solid transparent;
   border-radius: 6px;
   cursor: pointer;
+  /* Shift-click picks a range of builds, not a run of their text. */
+  user-select: none;
 }
 .build-overview-row:hover { background: rgb(255 255 255 / 5%); }
 .build-overview-row.selected { border-color: var(--accent); background: var(--accent-soft); }
@@ -5279,6 +5285,8 @@ button.ghost:hover:not(:disabled) { color: var(--text); background: transparent;
 .build-overview-when { grid-area: when; color: var(--muted); font: 10px var(--mono); }
 /* A build that runs on its own (after or with the one before) sits under it. */
 .build-overview-row:not([data-trigger="click"]) { margin-left: 14px; }
+.build-multi-pick { display: flex; flex-direction: column; gap: 6px; }
+.build-multi-pick .insp-hint { margin: 0; }
 
 /* The picked build's settings: a label column and the control beside it. */
 .build-detail-section .timeline-row { padding: 2px 0 0; }

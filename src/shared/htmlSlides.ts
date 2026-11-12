@@ -1848,6 +1848,7 @@ function elementFromMeasured(
       poster: node.dataset.poster ?? null,
       ...(node.dataset.syncGroup ? { syncGroup: node.dataset.syncGroup } : {}),
       ...syncLengthFromDataset(node.dataset),
+      ...playbackRateFrom(node.dataset.playbackRate),
     };
   }
 
@@ -1883,6 +1884,7 @@ function elementFromMeasured(
       sourceBox: cropFrom(node.dataset.crop),
       ...(node.dataset.syncGroup ? { syncGroup: node.dataset.syncGroup } : {}),
       ...syncLengthFromDataset(node.dataset),
+      ...playbackRateFrom(node.dataset.playbackRate),
     };
   }
 
@@ -2332,7 +2334,8 @@ function elementToHtml(
         + `${element.autoplay ? ' autoplay' : ''}${element.controls ? ' controls' : ''}`;
       const trim = ` data-trim="${element.start},${element.end ?? ''}"`
         + (element.syncGroup ? ` data-sync-group="${escape(element.syncGroup)}"` : '')
-        + (element.syncLength ? ` data-sync-length="${element.syncLength}"` : '');
+        + (element.syncLength ? ` data-sync-length="${element.syncLength}"` : '')
+        + (element.playbackRate !== undefined ? ` data-playback-rate="${element.playbackRate}"` : '');
       if (element.sourceBox) {
         return `  <div ${attrs} data-element="video"`
           + ` data-src="${escape(element.src)}" data-fit="${element.fit}"${trim}`
@@ -2755,6 +2758,15 @@ function trimOf(spec: string | undefined, src: string): [number, number | null] 
   if (spec) return trimFrom(spec);
   const fragment = mediaFragmentTrim(src);
   return fragment ? [fragment.start, fragment.end] : [0, null];
+}
+
+/**
+ * A video's speed from `data-playback-rate` ("2", "0.5", also "2x"). No
+ * attribute, or one that does not read as a speed, stores nothing: normal speed.
+ */
+function playbackRateFrom(spec: string | undefined): { playbackRate?: number } {
+  const rate = Number.parseFloat(spec?.trim() ?? '');
+  return Number.isFinite(rate) && rate > 0 ? { playbackRate: rate } : {};
 }
 
 function boxAttr(box: { x: number; y: number; w: number; h: number }): string {

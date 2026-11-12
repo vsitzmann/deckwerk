@@ -114,6 +114,80 @@ describe('Build panel interactions', () => {
     expect(labels).toEqual(['On enter · everything visible', 'Click 1']);
   });
 
+  it('picks several builds with Shift and Cmd/Ctrl and deletes them together', () => {
+    const deck = emptyDeck('Build');
+    for (const id of ['a', 'b', 'c', 'd']) {
+      deck.slides[0].elements.push({ id, type: 'text', x: 0, y: 0, w: 100, h: 50, rot: 0, z: 1,
+        opacity: 1, class: [], style: {}, html: id.toUpperCase(), align: 'left', valign: 'top' });
+    }
+    deck.slides[0].timeline.push(...['a', 'b', 'c', 'd'].map((target, i) => (
+      { id: `t-${i + 1}`, trigger: { on: 'click' as const, ref: null, delay: 0 },
+        action: { type: 'appear' as const, target, value: null } })));
+    const store = new EditorStore(deck, '/tmp/build');
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    new TimelinePanel(host, store);
+    const row = (id: string) => host.querySelector<HTMLElement>(`.build-overview-row[data-entry-id="${id}"]`)!;
+    const click = (id: string, keys: MouseEventInit = {}) =>
+      row(id).dispatchEvent(new MouseEvent('click', { bubbles: true, ...keys }));
+    const picked = () => [...host.querySelectorAll<HTMLElement>('.build-overview-row.selected')]
+      .map((r) => r.dataset.entryId);
+
+    // Shift picks the range from the last build clicked, and selects every
+    // object those builds animate.
+    click('t-1');
+    click('t-3', { shiftKey: true });
+    expect(picked()).toEqual(['t-1', 't-2', 't-3']);
+    expect([...store.get().selection].sort()).toEqual(['a', 'b', 'c']);
+    expect(host.querySelector('.timeline-row')).toBeNull();
+    expect(host.querySelector('.build-delete-picked')?.textContent).toBe('Delete 3 builds');
+
+    // Cmd/Ctrl drops one from the pick, and adds one.
+    click('t-2', { metaKey: true });
+    expect(picked()).toEqual(['t-1', 't-3']);
+    click('t-4', { ctrlKey: true });
+    expect(picked()).toEqual(['t-1', 't-3', 't-4']);
+
+    // Delete on a picked row removes those builds -- never the objects -- in
+    // one undo step, and focus moves on to the next build.
+    row('t-3').focus();
+    const del = new KeyboardEvent('keydown', { key: 'Delete', bubbles: true, cancelable: true });
+    let reachedWindow = false;
+    const onWindow = () => { reachedWindow = true; };
+    window.addEventListener('keydown', onWindow);
+    row('t-3').dispatchEvent(del);
+    window.removeEventListener('keydown', onWindow);
+    expect(reachedWindow).toBe(false);
+    expect(store.slide?.timeline.map((entry) => entry.id)).toEqual(['t-2']);
+    expect(store.slide?.elements.map((element) => element.id)).toEqual(['a', 'b', 'c', 'd']);
+    expect(store.get().selection.size).toBe(0);
+    expect(store.history()[0].label).toBe('Delete 3 builds');
+    expect((document.activeElement as HTMLElement).dataset.entryId).toBe('t-2');
+    store.undo();
+    expect(store.slide?.timeline.map((entry) => entry.id)).toEqual(['t-1', 't-2', 't-3', 't-4']);
+
+    // Cmd/Ctrl+A picks them all; the button deletes the pick.
+    click('t-2');
+    row('t-2').focus();
+    row('t-2').dispatchEvent(new KeyboardEvent('keydown', { key: 'a', metaKey: true, bubbles: true }));
+    expect(picked()).toEqual(['t-1', 't-2', 't-3', 't-4']);
+    host.querySelector<HTMLButtonElement>('.build-delete-picked')!.click();
+    expect(store.slide?.timeline).toEqual([]);
+
+    // A plain click ends a pick, and so does picking an object on the slide.
+    store.undo();
+    click('t-1');
+    click('t-2', { shiftKey: true });
+    expect(picked()).toEqual(['t-1', 't-2']);
+    click('t-4');
+    expect(picked()).toEqual(['t-4']);
+    click('t-3', { shiftKey: true });
+    expect(picked()).toEqual(['t-3', 't-4']);
+    store.select(['a']);
+    expect(picked()).toEqual(['t-1']);
+    expect(host.querySelector<HTMLElement>('.timeline-row')!.dataset.entryId).toBe('t-1');
+  });
+
   it('writes an element\'s steps in the list as the canvas badge does', () => {
     const deck = emptyDeck('Build');
     deck.slides[0].elements.push(

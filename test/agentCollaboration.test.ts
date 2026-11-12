@@ -242,7 +242,7 @@ for (const kind of BACKENDS) describe.skipIf(!electronBinary)(`an agent working 
     // Everything but the edited box is exactly what it was: the equation is
     // still TeX (not KaTeX's rendered trees), the escaped dollar still
     // escaped, the line break and trailing space still there; the clip still
-    // does not loop, unmute or autoplay; the region is not wrapped in its own
+    // does not loop, unmute or autoplay, and keeps its half speed; the region is not wrapped in its own
     // export box; the class's margin and object-position were not frozen in.
     for (const id of [
       'details-math', 'details-framed', 'details-clip', 'details-curve', 'details-brace', 'details-mirrored', 'details-arrow',
@@ -252,6 +252,20 @@ for (const kind of BACKENDS) describe.skipIf(!electronBinary)(`an agent working 
     }
     expect(element(after, 'details-nudged')).toMatchObject({ x: 120, y: 420, w: 800, h: 80 });
     expect(after.morphFromPrevious).toBe(false);
+  });
+
+  it('lands a speed the agent writes on a clip, and normal speed as none', async () => {
+    const workspace = await open(kind);
+    const page = await exportPage(workspace, 'details');
+    expect(page).toContain('data-playback-rate="0.5"');
+    await workspace.write('speed.html', page.replace('data-playback-rate="0.5"', 'data-playback-rate="2"'));
+    expect(landed(await apply(workspace, 'speed.html'), workspace).changes.replaced).toEqual(['details']);
+    const clip = () => workspace.deck().then((deck) => slideById(deck, 'details').elements
+      .find((element) => element.id === 'details-clip') as Extract<Slide['elements'][number], { type: 'video' }>);
+    expect((await clip()).playbackRate).toBe(2);
+    await workspace.write('normal.html', (await exportPage(workspace, 'details')).replace(' data-playback-rate="2"', ''));
+    landed(await apply(workspace, 'normal.html'), workspace);
+    expect((await clip()).playbackRate).toBeUndefined();
   });
 
   it('lands a mirror the agent writes as a flip, and folds a mirrored line into its ends', async () => {

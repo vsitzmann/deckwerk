@@ -157,6 +157,35 @@ describe('measured nodes become deck objects', () => {
     expect(cropped).toMatchObject({ src: 'assets/clip.mp4', start: 4, end: 6 });
   });
 
+  it('carries a video\'s speed both ways and stores nothing for a page that never says one', () => {
+    const deck = emptyDeck('Speed');
+    const clip = (id: string, over: Partial<Extract<SlideElement, { type: 'video' }>> = {}) => ({
+      id, type: 'video' as const, x: 10, y: 20, w: 500, h: 300, rot: 0, z: 1,
+      opacity: 1, class: [], style: {}, src: 'assets/clip.mp4', fit: 'contain' as const,
+      autoplay: true, loop: true, muted: true, controls: false,
+      start: 1, end: 5, poster: null, sourceBox: null, ...over,
+    });
+    deck.slides[0].elements.push(
+      clip('fast', { playbackRate: 2 }),
+      clip('cropped', { playbackRate: 0.5, sourceBox: { x: -10, y: 0, w: 520, h: 300 } }),
+      clip('plain'),
+    );
+    const html = slideToHtml(parseDeck(deck).slides[0], { w: 1920, h: 1080 });
+    expect(html).toMatch(/data-element-id="fast"[^>]*data-playback-rate="2"/);
+    expect(html).toMatch(/data-element-id="cropped"[^>]*data-playback-rate="0.5"/);
+    expect(html).not.toMatch(/data-element-id="plain"[^>]*data-playback-rate/);
+
+    const speedOf = (dataset: Record<string, string>, tag = 'video') => (elementFromNode(node({
+      tag, html: '', attrs: { src: 'assets/clip.mp4' }, dataset,
+    }), 'clip', 2) as Extract<SlideElement, { type: 'video' }>).playbackRate;
+    expect(speedOf({ playbackRate: '2' })).toBe(2);
+    expect(speedOf({ playbackRate: '1.5x' })).toBe(1.5);
+    expect(speedOf({ element: 'video', src: 'assets/clip.mp4', playbackRate: '0.25' }, 'div')).toBe(0.25);
+    expect(speedOf({})).toBeUndefined();
+    expect(speedOf({ playbackRate: 'fast' })).toBeUndefined();
+    expect(speedOf({ playbackRate: '-1' })).toBeUndefined();
+  });
+
   it('lands an imported round crop as one editable picture', () => {
     // What the walk hands over for `<div class="crop"><img></div>`: the
     // frame's ring, its backdrop and its round window folded onto the picture,

@@ -278,6 +278,13 @@ const VideoElement = BaseElement.extend({
   /** Non-destructive in/out points in seconds; `end: null` means end of file. */
   start: z.number().min(0).default(0),
   end: z.number().min(0).nullable().default(null),
+  /**
+   * How fast the clip plays, as a multiple of normal speed (2 = twice as fast,
+   * 0.5 = half). Absent means 1. Non-destructive like the trim: the file is
+   * untouched, `start`/`end` stay in the file's own seconds, and the
+   * presenter's live speed keys multiply it. Read it through `videoSpeed`.
+   */
+  playbackRate: z.number().positive().optional(),
   poster: z.string().nullable().default(null),
   /**
    * Videos on a slide that share a sync group play from one clock while
@@ -320,6 +327,17 @@ const VideoElement = BaseElement.extend({
     .nullable()
     .default(null),
 });
+
+/** The speeds a video may play at; Chromium plays 1/16× to 16×, WebKit no wider. */
+export const MIN_VIDEO_SPEED = 0.0625;
+export const MAX_VIDEO_SPEED = 16;
+
+/** The speed a video element plays at, 1 when it stores none. */
+export function videoSpeed(el: { playbackRate?: number }): number {
+  const rate = el.playbackRate;
+  if (rate === undefined || !Number.isFinite(rate) || rate <= 0) return 1;
+  return Math.min(MAX_VIDEO_SPEED, Math.max(MIN_VIDEO_SPEED, rate));
+}
 
 /** The ways a path's stroke can be drawn; the first is the default. */
 export const STROKE_STYLES = ['pen', 'brush', 'pencil', 'marker'] as const;

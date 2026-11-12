@@ -207,7 +207,7 @@ export function agentFixtureDeck(): Deck {
           // A theme class with a margin, and one that frames the picture.
           text('details-nudged', 'Nudged by its class', { x: 120, y: 420, w: 800, h: 80 }, { class: ['role-body', 'nudged'] }),
           { id: 'details-framed', type: 'image', x: 1000, y: 420, w: 400, h: 300, src: 'assets/pic.png', fit: 'cover', class: ['framed'], sourceBox: null },
-          { id: 'details-clip', type: 'video', x: 1450, y: 420, w: 400, h: 225, src: 'assets/clip.mp4', loop: false, muted: false, autoplay: false },
+          { id: 'details-clip', type: 'video', x: 1450, y: 420, w: 400, h: 225, src: 'assets/clip.mp4', loop: false, muted: false, autoplay: false, playbackRate: 0.5 },
           { id: 'details-curve', type: 'shape', shape: 'line', x: 120, y: 800, w: 600, h: 4, control: null, stroke: '#333333' },
           // A rotated brace pointing to its own −y: its depth rides on a data attribute.
           { id: 'details-brace', type: 'shape', shape: 'brace', x: 1200, y: 990, w: 500, h: 2, rot: 30, braceDepth: -50, stroke: '#333333' },
