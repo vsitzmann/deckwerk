@@ -132,6 +132,7 @@ import type { ImportedAsset } from '@shared/ipc.js';
 import { commentFocus, commentHighlightsShown, onCommentHighlightsChange, openComments } from './comments.js';
 import { openThreadCount } from '@shared/comments.js';
 import { reportRenderDivergences } from './renderInvariants.js';
+import { OffSlideText } from './offSlideText.js';
 import { SpellingSession } from './spellcheck.js';
 
 /** A row of the canvas right-click menu. */
@@ -932,6 +933,8 @@ export class EditorCanvas {
   private stage: HTMLElement;
   private slideLayer: HTMLElement;
   private overlay: HTMLElement;
+  /** Off-slide text recoloured to read on the pasteboard; see offSlideText.ts. */
+  private offSlideText: OffSlideText;
   /** The comparison chip last drawn in the overlay (compareChip.ts). */
   private compareChipNode: HTMLElement | null = null;
   private zoomInput: HTMLInputElement;
@@ -1239,7 +1242,8 @@ export class EditorCanvas {
     this.slideLayer.className = 'slide-layer';
     this.overlay = document.createElement('div');
     this.overlay.className = 'overlay-layer';
-    this.stage.append(this.slideLayer, this.overlay);
+    this.offSlideText = new OffSlideText(this.slideLayer, this.host);
+    this.stage.append(this.slideLayer, this.offSlideText.layer, this.overlay);
     this.zoomControls = this.createZoomControls();
     this.zoomInput = this.zoomControls.querySelector<HTMLInputElement>('.zoom-value')!;
     this.host.replaceChildren(this.stage, this.zoomControls);
