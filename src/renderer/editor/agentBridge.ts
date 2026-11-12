@@ -12,6 +12,8 @@ import {
 } from '@shared/agent.js';
 import type { Deck, Slide, SlideElement } from '@shared/deck.js';
 import type { PageStamp } from '@shared/htmlSlides.js';
+import { releaseDecodedVideo } from '../player/decodedVideoPool.js';
+import { ungateVideoLoad } from '../player/mediaLoadGate.js';
 import { fitAutoText, renderSlide } from '../player/render.js';
 import { sameSlideDrawing, type EditorStore } from './store.js';
 
@@ -47,6 +49,15 @@ export class AgentBridge {
   private options: AgentBridgeOptions;
   private timer: ReturnType<typeof setTimeout> | null = null;
   /**
+   * The publish in progress, if any. A measurement waits for a frame, and a
+   * window that is hidden or covered paints none, so it can wait for minutes.
+   * Each store change used to start another publish regardless, each with its
+   * own hidden copy of the slide: a background window on a synced deck piled
+   * up dozens. One runs at a time; changes in the meantime ask for one more.
+   */
+  private publishing: Promise<void> | null = null;
+  private publishAgain = false;
+  /**
    * The last measurement and what it was measured from. Measuring mounts a
    * full copy of every selected slide, images included, in a hidden host.
    * Done after each keystroke in the speaker notes drawer, that copy evicted
@@ -74,7 +85,7 @@ export class AgentBridge {
     if (this.timer) clearTimeout(this.timer);
     this.timer = setTimeout(() => {
       this.timer = null;
-      void this.publish();
+      void this.publishLatest();
     }, 140);
   }
 
@@ -82,7 +93,28 @@ export class AgentBridge {
   async flush(): Promise<void> {
     if (this.timer) clearTimeout(this.timer);
     this.timer = null;
-    await this.publish();
+    await this.publishLatest();
+  }
+
+  /** Publish the store as it is once any publish already running is done. */
+  private async publishLatest(): Promise<void> {
+    if (this.publishing) {
+      // The running loop goes round once more before it settles.
+      this.publishAgain = true;
+      await this.publishing;
+      return;
+    }
+    this.publishing = (async () => {
+      try {
+        do {
+          this.publishAgain = false;
+          await this.publish();
+        } while (this.publishAgain);
+      } finally {
+        this.publishing = null;
+      }
+    })();
+    await this.publishing;
   }
 
   async handle(request: AgentRequest): Promise<void> {
@@ -269,32 +301,35 @@ export async function buildComputedScenes(
   const output: ComputedSlideScene[] = [];
   for (const { slide, index } of slides) {
     const { host, root } = mountSlide(deck, slide, resolveSrc);
-    fitAutoText(root);
-    // Allow layout, fonts and media wrappers to settle before measuring.
-    await nextFrame();
-    const rootRect = root.getBoundingClientRect();
-    const nodes = elementNodes(root);
-    output.push({
-      id: slide.id,
-      index,
-      name: slide.name,
-      active: index === activeSlideIndex,
-      selected: selectedSlideIds.has(slide.id),
-      canvas: deck.canvas,
-      background: slide.background,
-      layout: slide.layout ?? 'freeform',
-      morphFromPrevious: slide.morphFromPrevious ?? false,
-      morphDuration: slide.morphDuration ?? 1000,
-      skipped: slide.skipped ?? false,
-      timeline: structuredClone(slide.timeline),
-      elements: slide.elements.map((element) => computedElement(
-        element,
-        nodes.get(element.id) ?? null,
-        rootRect,
-        selectedElementIds,
-      )),
-    });
-    host.remove();
+    try {
+      fitAutoText(root);
+      // Allow layout, fonts and media wrappers to settle before measuring.
+      await nextFrame();
+      const rootRect = root.getBoundingClientRect();
+      const nodes = elementNodes(root);
+      output.push({
+        id: slide.id,
+        index,
+        name: slide.name,
+        active: index === activeSlideIndex,
+        selected: selectedSlideIds.has(slide.id),
+        canvas: deck.canvas,
+        background: slide.background,
+        layout: slide.layout ?? 'freeform',
+        morphFromPrevious: slide.morphFromPrevious ?? false,
+        morphDuration: slide.morphDuration ?? 1000,
+        skipped: slide.skipped ?? false,
+        timeline: structuredClone(slide.timeline),
+        elements: slide.elements.map((element) => computedElement(
+          element,
+          nodes.get(element.id) ?? null,
+          rootRect,
+          selectedElementIds,
+        )),
+      });
+    } finally {
+      host.remove();
+    }
   }
   return output;
 }
@@ -308,25 +343,28 @@ async function buildInlineDom(
   const result: Array<{ slideId: string; html: string }> = [];
   for (const slide of slides) {
     const { host, root } = mountSlide(deck, slide, resolveSrc);
-    fitAutoText(root);
-    await nextFrame();
-    for (const node of root.querySelectorAll<HTMLElement>('*')) {
-      const style = getComputedStyle(node);
-      let inline = '';
-      // Indexed access rather than iteration: `CSSStyleDeclaration` is only
-      // iterable in real browsers, and this same code runs under jsdom in tests.
-      for (let i = 0; i < style.length; i++) {
-        const property = style.item(i);
-        inline += `${property}:${style.getPropertyValue(property)};`;
+    try {
+      fitAutoText(root);
+      await nextFrame();
+      for (const node of root.querySelectorAll<HTMLElement>('*')) {
+        const style = getComputedStyle(node);
+        let inline = '';
+        // Indexed access rather than iteration: `CSSStyleDeclaration` is only
+        // iterable in real browsers, and this same code runs under jsdom in tests.
+        for (let i = 0; i < style.length; i++) {
+          const property = style.item(i);
+          inline += `${property}:${style.getPropertyValue(property)};`;
+        }
+        node.setAttribute('style', inline);
       }
-      node.setAttribute('style', inline);
+      const nodes = elementNodes(root);
+      for (const id of selectedElementIds) {
+        nodes.get(id)?.setAttribute('data-agent-selected', 'true');
+      }
+      result.push({ slideId: slide.id, html: root.outerHTML });
+    } finally {
+      host.remove();
     }
-    const nodes = elementNodes(root);
-    for (const id of selectedElementIds) {
-      nodes.get(id)?.setAttribute('data-agent-selected', 'true');
-    }
-    result.push({ slideId: slide.id, html: root.outerHTML });
-    host.remove();
   }
   return result;
 }
@@ -339,6 +377,18 @@ function mountSlide(deck: Deck, slide: Slide, resolveSrc: (src: string) => strin
     height: `${deck.canvas.h}px`, visibility: 'hidden', pointerEvents: 'none',
   });
   const root = renderSlide(slide, { resolveSrc, mediaPreload: 'metadata' });
+  // A measurement reads boxes, which CSS sizes; nothing here needs a frame of
+  // video. Left with its source, every <video> in the copy opened a Chromium
+  // media pipeline on each navigation and was then dropped with the host, so
+  // the pipeline was torn down later by garbage collection, on the main
+  // thread, while the Media thread could still be loading. That deadlocked
+  // the renderer of a deck with 57 videos (Nov 2026; renderer main and Media
+  // threads both parked in __psynch_mutexwait under a GC prefinalizer).
+  // Releasing in the task that assigned the source means no load ever starts.
+  for (const video of root.querySelectorAll('video')) {
+    ungateVideoLoad(video);
+    releaseDecodedVideo(video);
+  }
   root.style.width = `${deck.canvas.w}px`;
   root.style.height = `${deck.canvas.h}px`;
   host.appendChild(root);
@@ -442,6 +492,16 @@ function htmlToPlainText(html: string): string {
   return (div.textContent ?? '').replace(/\s+/g, ' ').trim();
 }
 
+/**
+ * The next frame, or a short wait when none comes: a hidden or covered window
+ * paints nothing, and layout does not need a paint to be read.
+ */
 function nextFrame(): Promise<void> {
-  return new Promise((resolve) => requestAnimationFrame(() => resolve()));
+  return new Promise((resolve) => {
+    const timer = setTimeout(resolve, 100);
+    requestAnimationFrame(() => {
+      clearTimeout(timer);
+      resolve();
+    });
+  });
 }
