@@ -62,7 +62,7 @@ const RECORD = `(() => {
   window.__phase = 'settled';
   const last = new Map();
   const sample = () => {
-    for (const node of document.querySelectorAll('#canvas .element-text')) {
+    for (const node of document.querySelectorAll('#canvas .slide-layer .element-text')) {
       const size = node.offsetLeft + ',' + node.offsetWidth + 'x' + node.offsetHeight;
       if (last.get(node.dataset.elementId) === size) continue;
       last.set(node.dataset.elementId, size);

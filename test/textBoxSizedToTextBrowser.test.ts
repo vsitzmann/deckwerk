@@ -31,7 +31,7 @@ interface Fit {
 
 /** The newest text box on the canvas, measured against its text. */
 const FIT = `(() => {
-  const nodes = [...document.querySelectorAll('#canvas .element-text[data-auto-size="true"]')];
+  const nodes = [...document.querySelectorAll('#canvas .slide-layer .element-text[data-auto-size="true"]')];
   const node = nodes.at(-1);
   if (!node) return null;
   const content = node.querySelector('.text-content');

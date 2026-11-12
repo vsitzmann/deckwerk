@@ -3296,6 +3296,26 @@ button.morph-object-hit.selected-source:hover:not(:disabled) {
 .canvas-host .slide-layer,
 .canvas-host .slide-layer > .slide { overflow: visible; }
 
+/* Off-slide text that would not read on the pasteboard, recoloured in a copy
+   clipped to outside the slide (offSlideText.ts). The copy paints only its
+   recoloured glyphs: no ground, fills or shadows of its own. */
+.offslide-text-layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+.offslide-text-layer > .slide {
+  overflow: visible;
+  background: none !important;
+}
+.offslide-text-layer .element,
+.offslide-text-layer .element *:not(.katex *) {
+  background: none !important;
+  box-shadow: none !important;
+  text-shadow: none !important;
+  outline: none !important;
+}
+
 /* --- filesystem agent panel and scratchpad --- */
 
 .agent-chat-panel {
@@ -5229,7 +5249,7 @@ button.ghost:hover:not(:disabled) { color: var(--text); background: transparent;
    EditorCanvas.beginPlayback); the slide and its handles wait underneath. */
 .build-preview-shield { position: fixed; z-index: 30; overflow: hidden; }
 .build-preview-frame { position: absolute; }
-.canvas-host.build-previewing > .stage > :is(.slide-layer, .overlay-layer) { opacity: 0; }
+.canvas-host.build-previewing > .stage > :is(.slide-layer, .offslide-text-layer, .overlay-layer) { opacity: 0; }
 
 .step-label { margin-bottom: 4px; }
 .timeline-row { gap: 6px; padding: 6px; }
@@ -5369,7 +5389,7 @@ button.ghost:hover:not(:disabled) { color: var(--text); background: transparent;
 .design-slide-preview > .slide { position: absolute; inset: 0; }
 .design-slide-preview .text-body,
 .design-slide-preview .text-content { visibility: visible; }
-.canvas-host.design-slide-previewing > .stage > .overlay-layer { visibility: hidden; }
+.canvas-host.design-slide-previewing > .stage > :is(.offslide-text-layer, .overlay-layer) { visibility: hidden; }
 .design-slide-preview-banner {
   position: absolute;
   top: 10px;
