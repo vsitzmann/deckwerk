@@ -23,6 +23,10 @@ if (!globalThis.crypto?.subtle) {
   Object.defineProperty(globalThis, 'crypto', { value: webcrypto, configurable: true });
 }
 
+// jsdom implements no media playback, and the measuring copy pauses each video
+// it releases (`releaseDecodedVideo`).
+HTMLMediaElement.prototype.pause = () => {};
+
 /**
  * jsdom does no layout, so every box measures 0×0 and the authored-versus-
  * rendered distinction this module exists to expose would be untestable. Give
@@ -358,6 +362,90 @@ describe('agent context publication', () => {
       deckPath: '/decks/context',
     });
     expect(parsed.success).toBe(true);
+  });
+});
+
+describe('the measuring copy', () => {
+  beforeEach(() => document.body.replaceChildren());
+
+  const clip = (id: string): SlideElement => ({
+    id, type: 'video', x: 0, y: 0, w: 1920, h: 1080, rot: 0, z: 1, opacity: 1,
+    class: [], style: {}, src: `assets/${id}.mp4`, fit: 'contain', autoplay: false,
+    loop: false, muted: true, controls: false, start: 0, end: null, poster: null,
+    sourceBox: null,
+  });
+
+  /** Every measuring host the bridge attaches, with what its videos carried at that moment. */
+  function watchHosts() {
+    const mounted: Array<{ host: HTMLElement; videoSources: Array<string | null> }> = [];
+    let peak = 0;
+    const observer = new MutationObserver((records) => {
+      for (const record of records) {
+        for (const node of record.addedNodes) {
+          if (!(node instanceof HTMLElement) || !node.classList.contains('agent-measure-host')) continue;
+          mounted.push({
+            host: node,
+            videoSources: [...node.querySelectorAll('video')].map((video) => video.getAttribute('src')),
+          });
+        }
+      }
+      peak = Math.max(peak, document.querySelectorAll('.agent-measure-host').length);
+    });
+    observer.observe(document.body, { childList: true });
+    return { mounted, peak: () => peak, stop: () => observer.disconnect() };
+  }
+
+  it('never gives a measured video a source', async () => {
+    // Each navigation measured the slide in a hidden copy whose <video>s kept
+    // their source, so Chromium opened a media pipeline for every one and
+    // garbage collection tore it down after the copy was dropped. On a deck
+    // with 57 videos that deadlocked the renderer's main and Media threads
+    // inside a GC prefinalizer (Nov 2026).
+    const h = harness(deckOf(
+      makeSlide('slide-1', [clip('intro')]),
+      makeSlide('slide-2', [clip('teaser'), clip('rollout')]),
+    ));
+    const hosts = watchHosts();
+    await h.bridge.flush();
+    h.store.selectSlide(1);
+    await h.bridge.flush();
+    hosts.stop();
+
+    expect(hosts.mounted.map((m) => m.videoSources)).toEqual([[null], [null, null]]);
+    expect(document.querySelectorAll('video')).toHaveLength(0);
+    // Measurement still describes the clips.
+    expect(h.scene('slide-2').elements.map((e) => e.media?.src)).toEqual(['assets/teaser.mp4', 'assets/rollout.mp4']);
+  });
+
+  it('measures one copy at a time while the window paints no frames', async () => {
+    // A hidden or covered window never runs requestAnimationFrame. Each store
+    // change started another publish anyway, and each waited for a frame with
+    // its copy of the slide attached: a background window on a synced deck
+    // collected dozens of them, all released at once when it was shown again.
+    const raf = vi.spyOn(window, 'requestAnimationFrame').mockImplementation(() => 0);
+    try {
+      const h = harness(deckOf(
+        makeSlide('slide-1', [clip('a')]),
+        makeSlide('slide-2', [clip('b')]),
+        makeSlide('slide-3', [clip('c')]),
+      ));
+      await h.bridge.flush();
+      const hosts = watchHosts();
+      const publishes: Array<Promise<void>> = [];
+      for (const index of [1, 2, 0, 1, 2]) {
+        h.store.selectSlide(index);
+        publishes.push(h.bridge.flush());
+      }
+      await Promise.all(publishes);
+      hosts.stop();
+
+      expect(hosts.peak()).toBe(1);
+      expect(document.querySelectorAll('.agent-measure-host')).toHaveLength(0);
+      // What was published last is where the editor ended up.
+      expect(h.latest().activeSlideId).toBe('slide-3');
+    } finally {
+      raf.mockRestore();
+    }
   });
 });
 
