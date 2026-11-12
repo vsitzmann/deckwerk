@@ -1,5 +1,5 @@
 import { curvedShadowClasses } from '@shared/shapeShadow.js';
-import { MIRRORED_TEXT_STYLE_PROPERTIES } from '@shared/deck.js';
+import { MIRRORED_TEXT_STYLE_PROPERTIES, videoSpeed } from '@shared/deck.js';
 import type { Deck, MediaEffect, Slide, SlideElement } from '@shared/deck.js';
 import { fitScale } from '@shared/geometry.js';
 import { elementTransform } from '@shared/flip.js';
@@ -147,6 +147,11 @@ export function applyVideoPlaybackState(
   // player's runtime loops start -> end instead, so the flag stays off whenever
   // an in- or out-point is set.
   video.loop = el.loop && el.start <= 0 && el.end === null;
+  // The default rate too: a reload (a new source, a pooled clip) resets the
+  // rate to it, and the canvas preview should play at the stored speed.
+  const speed = videoSpeed(el);
+  video.defaultPlaybackRate = speed;
+  if (video.playbackRate !== speed) video.playbackRate = speed;
   // An element waiting for its bytes in memory shows the server's still.
   const poster = el.poster ? opts.resolveSrc(el.poster) : video.dataset.stillPoster;
   if (poster) video.poster = poster;

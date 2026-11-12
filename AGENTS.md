@@ -299,7 +299,9 @@ turns into, not a list of things to opt into.
   seconds; an exported `<video src>` also carries `#t=<start>` so the page
   previews the right frame. The file is the `src` without that fragment, and
   `deck.json` never stores one: a hand-written `src="x.mp4#t=15,20"` with no
-  `data-trim` lands as `src: "x.mp4"`, `start: 15`, `end: 20`.
+  `data-trim` lands as `src: "x.mp4"`, `start: 15`, `end: 20`. A clip's
+  speed is `data-playback-rate="2"` (`playbackRate` in `deck.json`; absent
+  means normal speed), so don't re-encode a clip just to speed it up.
 - **Crops** — `object-fit: cover/contain` with an `object-position` that is
   not the default is a crop, and it is measured into the deck's own
   `sourceBox`, so the framing you chose is what the crop tool picks up when

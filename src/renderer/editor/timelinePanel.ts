@@ -141,6 +141,19 @@ export class TimelinePanel {
   private draggingEntryId: string | null = null;
   /** The build whose settings show under the overview. */
   private selectedEntryId: string | null = null;
+  /**
+   * Builds picked together in the overview with Shift or Cmd/Ctrl, in build
+   * order; empty unless there are two or more. Picking them selects their
+   * objects on the slide, and the pick lasts only while that selection does.
+   */
+  private multiEntryIds: string[] = [];
+  private multiSelectionKey: string | null = null;
+  /** Where a Shift-click range starts: the last build clicked. */
+  private entryAnchorId: string | null = null;
+  /** The overview's builds in the order its rows show them, for Shift ranges. */
+  private overviewOrder: string[] = [];
+  /** The row to give focus once the panel is drawn again (after a keyboard delete). */
+  private focusAfterRender: string | null = null;
   private stale = false;
 
   constructor(host: HTMLElement, store: EditorStore, preview: BuildPreview | null = null) {
@@ -162,7 +175,25 @@ export class TimelinePanel {
   }
 
   render(): void {
+    // Every render draws new rows. A row that had focus gets it back, so the
+    // keys meant for the build order (Delete, Cmd/Ctrl+A) keep reaching it
+    // rather than the window, where they act on the slide's objects.
+    const active = document.activeElement;
+    const focused = active instanceof HTMLElement && this.host.contains(active)
+      ? active.closest<HTMLElement>('.build-overview-row')?.dataset.entryId ?? null
+      : null;
+    this.renderPanel();
+    const refocus = this.focusAfterRender ?? focused;
+    this.focusAfterRender = null;
+    if (refocus) {
+      [...this.host.querySelectorAll<HTMLElement>('.build-overview-row')]
+        .find((row) => row.dataset.entryId === refocus)?.focus({ preventScroll: true });
+    }
+  }
+
+  private renderPanel(): void {
     this.stale = false;
+    this.overviewOrder = [];
     const slide = this.store.slide;
     this.host.replaceChildren();
     this.previewButtons = null;
@@ -301,14 +332,17 @@ export class TimelinePanel {
       return;
     }
 
+    const multi = this.currentMultiPick(slide, selection);
     // The build whose settings show below: the one picked in the overview,
     // or else the first one that animates what is selected on the slide.
     let chosen = slide.timeline.find((e) => e.id === this.selectedEntryId);
-    if (selection.size > 0 && (!chosen || !selection.has(chosen.action.target))) {
+    if (multi.length > 0) {
+      chosen = undefined;
+    } else if (selection.size > 0 && (!chosen || !selection.has(chosen.action.target))) {
       chosen = slide.timeline.find((e) => selection.has(e.action.target));
     }
     // Lines picked in a block's gutter pick the build on exactly those lines.
-    if (picked) {
+    if (picked && multi.length === 0) {
       const range = (entry: TimelineEntry) => lineBuildRange(entry);
       const onPicked = slide.timeline.find((e) => e.action.target === picked.elementId
         && range(e)?.from === picked.from && range(e)?.to === picked.to);
@@ -316,7 +350,8 @@ export class TimelinePanel {
         chosen = onPicked;
       }
     }
-    this.selectedEntryId = chosen?.id ?? null;
+    if (multi.length === 0) this.selectedEntryId = chosen?.id ?? null;
+    const pickedIds = new Set(multi.length > 0 ? multi : chosen ? [chosen.id] : []);
 
     // The overview: one compact row per build, under the click that starts
     // it, so the whole slide's choreography reads at a glance. Steps are
@@ -334,7 +369,8 @@ export class TimelinePanel {
         rendered.add(unit.sourceId);
         const entry = slide.timeline.find((e) => e.id === unit.sourceId);
         if (!entry) continue;
-        rows.push(this.orderRow(entry, slide, numbersBySource.get(entry.id) ?? []));
+        this.overviewOrder.push(entry.id);
+        rows.push(this.orderRow(entry, slide, numbersBySource.get(entry.id) ?? [], pickedIds.has(entry.id)));
       }
       if (rows.length === 0 && stepIndex > 0) return;
       const label = document.createElement('div');
@@ -344,11 +380,14 @@ export class TimelinePanel {
         : `Click ${stepIndex}`;
       overview.append(label, ...rows);
     });
+    overview.addEventListener('keydown', (event) => this.overviewKey(event, multi));
     stepsSection.appendChild(overview);
 
-    const detail = panelSection('Selected build', 'build-detail-section').section;
+    const detail = panelSection(multi.length > 0 ? 'Selected builds' : 'Selected build', 'build-detail-section').section;
     this.host.appendChild(detail);
-    if (chosen) {
+    if (multi.length > 0) {
+      detail.appendChild(this.multiPickCard(multi));
+    } else if (chosen) {
       detail.appendChild(this.entryRow(chosen, slide, numbersBySource.get(chosen.id) ?? []));
     } else {
       const hint = document.createElement('p');
@@ -363,13 +402,14 @@ export class TimelinePanel {
    * and how it starts. Clicking picks it (and its object on the slide);
    * dragging reorders, or drops it in the middle of another row to run with it.
    */
-  private orderRow(entry: TimelineEntry, slide: Slide, numbers: number[]): HTMLElement {
+  private orderRow(entry: TimelineEntry, slide: Slide, numbers: number[], picked: boolean): HTMLElement {
     const row = document.createElement('div');
     row.className = 'build-overview-row';
     row.setAttribute('role', 'listitem');
+    row.setAttribute('aria-selected', String(picked));
     row.dataset.entryId = entry.id;
     row.dataset.trigger = entry.trigger.on;
-    row.classList.toggle('selected', entry.id === this.selectedEntryId);
+    row.classList.toggle('selected', picked);
     row.draggable = true;
     row.tabIndex = 0;
     const targetEl = slide.elements.find((el) => el.id === entry.action.target);
@@ -393,20 +433,12 @@ export class TimelinePanel {
     when.textContent = `${trigger?.short ?? entry.trigger.on}${entry.trigger.delay > 0 ? ` +${seconds(entry.trigger.delay)}` : ''}`;
     row.title = `${linesName ?? (targetEl ? describeElement(targetEl) : 'Missing element')}: ${what.textContent}, ${when.textContent}`;
     row.append(num, name, what, when);
-    const pick = (): void => {
-      this.selectedEntryId = entry.id;
-      // Selecting the object re-renders the panel with this build picked; a
-      // build on some of a block's lines shows those lines picked too.
-      const lines = lineBuildRange(entry);
-      if (targetEl && lines) this.store.setCodeLineRange(targetEl.id, lines.from, lines.to);
-      else if (targetEl) this.store.select([targetEl.id]);
-      else this.render();
-    };
-    row.addEventListener('click', pick);
+    row.addEventListener('click', (event) => this.clickRow(entry, event));
     row.addEventListener('keydown', (event) => {
       if (event.key === 'Enter' || event.key === ' ') {
         event.preventDefault();
-        pick();
+        this.entryAnchorId = entry.id;
+        this.pickEntry(entry);
       }
     });
     row.addEventListener('dragstart', (event) => {
@@ -440,6 +472,165 @@ export class TimelinePanel {
       }, { label: mode === 'fuse' ? 'Group build animations' : 'Reorder build animations' });
     });
     return row;
+  }
+
+  /**
+   * A click on an overview row, as clicks pick in any list: plain picks this
+   * build alone, Cmd/Ctrl adds or drops it, Shift picks the range from the
+   * last build clicked (Cmd/Ctrl+Shift adds that range).
+   */
+  private clickRow(entry: TimelineEntry, event: MouseEvent): void {
+    const toggle = event.metaKey || event.ctrlKey;
+    const anchor = this.entryAnchorId !== null && this.overviewOrder.includes(this.entryAnchorId)
+      ? this.entryAnchorId : null;
+    if (!toggle && !(event.shiftKey && anchor)) {
+      this.entryAnchorId = entry.id;
+      this.pickEntry(entry);
+      return;
+    }
+    const current = this.multiEntryIds.length > 0
+      ? this.multiEntryIds
+      : this.selectedEntryId ? [this.selectedEntryId] : [];
+    let next: string[];
+    if (event.shiftKey && anchor) {
+      const from = this.overviewOrder.indexOf(anchor);
+      const to = this.overviewOrder.indexOf(entry.id);
+      const range = this.overviewOrder.slice(Math.min(from, to), Math.max(from, to) + 1);
+      next = toggle ? [...current, ...range] : range;
+    } else {
+      next = current.includes(entry.id) ? current.filter((id) => id !== entry.id) : [...current, entry.id];
+      this.entryAnchorId = entry.id;
+    }
+    this.pickEntries(next);
+  }
+
+  /** Pick one build: its settings show below and its object is selected on the slide. */
+  private pickEntry(entry: TimelineEntry): void {
+    this.multiEntryIds = [];
+    this.multiSelectionKey = null;
+    this.selectedEntryId = entry.id;
+    // Selecting the object re-renders the panel with this build picked; a
+    // build on some of a block's lines shows those lines picked too.
+    const targetEl = this.store.slide?.elements.find((el) => el.id === entry.action.target);
+    const lines = lineBuildRange(entry);
+    if (targetEl && lines) this.store.setCodeLineRange(targetEl.id, lines.from, lines.to);
+    else if (targetEl) this.store.select([targetEl.id]);
+    else this.render();
+  }
+
+  /** Pick several builds at once and select every object they animate. */
+  private pickEntries(ids: string[]): void {
+    const slide = this.store.slide;
+    if (!slide) return;
+    const wanted = new Set(ids);
+    const entries = this.overviewOrder
+      .filter((id) => wanted.has(id))
+      .map((id) => slide.timeline.find((entry) => entry.id === id))
+      .filter((entry): entry is TimelineEntry => entry !== undefined);
+    if (entries.length === 1) {
+      this.pickEntry(entries[0]);
+      return;
+    }
+    if (entries.length === 0) {
+      this.multiEntryIds = [];
+      this.multiSelectionKey = null;
+      this.selectedEntryId = null;
+      if (this.store.get().selection.size > 0) this.store.clearSelection();
+      else this.render();
+      return;
+    }
+    const targets = [...new Set(entries.map((entry) => entry.action.target))]
+      .filter((id) => slide.elements.some((el) => el.id === id));
+    this.multiEntryIds = entries.map((entry) => entry.id);
+    this.multiSelectionKey = selectionKey(targets);
+    if (selectionKey(this.store.get().selection) === this.multiSelectionKey) this.render();
+    else this.store.select(targets);
+  }
+
+  /**
+   * The builds picked together, or none. A pick lasts while the slide's
+   * selection is still the one it made: picking an object on the slide, or
+   * any other change of selection, ends it.
+   */
+  private currentMultiPick(slide: Slide, selection: Set<string>): string[] {
+    const ids = this.multiEntryIds.filter((id) => slide.timeline.some((entry) => entry.id === id));
+    if (ids.length < 2 || selectionKey(selection) !== this.multiSelectionKey) {
+      this.multiEntryIds = [];
+      this.multiSelectionKey = null;
+      return [];
+    }
+    this.multiEntryIds = ids;
+    return ids;
+  }
+
+  /**
+   * Keys on a focused overview row. Delete and Backspace remove builds here,
+   * never the objects they animate; Cmd/Ctrl+A picks every build.
+   */
+  private overviewKey(event: KeyboardEvent, multi: string[]): void {
+    const row = event.target instanceof HTMLElement
+      ? event.target.closest<HTMLElement>('.build-overview-row') : null;
+    const id = row?.dataset.entryId;
+    if (!id) return;
+    if (event.key === 'Delete' || event.key === 'Backspace') {
+      event.preventDefault();
+      event.stopPropagation();
+      // The focused row goes with the builds picked alongside it; on its own
+      // otherwise, as a list deletes what the keyboard is on.
+      this.deleteEntries(multi.includes(id) ? multi : [id], true);
+      return;
+    }
+    if ((event.metaKey || event.ctrlKey) && !event.altKey && event.key.toLowerCase() === 'a') {
+      event.preventDefault();
+      event.stopPropagation();
+      this.pickEntries(this.overviewOrder);
+    }
+  }
+
+  /** What the detail section shows while several builds are picked. */
+  private multiPickCard(ids: string[]): HTMLElement {
+    const card = document.createElement('div');
+    card.className = 'build-multi-pick';
+    const note = document.createElement('p');
+    note.className = 'insp-hint';
+    note.textContent = `${ids.length} builds selected. Shift-click picks a range, Cmd/Ctrl-click adds or removes one.`;
+    const remove = document.createElement('button');
+    remove.type = 'button';
+    remove.className = 'panel-action build-delete-picked';
+    remove.textContent = `Delete ${ids.length} builds`;
+    remove.title = 'Remove these build steps; the objects stay on the slide (Delete)';
+    remove.addEventListener('click', () => this.deleteEntries(ids, false));
+    card.append(note, remove);
+    return card;
+  }
+
+  /**
+   * Remove builds in one undoable step. Nothing is left selected on the slide
+   * afterwards, so a second Delete that lands on the window cannot take the
+   * objects too; from the keyboard, focus moves on to the next build.
+   */
+  private deleteEntries(ids: string[], fromKeyboard: boolean): void {
+    if (ids.length === 0) return;
+    const doomed = new Set(ids);
+    // The build that takes the first deleted one's place, else the one before it.
+    const order = this.overviewOrder;
+    const first = Math.max(0, order.findIndex((id) => doomed.has(id)));
+    const next = order.slice(first + 1).find((id) => !doomed.has(id))
+      ?? order.slice(0, first).reverse().find((id) => !doomed.has(id))
+      ?? null;
+    this.multiEntryIds = [];
+    this.multiSelectionKey = null;
+    this.selectedEntryId = null;
+    this.entryAnchorId = next;
+    if (fromKeyboard) this.focusAfterRender = next;
+    const slideIndex = this.store.get().slideIndex;
+    // Selection first: cleared after, the panel would pick a remaining build
+    // on the same object in between and keep it picked.
+    this.store.clearSelection();
+    this.store.commit((deck) => {
+      const slide = deck.slides[slideIndex];
+      slide.timeline = slide.timeline.filter((entry) => !doomed.has(entry.id));
+    }, { label: ids.length === 1 ? 'Delete build' : `Delete ${ids.length} builds` });
   }
 
   /**
@@ -854,6 +1045,10 @@ export class TimelinePanel {
 }
 
 export type BuildDropMode = 'before' | 'after' | 'fuse';
+
+function selectionKey(ids: Iterable<string>): string {
+  return [...ids].sort().join('\n');
+}
 
 /** Reorder one build entry; fuse means reveal alongside the target click. */
 export function reorderBuildEntry(

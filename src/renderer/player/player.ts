@@ -1,4 +1,4 @@
-import type { Deck, Slide, SlideElement, TimelineEntry } from '@shared/deck.js';
+import { videoSpeed, type Deck, type Slide, type SlideElement, type TimelineEntry } from '@shared/deck.js';
 import {
   type Cursor,
   type SlideState,
@@ -1666,7 +1666,8 @@ export class Player {
       }
 
       // Pooled videos arrive with whatever speed their last slide left them at.
-      if (video.playbackRate !== this.videoRate) video.playbackRate = this.videoRate;
+      const rate = this.playRate(el);
+      if (video.playbackRate !== rate) video.playbackRate = rate;
 
       if (state.playing.has(el.id) && state.visible.has(el.id) && !this.blanked) {
         this.keepPlaying(el.id, video);
@@ -1779,23 +1780,26 @@ export class Player {
       if (this.syncedGroups.has(group)) continue;
       if (!this.groupClockOf(members)) continue;
       this.syncedGroups.add(group);
-      const touched = new Set<HTMLVideoElement>();
+      const touched = new Map<HTMLVideoElement, VideoEl>();
       let frame = 0;
       const tick = (): void => {
         const clock = this.groupClockOf(members);
         if (!clock || !clock.video.isConnected) return;
         const playing = !clock.video.paused;
         const elapsed = clock.video.currentTime - clock.element.start;
+        // The whole group runs at its clock's speed: a follower at any other
+        // speed could not stay on the clock's frame.
+        const groupRate = this.playRate(clock.element);
         members.forEach((el, index) => {
           const video = clock.videos[index];
           if (!video || video.dataset.holdFrame === 'true') return;
-          touched.add(video);
+          touched.set(video, el);
           if (index === clock.index) {
             // The clock may have been a follower a moment ago, before every
-            // length was known: it runs at the presenter's speed, unbent.
+            // length was known: it runs at its own speed, unbent.
             this.parkedVideos.delete(video);
             video.classList.remove(SYNC_BLACK_CLASS);
-            if (video.playbackRate !== this.videoRate) video.playbackRate = this.videoRate;
+            if (video.playbackRate !== groupRate) video.playbackRate = groupRate;
             return;
           }
           const at = memberFrame(elapsed, clock.clips[index], clock.mode, clock.length);
@@ -1805,8 +1809,8 @@ export class Player {
           const followerPlaying = playing && !at.ended && this.intendedPlaying.has(el.id);
           const fix = followerCorrection(video.currentTime, at.time, followerPlaying);
           if (fix.seek !== undefined) video.currentTime = fix.seek;
-          // The correction bends the presenter's speed, not normal speed.
-          const rate = fix.rate * this.videoRate;
+          // The correction bends the group's speed, not normal speed.
+          const rate = fix.rate * groupRate;
           if (video.playbackRate !== rate) video.playbackRate = rate;
           if (!followerPlaying && !video.paused) video.pause();
           if (followerPlaying && video.paused) void video.play().catch(() => {});
@@ -1819,10 +1823,10 @@ export class Player {
       tick();
       this.mediaListeners.push(() => {
         cancelAnimationFrame(frame);
-        for (const video of touched) {
+        for (const [video, el] of touched) {
           this.parkedVideos.delete(video);
           video.classList.remove(SYNC_BLACK_CLASS);
-          video.playbackRate = this.videoRate;
+          video.playbackRate = this.playRate(el);
         }
       });
     }
@@ -2078,9 +2082,19 @@ export class Player {
     this.videoRate = rate;
     this.rateSlide = this.deck.slides[this.cursor.slide]?.id ?? null;
     // Sync-group followers pick the rate up on their next correction tick.
-    for (const video of this.stage.querySelectorAll('video')) video.playbackRate = this.videoRate;
+    const elements = this.deck.slides[this.cursor.slide]?.elements ?? [];
+    for (const video of this.stage.querySelectorAll('video')) {
+      const id = video.closest<HTMLElement>('[data-element-id]')?.dataset.elementId;
+      const el = elements.find((candidate) => candidate.id === id);
+      video.playbackRate = this.playRate(el?.type === 'video' ? el : undefined);
+    }
     if (badge) this.showRateBadge();
     return this.videoRate;
+  }
+
+  /** A clip's speed while presenting: its own stored speed times the presenter's. */
+  private playRate(el: VideoEl | undefined): number {
+    return this.videoRate * (el ? videoSpeed(el) : 1);
   }
 
   getVideoRate(): number {

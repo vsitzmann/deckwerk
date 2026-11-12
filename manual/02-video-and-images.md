@@ -22,6 +22,10 @@ Select a video, then drag the **Start** and **End** controls under **Props → T
 
 Use **Reset trim** to restore the full clip.
 
+### Speed
+
+**Props → Playback → Speed** sets how fast a video plays: 2 plays it twice as fast, 0.5 at half speed. Clear the field to go back to normal speed. Like the trim, speed leaves the file alone, and the trim still counts the file's own seconds. Videos that play in sync share one speed, so changing it on one changes it on all of them. While presenting, the speed keys still speed up or slow down the slide on top of this.
+
 > Screenshot placeholder: The video trim controls and frame preview.
 
 ### Crop
