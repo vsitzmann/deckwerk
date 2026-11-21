@@ -157,7 +157,7 @@ module.exports = {
     vendor: 'Vincent Sitzmann',
     synopsis: 'WYSIWYG slide editor with first-class video support',
     description:
-      'DeckWerk is an opinionated cross-platform WYSIWYG slide editor, optimized for ' +
+      'DeckWerk is an open-source, cross-platform WYSIWYG slide editor, optimized for ' +
       'presentations centered on video and image content, with native support for ' +
       'agent-assisted authoring and account-free collaboration on trusted networks.',
     desktop: {
