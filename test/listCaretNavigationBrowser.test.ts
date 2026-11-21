@@ -42,7 +42,8 @@ import { launchSafari, type SafariKey } from './support/safariDriver.js';
  * one further on.
  *
  * Chromium runs in the browser tier. Real Safari runs on a Mac when asked,
- * RUN_SAFARI_CARET=1 (as the CI `safari` job does).
+ * RUN_SAFARI_CARET=1; CI has no Safari job, so run it there after changing
+ * list markers or the typing sentinel.
  */
 
 const DECK_ID = 'list-caret-navigation';
