@@ -98,7 +98,9 @@ interface Page {
   close(): Promise<void>;
 }
 
-const KEY_CODES: Record<SafariKey, number> = { ArrowDown: 40, ArrowUp: 38, End: 35, Escape: 27, Enter: 13 };
+const KEY_CODES: Record<SafariKey, number> = {
+  ArrowDown: 40, ArrowUp: 38, ArrowLeft: 37, ArrowRight: 39, End: 35, Home: 36, Escape: 27, Enter: 13, Tab: 9, Backspace: 8,
+};
 
 async function openPage(kind: BrowserKind, profileDir: string): Promise<Page> {
   if (kind === 'Safari') {

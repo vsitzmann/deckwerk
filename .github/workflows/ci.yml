@@ -120,3 +120,11 @@ jobs:
         env:
           RUN_SAFARI_LATENCY: "1"
         run: npx vitest run --config vitest.serial.config.ts test/editingLatencyBrowser.test.ts -t "Safari"
+      # Where the caret goes in a list: past empty bullets with the arrows,
+      # and after the letter it follows. WebKit's caret is what was wrong;
+      # the Chromium half runs in `browser`.
+      - name: List caret in Safari (advisory)
+        if: ${{ !cancelled() }}
+        env:
+          RUN_SAFARI_CARET: "1"
+        run: npx vitest run --config vitest.browser.config.ts test/listCaretNavigationBrowser.test.ts -t "Safari"
