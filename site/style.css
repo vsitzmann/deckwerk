@@ -82,7 +82,8 @@ h1, h2, h3 { font-family: var(--serif); font-weight: 700; letter-spacing: -0.02e
   line-height: 1.2;
   letter-spacing: -0.015em;
   margin: 26px auto 0;
-  max-width: 24ch;
+  max-width: 30ch;
+  text-wrap: balance;
   color: var(--ink);
 }
 .hero .sub { margin: 18px auto 0; max-width: 56ch; color: var(--muted); font-size: 18px; }

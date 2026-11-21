@@ -1,6 +1,6 @@
 # DeckWerk
 
-**DeckWerk is an opinionated cross-platform what-you-see-is-what-you-get slide editor by Vincent Sitzmann.**
+**DeckWerk: open-source, collaborative and agentic slides, with perfect video.** A what-you-see-is-what-you-get slide editor for Linux, macOS and Windows, by Vincent Sitzmann.
 
 *Deck* as in slide deck, and *Werk* as in the German word that means "a work (of art, literature, etc)", a factory, or a structure.
 
@@ -58,7 +58,7 @@ DeckWerk starts from a different set of assumptions:
 - An AI agent should be able to edit the same presentation as a person.
 - Starting a collaborative session should not require creating accounts or uploading a talk to a third-party service.
 
-These assumptions make DeckWerk opinionated. It is not trying to reproduce every feature of PowerPoint or Keynote. It is trying to make a particular kind of visual, media-rich presentation easy to create and collaborate on in trusted networks and tailnets such as labs or companies.
+DeckWerk is not trying to reproduce every feature of PowerPoint or Keynote. It is trying to make a particular kind of visual, media-rich presentation easy to create and collaborate on in trusted networks and tailnets such as labs or companies.
 
 ## Design principles
 
