@@ -19,11 +19,24 @@ import { createServer } from 'node:net';
 const WEBDRIVER_KEYS = {
   ArrowDown: '\uE015',
   ArrowUp: '\uE013',
+  ArrowLeft: '\uE012',
+  ArrowRight: '\uE014',
   End: '\uE010',
+  Home: '\uE011',
   Escape: '\uE00C',
   Enter: '\uE007',
+  Tab: '\uE004',
+  Backspace: '\uE003',
 } as const;
 export type SafariKey = keyof typeof WEBDRIVER_KEYS;
+
+/** Modifier keys a chord holds down, as WebDriver spells them. */
+const WEBDRIVER_MODIFIERS = {
+  Shift: '\uE008',
+  Control: '\uE009',
+  Meta: '\uE03D',
+} as const;
+export type SafariModifier = keyof typeof WEBDRIVER_MODIFIERS;
 
 export interface SafariPage {
   evaluate<T>(expression: string): Promise<T>;
@@ -37,6 +50,10 @@ export interface SafariPage {
   type(text: string): Promise<void>;
   /** A real press of a named key. */
   press(key: SafariKey): Promise<void>;
+  /** A real click, or two, at a point in the viewport (CSS pixels). */
+  clickAt(x: number, y: number, count?: 1 | 2): Promise<void>;
+  /** A key (a character or a named key) pressed while the modifiers are held. */
+  chord(modifiers: SafariModifier[], key: SafariKey | string): Promise<void>;
   close(): Promise<void>;
 }
 
@@ -144,6 +161,34 @@ export async function launchSafari(): Promise<SafariPage> {
       await call('POST', `${session}/actions`, {
         actions: [{ type: 'key', id: 'keyboard', actions: [{ type: 'keyDown', value }, { type: 'keyUp', value }] }],
       });
+    },
+    async clickAt(x: number, y: number, count: 1 | 2 = 1): Promise<void> {
+      const press = [{ type: 'pointerDown', button: 0 }, { type: 'pointerUp', button: 0 }];
+      await call('POST', `${session}/actions`, {
+        actions: [{
+          type: 'pointer', id: 'mouse', parameters: { pointerType: 'mouse' },
+          actions: [
+            { type: 'pointerMove', origin: 'viewport', x: Math.round(x), y: Math.round(y) },
+            ...press,
+            ...(count === 2 ? [{ type: 'pause', duration: 60 }, ...press] : []),
+          ],
+        }],
+      });
+    },
+    async chord(modifiers: SafariModifier[], key: SafariKey | string): Promise<void> {
+      const value = key in WEBDRIVER_KEYS ? WEBDRIVER_KEYS[key as SafariKey] : key;
+      const held = modifiers.map((modifier) => WEBDRIVER_MODIFIERS[modifier]);
+      await call('POST', `${session}/actions`, {
+        actions: [{
+          type: 'key', id: 'keyboard', actions: [
+            ...held.map((modifier) => ({ type: 'keyDown', value: modifier })),
+            { type: 'keyDown', value }, { type: 'keyUp', value },
+            ...held.reverse().map((modifier) => ({ type: 'keyUp', value: modifier })),
+          ],
+        }],
+      });
+      // Releases every key the session holds, so a modifier cannot stick.
+      await call('DELETE', `${session}/actions`).catch(() => null);
     },
     async close(): Promise<void> {
       await call('DELETE', session).catch(() => null);

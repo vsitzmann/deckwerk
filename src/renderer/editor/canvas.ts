@@ -87,6 +87,8 @@ import {
   paragraphUnits,
   paragraphsToList,
   paragraphsToOrderedList,
+  retagList,
+  clearListMarkerOverrides,
   applyTableColumnWidths,
   pastedTableData,
   LIST_HOLDER_ATTRIBUTE,
@@ -483,6 +485,30 @@ function deleteSentinels(texts: Iterable<Text>): void {
       text.deleteData(at, TYPING_STYLE_SENTINEL.length);
     }
   }
+}
+
+/**
+ * Keep a pending run's sentinel in a text node of its own, apart from what is
+ * typed into the run.
+ *
+ * The caret of a pending run sits just before the sentinel, so each typed
+ * character lands in the sentinel's text node, right in front of it. Safari
+ * shapes a text node with Core Text, which folds an invisible U+2060 into the
+ * cluster of the letter before it, and WebKit draws a caret inside a cluster
+ * an even share of its width along: the caret stood in the middle of the
+ * letter just typed (Cmd+I, type, Cmd+I, type -- Nov 2026). Text in different
+ * nodes is never shaped together, so a sentinel alone in its node is a
+ * zero-width cluster of its own. Chromium shapes it apart either way.
+ */
+function isolateTypingSentinel(selection: Selection | null): void {
+  const node = selection?.rangeCount ? selection.getRangeAt(0).startContainer : null;
+  if (!(node instanceof Text) || !node.parentElement?.closest('[data-editor-typing-style]')) return;
+  const at = node.data.indexOf(TYPING_STYLE_SENTINEL);
+  if (at < 0 || node.data === TYPING_STYLE_SENTINEL) return;
+  // splitText moves a live caret past the split point into the new node and
+  // leaves one at it where it was, so the caret keeps its place.
+  const sentinel = at > 0 ? node.splitText(at) : node;
+  if (sentinel.data.length > TYPING_STYLE_SENTINEL.length) sentinel.splitText(TYPING_STYLE_SENTINEL.length);
 }
 
 function textNodesIn(root: Node): Text[] {
@@ -4939,6 +4965,7 @@ export class EditorCanvas {
         adoptComposedText(event.data, compositionPendingStyle);
       }
       compositionPendingStyle = null;
+      isolateTypingSentinel(window.getSelection());
       if (this.liveTextSync && !liveTimer) liveTimer = window.setTimeout(pushLive, 250);
       scheduleIdleSeal();
     };
@@ -5429,6 +5456,9 @@ export class EditorCanvas {
       ) {
         // The space that ends a URL is the moment it becomes a link.
         linkifyTypedUrl();
+      }
+      if (typed?.inputType === 'insertText' && !typed.isComposing) {
+        isolateTypingSentinel(window.getSelection());
       }
       if (el.type === 'text' && (el.autoFit || el.noWrap) && !el.autoSize) scheduleAutoFit(node!);
       if (el.type === 'text' && el.autoSize) this.followTextSizeWhileEditing(node!, el.id);
@@ -7244,8 +7274,8 @@ export class EditorCanvas {
     if (selectedBlocks.length === 0) return this.declineLiveTextFormat();
 
     // If any selected text belongs to a list, that whole top-level list is the
-    // formatting target. Unrelated paragraphs crossed by the Range are left
-    // alone; this is the familiar Keynote/word-processor list behaviour.
+    // formatting target. Bulleted and Numbered also take in the paragraphs the
+    // Range crosses (below); None leaves them alone.
     const selectedLists = selectedBlocks.filter((block) => /^(OL|UL)$/.test(block.tagName));
     const targets = selectedLists.length > 0 ? selectedLists : selectedBlocks;
     const inserted: Node[] = [];
@@ -7280,47 +7310,54 @@ export class EditorCanvas {
       }
     } else {
       const targetTag = style === 'Numbered' ? 'OL' : 'UL';
-      if (selectedLists.length === 0) {
+      // Every block the selection touches becomes part of the list, the
+      // paragraphs between and around lists too: choosing Bulleted over three
+      // paragraphs and a list makes four bullets, as in Keynote. Converting
+      // only the lists left the paragraphs as they were, so over a pasted
+      // list that had lost its markers the choice seemed to do nothing but
+      // move the selection (Nov 2026).
+      const convertParagraphs = (run: HTMLElement[]) => {
+        if (run.length === 0) return;
         // Keep the typed-marker inference used by automatic list conversion
         // (`1.`, `2)`, `*`, `-`) while limiting it to the selected blocks.
         const source = document.createElement('div');
-        targets.forEach((block) => source.appendChild(block.cloneNode(true)));
+        run.forEach((block) => source.appendChild(block.cloneNode(true)));
         const converted = style === 'Numbered'
           ? paragraphsToOrderedList(source.innerHTML)
           : paragraphsToList(source.innerHTML);
         const template = document.createElement('template');
         template.innerHTML = converted;
         const replacements = [...template.content.childNodes];
-        const parent = targets[0].parentNode;
-        if (!parent || replacements.length === 0) return false;
-        replacements.forEach((replacement) => parent.insertBefore(replacement, targets[0]));
-        targets.forEach((block) => block.remove());
+        const parent = run[0].parentNode;
+        if (!parent || replacements.length === 0) return;
+        replacements.forEach((replacement) => parent.insertBefore(replacement, run[0]));
+        run.forEach((block) => block.remove());
         inserted.push(...replacements);
         changed = true;
-      }
-      const retagList = (list: HTMLElement): HTMLElement => {
-        if (list.tagName === targetTag) return list;
-        const replacement = document.createElement(targetTag.toLowerCase());
-        for (const attr of [...list.attributes]) {
-          if (targetTag === 'UL' && attr.name === 'start') continue;
-          replacement.setAttribute(attr.name, attr.value);
-        }
-        while (list.firstChild) replacement.appendChild(list.firstChild);
-        list.replaceWith(replacement);
-        changed = true;
-        return replacement;
       };
-      for (const block of selectedLists) {
-        if (!/^(OL|UL)$/.test(block.tagName)) continue;
+      let run: HTMLElement[] = [];
+      for (const block of selectedBlocks) {
+        if (!/^(OL|UL)$/.test(block.tagName)) {
+          run.push(block);
+          continue;
+        }
+        convertParagraphs(run);
+        run = [];
         // Sub-lists are part of the list you are converting. Leaving them at
         // their old kind is what made converting a pasted, nested list look
         // like it did nothing at all: the visible items live in the sub-list.
-        const converted = retagList(block);
+        const converted = retagList(block, style === 'Numbered');
+        if (converted !== block) changed = true;
         for (const nested of [...converted.querySelectorAll<HTMLElement>('ul, ol')]) {
-          retagList(nested);
+          if (retagList(nested, style === 'Numbered') !== nested) changed = true;
         }
+        // A marker type on an item outranks the list's (type.css), so the
+        // style chosen here only shows once the items stop overriding it.
+        if (clearListMarkerOverrides(converted)) changed = true;
         inserted.push(converted);
       }
+      convertParagraphs(run);
+      if (inserted.length === 0) return false;
       // Merge adjacent lists created from a multi-paragraph selection.
       for (let index = 1; index < inserted.length; index++) {
         const previous = inserted[index - 1] as HTMLElement;

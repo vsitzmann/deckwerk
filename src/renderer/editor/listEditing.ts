@@ -1,8 +1,11 @@
 import {
   LIST_HOLDER_ATTRIBUTE,
-  LIST_MARKER_COLOR_ATTRIBUTE,
-  LIST_MARKER_COLOR_PROPERTY,
+  listItemParagraphs,
 } from '@shared/paragraphs.js';
+
+// Turning items into paragraphs is shared with the inspector's whole-box
+// "None", which works on stored html rather than the live surface.
+export { flattenListToParagraphs, listItemParagraphs } from '@shared/paragraphs.js';
 
 /**
  * Taking the bullet off one paragraph of a list.
@@ -24,103 +27,6 @@ export function isTopLevelListItem(content: HTMLElement, item: HTMLElement): boo
   const list = item.parentElement;
   return item.tagName === 'LI' && Boolean(list)
     && LIST_TAGS.test(list!.tagName) && list!.parentElement === content;
-}
-
-/** A paragraph carrying an item's own attributes, minus list-only paint. */
-function paragraphFrom(source: HTMLElement): HTMLElement {
-  const doc = source.ownerDocument ?? document;
-  const paragraph = doc.createElement('p');
-  for (const attr of [...source.attributes]) {
-    if (attr.name !== LIST_MARKER_COLOR_ATTRIBUTE) paragraph.setAttribute(attr.name, attr.value);
-  }
-  paragraph.style.removeProperty(LIST_MARKER_COLOR_PROPERTY);
-  paragraph.style.removeProperty('list-style-type');
-  if (!paragraph.getAttribute('style')?.trim()) paragraph.removeAttribute('style');
-  return paragraph;
-}
-
-/**
- * Every paragraph one list item's content becomes, in document order.
- *
- * A sub-list or a block written inside the item (Google Docs and Word both do
- * this) becomes its own paragraph exactly where it was, rather than being
- * appended after the item it was nested in. An empty item stays one empty
- * paragraph — that is the case the caret lands in most often.
- */
-export function listItemParagraphs(item: HTMLElement): HTMLElement[] {
-  const doc = item.ownerDocument ?? document;
-  const out: HTMLElement[] = [];
-  let current = paragraphFrom(item);
-  const flush = () => {
-    if (current.childNodes.length > 0) out.push(current);
-    current = paragraphFrom(item);
-  };
-  for (const node of [...item.childNodes]) {
-    if (node instanceof HTMLElement && LIST_TAGS.test(node.tagName)) {
-      flush();
-      for (const nested of [...node.children] as HTMLElement[]) {
-        if (nested.tagName === 'LI') out.push(...listItemParagraphs(nested));
-      }
-      continue;
-    }
-    if (node instanceof HTMLElement && node.tagName === 'LI') {
-      // Chromium's Return inside an item that holds a sub-list can leave an
-      // item nested straight inside an item. It is a paragraph of its own,
-      // exactly like a sub-list's items — never a paragraph's content.
-      flush();
-      out.push(...listItemParagraphs(node));
-      continue;
-    }
-    if (node instanceof HTMLElement && /^(?:P|DIV|H[1-6])$/.test(node.tagName)) {
-      flush();
-      const paragraph = paragraphFrom(node);
-      while (node.firstChild) paragraph.appendChild(node.firstChild);
-      out.push(paragraph);
-      continue;
-    }
-    current.appendChild(node);
-  }
-  flush();
-  if (out.length === 0) {
-    const empty = paragraphFrom(item);
-    empty.appendChild(doc.createElement('br'));
-    out.push(empty);
-  }
-  return out;
-}
-
-/**
- * Turn one whole list into plain paragraphs, in place.
- *
- * Sub-lists, blocks written inside an item, and the malformed shapes
- * contenteditable leaves behind all become paragraphs exactly where they
- * stood, so nothing is reordered and nothing is dropped.
- */
-export function flattenListToParagraphs(list: HTMLElement): HTMLElement[] {
-  const doc = list.ownerDocument ?? document;
-  const fragment = doc.createDocumentFragment();
-  const paragraphs: HTMLElement[] = [];
-  const take = (item: HTMLElement) => {
-    for (const paragraph of listItemParagraphs(item)) {
-      fragment.appendChild(paragraph);
-      paragraphs.push(paragraph);
-    }
-  };
-  for (const child of [...list.children] as HTMLElement[]) {
-    if (child.tagName === 'LI') {
-      take(child);
-      continue;
-    }
-    // A sub-list Chromium wrote as a sibling of the items rather than inside
-    // one of them. Its items are paragraphs too, where they stand.
-    if (LIST_TAGS.test(child.tagName)) {
-      for (const nested of [...child.children] as HTMLElement[]) {
-        if (nested.tagName === 'LI') take(nested);
-      }
-    }
-  }
-  list.replaceWith(fragment);
-  return paragraphs;
 }
 
 /**

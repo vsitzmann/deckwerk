@@ -850,6 +850,64 @@ body.panel-resizing iframe { pointer-events: none; }
   user-select: text;
 }
 
+/*
+ * List markers while a box is edited: the same pixels type.css paints, drawn
+ * by boxes WebKit can move the caret past.
+ *
+ * WebKit cannot move the caret up or down into or out of a line that holds
+ * an atomic inline (an inline-block) and nothing but a `<br>`, and type.css
+ * draws every marker as an inline-block. So in Safari, ArrowDown from the
+ * bullet above an empty one did nothing, ArrowUp from the bullet below did
+ * nothing, and the next keystroke landed on the line the caret was stuck on
+ * (Nov 2026). Chromium navigates either way. A non-atomic inline or an
+ * out-of-flow box does not trip it:
+ *
+ * - The disc becomes an inline with no advance whose own box is a disc-sized
+ *   circle on the baseline, painted where the inline-block painted it by an
+ *   offset shadow. The box starts where the text does, so the caret of an
+ *   empty item is drawn after the bullet, not before it (see type.css).
+ *   `--list-item-em` carries the item's em into it: its own font size is
+ *   zero, so that its box sits exactly on the baseline.
+ * - A text marker (a number, the dash) keeps its inline-block wherever its
+ *   line has text, which aligns it with the baseline of whatever the line
+ *   holds. On a line that starts with a `<br>` it is taken out of flow at the
+ *   line's start; that line is the bare strut, so the marker's own line, in
+ *   the item's font, has the same baseline.
+ *
+ * `test/listArrowNavigationBrowser.test.ts` walks the caret through both.
+ */
+@property --list-item-em {
+  syntax: '<length>';
+  inherits: true;
+  initial-value: 0px;
+}
+.element.editing .text-body li {
+  --list-item-em: 1em;
+}
+.element.editing .text-body ul > li:not(ul ul > li)::before {
+  position: static;
+  display: inline;
+  min-width: 0;
+  height: auto;
+  font-size: 0;
+  /* Nor a line height: an inline's own line height is laid out around the
+     baseline, and a fixed one (the box's line spacing) made the line taller. */
+  line-height: 0;
+  vertical-align: baseline;
+  margin: 0 calc(-0.3125 * var(--list-item-em)) 0 0;
+  padding: calc(0.15625 * var(--list-item-em));
+  border-radius: 50%;
+  background: none;
+  /* One indent left, and up from the baseline to 0.16em under the disc. */
+  box-shadow: calc(-1.4 * var(--list-item-em)) calc(-0.31625 * var(--list-item-em)) 0 0 currentColor;
+}
+.element.editing .text-body :is(ol > li, ul ul > li):has(> br:first-child)::before {
+  position: absolute;
+  left: auto;
+  margin-right: 0;
+  margin-left: -1.4em;
+}
+
 .sel-box {
   position: absolute;
   /* --inv counteracts the stage scale so chrome is a constant on-screen size. */

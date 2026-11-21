@@ -279,7 +279,10 @@ const SEEN_LINES = `((selector) => {
     let marker = '';
     if (before.content && before.content !== 'none' && before.display !== 'none') {
       if (before.content.includes('counter')) marker = (numbers.get(item) ?? '?') + '.';
-      else if (before.content === '""') marker = before.backgroundImage !== 'none' ? '•' : '';
+      // The drawn disc: a background, or while the box is edited a shadow (editor.css).
+      else if (before.content === '""') {
+        marker = before.backgroundImage !== 'none' || (before.boxShadow && before.boxShadow !== 'none') ? '•' : '';
+      }
       else marker = before.content.replace(/^"|"$/g, '');
     } else if (own.listStyleType !== 'none' && getComputedStyle(item, '::marker').content !== '""') {
       marker = '*';
