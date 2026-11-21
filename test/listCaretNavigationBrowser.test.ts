@@ -36,7 +36,7 @@ import { launchSafari, type SafariKey } from './support/safariDriver.js';
  * engines: a collapsed caret is drawn at the edge of the glyph it follows.
  *
  * The walk at the end is the fuzz the report asked for: arrows, typing,
- * Return, Tab and Shift+Tab, Home and End, Backspace and format toggles in a
+ * Return, Tab and Shift+Tab, to a line's start and end, Backspace and format toggles in a
  * seeded order, and after every ArrowUp or ArrowDown the caret must be on the
  * neighbouring line of the box -- the very next one, not the same one and not
  * one further on.
@@ -57,9 +57,9 @@ const BROWSERS: BrowserKind[] = [
 ];
 
 /** Keys the walk presses by name. */
-type Key = Extract<SafariKey, 'ArrowUp' | 'ArrowDown' | 'End' | 'Home' | 'Enter' | 'Tab' | 'Backspace' | 'Escape'>;
+type Key = Extract<SafariKey, 'ArrowUp' | 'ArrowDown' | 'Enter' | 'Tab' | 'Backspace' | 'Escape'>;
 const KEY_CODES: Record<Key, number> = {
-  ArrowUp: 38, ArrowDown: 40, End: 35, Home: 36, Enter: 13, Tab: 9, Backspace: 8, Escape: 27,
+  ArrowUp: 38, ArrowDown: 40, Enter: 13, Tab: 9, Backspace: 8, Escape: 27,
 };
 
 interface Page {
@@ -69,6 +69,8 @@ interface Page {
   press(key: Key): Promise<void>;
   /** Shift+Tab. */
   outdent(): Promise<void>;
+  /** To the start or end of the line: Home and End, or Cmd+Left and Cmd+Right on a Mac, where Home and End scroll. */
+  lineEdge(edge: 'start' | 'end'): Promise<void>;
   /** Cmd (Ctrl off a Mac) with a letter: the format toggles. */
   format(letter: 'b' | 'i'): Promise<void>;
   close(): Promise<void>;
@@ -85,6 +87,7 @@ async function openPage(kind: BrowserKind, url: string, profileDir: string): Pro
       type: (text) => safari.type(text),
       press: (key) => safari.press(key),
       outdent: () => safari.chord(['Shift'], 'Tab'),
+      lineEdge: (edge) => safari.chord(['Meta'], edge === 'end' ? 'ArrowRight' : 'ArrowLeft'),
       format: (letter) => safari.chord(['Meta'], letter),
       close: () => safari.close(),
     };
@@ -101,6 +104,10 @@ async function openPage(kind: BrowserKind, url: string, profileDir: string): Pro
     type: (text) => cdp.typeKeys(text),
     press: (key) => cdp.key(key, KEY_CODES[key]),
     outdent: () => cdp.chord('Tab', 'Tab', 9, 8),
+    lineEdge: (edge) => (process.platform === 'darwin'
+      ? cdp.chord(edge === 'end' ? 'ArrowRight' : 'ArrowLeft', edge === 'end' ? 'ArrowRight' : 'ArrowLeft',
+        edge === 'end' ? 39 : 37, 4)
+      : cdp.key(edge === 'end' ? 'End' : 'Home', edge === 'end' ? 35 : 36)),
     format: (letter) => cdp.chord(letter, `Key${letter.toUpperCase()}`, letter.toUpperCase().charCodeAt(0), mod),
     close: async () => {
       cdp.close();
@@ -254,8 +261,8 @@ for (const kind of BROWSERS) {
       await page.doubleClickAt(point.x, point.y);
       await eventually(async () => page.evaluate<boolean>(
         `document.querySelector(${JSON.stringify(CONTENT)})?.isContentEditable === true`), 'the box never opened');
-      // The double-click selects a word; End puts a plain caret after it.
-      await page.press('End');
+      // The double-click selects a word; the line's end is a plain caret after it.
+      await page.lineEdge('end');
       await wait(100);
     };
 
@@ -343,7 +350,10 @@ for (const kind of BROWSERS) {
         check('typing in the format', inside);
         check('just toggled off', toggled);
         check('typing after it', after);
-        expect(await caret('after typing'), await markup()).toMatchObject({ block: 0, text: 'alpha abfilxy' });
+        const typed = await caret('after typing');
+        if (typed.block !== 0 || typed.text !== 'alpha abfilxy') {
+          wrong.push(`Cmd+${letter}: the words landed as "${typed.text}" in block ${typed.block}: ${await markup()}`);
+        }
       }
       expect(wrong, 'carets drawn away from the end of the letter they follow').toEqual([]);
     });
@@ -387,8 +397,9 @@ for (const kind of BROWSERS) {
             move = `Cmd+${letter}`;
             await page.format(letter);
           } else if (roll < 0.51) {
-            move = next() < 0.5 ? 'End' : 'Home';
-            await press(move as Key);
+            const edge = next() < 0.5 ? 'end' : 'start';
+            move = `line ${edge}`;
+            await page.lineEdge(edge);
           } else if (roll < 0.55) {
             move = 'Backspace';
             await press('Backspace');
