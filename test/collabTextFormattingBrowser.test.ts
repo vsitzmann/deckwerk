@@ -203,9 +203,11 @@ describe.skipIf(!electronBinary)('text formatting in the collaboration browser',
       const item = document.querySelector('#canvas [data-element-id="${BODY_ID}"] .text-body li');
       if (getComputedStyle(item).listStyleType !== 'none') return true;
       const marker = getComputedStyle(item, '::before');
+      // While the box is edited the disc is a shadow (editor.css).
+      const shadow = marker.boxShadow && marker.boxShadow !== 'none';
       const painted = marker.content !== 'none' && marker.display !== 'none'
-        && parseFloat(marker.minWidth || marker.width) > 0
-        && (marker.content !== '""' || marker.backgroundImage !== 'none');
+        && (parseFloat(marker.minWidth || marker.width) > 0 || shadow)
+        && (marker.content !== '""' || marker.backgroundImage !== 'none' || shadow);
       return painted;
     })()`), 'the bullet marker does not paint').toBe(true);
 

@@ -237,6 +237,62 @@ export function stripLayoutDeclarations(
 }
 
 /**
+ * The list paint a browser's copy writes onto every list and item: their
+ * computed style, not anything the author chose.
+ *
+ * type.css draws markers itself and so gives every item `list-style-type:
+ * none`; Chromium and Safari copy that onto each `<li>`, and an item's own
+ * marker type is what type.css reads as a request for the browser's native
+ * markers -- here, none. A list copied from one box and pasted into another
+ * kept its structure and lost every bullet, and the List control could not
+ * bring them back (Nov 2026). Other sources (Google Docs, any web page)
+ * write the browser's default for the level (`disc`, `circle`, `square`,
+ * `decimal`), which would trade the deck's markers for native ones. Both go;
+ * a type that is neither (`lower-roman`, a `square` first level) is the
+ * source's own and stays. Position, image and counters are the item box's,
+ * as is the editor-only `--list-item-em` (editor.css).
+ */
+export function stripEchoedListStyles(root: ParentNode): boolean {
+  let changed = false;
+  const remove = (node: HTMLElement, property: string) => {
+    if (!node.style.getPropertyValue(property)) return;
+    node.style.removeProperty(property);
+    changed = true;
+  };
+  for (const node of [...root.querySelectorAll<HTMLElement>('[style]')]) {
+    if (!node.style) continue;
+    remove(node, '--list-item-em');
+    if (/^(?:UL|OL|LI)$/.test(node.tagName)) {
+      remove(node, 'list-style-position');
+      remove(node, 'list-style-image');
+    }
+    if (node.tagName === 'LI') {
+      remove(node, 'counter-increment');
+      remove(node, 'counter-reset');
+      remove(node, 'counter-set');
+      const type = node.style.getPropertyValue('list-style-type').trim();
+      if (type === 'none' || (type && type === defaultItemMarker(node))) {
+        remove(node, 'list-style-type');
+      }
+    }
+    if (!node.getAttribute('style')?.trim()) node.removeAttribute('style');
+  }
+  return changed;
+}
+
+/** The marker a browser gives an item of its list on its own. */
+function defaultItemMarker(item: HTMLElement): string | null {
+  const list = item.parentElement;
+  if (list?.tagName === 'OL') return 'decimal';
+  if (list?.tagName !== 'UL') return null;
+  let depth = 0;
+  for (let up = list.parentElement?.closest('ul, ol'); up; up = up.parentElement?.closest('ul, ol')) {
+    depth += 1;
+  }
+  return depth === 0 ? 'disc' : depth === 1 ? 'circle' : 'square';
+}
+
+/**
  * Drop the size auto-fit wrote on a box (`fitted`, the `font-size` on its
  * `.text-content`) wherever a run below `root` repeats it, and unwrap a span
  * that has nothing left to say.
@@ -509,6 +565,7 @@ export function sanitizePastedTextHtml(html: string): string {
     if (!node.getAttribute('style')?.trim()) node.removeAttribute('style');
   }
   stripLayoutDeclarations(root);
+  stripEchoedListStyles(root);
   stripRunBackgrounds(root);
   for (const node of root.querySelectorAll<HTMLElement>('*')) {
     for (const attribute of [...node.attributes]) {
