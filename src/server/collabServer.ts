@@ -1428,12 +1428,28 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
     ...(bridge && bridge.clientId !== 'http' ? { clientId: bridge.clientId } : {}),
     ...(participant ? { agentFor: participant } : {}),
   });
-  const publishAgentPresence = (room: Room, slideId: string): void => {
+  /**
+   * Show which slide an agent is looking at. A person's bridge already has a
+   * ⚙ chip of its own (its socket), so that chip moves rather than a second
+   * one appearing beside it. Without such a socket the server shows one
+   * stand-in chip, marked as an agent and, with --access, named after whose
+   * agent it is — never the bridge's generic "Your agent", which every other
+   * person in the deck would read as somebody called "YA".
+   */
+  const publishAgentPresence = (room: Room, slideId: string, identity: Identity | null): void => {
     if (!agentMode && !sharedAgent) return;
+    const bridge = [...room.peers.values()].find((peer) => peer.greeted && peer.agentFor
+      && (!accessControl || peer.identity?.login === identity?.login));
+    if (bridge) {
+      bridge.state = { ...bridge.state, activeSlideId: slideId, selectedSlideIds: [slideId] };
+      broadcast(room, { kind: 'presence', state: bridge.state });
+      return;
+    }
     room.agentPresence = {
       clientId: 'agent-http',
-      name: sharedAgent?.name ?? 'Agent',
+      name: identity ? `${identity.name} · agent` : sharedAgent?.name ?? 'Agent',
       color: PALETTE[0],
+      agent: true,
       activeSlideId: slideId,
       selectedSlideIds: [slideId],
       selectedElementIds: [],
@@ -4266,7 +4282,7 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
       const room = await getRoom(deckParam);
       const slide = room.session.deck.slides.find((candidate) => candidate.id === slideId);
       if (!slide) return respondJson(response, 404, { error: `no slide ${slideId}` });
-      publishAgentPresence(room, slideId);
+      publishAgentPresence(room, slideId, identity);
       const html = slidesToHtml([slide], room.session.deck.canvas, {
         typeCss: PLAYER_TYPE_CSS,
         base: `/decks/${encodeURIComponent(deckParam)}/`,
@@ -4297,7 +4313,7 @@ export async function startCollabServer(options: CollabServerOptions): Promise<R
       if (index < 0) return respondJson(response, 404, { error: `no slide ${slideId}` });
       // The real-player URL is the point at which the agent declares what it
       // is visually inspecting. Surface that slide in every connected editor.
-      publishAgentPresence(room, slideId);
+      publishAgentPresence(room, slideId, identity);
       respondJson(response, 200, {
         slideId,
         slide: index + 1,
