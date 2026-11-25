@@ -1,4 +1,4 @@
-import { createPresentationButton } from '../src/renderer/editor/presentationButton.js';
+import { createPresentationButton, handlePresentationShortcut } from '../src/renderer/editor/presentationButton.js';
 import { JSDOM } from 'jsdom';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -185,6 +185,31 @@ describe('shared editor controls', () => {
       expect(launches).toEqual([{ speaker, mode }]);
       launches.length = 0;
     }
+  });
+
+  it('starts the selected mode with Option+Cmd+P, including macOS’s π key value', () => {
+    const launches: string[] = [];
+    const control = createPresentationButton((speaker, mode) => launches.push(speaker ? 'speaker' : mode));
+    document.body.replaceChildren(control);
+    const key = (extra: KeyboardEventInit = {}) => new window.KeyboardEvent('keydown', {
+      key: 'π', code: 'KeyP', metaKey: true, altKey: true, cancelable: true, ...extra,
+    });
+    for (const [label, expected] of [['Fullscreen', 'fullscreen'], ['In Window', 'windowed'], ['In Editor', 'editor'], ['Speaker View', 'speaker']]) {
+      control.querySelector<HTMLButtonElement>('.toolbar-split-menu')!.click();
+      [...control.querySelectorAll<HTMLButtonElement>('[role="menuitemradio"]')].find((item) => item.textContent === label)!.click();
+      const event = key();
+      expect(handlePresentationShortcut(event)).toBe(true);
+      expect(event.defaultPrevented).toBe(true);
+      expect(launches.pop()).toBe(expected);
+    }
+    expect(handlePresentationShortcut(key({ repeat: true }))).toBe(true);
+    expect(launches).toEqual([]);
+    for (const extra of [{ altKey: false }, { metaKey: false }, { shiftKey: true }, { ctrlKey: true }, { code: 'KeyO' }]) {
+      expect(handlePresentationShortcut(key(extra))).toBe(false);
+    }
+    control.querySelector<HTMLButtonElement>('.toolbar-split-main')!.disabled = true;
+    expect(handlePresentationShortcut(key())).toBe(false);
+    expect(launches).toEqual([]);
   });
 
   it('progressively compacts the toolbar before controls can overlap', () => {

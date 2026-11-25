@@ -116,7 +116,8 @@ describe.skipIf(!electronBinary)('leaving a browser presentation', () => {
     if (mode !== 'fullscreen') {
       await editor.click('[aria-label="Presentation options"]');
       await editor.clickByText('button', mode === 'editor' ? 'In Editor' : 'In Window');
-      await editor.clickByText('button', 'Present', 'Present');
+      await editor.call('Input.dispatchKeyEvent', { type: 'keyDown', key: 'π', code: 'KeyP', windowsVirtualKeyCode: 80, modifiers: 5 });
+      await editor.call('Input.dispatchKeyEvent', { type: 'keyUp', key: 'π', code: 'KeyP', windowsVirtualKeyCode: 80, modifiers: 5 });
     } else await editor.clickByText('button', 'Present', 'Present');
     const playback = editor;
     const stage = `document.querySelector('iframe[src*="present.html"]')?.contentDocument?.getElementById('stage')`;

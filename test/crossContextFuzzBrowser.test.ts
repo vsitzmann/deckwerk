@@ -159,7 +159,7 @@ type OpName =
   | 'rail hop' | 'slide section round-trip' | 'undo' | 'redo' | 'undo round-trip' | 'delete selection'
   | 'cmd+a' | 'click with stray hover' | 'rail multi-delete' | 'stack key' | 'spelling fix'
   | 'size from sidebar' | 'flip from sidebar' | 'viewport gesture' | 'pen abandoned' | 'pen line undone'
-  | 'present in editor' | 'present in window' | 'pencil stroke undone' | 'line bent and undone' | 'build multi-delete';
+  | 'present in editor' | 'present in window' | 'present shortcut' | 'pencil stroke undone' | 'line bent and undone' | 'build multi-delete';
 
 interface Violation { seed: number; step: number; op: OpName; oracle: string; detail: string }
 
@@ -179,6 +179,7 @@ describe.skipIf(!electronBinary)('cross-context fuzz over three elements and two
     await session.reset();
     await performOp('present in window', random(902026), await session.state(), () => {});
     await performOp('present in editor', random(902026), await session.state(), () => {});
+    await performOp('present shortcut', random(902026), await session.state(), () => {});
     expect(await session.problems()).toEqual([]);
   });
 
@@ -423,6 +424,7 @@ function chooseOp(next: () => number, pre: CrossState): OpName {
   };
   add('present in window', 1);
   add('present in editor', 1);
+  add('present shortcut', 1);
   if (targets.length > 0) {
     add('click', 3);
     add('shift-click', 2);
@@ -478,12 +480,16 @@ async function performOp(
 ): Promise<'same' | 'resync' | string[]> {
   const targets = targetsOn(pre);
   switch (op) {
+    case 'present shortcut':
     case 'present in editor':
     case 'present in window': {
       const before = await session.deckSnapshot();
       await session.cdp.click('[aria-label="Presentation options"]');
       await session.cdp.clickByText('button', op === 'present in editor' ? 'In Editor' : 'In Window');
-      await session.cdp.clickByText('button', 'Present', 'Present');
+      if (op === 'present shortcut') {
+        await session.cdp.call('Input.dispatchKeyEvent', { type: 'keyDown', key: 'π', code: 'KeyP', windowsVirtualKeyCode: 80, modifiers: 5 });
+        await session.cdp.call('Input.dispatchKeyEvent', { type: 'keyUp', key: 'π', code: 'KeyP', windowsVirtualKeyCode: 80, modifiers: 5 });
+      } else await session.cdp.clickByText('button', 'Present', 'Present');
       await eventually(
         async () => session.cdp.evaluate(`!!document.querySelector('iframe[src*="present.html"]')?.contentDocument?.querySelector('#stage .slide')`),
         'In Window did not paint in the existing window', Boolean,

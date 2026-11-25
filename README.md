@@ -82,6 +82,9 @@ Slide numbers and progress totals count only unskipped slides. Hidden slides sho
 CLI references follow the visible-slide numbering. Collapsing a section does not
 change its slides' numbers. The navigator's scrollbar stays visible while idle.
 
+Press **Option+Command+P** on macOS to start the selected presentation mode,
+just like clicking **Present**.
+
 ## Design principles
 
 ### Cross-platform

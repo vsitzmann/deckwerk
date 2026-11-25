@@ -1,3 +1,4 @@
+import { handlePresentationShortcut } from './presentationButton.js';
 import type { Comment, SlideElement } from '@shared/deck.js';
 import { openThreadCount } from '@shared/comments.js';
 import { commentHighlightsShown, setCommentHighlightsShown } from './comments.js';
@@ -342,6 +343,7 @@ export function bindEditorKeys(deps: ShellDeps, clipboard: ClipboardActions): vo
     // Modal workflows own their keyboard input; a second Cmd+V must not start
     // another paste behind the theme-choice dialog.
     if (document.querySelector('[aria-modal="true"]')) return;
+    if (handlePresentationShortcut(e)) return;
     // Cmd/Ctrl +, - and 0 zoom the canvas wherever focus is: no field gives
     // them a meaning of its own, and left alone they would zoom the whole
     // interface (the browser's page zoom, the desktop menu's zoom roles).
