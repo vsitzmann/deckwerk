@@ -5358,9 +5358,10 @@ button.ghost:hover:not(:disabled) { color: var(--text); background: transparent;
   font-variant-numeric: tabular-nums;
   text-align: center;
   white-space: nowrap;
-  cursor: default;
+  cursor: grab;
 }
 .build-click-pill[data-drop-mode="before"] { box-shadow: 0 0 0 2px var(--accent); }
+.build-click-pill.dragging { opacity: 0.4; }
 .build-click-pill:not(:first-child),
 .build-overview-row[data-click-start]:not(:nth-child(2)) { margin-top: 5px; }
 .build-overview-row {
@@ -5385,6 +5386,9 @@ button.ghost:hover:not(:disabled) { color: var(--text); background: transparent;
 .build-overview-row[data-drop-mode="before"] { box-shadow: inset 0 2px 0 var(--accent); }
 .build-overview-row[data-drop-mode="after"] { box-shadow: inset 0 -2px 0 var(--accent); }
 .build-overview-row[data-drop-mode="fuse"] { outline: 2px solid var(--accent); background: var(--accent-soft); }
+.build-overview-row[data-group-drop="before"] { box-shadow: inset 0 2px 0 var(--accent); }
+.build-overview-row[data-group-drop="after"] { box-shadow: inset 0 -2px 0 var(--accent); }
+.build-overview-row[data-group-drop="fuse"] { background: var(--accent-soft); }
 .build-overview-row > .build-target-name { flex: 1 1 auto; min-width: min(6em, 45%); overflow: hidden; font-size: 11px; color: var(--text); text-overflow: ellipsis; white-space: nowrap; }
 /* When the row is short of room the effect gives way long before the name. */
 .build-overview-effect { flex: 0 50 auto; min-width: 0; overflow: hidden; color: var(--muted); font: 10px var(--mono); text-overflow: ellipsis; white-space: nowrap; }

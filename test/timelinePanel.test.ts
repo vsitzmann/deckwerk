@@ -2,7 +2,8 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { emptyDeck } from '../src/shared/deck.js';
 import { EditorStore } from '../src/renderer/editor/store.js';
-import { edgeScroll, TimelinePanel } from '../src/renderer/editor/timelinePanel.js';
+import { edgeScroll, moveBuildGroup, TimelinePanel } from '../src/renderer/editor/timelinePanel.js';
+import type { TimelineEntry } from '../src/shared/deck.js';
 
 describe('Build panel interactions', () => {
   beforeEach(() => document.body.replaceChildren());
@@ -163,6 +164,83 @@ describe('Build panel interactions', () => {
     fire(pills()[0], 'drop');
     expect(store.slide?.timeline.map((entry) => entry.id)).toEqual(['t-3', 't-1', 't-2']);
     expect(pills().map((pill) => pill.textContent)).toEqual(['1', '2', '3']);
+  });
+
+  it('drags a click pill to move all of its builds at once', () => {
+    const deck = emptyDeck('Build');
+    for (const id of ['a', 'b', 'c', 'd']) {
+      deck.slides[0].elements.push({ id, type: 'text', x: 0, y: 0, w: 100, h: 50, rot: 0, z: 1,
+        opacity: 1, class: [], style: {}, html: id.toUpperCase(), align: 'left', valign: 'top' });
+    }
+    const step = (id: string, target: string, on: 'click' | 'withPrev') =>
+      ({ id, trigger: { on, ref: null, delay: 0 }, action: { type: 'appear' as const, target, value: null } });
+    deck.slides[0].timeline.push(
+      step('t-1', 'a', 'click'), step('t-2', 'b', 'click'), step('t-3', 'c', 'withPrev'), step('t-4', 'd', 'click'));
+    const store = new EditorStore(deck, '/tmp/build');
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    new TimelinePanel(host, store);
+
+    const pills = () => [...host.querySelectorAll<HTMLElement>('.build-click-pill')];
+    const row = (id: string) => host.querySelector<HTMLElement>(`.build-overview-row[data-entry-id="${id}"]`)!;
+    const transfer = { setData() {}, effectAllowed: '', dropEffect: '' };
+    const fire = (target: Element, type: string) => {
+      const event = new MouseEvent(type, { bubbles: true, cancelable: true });
+      Object.defineProperty(event, 'dataTransfer', { value: transfer });
+      target.dispatchEvent(event);
+    };
+    expect(pills()[1].draggable).toBe(true);
+
+    // Click 2 (b and c) onto click 1's pill: both builds move above a.
+    fire(pills()[1], 'dragstart');
+    expect(row('t-2').classList.contains('dragging')).toBe(true);
+    expect(row('t-3').classList.contains('dragging')).toBe(true);
+    fire(pills()[0], 'dragover');
+    expect(row('t-1').dataset.groupDrop).toBe('before');
+    fire(pills()[0], 'drop');
+    fire(pills()[1], 'dragend');
+    expect(store.slide?.timeline.map((entry) => entry.id)).toEqual(['t-2', 't-3', 't-1', 't-4']);
+    expect(pills().map((pill) => pill.textContent)).toEqual(['1', '2', '3']);
+    expect(store.history()[0].label).toBe('Reorder build animations');
+
+    // Click 1 (b and c) into the middle of d's row: they join click 3.
+    fire(pills()[0], 'dragstart');
+    const d = row('t-4');
+    d.getBoundingClientRect = () => ({ top: 0, height: 30, bottom: 30, left: 0, right: 100, width: 100, x: 0, y: 0, toJSON() {} });
+    const over = new MouseEvent('dragover', { bubbles: true, cancelable: true, clientY: 15 });
+    Object.defineProperty(over, 'dataTransfer', { value: transfer });
+    d.dispatchEvent(over);
+    expect(row('t-4').dataset.groupDrop).toBe('fuse');
+    fire(d, 'drop');
+    expect(store.slide?.timeline.map((entry) => [entry.id, entry.trigger.on])).toEqual(
+      [['t-1', 'click'], ['t-4', 'click'], ['t-2', 'withPrev'], ['t-3', 'withPrev']]);
+    expect(pills().map((pill) => pill.textContent)).toEqual(['1', '2']);
+  });
+
+  it('moves a click as a block, keeping what builds as the slide appears in its place', () => {
+    const entry = (id: string, on: TimelineEntry['trigger']['on'], delay = 0): TimelineEntry =>
+      ({ id, trigger: { on, ref: null, delay }, action: { type: 'appear', target: id, value: null } });
+    const shape = (timeline: TimelineEntry[]) => timeline.map((e) => `${e.id}:${e.trigger.on}:${e.trigger.delay}`);
+
+    // Below the next click.
+    let timeline = [entry('a', 'click'), entry('b', 'withPrev'), entry('c', 'click'), entry('d', 'click')];
+    moveBuildGroup(timeline, ['a', 'b'], ['c'], 'after');
+    expect(shape(timeline)).toEqual(['c:click:0', 'a:click:0', 'b:withPrev:0', 'd:click:0']);
+
+    // Above what builds on entry: the moved click builds on entry instead.
+    timeline = [entry('e', 'afterPrev', 500), entry('a', 'click'), entry('b', 'withPrev')];
+    moveBuildGroup(timeline, ['a', 'b'], ['e'], 'before');
+    expect(shape(timeline)).toEqual(['a:afterPrev:500', 'b:withPrev:0', 'e:click:0']);
+
+    // What built on entry, moved down, takes a click of its own.
+    timeline = [entry('e', 'afterPrev', 500), entry('f', 'withPrev'), entry('a', 'click')];
+    moveBuildGroup(timeline, ['e', 'f'], ['a'], 'after');
+    expect(shape(timeline)).toEqual(['a:click:0', 'e:click:0', 'f:withPrev:0']);
+
+    // Onto itself: nothing changes.
+    timeline = [entry('a', 'click'), entry('b', 'click')];
+    moveBuildGroup(timeline, ['a'], ['a'], 'before');
+    expect(shape(timeline)).toEqual(['a:click:0', 'b:click:0']);
   });
 
   it('keeps the build order scrolled where it was when a drop redraws it', () => {
