@@ -108,6 +108,25 @@ describe.skipIf(!electronBinary)('Keynote-style slide sections in the browser', 
 });
 
 describe.skipIf(!electronBinary)('slide rail progress and scrollbar', () => {
+  it('keeps the selected border blue and adds no border to other slides on hover', async () => {
+    await fixture();
+    await session.clickRail(0);
+    for (const theme of ['light', 'dark']) {
+      await session.cdp.evaluate(`document.documentElement.dataset.uiTheme = '${theme}'`);
+      await session.cdp.call('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 300, y: 10 });
+      const selectedBorder = await session.cdp.evaluate<string>(`getComputedStyle(document.querySelector('#rail .rail-item[data-index="0"]')).borderTopColor`);
+      for (const index of [0, 1]) {
+        const point = await session.cdp.evaluate<{x: number; y: number}>(`(() => {
+          const r = document.querySelector('#rail .rail-item[data-index="${index}"]').getBoundingClientRect();
+          return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+        })()`);
+        await session.cdp.call('Input.dispatchMouseEvent', { type: 'mouseMoved', ...point });
+        const border = await session.cdp.evaluate<string>(`getComputedStyle(document.querySelector('#rail .rail-item[data-index="${index}"]')).borderTopColor`);
+        expect(border).toBe(index === 0 ? selectedBorder : 'rgba(0, 0, 0, 0)');
+      }
+    }
+  });
+
   it('leaves only the current slide highlighted after clicking and navigating with arrows', async () => {
     await fixture();
     await session.clickRail(1);

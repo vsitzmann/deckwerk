@@ -2408,9 +2408,10 @@ button.primary:hover:not(:disabled) { background: var(--accent-hover); }
   border: 1px solid transparent;
   background: transparent;
 }
-.rail-item:hover { background: var(--panel-2); border-color: var(--line); }
-.rail-item.selected { background: var(--accent-soft); border-color: var(--accent); }
-.rail-item.active { background: var(--accent-soft); border-color: var(--accent); }
+/* Override the shared button hover border without changing selection colors. */
+#rail .rail-item:hover { background: var(--panel-2); border-color: transparent; }
+#rail .rail-item.selected { background: var(--accent-soft); border-color: var(--accent); }
+#rail .rail-item.active { background: var(--accent-soft); border-color: var(--accent); }
 
 .rail-num {
   align-self: end;
