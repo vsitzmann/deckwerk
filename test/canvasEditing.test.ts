@@ -4032,7 +4032,7 @@ describe('build badges on the canvas', () => {
     document.body.replaceChildren();
   });
 
-  it('numbers animated elements while the Build tab is open, and only then', () => {
+  it('numbers animated elements by click while the Build tab is open, and only then', () => {
     const { store, canvas, host } = setup();
     store.commit((deck) => {
       deck.slides[0].timeline.push(
@@ -4048,13 +4048,24 @@ describe('build badges on the canvas', () => {
 
     canvas.setBuildBadgesVisible(true);
     const badges = [...host.querySelectorAll<HTMLElement>('.build-badge')];
-    expect(badges.map((b) => b.textContent)).toEqual(['1,3', '2']);
+    // The video plays after the text appears, on the same click.
+    expect(badges.map((b) => b.textContent)).toEqual(['1,2', '1']);
     // Anchored to the element's top-right corner in canvas coordinates.
     expect(badges[0].style.left).toBe('700px');
     expect(badges[0].style.top).toBe('100px');
 
+    // Pointing at the text's builds in the panel lights it up and dims the rest.
+    canvas.setBuildHighlight(['text-1']);
+    expect(host.querySelectorAll('.build-highlight .build-highlight-outline')).toHaveLength(1);
+    expect([...host.querySelectorAll('.build-badge')].map((b) => b.classList.contains('dimmed')))
+      .toEqual([false, true]);
+    canvas.setBuildHighlight(null);
+    expect(host.querySelector('.build-highlight')).toBeNull();
+
+    canvas.setBuildHighlight(['text-1']);
     canvas.setBuildBadgesVisible(false);
     expect(host.querySelectorAll('.build-badge')).toHaveLength(0);
+    expect(host.querySelector('.build-highlight')).toBeNull();
   });
 });
 

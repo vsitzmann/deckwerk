@@ -335,7 +335,12 @@ new SpeakerNotesDrawer(el('canvas'), store, {
 new CanvasRulers(el('canvas'), canvas, store);
 new LightTable(el('canvas'), canvas, store);
 const inspector = new Inspector(el('inspector'), store);
-new TimelinePanel(el('timeline'), store, new BuildPreview(canvas, store));
+// Pointing at a build lights up its object on the slide, and pointing at an
+// object lights up its builds.
+const buildPanel = new TimelinePanel(
+  el('timeline'), store, new BuildPreview(canvas, store), (ids) => canvas.setBuildHighlight(ids),
+);
+canvas.onBuildHover = (id) => buildPanel.highlightBuildsOf(id);
 // History opens beside the deck name and Media from the Insert bar, as in the
 // desktop app (toolbarPanels.ts).
 const historyHost = popoverPanelHost('history');

@@ -61,7 +61,7 @@ import { decodeImage } from '../player/imageDecode.js';
 import { DecodedVideoPool, releaseDecodedVideo } from '../player/decodedVideoPool.js';
 import { ungateVideoLoad } from '../player/mediaLoadGate.js';
 import { openSlideLinkInNewTab, slideLinkFromEvent } from '../player/links.js';
-import { expandTimeline } from '@shared/timeline.js';
+import { expandTimeline, unitClicks } from '@shared/timeline.js';
 import { mergeTextHtml } from '@shared/textMerge.js';
 import {
   BASELINE_RUN_FONT_SIZE, isRelativeFontSize, restoreKatexSourceHtml,
@@ -1188,6 +1188,10 @@ export class EditorCanvas {
    */
   private maskingId: string | null = null;
   private buildBadgesVisible = false;
+  /** Objects lit up from the Build panel while their builds are pointed at there. */
+  private buildHighlight: string[] | null = null;
+  /** The object last reported under the pointer to `onBuildHover`. */
+  private buildHoverId: string | null = null;
   /** The Build panel's preview, laid over the slide while it plays; see beginPlayback. */
   private playback: { shield: HTMLElement; frame: HTMLElement } | null = null;
   /** The crop as it was when the current mask drag began. */
@@ -1234,6 +1238,11 @@ export class EditorCanvas {
   onTableBorderPaintModeChange?: () => void;
   /** Routes undo/redo through the active shell while editing text in place. */
   onUndoRequest?: (redo: boolean) => void;
+  /**
+   * While the Build tab is open: the object under the pointer whenever it
+   * changes (null off every object), so the panel can light up its builds.
+   */
+  onBuildHover?: (elementId: string | null) => void;
   /** Pointer position in slide space on every move, null on leave. For presence. */
   onPointerSample?: (point: { x: number; y: number } | null) => void;
   /** Fired after the stage scale/placement recomputes. For presence overlays. */
@@ -2510,10 +2519,15 @@ export class EditorCanvas {
     elements = this.codeEditor.liveElements(elements);
     const frag = document.createDocumentFragment();
 
-    // While the Build tab is open, number every element a build entry touches
-    // so the cards in the panel can be matched to objects on the slide.
+    // While the Build tab is open, mark every element a build entry touches
+    // with the clicks it builds on (0: as the slide appears), so the panel's
+    // click pills can be matched to objects on the slide. While builds are
+    // pointed at in the panel, everything but their objects dims.
     if (this.buildBadgesVisible) {
       const slide = this.store.get().deck.slides[this.store.get().slideIndex];
+      const lit = this.buildHighlight;
+      if (lit) frag.appendChild(this.buildHighlightVeil(deck, elements.filter((el) => lit.includes(el.id))));
+      const clicks = slide ? unitClicks(slide) : [];
       const numbersByElement = new Map<string, number[]>();
       // By-paragraph reveals get one badge per paragraph, pinned to the
       // paragraph's own line so each number matches its row in the panel.
@@ -2523,21 +2537,22 @@ export class EditorCanvas {
       (slide ? expandTimeline(slide) : []).forEach((unit, i) => {
         if (slide && unit.action.lines && isLineBuild(unit, slide)) {
           const list = lineNumbers.get(unit.action.target) ?? [];
-          list.push({ line: Number.parseInt(unit.action.lines, 10), num: i + 1 });
+          list.push({ line: Number.parseInt(unit.action.lines, 10), num: clicks[i] });
           lineNumbers.set(unit.action.target, list);
         } else if (unit.part !== null) {
           const list = paragraphNumbers.get(unit.action.target) ?? [];
-          list.push({ part: unit.part, num: i + 1 });
+          list.push({ part: unit.part, num: clicks[i] });
           paragraphNumbers.set(unit.action.target, list);
         } else {
           const list = numbersByElement.get(unit.action.target) ?? [];
-          list.push(i + 1);
+          if (!list.includes(clicks[i])) list.push(clicks[i]);
           numbersByElement.set(unit.action.target, list);
         }
       });
-      const makeBadge = (text: string, x: number, y: number) => {
+      const makeBadge = (elementId: string, text: string, x: number, y: number) => {
         const badge = document.createElement('div');
         badge.className = 'build-badge';
+        if (lit && !lit.includes(elementId)) badge.classList.add('dimmed');
         badge.textContent = text;
         badge.style.left = `${x}px`;
         badge.style.top = `${y}px`;
@@ -2547,15 +2562,16 @@ export class EditorCanvas {
       const stageRect = this.stage.getBoundingClientRect();
       for (const el of elements) {
         const numbers = numbersByElement.get(el.id);
-        if (numbers) makeBadge(numbers.join(','), el.x + el.w, el.y);
+        if (numbers) makeBadge(el.id, numbers.join(','), el.x + el.w, el.y);
         const lineBuilds = lineNumbers.get(el.id);
         if (lineBuilds) {
           // Builds on the same line share one badge, as an object's do.
           const byLine = new Map<number, number[]>();
           for (const { line, num } of lineBuilds) byLine.set(line, [...(byLine.get(line) ?? []), num]);
           for (const [line, nums] of byLine) {
+            const distinct = [...new Set(nums)];
             const box = this.codeLineBox(el, line, line, stageRect);
-            makeBadge(nums.join(','), el.x + el.w, (box?.top ?? el.y) + 9);
+            makeBadge(el.id, distinct.join(','), el.x + el.w, (box?.top ?? el.y) + 9);
           }
         }
         const parts = paragraphNumbers.get(el.id);
@@ -2569,7 +2585,7 @@ export class EditorCanvas {
           const y = rect && rect.height > 0
             ? (rect.top - stageRect.top) / this.scale
             : el.y + part * 24;
-          makeBadge(String(num), el.x + el.w, y + 9);
+          makeBadge(el.id, String(num), el.x + el.w, y + 9);
         }
       }
     }
@@ -2933,6 +2949,7 @@ export class EditorCanvas {
       if (this.drag.kind === 'none') this.setRotationModifier(commandModifier(ev));
       this.onPointerMove(ev);
     });
+    this.host.addEventListener('pointerleave', () => this.reportBuildHover(null));
     // Safari can deliver compatibility mouse motion without a corresponding
     // pointermove while the trackpad is hovering (not dragging). Keep remote
     // cursors live from that stream too. Browsers which deliver both are
@@ -3302,6 +3319,9 @@ export class EditorCanvas {
     // Presence: report the pointer in slide space whether hovering or
     // dragging, so collaborators see the cursor move, not only the edits.
     this.onPointerSample?.(this.toCanvas(ev));
+    if (this.buildBadgesVisible) {
+      this.reportBuildHover(this.drag.kind === 'none' && isHoverMove(ev) ? this.hitTest(this.toCanvas(ev))?.id ?? null : null);
+    }
     if (this.pen) {
       // Hovering moves the preview; with the button down, the press pulls
       // out the new point's handles.
@@ -8223,7 +8243,66 @@ export class EditorCanvas {
   setBuildBadgesVisible(visible: boolean): void {
     if (this.buildBadgesVisible === visible) return;
     this.buildBadgesVisible = visible;
+    if (!visible) {
+      this.buildHighlight = null;
+      this.reportBuildHover(null);
+    }
     this.render();
+  }
+
+  /**
+   * Light up these objects, dimming the rest of the slide, while their builds
+   * are pointed at in the Build panel; null puts the slide back.
+   */
+  setBuildHighlight(elementIds: string[] | null): void {
+    const next = elementIds && elementIds.length > 0 ? elementIds : null;
+    if (next?.join() === this.buildHighlight?.join()) return;
+    this.buildHighlight = next;
+    this.redrawOverlay();
+  }
+
+  private reportBuildHover(elementId: string | null): void {
+    if (elementId === this.buildHoverId) return;
+    this.buildHoverId = elementId;
+    this.onBuildHover?.(elementId);
+  }
+
+  /**
+   * A veil over the slide with a hole and an outline at each of `lit`, so the
+   * objects a pointed-at build animates stand out from the rest.
+   */
+  private buildHighlightVeil(deck: Deck, lit: SlideElement[]): SVGSVGElement {
+    const ns = 'http://www.w3.org/2000/svg';
+    const make = (tag: string, attrs: Record<string, string | number>) => {
+      const node = document.createElementNS(ns, tag);
+      for (const [name, value] of Object.entries(attrs)) node.setAttribute(name, String(value));
+      return node;
+    };
+    const { w, h } = deck.canvas;
+    const pad = 6 / this.scale;
+    const svg = make('svg', { class: 'build-highlight', width: w, height: h, viewBox: `0 0 ${w} ${h}` }) as SVGSVGElement;
+    // The veil is the slide with a hole cut at each object (even-odd fill),
+    // its corners turned with the object; lines keep their box unrotated, as
+    // their selection does, since their geometry is already in canvas space.
+    const holes = lit.map((el) => {
+      const angle = el.rot && !hasEndpoints(el) ? (el.rot * Math.PI) / 180 : 0;
+      const cx = el.x + el.w / 2;
+      const cy = el.y + el.h / 2;
+      const hw = el.w / 2 + pad;
+      const hh = el.h / 2 + pad;
+      return [[-hw, -hh], [hw, -hh], [hw, hh], [-hw, hh]].map(([dx, dy]) => [
+        cx + dx * Math.cos(angle) - dy * Math.sin(angle),
+        cy + dx * Math.sin(angle) + dy * Math.cos(angle),
+      ].map((v) => Math.round(v * 10) / 10).join(' '));
+    });
+    const d = [`M0 0H${w}V${h}H0Z`, ...holes.map((corners) => `M${corners.join('L')}Z`)].join('');
+    svg.appendChild(make('path', { d, class: 'build-highlight-veil', 'fill-rule': 'evenodd' }));
+    for (const corners of holes) {
+      svg.appendChild(make('polygon', {
+        points: corners.join(' '), class: 'build-highlight-outline', 'stroke-width': 2 / this.scale,
+      }));
+    }
+    return svg;
   }
 
   /** The element whose mask is being edited, if any. */

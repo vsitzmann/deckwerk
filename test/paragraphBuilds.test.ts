@@ -6,6 +6,7 @@ import {
   groupIntoSteps,
   resolveState,
   stepCount,
+  unitClicks,
 } from '../src/shared/timeline.js';
 import {
   applyParagraphVisibility,
@@ -171,6 +172,17 @@ describe('by-paragraph expansion', () => {
     expect(units).toHaveLength(4);
     expect(units[3].action.target).toBe('b');
     expect(groupIntoSteps(slide)).toHaveLength(5);
+    // Each paragraph takes a click of its own, and the build after them the next.
+    expect(unitClicks(slide)).toEqual([1, 2, 3, 4]);
+  });
+
+  it('numbers a build by the click it runs on, 0 before the first', () => {
+    const slide = slideWith(THREE_PARAS, [
+      { id: 't-a', trigger: { on: 'afterPrev' }, action: { type: 'appear', target: 'b' } },
+      byParagraph(),
+      { id: 't-b', trigger: { on: 'withPrev' }, action: { type: 'appear', target: 'b' } },
+    ]);
+    expect(unitClicks(slide)).toEqual([0, 1, 2, 3, 3]);
   });
 
   it('treats byParagraph on a non-text target as a whole-element reveal', () => {

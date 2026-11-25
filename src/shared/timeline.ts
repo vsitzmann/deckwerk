@@ -206,6 +206,17 @@ export function groupIntoSteps(slide: Slide): ExpandedEntry[][] {
   return steps;
 }
 
+/**
+ * The click each unit of `expandTimeline(slide)` runs on, in the same order:
+ * 0 for what builds as the slide appears, then 1, 2, ... The editor numbers
+ * builds by these, on the slide and in the panel alike, so a number reads as
+ * "comes on my n-th click".
+ */
+export function unitClicks(slide: Slide): number[] {
+  let click = 0;
+  return expandTimeline(slide).map((unit) => (unit.trigger.on === 'click' ? ++click : click));
+}
+
 /** Number of distinct states this slide advances through, minimum 1. */
 export function stepCount(slide: Slide): number {
   return groupIntoSteps(slide).length;
