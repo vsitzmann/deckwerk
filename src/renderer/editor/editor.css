@@ -5746,9 +5746,14 @@ button.ghost:hover:not(:disabled) { color: var(--text); background: transparent;
   height: 24px;
   border-radius: var(--radius);
   color: var(--muted);
-  font: 18px/1 var(--sans, sans-serif);
   cursor: pointer;
 }
+.rail-section-toggle > svg {
+  width: 10px;
+  height: 10px;
+  transform: rotate(0deg);
+}
+.rail-section-toggle[aria-expanded="true"] > svg { transform: rotate(90deg); }
 .rail-section-toggle:hover { color: var(--text); background: var(--panel-2); }
 .rail-section-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .rail-section-parent.active .rail-section-toggle { color: var(--accent-text, var(--accent)); }

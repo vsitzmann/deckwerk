@@ -242,6 +242,9 @@ export class SlideRail {
     if (!toggle) {
       toggle = document.createElement('span');
       toggle.className = 'rail-section-toggle';
+      toggle.innerHTML = '<svg viewBox="0 0 10 10" aria-hidden="true">'
+        + '<path d="M3.5 2 6.5 5 3.5 8" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>'
+        + '</svg>';
       toggle.setAttribute('role', 'button');
       toggle.tabIndex = 0;
       toggle.addEventListener('pointerdown', (event) => { event.stopPropagation(); event.preventDefault(); });
@@ -258,7 +261,6 @@ export class SlideRail {
     toggle.setAttribute('aria-expanded', String(expanded));
     toggle.setAttribute('aria-label', label);
     toggle.title = label;
-    toggle.textContent = expanded ? '⌄' : '›';
   }
   /**
    * The active hidden slide whose run the user explicitly collapsed.
