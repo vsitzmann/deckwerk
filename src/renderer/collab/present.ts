@@ -70,12 +70,14 @@ function hint(): HTMLElement {
   return node;
 }
 
-function goFullscreen(): void {
+function goFullscreen(automatic = false): void {
+  if (automatic && windowed) return;
   if (embedded || tutorialViewer || document.fullscreenElement) return;
   document.documentElement.requestFullscreen().then(() => {
     awaitingFullscreenGesture = false;
     hint().remove();
   }, () => {
+    if (windowed) return;
     awaitingFullscreenGesture = true;
     hint();
   });
@@ -91,7 +93,10 @@ function consumeFullscreenGesture(): boolean {
 }
 
 window.addEventListener('keydown', (event) => {
-  if (event.key === 'f' || event.key === 'F') goFullscreen();
+  if (event.key === 'f' || event.key === 'F') {
+    if (document.fullscreenElement) void document.exitFullscreen();
+    else goFullscreen();
+  }
 }, true);
 
 const params = new URLSearchParams(location.search);
@@ -118,6 +123,7 @@ const range: PresentationRange | null = endParam !== null && Number.isFinite(Num
   ? { start: startSlide, end: Math.max(startSlide, Number(endParam) - 1) }
   : null;
 const agentViewer = params.get('agent') === '1';
+const windowed = params.get('mode') === 'windowed';
 /**
  * The deck server's shared tutorial, which nobody may edit: it reaches this
  * page because the editor shell sends every view-only visitor here. It is
@@ -128,6 +134,7 @@ const tutorialViewer = deckId === SERVER_TUTORIAL_DECK_ID && !agentViewer;
 // Embedded: the editor tab mounted us in an iframe it already fullscreened, so
 // fullscreen is somebody else's job and exiting means telling the parent.
 const embedded = params.get('embed') === '1' && window.parent !== window;
+const editorWindow = embedded ? window.parent : null;
 
 let role: PresentationRole = params.get('role') === 'speaker' ? 'speaker' : 'audience';
 
@@ -217,9 +224,9 @@ function announceExit(): void {
  * route, Escape out of fullscreen included — lands the editor there.
  */
 function reportShownSlide(): void {
-  if (!embedded) return;
+  if (!editorWindow) return;
   const slideId = deck?.slides[lastState.cursor.slide]?.id;
-  if (slideId) window.parent.postMessage({ type: 'present-at', slideId }, location.origin);
+  if (slideId) editorWindow?.postMessage({ type: 'present-at', slideId }, location.origin);
 }
 
 function exitPresentation(): void {
@@ -230,7 +237,7 @@ function exitPresentation(): void {
   remotes?.endAll();
   announceExit();
   bus?.close();
-  if (embedded) window.parent.postMessage({ type: 'present-exit' }, location.origin);
+  if (editorWindow) editorWindow.postMessage({ type: 'present-exit' }, location.origin);
   else window.close();
 }
 
@@ -342,7 +349,7 @@ function mountAudience(): void {
     onPrev: retreat,
     onHome: () => player?.goToSlide(range?.start ?? 0, { play: true }),
   });
-  goFullscreen();
+  goFullscreen(true);
   window.focus();
 }
 
@@ -520,7 +527,7 @@ bus?.subscribe((message) => {
     // The other surface is gone; the show is over here too. Do not answer with
     // a farewell of our own — that is what would ping-pong the pair shut.
     announcedExit = true;
-    if (embedded) window.parent.postMessage({ type: 'present-exit' }, location.origin);
+    if (editorWindow) editorWindow.postMessage({ type: 'present-exit' }, location.origin);
     else window.close();
     return;
   }
@@ -531,7 +538,7 @@ bus?.subscribe((message) => {
   else if (command.type === 'next' || command.type === 'prev' || command.type === 'toggleBlank') {
     runCommand({ type: command.type });
   } else if (command.type === 'exit') {
-    if (embedded) window.parent.postMessage({ type: 'present-exit' }, location.origin);
+    if (editorWindow) editorWindow.postMessage({ type: 'present-exit' }, location.origin);
     else window.close();
   } else if (command.type === 'swapDisplays') {
     // The audience decides the exchange so there is one authority for the
@@ -668,9 +675,9 @@ if (!agentViewer && matchMedia('(pointer: coarse)').matches) {
  * welcome costs about a second, and that second was spent showing black.
  * The socket still connects, and its welcome remains authoritative.
  */
-if (embedded) {
+if (editorWindow) {
   window.addEventListener('message', (event: MessageEvent) => {
-    if (event.origin !== location.origin) return;
+    if (event.origin !== location.origin || event.source !== editorWindow) return;
     const data = event.data as {
       type?: string; deck?: unknown; themeCss?: string; mediaVariants?: Record<string, string>; hostClientId?: string;
     } | null;
@@ -681,7 +688,7 @@ if (embedded) {
     applyDeck(data.deck as Deck, data.themeCss ?? null, 'seed');
     retitle();
   });
-  window.parent.postMessage({ type: 'present-hello' }, location.origin);
+  editorWindow.postMessage({ type: 'present-hello' }, location.origin);
 }
 
 // A dead server must never mean an unexplained blank page. With a deck on

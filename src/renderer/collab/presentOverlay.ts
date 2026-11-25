@@ -1,3 +1,4 @@
+import type { PlaybackHost } from '../editor/buildPreview.js';
 /**
  * Presenting from the editor tab, without an intermediate window.
  *
@@ -43,6 +44,8 @@ export interface PresentSeed {
 }
 
 export interface PresentOptions {
+  mode?: 'fullscreen' | 'windowed' | 'editor';
+  playbackHost?: PlaybackHost;
   /** Inclusive last slide index when presenting a multi-slide rail selection. */
   endSlideIndex?: number;
   /**
@@ -57,6 +60,7 @@ export interface PresentOptions {
 }
 
 let overlay: HTMLIFrameElement | null = null;
+let endPlayback: (() => void) | null = null;
 /** Whether the current overlay has been fullscreen: only then does leaving fullscreen end it. */
 let overlayFullscreen = false;
 /**
@@ -95,9 +99,11 @@ function teardown(): void {
   if (companionWindow && !companionWindow.closed) companionWindow.close();
   companionWindow = null;
   clearTimeout(helloTimer);
-  if (!overlay) return;
-  overlay.remove();
+  overlay?.remove();
   overlay = null;
+  endPlayback?.();
+  endPlayback = null;
+  window.removeEventListener('keydown', onEditorKey, true);
   seedProvider = null;
   const ended = onEnd;
   const slideId = shownSlideId;
@@ -106,6 +112,13 @@ function teardown(): void {
   window.removeEventListener('message', onMessage);
   document.removeEventListener('fullscreenchange', onFullscreenChange);
   if (ended && slideId) ended(slideId);
+}
+
+function onEditorKey(event: KeyboardEvent): void {
+  if (event.key !== 'Escape') return;
+  event.preventDefault();
+  event.stopImmediatePropagation();
+  teardown();
 }
 
 function onMessage(event: MessageEvent): void {
@@ -118,8 +131,9 @@ function onMessage(event: MessageEvent): void {
   if (type === 'present-hello') {
     clearTimeout(helloTimer);
     const seed = seedProvider?.();
-    if (seed && overlay?.contentWindow) {
-      overlay.contentWindow.postMessage(
+    const target = overlay?.contentWindow;
+    if (seed && target) {
+      target.postMessage(
         {
           type: 'present-seed',
           deck: seed.deck,
@@ -164,7 +178,7 @@ export function isPresenting(): boolean {
 export function presentUrl(
   deckId: string,
   slideIndex: number,
-  extra: { endSlideIndex?: number; role?: 'speaker'; embed?: boolean } = {},
+  extra: { endSlideIndex?: number; role?: 'speaker'; embed?: boolean; mode?: 'windowed' } = {},
 ): string {
   const params = new URLSearchParams({
     deck: deckId,
@@ -174,6 +188,7 @@ export function presentUrl(
   if (extra.endSlideIndex !== undefined) {
     params.set('endSlide', String(extra.endSlideIndex + 1));
   }
+  if (extra.mode) params.set('mode', extra.mode);
   if (extra.role) params.set('role', extra.role);
   if (extra.embed) params.set('embed', '1');
   return `present.html?${params.toString()}`;
@@ -226,6 +241,10 @@ export async function startPresenting(
 ): Promise<void> {
   teardown();
   const start = ++starts;
+  if (options.mode === 'windowed' || options.mode === 'editor') {
+    mountOverlay(deckId, slideIndex, seed, options, 'audience');
+    return;
+  }
   const screens = windowManagement();
   if (!screens) {
     presentOnThisScreen(deckId, slideIndex, seed, options);
@@ -356,11 +375,17 @@ function mountOverlay(
     endSlideIndex: options.endSlideIndex,
     role: role === 'speaker' ? 'speaker' : undefined,
     embed: true,
+    mode: options.mode === 'windowed' ? 'windowed' : undefined,
   });
   frame.allow = 'fullscreen';
-  frame.style.cssText = 'position:fixed;inset:0;width:100vw;height:100vh;border:0;'
+  const playback = options.mode === 'editor' ? options.playbackHost?.beginPlayback(() => {}) : undefined;
+  if (playback) {
+    endPlayback = playback.end;
+    window.addEventListener('keydown', onEditorKey, true);
+  }
+  frame.style.cssText = `position:${playback ? 'absolute' : 'fixed'};inset:0;width:100%;height:100%;border:0;`
     + 'background:#000;z-index:9999;';
-  document.body.appendChild(frame);
+  (playback?.surface ?? document.body).appendChild(frame);
   overlay = frame;
   overlayFullscreen = false;
   window.addEventListener('message', onMessage);

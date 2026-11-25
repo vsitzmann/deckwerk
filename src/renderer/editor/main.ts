@@ -1,3 +1,5 @@
+import { presentInEditorWindow } from './inWindowPresentation.js';
+import { createPresentationButton } from './presentationButton.js';
 import '../player/player.css';
 import '../appChrome.css';
 import './editor.css';
@@ -669,12 +671,7 @@ function buildToolbar(): void {
   right.append(
     secondaryActions,
     compactSecondary,
-    createToolbarSplitButton(
-      'Present',
-      () => void startPresentation(),
-      [{ label: 'Present in Speaker View', action: () => void startPresentation(true) }],
-      { variant: 'primary', menuLabel: 'Presentation options' },
-    ),
+    createPresentationButton((speakerView, mode) => void startPresentation(speakerView, mode)),
   );
 
   bar.append(left, mid, right);
@@ -682,7 +679,7 @@ function buildToolbar(): void {
   installResponsiveToolbar(bar);
 }
 
-async function startPresentation(speakerView = false): Promise<void> {
+async function startPresentation(speakerView = false, mode: 'fullscreen' | 'windowed' | 'editor' = 'fullscreen'): Promise<void> {
   await runOperation('Preparing presentation…', async (operation) => {
     // Presentation reads the main process's in-memory session. When the deck
     // is dirty, mirror that state directly rather than making window creation
@@ -703,6 +700,11 @@ async function startPresentation(speakerView = false): Promise<void> {
       if (agentSessionReady || store.get().dirty) await syncMainSessionSnapshot();
       const { deck, slideIndex, slideSelection } = store.get();
       const range = rangeForSlideSelection(deck.slides, slideSelection);
+      if (mode === 'windowed' || mode === 'editor') {
+        presentInEditorWindow(range?.start ?? slideIndex, range?.end, (shown) => store.selectSlide(shown),
+          mode === 'editor' ? canvas : undefined);
+        return;
+      }
       operation.update('Opening presentation windows');
       await window.api.present(range?.start ?? slideIndex, {
         speakerView,

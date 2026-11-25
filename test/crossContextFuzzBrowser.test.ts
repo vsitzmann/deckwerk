@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { electronBinary, wait } from './support/browserSession.js';
+import { electronBinary, eventually, wait } from './support/browserSession.js';
 import {
   FAR,
   IMAGE,
@@ -159,7 +159,7 @@ type OpName =
   | 'rail hop' | 'slide section round-trip' | 'undo' | 'redo' | 'undo round-trip' | 'delete selection'
   | 'cmd+a' | 'click with stray hover' | 'rail multi-delete' | 'stack key' | 'spelling fix'
   | 'size from sidebar' | 'flip from sidebar' | 'viewport gesture' | 'pen abandoned' | 'pen line undone'
-  | 'pencil stroke undone' | 'line bent and undone' | 'build multi-delete';
+  | 'present in editor' | 'present in window' | 'pencil stroke undone' | 'line bent and undone' | 'build multi-delete';
 
 interface Violation { seed: number; step: number; op: OpName; oracle: string; detail: string }
 
@@ -175,6 +175,13 @@ interface OracleStats {
 }
 
 describe.skipIf(!electronBinary)('cross-context fuzz over three elements and two slides', () => {
+  it('opens and closes windowed playback between editing operations', async () => {
+    await session.reset();
+    await performOp('present in window', random(902026), await session.state(), () => {});
+    await performOp('present in editor', random(902026), await session.state(), () => {});
+    expect(await session.problems()).toEqual([]);
+  });
+
   it(`survives ${SEEDS} seeded walks of ${STEPS} cross-context steps`, {
     timeout: 30 * 60_000,
   }, async () => {
@@ -414,6 +421,8 @@ function chooseOp(next: () => number, pre: CrossState): OpName {
   const add = (op: OpName, weight: number) => {
     for (let i = 0; i < weight; i++) ops.push(op);
   };
+  add('present in window', 1);
+  add('present in editor', 1);
   if (targets.length > 0) {
     add('click', 3);
     add('shift-click', 2);
@@ -469,6 +478,23 @@ async function performOp(
 ): Promise<'same' | 'resync' | string[]> {
   const targets = targetsOn(pre);
   switch (op) {
+    case 'present in editor':
+    case 'present in window': {
+      const before = await session.deckSnapshot();
+      await session.cdp.click('[aria-label="Presentation options"]');
+      await session.cdp.clickByText('button', op === 'present in editor' ? 'In Editor' : 'In Window');
+      await session.cdp.clickByText('button', 'Present', 'Present');
+      await eventually(
+        async () => session.cdp.evaluate(`!!document.querySelector('iframe[src*="present.html"]')?.contentDocument?.querySelector('#stage .slide')`),
+        'In Window did not paint in the existing window', Boolean,
+      );
+      expect(await session.cdp.evaluate('document.fullscreenElement === null')).toBe(true);
+      await session.key('Escape', 27);
+      await eventually(async () => session.cdp.evaluate(`!document.querySelector('iframe[src*="present.html"]')`),
+        'Escape did not return to the editor', Boolean);
+      expect(await session.deckSnapshot()).toBe(before);
+      return 'same';
+    }
     case 'click':
       await session.click(pick(next, targets));
       return 'same';

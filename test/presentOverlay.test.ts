@@ -81,6 +81,19 @@ describe('starting a browser presentation', () => {
     Object.defineProperty(document, 'fullscreenElement', { configurable: true, get: () => element });
   }
 
+  it('plays In Window in this tab without fullscreen, popups or screen permissions', async () => {
+    const screens = vi.fn();
+    vi.stubGlobal('getScreenDetails', screens);
+    popupsAllowed = false;
+    await startPresenting('talk', 2, seed, { mode: 'windowed', endSlideIndex: 4 });
+    expect(opened).toEqual([]);
+    expect(query(overlayFrame()!.src).get('mode')).toBe('windowed');
+    expect(query(overlayFrame()!.src).get('slide')).toBe('3');
+    expect(query(overlayFrame()!.src).get('endSlide')).toBe('5');
+    expect(HTMLElement.prototype.requestFullscreen).not.toHaveBeenCalled();
+    expect(screens).not.toHaveBeenCalled();
+  });
+
   it('mounts the audience in a fullscreened overlay by default', () => {
     startPresenting('talk', 3, seed);
 

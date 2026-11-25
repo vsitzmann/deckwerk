@@ -14,11 +14,17 @@ import { selectionPreventsAdvance } from '../player/presentationPointer.js';
 import { rewriteCssAssetUrls } from '../player/render.js';
 
 /**
- * The fullscreen presentation window. Thin by design: it renders the deck with
+ * The audience player, in its own window or embedded over the editor. It uses
  * the same `Player` the editor previews with, so what you rehearse is exactly
  * what the projector shows.
  */
 
+const embedded = new URLSearchParams(location.search).get('embed') === '1' && window.parent !== window;
+const api = window.api ?? (window.parent as Window & { api: typeof window.api }).api;
+function exitPresentation(): void {
+  if (embedded) window.parent.postMessage({ type: 'present-exit' }, location.origin);
+  else window.close();
+}
 const root = document.getElementById('root');
 if (!root) throw new Error('missing #root');
 hideCursorWhenIdle(document.body);
@@ -69,7 +75,8 @@ function resumePoint(params: URLSearchParams): {
 function publish(): void {
   if (!player || settlingBeforeResume) return;
   const cursor = player.getCursor();
-  window.api.publishPresentState({
+  if (embedded) window.parent.postMessage({ type: 'present-at', slideIndex: cursor.slide }, location.origin);
+  else api.publishPresentState({
     cursor,
     steps: stepsOnSlide,
     startedAt,
@@ -85,12 +92,12 @@ function toggleBlank(): void {
 }
 
 async function applyTheme(): Promise<void> {
-  const css = await window.api.loadTheme();
+  const css = await api.loadTheme();
   if (!themeLink) {
     themeLink = document.createElement('style');
     document.head.appendChild(themeLink);
   }
-  themeLink.textContent = rewriteCssAssetUrls(css, (src) => window.api.assetUrl(src));
+  themeLink.textContent = rewriteCssAssetUrls(css, (src) => api.assetUrl(src));
 }
 
 function start(nextSession: DeckSession): void {
@@ -109,7 +116,7 @@ function start(nextSession: DeckSession): void {
   player = new Player({
     deck: nextSession.deck,
     container: root!,
-    resolveSrc: (src) => window.api.assetUrl(src),
+    resolveSrc: (src) => api.assetUrl(src),
     onCursor: (cursor, steps) => {
       stepsOnSlide = steps;
       if (settlingBeforeResume) return;
@@ -146,7 +153,7 @@ function start(nextSession: DeckSession): void {
   }
 
   bindPresentKeys(window, player, {
-    onExit: () => window.close(),
+    onExit: exitPresentation,
     onNext: advance,
     onPrev: retreat,
     onHome: () => player?.goToSlide(range?.start ?? 0, { play: true }),
@@ -170,7 +177,7 @@ function start(nextSession: DeckSession): void {
 function advance(): void {
   if (!player || !session) return;
   if (range && nextLeavesPresentationRange(session.deck.slides, player.getCursor(), range)) {
-    window.close();
+    exitPresentation();
     return;
   }
   player.next();
@@ -182,7 +189,7 @@ function retreat(): void {
   player.prev();
 }
 
-window.api.onPresentCommand((command: PresentationCommand) => {
+const unbindCommands = api.onPresentCommand((command: PresentationCommand) => {
   if (!player) return;
   if (command.type === 'next') advance();
   else if (command.type === 'prev') retreat();
@@ -197,7 +204,7 @@ window.api.onPresentCommand((command: PresentationCommand) => {
 });
 
 // Live updates while presenting (editing on a second screen mid-rehearsal).
-window.api.onDeckState((nextSession) => {
+const unbindDeck = api.onDeckState((nextSession) => {
   session = nextSession;
   void applyTheme();
   start(nextSession);
@@ -206,9 +213,15 @@ window.api.onDeckState((nextSession) => {
 // Pull the current deck on load, rather than waiting for a broadcast that may
 // already have fired — reopening this window mid-talk must not show black.
 void (async () => {
-  const initialSession = await window.api.getDeck();
+  const initialSession = await api.getDeck();
   if (!initialSession) return;
   session = initialSession;
   await applyTheme();
   start(initialSession);
 })();
+
+window.addEventListener('pagehide', () => {
+  unbindCommands();
+  unbindDeck();
+  player?.destroy();
+});

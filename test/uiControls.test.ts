@@ -1,3 +1,4 @@
+import { createPresentationButton } from '../src/renderer/editor/presentationButton.js';
 import { JSDOM } from 'jsdom';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -151,11 +152,39 @@ describe('shared editor controls', () => {
     expect(actions).toEqual(['present', 'speaker']);
 
     const editor = readFileSync(join(process.cwd(), 'src/renderer/editor/main.ts'), 'utf8');
-    expect(editor).toContain("label: 'Present in Speaker View'");
+    expect(editor).toContain('createPresentationButton');
     expect(editor).not.toContain('presenterPreflight');
 
     const styles = readFileSync(join(process.cwd(), 'src/renderer/editor/editor.css'), 'utf8');
     expect(styles).toMatch(/\.shape-menu\.toolbar-split-popover\s*\{[\s\S]*?right:\s*-12px;[\s\S]*?left:\s*auto;/);
+  });
+
+  it('selects exactly one presentation mode without starting, then plays that mode', () => {
+    const launches: unknown[] = [];
+    const present = createPresentationButton((speaker, mode) => launches.push({ speaker, mode }));
+    document.body.appendChild(present);
+    const main = present.querySelector<HTMLButtonElement>('.toolbar-split-main')!;
+    const trigger = present.querySelector<HTMLButtonElement>('.toolbar-split-menu')!;
+    const items = () => [...present.querySelectorAll<HTMLButtonElement>('[role="menuitemradio"]')];
+    trigger.click();
+    expect(items().filter((item) => item.getAttribute('aria-checked') === 'true').map((item) => item.textContent)).toEqual(['Fullscreen']);
+    trigger.click();
+    for (const [label, speaker, mode] of [
+      ['In Window', false, 'windowed'],
+      ['In Editor', false, 'editor'],
+      ['Speaker View', true, 'fullscreen'],
+      ['Fullscreen', false, 'fullscreen'],
+    ] as const) {
+      trigger.click();
+      items().find((item) => item.textContent === label)!.click();
+      expect(launches).toHaveLength(0);
+      trigger.click();
+      expect(items().filter((item) => item.getAttribute('aria-checked') === 'true').map((item) => item.textContent)).toEqual([label]);
+      trigger.click();
+      main.click();
+      expect(launches).toEqual([{ speaker, mode }]);
+      launches.length = 0;
+    }
   });
 
   it('progressively compacts the toolbar before controls can overlap', () => {

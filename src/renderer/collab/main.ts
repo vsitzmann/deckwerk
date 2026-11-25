@@ -1,3 +1,4 @@
+import { createPresentationButton } from '../editor/presentationButton.js';
 import '../player/player.css';
 import '../appChrome.css';
 import '../editor/editor.css';
@@ -996,7 +997,7 @@ async function exportPdf(): Promise<void> {
  * exactly as the desktop app does: a selection of two or more slides starts at
  * the first and ends the show after the last.
  */
-function startPresentation(speakerView = false): void {
+function startPresentation(speakerView = false, mode: 'fullscreen' | 'windowed' | 'editor' = 'fullscreen'): void {
   // present.html and its bundle are served by the collab server; with the
   // server gone the iframe loads them from the offline copy (sw.ts), and the
   // deck's files from there too. Without a complete copy it would show a
@@ -1019,6 +1020,8 @@ function startPresentation(speakerView = false): void {
     {
       endSlideIndex: range?.end,
       speakerView,
+      mode,
+      playbackHost: mode === 'editor' ? canvas : undefined,
       onStatus: setStatusMessage,
       // Leave the show where it was, not where it started.
       onEnd: (slideId) => {
@@ -1374,12 +1377,7 @@ function buildToolbar(): void {
     divider(),
     secondaryActions,
     ...(compactSecondary ? [compactSecondary] : []),
-    createToolbarSplitButton(
-      'Present',
-      () => startPresentation(),
-      [{ label: 'Present in Speaker View', action: () => startPresentation(true) }],
-      { variant: 'primary', menuLabel: 'Presentation options' },
-    ),
+    createPresentationButton((speakerView, mode) => startPresentation(speakerView, mode)),
   );
 
   bar.append(left, mid, right);

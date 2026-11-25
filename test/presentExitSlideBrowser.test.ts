@@ -85,7 +85,7 @@ describe.skipIf(!electronBinary)('leaving a browser presentation', () => {
     server = null;
   });
 
-  it('lands the editor on the slide the show ended on', async () => {
+  it.each(['fullscreen', 'windowed', 'editor'] as const)('lands the editor on the last slide (%s)', async (mode) => {
     workDir = await mkdtemp(join(tmpdir(), 'present-exit-browser-'));
     const decksRoot = join(workDir, 'decks');
     const profileDir = join(workDir, 'electron-profile');
@@ -113,28 +113,62 @@ describe.skipIf(!electronBinary)('leaving a browser presentation', () => {
     );
     expect(await editor.evaluate<string | null>(ACTIVE_RAIL_SLIDE)).toBe('s1');
 
-    await editor.clickByText('button', 'Present', 'Present');
+    if (mode !== 'fullscreen') {
+      await editor.click('[aria-label="Presentation options"]');
+      await editor.clickByText('button', mode === 'editor' ? 'In Editor' : 'In Window');
+      await editor.clickByText('button', 'Present', 'Present');
+    } else await editor.clickByText('button', 'Present', 'Present');
+    const playback = editor;
     const stage = `document.querySelector('iframe[src*="present.html"]')?.contentDocument?.getElementById('stage')`;
     await eventually(
-      async () => editor!.evaluate<string[]>(shownProbe(stage)),
+      async () => playback.evaluate<string[]>(shownProbe(stage)),
       'the presentation did not paint its first slide',
       (ids) => ids.length === 1 && ids[0] === 't1',
     );
 
-    await editor.key('ArrowRight', ARROW_RIGHT);
+    if (mode === 'editor') {
+      expect(await editor.evaluate<boolean>(`(() => {
+        const frame = document.querySelector('iframe[src*="present.html"]')?.getBoundingClientRect();
+        const slide = document.querySelector('.slide-layer')?.getBoundingClientRect();
+        return !!frame && !!slide && Math.abs(frame.left - slide.left) < 2
+          && Math.abs(frame.top - slide.top) < 2 && Math.abs(frame.width - slide.width) < 2
+          && Math.abs(frame.height - slide.height) < 2;
+      })()`)).toBe(true);
+    }
+    if (mode !== 'fullscreen') {
+      expect(await playback.evaluate('document.fullscreenElement === null')).toBe(true);
+      const targets = await playback.call('Target.getTargets');
+      expect(targets.targetInfos.filter((t: { type: string; url: string }) => t.type === 'page' && t.url.includes('present.html'))).toHaveLength(0);
+      // A first click advances immediately rather than being spent on fullscreen.
+      await playback.click('iframe[src*="present.html"]');
+    } else await playback.key('ArrowRight', ARROW_RIGHT);
     await eventually(
-      async () => editor!.evaluate<string[]>(shownProbe(stage)),
+      async () => playback.evaluate<string[]>(shownProbe(stage)),
       'ArrowRight did not advance to the second slide',
       (ids) => ids.length === 1 && ids[0] === 't2',
     );
-    await editor.key('ArrowRight', ARROW_RIGHT);
+    await playback.key('ArrowRight', ARROW_RIGHT);
     await eventually(
-      async () => editor!.evaluate<string[]>(shownProbe(stage)),
+      async () => playback.evaluate<string[]>(shownProbe(stage)),
       'ArrowRight did not advance to the third slide',
       (ids) => ids.length === 1 && ids[0] === 't3',
     );
 
-    await editor.key('Escape', ESCAPE);
+    if (mode !== 'fullscreen') {
+      // Resizing a window must keep the complete slide inside the viewport.
+      for (const [width, height] of [[900, 700], [1100, 500]]) {
+        await playback.call('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 1, mobile: false });
+        await eventually(async () => playback.evaluate<boolean>(`(() => {
+          const doc = document.querySelector('iframe[src*="present.html"]')?.contentDocument;
+          const box = doc?.querySelector('#stage .slide')?.getBoundingClientRect();
+          return !!box && box.width > 0 && box.left >= -1 && box.top >= -1
+            && box.right <= innerWidth + 1 && box.bottom <= innerHeight + 1;
+        })()`), 'the resized player clipped the slide', (fits) => fits);
+      }
+      expect(await playback.evaluate('document.fullscreenElement === null && !document.getElementById("fullscreen-hint")')).toBe(true);
+      if (mode === 'editor') await playback.click('#side-tabs button');
+      await playback.key('Escape', ESCAPE);
+    } else await editor.key('Escape', ESCAPE);
     await eventually(
       async () => editor!.evaluate<boolean>(`!document.querySelector('iframe[src*="present.html"]')`),
       'Escape did not end the presentation',
@@ -165,7 +199,7 @@ describe.skipIf(!electronBinary || process.platform === 'win32')('leaving a desk
     appProcess = null;
   }, 30_000);
 
-  it('lands the editor on the slide the show ended on', async () => {
+  it.each(['fullscreen', 'windowed', 'editor'] as const)('lands the editor on the last slide (%s)', async (mode) => {
     workDir = await mkdtemp(join(tmpdir(), 'present-exit-desktop-'));
     const appDir = join(workDir, 'app');
     const profileDir = join(workDir, 'electron-profile');
@@ -190,20 +224,39 @@ describe.skipIf(!electronBinary || process.platform === 'win32')('leaving a desk
     );
     expect(await editor.evaluate<string | null>(ACTIVE_RAIL_SLIDE)).toBe('s1');
 
-    await editor.clickByText('button', 'Present', 'Present');
-    const audienceTarget = await findTarget(
-      app.debugPort,
-      (candidate) => candidate.url.includes('/present/index.html'),
-      app.log,
-    );
-    audience = await Cdp.connect(audienceTarget.webSocketDebuggerUrl!);
-    const root = `document.getElementById('root')`;
+    if (mode !== 'fullscreen') {
+      await editor.click('[aria-label="Presentation options"]');
+      await editor.clickByText('button', mode === 'editor' ? 'In Editor' : 'In Window');
+      await editor.clickByText('button', 'Present', 'Present');
+    } else await editor.clickByText('button', 'Present', 'Present');
+    if (mode !== 'fullscreen') audience = editor;
+    else {
+      const audienceTarget = await findTarget(app.debugPort,
+        (candidate) => candidate.url.includes('/present/index.html'), app.log);
+      audience = await Cdp.connect(audienceTarget.webSocketDebuggerUrl!);
+    }
+    if (mode !== 'fullscreen') {
+      const targets = await editor.call('Target.getTargets');
+      expect(targets.targetInfos.filter((t: { type: string; url: string }) => t.type === 'page' && t.url.includes('/present/index.html'))).toHaveLength(0);
+    }
+    const root = mode !== 'fullscreen'
+      ? `document.querySelector('.in-window-presentation')?.contentDocument?.getElementById('root')`
+      : `document.getElementById('root')`;
     await eventually(
       async () => audience!.evaluate<string[]>(shownProbe(root)),
       'the audience window did not paint its first slide',
       (ids) => ids.length === 1 && ids[0] === 't1',
     );
 
+    if (mode === 'editor') {
+      expect(await editor.evaluate<boolean>(`(() => {
+        const frame = document.querySelector('.in-window-presentation')?.getBoundingClientRect();
+        const slide = document.querySelector('.slide-layer')?.getBoundingClientRect();
+        return !!frame && !!slide && Math.abs(frame.left - slide.left) < 2
+          && Math.abs(frame.top - slide.top) < 2 && Math.abs(frame.width - slide.width) < 2
+          && Math.abs(frame.height - slide.height) < 2;
+      })()`)).toBe(true);
+    }
     await audience.key('ArrowRight', ARROW_RIGHT);
     await eventually(
       async () => audience!.evaluate<string[]>(shownProbe(root)),
@@ -216,6 +269,8 @@ describe.skipIf(!electronBinary || process.platform === 'win32')('leaving a desk
       'ArrowRight did not advance to the third slide',
       (ids) => ids.length === 1 && ids[0] === 't3',
     );
+
+    if (mode === 'editor') await editor.click('#side-tabs button');
 
     // Escape closes the audience window on key-down, so a key-up has no window
     // left to reach: send the press alone, and let the connection close under it.
