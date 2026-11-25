@@ -1,3 +1,4 @@
+import { copyElementStyle, pasteElementStyle } from './styleClipboard.js';
 import { handlePresentationShortcut } from './presentationButton.js';
 import type { Comment, SlideElement } from '@shared/deck.js';
 import { openThreadCount } from '@shared/comments.js';
@@ -384,6 +385,15 @@ export function bindEditorKeys(deps: ShellDeps, clipboard: ClipboardActions): vo
     // rather than deleting the element being typed into.
     if (typing || canvas.isEditing()) return;
 
+    if (mod && e.shiftKey && !e.altKey && ['KeyC', 'KeyV'].includes(e.code)) {
+      e.preventDefault();
+      e.stopPropagation();
+      if (!e.repeat) {
+        if (e.code === 'KeyC') copyElementStyle(store, deps.setStatusMessage);
+        else pasteElementStyle(store, deps.setStatusMessage);
+      }
+      return;
+    }
     if (mod && e.key.toLowerCase() === 'z') {
       e.preventDefault();
       if (e.shiftKey) (deps.redo ?? (() => store.redo()))();
@@ -533,6 +543,8 @@ export function makeContextActions(
       items.push(
         { label: 'Cut', action: () => void cutSelectionToClipboard(store) },
         { label: 'Copy', action: () => void copySelectionToClipboard(store) },
+        { label: 'Copy style', action: () => copyElementStyle(store, deps.setStatusMessage) },
+        { label: 'Paste style', action: () => pasteElementStyle(store, deps.setStatusMessage) },
       );
     }
     items.push({ label: 'Paste', action: () => void clipboard.pasteClipboard() });

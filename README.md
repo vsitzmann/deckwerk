@@ -89,6 +89,13 @@ The **DeckWerk** menu includes **Show video badges**, a personal preference save
 on this browser/device across decks. It defaults to on and can be toggled without
 changing the shared presentation.
 
+Select one text box, image, or video and press **Command+Shift+C** to copy its
+style. Select matching objects and press **Command+Shift+V** to apply it in one
+undoable change (use Ctrl in place of Command on Windows/Linux). Images and
+videos share styles. Text styles apply to text boxes. The same commands are in
+the object's context menu. Content, geometry, media crops, and playback settings
+stay with the target; style copying uses a separate clipboard.
+
 ## Design principles
 
 ### Cross-platform
