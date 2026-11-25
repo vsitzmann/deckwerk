@@ -220,7 +220,16 @@ body.welcome-mode .deck-only { display: none; }
   min-height: 0;
 }
 
-#rail, #side {
+#rail, #rail::-webkit-scrollbar { width: 12px; }
+#rail::-webkit-scrollbar-track { background: var(--panel); }
+#rail::-webkit-scrollbar-thumb {
+  background: var(--muted);
+  border: 3px solid var(--panel);
+  border-radius: 6px;
+}
+#rail::-webkit-scrollbar-thumb:hover { background: var(--text); }
+
+#side {
   display: flex;
   overflow-y: auto;
   flex-direction: column;
@@ -229,6 +238,10 @@ body.welcome-mode .deck-only { display: none; }
 
 #rail {
   width: var(--rail-width, 220px);
+  /* A styled, non-overlay scrollbar stays visible even with macOS's
+     “Automatically” setting, so the navigator always shows its position. */
+  overflow-y: scroll;
+  scrollbar-gutter: stable;
   border-right: 1px solid var(--line);
 }
 #side {

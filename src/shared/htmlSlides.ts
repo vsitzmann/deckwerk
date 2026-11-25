@@ -614,7 +614,7 @@ export function insertionAnchor(deck: Deck, ref: string): string | null | undefi
   if (deck.slides.some((slide) => slide.id === ref)) return ref;
   if (!/^\d+$/.test(ref)) return undefined;
   const number = Number(ref);
-  return number === 0 ? null : deck.slides[number - 1]?.id;
+  return number === 0 ? null : deck.slides.filter((slide) => !slide.skipped)[number - 1]?.id;
 }
 
 /**

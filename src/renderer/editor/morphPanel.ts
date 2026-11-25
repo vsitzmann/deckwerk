@@ -1,3 +1,4 @@
+import { slideNumberLabel } from '@shared/slideNumbering.js';
 import type { Slide } from '@shared/deck.js';
 import { durationField } from './durationField.js';
 import { MORPH_NAME } from '@shared/featureNames.js';
@@ -172,8 +173,8 @@ export class MorphPanel {
     const previews = document.createElement('div');
     previews.className = 'morph-previews morph-compact-previews';
     previews.append(
-      this.preview(current, `Slide ${slideIndex + 1}`, 'source', pairNumbers, false),
-      this.preview(next, `Slide ${slideIndex + 2}`, 'target', pairNumbers, false),
+      this.preview(current, `Slide ${slideNumberLabel(deck.slides, slideIndex)}`, 'source', pairNumbers, false),
+      this.preview(next, `Slide ${slideNumberLabel(deck.slides, slideIndex + 1)}`, 'target', pairNumbers, false),
     );
     const summary = document.createElement('p');
     summary.className = 'insp-hint morph-summary';
@@ -322,8 +323,8 @@ export class MorphPanel {
     const previews = document.createElement('div');
     previews.className = 'morph-previews';
     previews.append(
-      this.preview(current, `Source · Slide ${slideIndex + 1}`, 'source', pairNumbers),
-      this.preview(next, `Target · Slide ${slideIndex + 2}`, 'target', pairNumbers),
+      this.preview(current, `Source · Slide ${slideNumberLabel(deck.slides, slideIndex)}`, 'source', pairNumbers),
+      this.preview(next, `Target · Slide ${slideNumberLabel(deck.slides, slideIndex + 1)}`, 'target', pairNumbers),
     );
     const actions = document.createElement('div');
     actions.className = 'button-row morph-actions';

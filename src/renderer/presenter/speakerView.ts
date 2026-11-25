@@ -1,3 +1,4 @@
+import { slideNumberLabel } from '@shared/slideNumbering.js';
 import type { Deck } from '@shared/deck.js';
 import type { PresentationCommand, PresentationState } from '@shared/ipc.js';
 import { resolveState } from '@shared/timeline.js';
@@ -209,7 +210,7 @@ export function createSpeakerView(options: SpeakerViewOptions): SpeakerView {
     let nextSlide = state.cursor.slide + 1;
     while (nextSlide <= lastSlide && deck.slides[nextSlide]?.skipped) nextSlide += 1;
     preview(nextHost, nextSlide <= lastSlide ? nextSlide : -1);
-    position.textContent = presentationLabel(state, deck.slides.length);
+    position.textContent = presentationLabel(state, deck.slides);
     const slide = deck.slides[state.cursor.slide];
     if (shownNotesSlideId !== slide?.id) commitNotes();
     if (shownNotesSlideId !== slide?.id || document.activeElement !== notes) {
@@ -259,13 +260,13 @@ export function createSpeakerView(options: SpeakerViewOptions): SpeakerView {
       const button = document.createElement('button');
       button.className = `speaker-overview-slide${slide.skipped ? ' skipped' : ''}`;
       button.dataset.slide = String(index);
-      button.setAttribute('aria-label', `Slide ${index + 1}: ${slide.name || 'Untitled'}${slide.skipped ? ', hidden' : ''}`);
+      button.setAttribute('aria-label', `Slide ${slideNumberLabel(deck.slides, index)}: ${slide.name || 'Untitled'}${slide.skipped ? ', hidden' : ''}`);
       const thumbnail = document.createElement('div');
       thumbnail.className = 'preview';
       thumbnail.dataset.slide = String(index);
       const label = document.createElement('span');
       label.className = 'speaker-overview-label';
-      label.textContent = `${index + 1}  ${slide.name || 'Untitled'}`;
+      label.textContent = `${slideNumberLabel(deck.slides, index)}  ${slide.name || 'Untitled'}`;
       button.append(thumbnail, label);
       if (slide.skipped) {
         const badge = document.createElement('span');

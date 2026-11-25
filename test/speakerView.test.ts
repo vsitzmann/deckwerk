@@ -143,6 +143,14 @@ describe('speaker view', () => {
     view.destroy();
   });
 
+  it('excludes hidden slides from the counter and overview', () => {
+    const view = open();
+    view.setDeck(deckOf(['Hidden intro', 'Intro', 'Hidden detail', 'Results'], [0, 2]));
+    view.setState(state({ cursor: { slide: 3, step: 0 } }));
+    expect(host.querySelector('.speaker-position')!.textContent).toContain('Slide 2 / 2');
+    view.destroy();
+  });
+
   it('reports slide and build position', () => {
     const view = open();
     view.setDeck(deckOf(['Intro', 'Method', 'Results']));

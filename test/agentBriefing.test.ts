@@ -345,6 +345,7 @@ describe('image and video keep the same media vocabulary', () => {
     syncGroup: 'Shares a playback clock, meaningless on a still (a still can still be a wipe layer).',
     syncLength: 'How long a playback clock runs, meaningless on a still.',
     playbackRate: 'Playback speed, meaningless on a still.',
+    editingPreviewTime: 'Editing preview frame time, meaningless on a still.',
   };
 
   const shapeOf = (type: string): Set<string> => {

@@ -522,7 +522,7 @@ describe('deleting slides from the rail', () => {
 
     store.selectSlide(180);
     const collapsed = host.querySelector<HTMLElement>('.rail-collapsed')!;
-    expect(collapsed.title).toBe('Show hidden slides 182–215');
+    expect(collapsed.title).toBe('Show 34 hidden slides');
     expect(host.querySelector('.rail-run')).toBeNull();
 
     pickRow(collapsed, true);
@@ -1206,5 +1206,21 @@ describe('collapsible slide sections', () => {
     expect(store.get().deck.slides.slice(0, 4).map((slide) => slide.id)).toEqual([
       'section-0', 'section-1', 'section-2', 'section-3',
     ]);
+  });
+});
+
+
+describe('visible slide numbering', () => {
+  it('renumbers cached rail rows when an earlier slide is hidden, shown or undone', () => {
+    const { store, host } = setup();
+    const numbers = () => [...host.querySelectorAll('.rail-num')].map((node) => node.textContent);
+    expect(numbers()).toEqual(['1', '2']);
+    store.commit((deck) => { deck.slides[0].skipped = true; });
+    expect(numbers()).toEqual(['—', '1']);
+    store.undo();
+    expect(numbers()).toEqual(['1', '2']);
+    store.commit((deck) => { deck.slides[0].skipped = true; });
+    store.commit((deck) => { deck.slides[0].skipped = false; });
+    expect(numbers()).toEqual(['1', '2']);
   });
 });

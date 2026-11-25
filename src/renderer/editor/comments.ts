@@ -1,3 +1,4 @@
+import { slideNumberLabel } from '@shared/slideNumbering.js';
 import type { Comment, Slide } from '@shared/deck.js';
 import {
   commentThreads,
@@ -262,8 +263,9 @@ class CommentsPopover {
     return out;
   }
 
-  private slideNumber(): number {
-    return this.options.store.get().deck.slides.findIndex((slide) => slide.id === this.options.slideId) + 1;
+  private slideNumber(): string {
+    const slides = this.options.store.get().deck.slides;
+    return slideNumberLabel(slides, slides.findIndex((slide) => slide.id === this.options.slideId));
   }
 
   private mutate(target: CommentTarget, label: string, change: (comments: Comment[]) => Comment[]): void {

@@ -77,6 +77,11 @@ only the navigator: every unskipped slide still appears when presenting.
 Section structure is saved in the deck and shared with collaborators. Each
 person's collapsed sections are remembered locally for that deck.
 
+Slide numbers and progress totals count only unskipped slides. Hidden slides show
+“—” in the navigator and remain accessible by id through `slide-agent`; numeric
+CLI references follow the visible-slide numbering. Collapsing a section does not
+change its slides' numbers. The navigator's scrollbar stays visible while idle.
+
 ## Design principles
 
 ### Cross-platform

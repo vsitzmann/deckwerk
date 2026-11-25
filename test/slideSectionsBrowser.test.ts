@@ -106,3 +106,34 @@ describe.skipIf(!electronBinary)('Keynote-style slide sections in the browser', 
   });
 
 });
+
+describe.skipIf(!electronBinary)('slide rail progress and scrollbar', () => {
+  it('keeps the scrollbar gutter visible when idle and renumbers after hiding a slide', { timeout: 120_000 }, async () => {
+    await fixture();
+    await session.clickRail(0);
+    await session.cdp.click('.rail-actions button:nth-child(3)');
+    expect(await session.cdp.evaluate<string[]>(`[...document.querySelectorAll('.rail-item > .rail-num')].map((n) => n.textContent)`))
+      .toEqual(['—', '1', '2', '3', '4']);
+    await session.cdp.evaluate(`window.store.commit((deck) => {
+      const first = deck.slides[0];
+      deck.slides.push(...Array.from({length: 30}, (_, i) => ({ ...structuredClone(first), elements: [], timeline: [], indentLevel: 0, skipped: false, id: 'scroll-' + i })));
+    })`);
+    for (const theme of ['light', 'dark']) {
+      await session.cdp.evaluate(`document.documentElement.dataset.uiTheme = '${theme}'`);
+      await wait(1_200);
+      const metrics = await session.cdp.evaluate<{ overflow: string; gutter: number; thumb: string; scrolls: boolean }>(`(() => {
+        const rail = document.querySelector('#rail');
+        const style = getComputedStyle(rail);
+        rail.scrollTop = 100;
+        return { overflow: style.overflowY,
+          gutter: rail.offsetWidth - rail.clientWidth - parseFloat(style.borderRightWidth),
+          thumb: getComputedStyle(rail, '::-webkit-scrollbar-thumb').backgroundColor,
+          scrolls: rail.scrollTop > 0 };
+      })()`);
+      expect(metrics.overflow).toBe('scroll');
+      expect(metrics.gutter).toBeGreaterThanOrEqual(12);
+      expect(metrics.thumb).not.toBe('rgba(0, 0, 0, 0)');
+      expect(metrics.scrolls).toBe(true);
+    }
+  });
+});

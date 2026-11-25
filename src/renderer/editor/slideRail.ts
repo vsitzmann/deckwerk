@@ -1,3 +1,4 @@
+import { slideNumberLabel } from '@shared/slideNumbering.js';
 import { slideSections, canChangeSlideIndent, changeSlideIndent, moveSlideSection, type SlideSection } from '@shared/slideSections.js';
 import { openContextMenu } from './contextMenuPlacement.js';
 import { makeId } from '@shared/geometry.js';
@@ -37,7 +38,13 @@ interface MenuItem {
  * 1-based slide numbers as a reader says them: runs collapse to ranges, so
  * [3, 4, 5, 8] reads "3–5, 8".
  */
-export function slideNumbersLabel(indices: readonly number[]): string {
+export function slideNumbersLabel(indices: readonly number[], slides?: readonly { skipped?: boolean }[]): string {
+  if (slides) {
+    const visible = indices.filter((index) => !slides[index]?.skipped)
+      .map((index) => Number(slideNumberLabel(slides, index)) - 1);
+    const hidden = indices.length - visible.length;
+    return [visible.length ? slideNumbersLabel(visible) : '', hidden ? `${hidden} hidden` : ''].filter(Boolean).join(', ');
+  }
   const sorted = [...new Set(indices)].sort((a, b) => a - b);
   const parts: string[] = [];
   for (let at = 0; at < sorted.length;) {
@@ -639,11 +646,11 @@ export class SlideRail {
       .some((slide) => slideSelection.has(slide.id));
     row.className = `rail-item rail-collapsed${selected ? ' selected' : ''}`;
     row.setAttribute('aria-selected', String(selected));
-    row.title = `Show hidden slides ${start + 1}–${end + 1}`;
+    row.title = `Show ${end - start + 1} hidden slides`;
 
     const num = document.createElement('span');
     num.className = 'rail-num';
-    num.textContent = `${start + 1}…${end + 1}`;
+    num.textContent = '—';
 
     const stack = document.createElement('div');
     stack.className = 'rail-stack';
@@ -695,7 +702,7 @@ export class SlideRail {
     wrap.className = 'rail-run';
     const bracket = document.createElement('button');
     bracket.className = 'rail-run-bracket';
-    bracket.title = `Collapse hidden slides ${start + 1}–${end + 1}`;
+    bracket.title = `Collapse ${end - start + 1} hidden slides`;
     bracket.setAttribute('aria-label', bracket.title);
     bracket.addEventListener('click', () => {
       this.expandedRuns.delete(runKey);
@@ -892,6 +899,7 @@ export class SlideRail {
       // store decides per render, and re-arm the visibility observer the
       // rebuild disconnected.
       const item = cached.row;
+      item.querySelector<HTMLElement>('.rail-num')!.textContent = slideNumberLabel(deck.slides, i);
       this.rowBySlideId.set(slide.id, item);
       this.syncRowState(item, i === slideIndex, slideSelection.has(slide.id));
       this.syncCommentState(item, slide);
@@ -917,7 +925,7 @@ export class SlideRail {
 
       const num = document.createElement('span');
       num.className = 'rail-num';
-      num.textContent = String(i + 1);
+      num.textContent = slideNumberLabel(deck.slides, i);
 
       const thumb = this.deferredThumb(deck, slide, i === slideIndex);
       item.append(num, thumb);
@@ -1124,7 +1132,7 @@ export class SlideRail {
     this.clearDragImage();
     const chip = document.createElement('div');
     chip.className = 'rail-drag-image';
-    chip.textContent = `Slide ${index + 1}`;
+    chip.textContent = `Slide ${slideNumberLabel(this.store.get().deck.slides, index)}`;
     document.body.appendChild(chip);
     this.dragImage = chip;
     return chip;
@@ -1367,7 +1375,7 @@ export class SlideRail {
       applyDeckThemeToNewSlide(d, 0);
     }, { label: doomed.length === 1 ? 'Delete slide' : `Delete ${doomed.length} slides` });
     this.store.selectSlide(wholeDeck ? 0 : Math.max(0, first - 1));
-    const numbers = slideNumbersLabel(doomed.map(({ index }) => index));
+    const numbers = slideNumbersLabel(doomed.map(({ index }) => index), deck.slides);
     const one = doomed.length === 1;
     this.onStatus?.(`${options.verb ?? 'Deleted'} slide${one ? '' : 's'} ${numbers}. `
       + `Undo (${undoShortcutLabel()}) restores ${one ? 'it' : 'them'}.`);
@@ -1394,7 +1402,7 @@ export class SlideRail {
     }
     const ids = new Set(doomed.map(({ slide }) => slide.id));
     const count = doomed.length;
-    const numbers = slideNumbersLabel(doomed.map(({ index }) => index));
+    const numbers = slideNumbersLabel(doomed.map(({ index }) => index), deck.slides);
     this.confirmingDelete = true;
     try {
       const confirmed = await showConfirmDialog({

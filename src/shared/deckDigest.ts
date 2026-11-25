@@ -1,3 +1,4 @@
+import { slideProgress } from './slideNumbering.js';
 import type { Deck, Slide, SlideElement } from './deck.js';
 
 /**
@@ -16,6 +17,8 @@ import type { Deck, Slide, SlideElement } from './deck.js';
 
 export interface SlideOutline {
   index: number;
+  /** Presentation number, excluding hidden slides. Hidden slides use their id. */
+  number: number | null;
   id: string;
   name: string;
   /** First line of the slide's most title-like text, for recognising it. */
@@ -61,6 +64,7 @@ const BODY_CLASSES = ['role-body', 'body'];
 export function deckOutline(deck: Deck): SlideOutline[] {
   return deck.slides.map((slide, index) => ({
     index,
+    number: slideProgress(deck.slides, index).number,
     id: slide.id,
     name: slide.name,
     title: slideTitle(slide),

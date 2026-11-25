@@ -106,10 +106,12 @@ you find "the middle of the talk" without reading the talk. It takes no flags:
 it is always the whole deck.
 
 **Naming a slide.** Anywhere a command takes `--slide`, it takes the slide's id
-*or* its 1-based number — the number the editor's rail shows, the number
+*or* its 1-based visible-slide number — the number the editor's rail shows
+(hidden slides do not count), the number
 `context` and `comments` print, and the number a person says out loud. So "my
 slide 44 is ugly" is `--slide 44`, and that slide with its neighbours is
-`--slide 43,44,45`. You never have to look up an id to act on a number.
+`--slide 43,44,45`. Hidden slides have no number and must be named by id.
+You never have to look up an id to act on a visible-slide number.
 Where a command takes several slides (`inspect`, `render`, `validate`,
 `theme apply`), a range of numbers counts too, both ends included, and a list
 can mix them: `--slide 2-40`, `--slide 1,3-5`.

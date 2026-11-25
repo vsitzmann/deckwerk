@@ -1,3 +1,4 @@
+import { slideNumberLabel } from '@shared/slideNumbering.js';
 import type { Deck, Slide } from '@shared/deck.js';
 import { releasePreviewVideos } from '../player/previewPoster.js';
 import type { EditorCanvas } from './canvas.js';
@@ -141,7 +142,7 @@ export class LightTable {
     frame.appendChild(surface);
     const label = document.createElement('span');
     label.className = 'light-table-label';
-    label.textContent = slide.skipped ? `${index + 1} · hidden` : String(index + 1);
+    label.textContent = slide.skipped ? '— · hidden' : slideNumberLabel(deck.slides, index);
     card.append(frame, label);
     card.addEventListener('click', () => {
       this.store.selectSlide(index);

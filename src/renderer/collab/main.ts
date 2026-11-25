@@ -1,3 +1,4 @@
+import { slideNumberLabel, slideProgressLabel } from '@shared/slideNumbering.js';
 import { createPresentationButton } from '../editor/presentationButton.js';
 import '../player/player.css';
 import '../appChrome.css';
@@ -519,7 +520,7 @@ const slideIndexOf = (slideId: string): number => store.get().deck.slides.findIn
 const presenceBar = new PresenceBar(
   (slideId) => {
     const index = slideIndexOf(slideId);
-    return index >= 0 ? `slide ${index + 1}` : null;
+    return index >= 0 ? `slide ${slideNumberLabel(store.get().deck.slides, index)}` : null;
   },
   (peer) => {
     const index = peer.activeSlideId ? slideIndexOf(peer.activeSlideId) : -1;
@@ -539,11 +540,11 @@ const chatPanel = new ChatPanel(el('chat'), {
   currentSlide: () => {
     const { deck, slideIndex } = store.get();
     const slide = deck.slides[slideIndex];
-    return slide ? { id: slide.id, number: slideIndex + 1 } : null;
+    return slide ? { id: slide.id, number: slideNumberLabel(deck.slides, slideIndex) } : null;
   },
   slideNumber: (slideId) => {
     const index = slideIndexOf(slideId);
-    return index >= 0 ? index + 1 : null;
+    return index >= 0 ? slideNumberLabel(store.get().deck.slides, index) : null;
   },
   slideOfComment: (commentId) => findComment(store.get().deck, commentId)?.target.slideId ?? null,
   openComment: (commentId) => openCommentById(commentId),
@@ -1441,7 +1442,7 @@ function renderStatus(): void {
   const bits = [
     connectionState,
     deck.title,
-    `slide ${slideIndex + 1}/${deck.slides.length}`,
+    `slide ${slideProgressLabel(deck.slides, slideIndex)}`,
   ];
   if (slideSelection.size > 1) bits.push(`${slideSelection.size} slides selected`);
   if (selection.size > 0) bits.push(`${selection.size} selected`);

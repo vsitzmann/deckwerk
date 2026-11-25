@@ -1,3 +1,4 @@
+import { slideNumberLabel } from '@shared/slideNumbering.js';
 import type { Deck, Slide } from '@shared/deck.js';
 import {
   unresolved,
@@ -125,7 +126,7 @@ export function showMergeDialog(
       row.dataset.mergeKey = item.key;
       const head = document.createElement('header');
       const name = document.createElement('strong');
-      name.textContent = itemTitle(item);
+      name.textContent = itemTitle(item, plan);
       const detail = document.createElement('span');
       detail.textContent = item.detail;
       head.append(name, detail);
@@ -160,7 +161,7 @@ export function showMergeDialog(
         const base = plan.input.base.slides.find((s) => s.id === item.slideId);
         const changes = slide && base ? changedObjects(base, slide) : null;
         card.append(slide ? miniature(deck, slide, changes?.ids) : gone(side === 'local' ? item.local : item.remote));
-        const number = side === 'local' ? item.localNumber : item.remoteNumber;
+        const number = slideNumberLabel(deck.slides, deck.slides.findIndex((slide) => slide.id === item.slideId));
         const where = document.createElement('span');
         where.className = 'merge-side-detail';
         where.textContent = slide ? `Slide ${number}` : 'Not in this version';
@@ -196,7 +197,7 @@ export function showMergeDialog(
       row.dataset.mergeKey = item.key;
       const text = document.createElement('span');
       const name = document.createElement('strong');
-      name.textContent = itemTitle(item);
+      name.textContent = itemTitle(item, plan);
       text.append(name, document.createTextNode(` — ${item.detail}`));
       const strip = document.createElement('div');
       strip.className = 'segmented-buttons merge-auto-choice';
@@ -227,9 +228,10 @@ export function showMergeDialog(
   });
 }
 
-function itemTitle(item: MergeItem): string {
+function itemTitle(item: MergeItem, plan: MergePlan): string {
   if (item.kind === 'slide') {
-    const number = item.localNumber ?? item.remoteNumber;
+    const deck = item.localNumber !== null ? plan.input.local : plan.input.remote;
+    const number = slideNumberLabel(deck.slides, deck.slides.findIndex((slide) => slide.id === item.slideId));
     return `Slide ${number}${item.title ? ` · ${item.title}` : ''}`;
   }
   if (item.kind === 'order') return 'Slide order';
