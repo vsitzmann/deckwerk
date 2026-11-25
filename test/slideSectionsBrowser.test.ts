@@ -121,16 +121,22 @@ describe.skipIf(!electronBinary)('slide rail progress and scrollbar', () => {
     for (const theme of ['light', 'dark']) {
       await session.cdp.evaluate(`document.documentElement.dataset.uiTheme = '${theme}'`);
       await wait(1_200);
-      const metrics = await session.cdp.evaluate<{ overflow: string; gutter: number; thumb: string; scrolls: boolean }>(`(() => {
+      const metrics = await session.cdp.evaluate<{ overflow: string; gutter: number; thumb: string; scrolls: boolean; display: string; thumbnailWidth: number; thumbnailHeight: number }>(`(() => {
         const rail = document.querySelector('#rail');
         const style = getComputedStyle(rail);
         rail.scrollTop = 100;
         return { overflow: style.overflowY,
           gutter: rail.offsetWidth - rail.clientWidth - parseFloat(style.borderRightWidth),
           thumb: getComputedStyle(rail, '::-webkit-scrollbar-thumb').backgroundColor,
+          display: style.display,
+          thumbnailWidth: rail.querySelector('.rail-thumb').getBoundingClientRect().width,
+          thumbnailHeight: rail.querySelector('.rail-thumb').getBoundingClientRect().height,
           scrolls: rail.scrollTop > 0 };
       })()`);
       expect(metrics.overflow).toBe('scroll');
+      expect(metrics.display).toBe('flex');
+      expect(metrics.thumbnailWidth).toBeGreaterThan(80);
+      expect(metrics.thumbnailHeight).toBeGreaterThan(40);
       expect(metrics.gutter).toBeGreaterThanOrEqual(12);
       expect(metrics.thumb).not.toBe('rgba(0, 0, 0, 0)');
       expect(metrics.scrolls).toBe(true);
