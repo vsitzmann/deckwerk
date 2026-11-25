@@ -1191,10 +1191,10 @@ describe('collapsible slide sections', () => {
     expect(firstRow?.querySelector('.rail-section-toggle')).toBeNull();
   });
 
-  it('promotes children when their parent alone is deleted, preserving siblings', () => {
+  it('leaves following slides indentation unchanged when a parent is deleted', () => {
     const { store, rail } = sectionRail();
     rail.deleteSlide();
-    expect(store.get().deck.slides.map((slide) => slide.indentLevel ?? 0)).toEqual([0, 0, 0, 0]);
+    expect(store.get().deck.slides.map((slide) => slide.indentLevel ?? 0)).toEqual([1, 1, 1, 0]);
     store.undo();
     expect(store.get().deck.slides.map((slide) => slide.indentLevel ?? 0)).toEqual([0, 1, 1, 1, 0]);
   });

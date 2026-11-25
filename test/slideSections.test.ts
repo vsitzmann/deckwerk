@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { parseDeck, type Slide } from '../src/shared/deck.js';
-import { slideSections, changeSlideIndent, moveSlideSection, sectionSelection } from '../src/shared/slideSections.js';
+import { slideSections, changeSlideIndent, moveSlideSection } from '../src/shared/slideSections.js';
 import { diffDecks } from '../src/shared/deckDiff.js';
 import { applyOpsLenient } from '../src/shared/collabApply.js';
 
@@ -10,12 +10,12 @@ const slides = (...levels: number[]): Slide[] => parseDeck({ version: 1,
 const depths = (s: Slide[]) => slideSections(s).map((entry) => entry.depth);
 
 describe('slide section structure', () => {
-  it('finds one-level boundaries and repairs an orphaned first slide', () => {
+  it('finds one-level boundaries without rewriting an orphaned first slide', () => {
     expect(slideSections(slides(0, 1, 1, 0))).toEqual([
       { depth: 0, parent: null, end: 3 }, { depth: 1, parent: 0, end: 2 },
       { depth: 1, parent: 0, end: 3 }, { depth: 0, parent: null, end: 4 },
     ]);
-    expect(depths(slides(1, 1, 0, 1))).toEqual([0, 1, 0, 1]);
+    expect(depths(slides(1, 1, 0, 1))).toEqual([1, 1, 0, 1]);
   });
 
   it('indents contiguous siblings together and outdents them atomically', () => {
@@ -26,15 +26,30 @@ describe('slide section structure', () => {
     expect(depths(s)).toEqual([0, 0, 0, 0]);
   });
 
-  it('refuses a second level and refuses nesting an existing section, without partial changes', () => {
-    const s = slides(0, 0, 1, 0);
-    expect([...sectionSelection(s, new Set(['s1']))]).toEqual(['s1', 's2']);
-    const before = structuredClone(s);
-    expect(changeSlideIndent(s, new Set(['s1']), 1)).toBe(false);
+  it('indents a heading alone without changing any following slide', () => {
+    const s = slides(0, 0, 1, 1, 0);
+    const children = structuredClone(s.slice(2));
+    expect(changeSlideIndent(s, new Set(['s1']), 1)).toBe(true);
+    expect(depths(s)).toEqual([0, 1, 1, 1, 0]);
+    expect(s.slice(2)).toEqual(children);
+    expect(slideSections(s)[0].end).toBe(4);
+    expect(changeSlideIndent(s, new Set(['s1']), -1)).toBe(true);
+    expect(depths(s)).toEqual([0, 0, 1, 1, 0]);
+    expect(s.slice(2)).toEqual(children);
+    expect(slideSections(s)[1].end).toBe(4);
+  });
+
+  it('handles mixed and scattered selections as independent slide properties', () => {
+    const s = slides(0, 0, 1, 0, 1);
+    const child = structuredClone(s[2]);
+    expect(changeSlideIndent(s, new Set(['s1', 's4']), 1)).toBe(true);
+    expect(s.map((slide) => slide.indentLevel ?? 0)).toEqual([0, 1, 1, 0, 1]);
+    expect(s[2]).toEqual(child);
+    expect(changeSlideIndent(s, new Set(['s1', 's3']), -1)).toBe(true);
+    expect(s.map((slide) => slide.indentLevel ?? 0)).toEqual([0, 0, 1, 0, 1]);
+    expect(s[2]).toEqual(child);
+    expect(changeSlideIndent(s, new Set(['s0']), 1)).toBe(true);
     expect(changeSlideIndent(s, new Set(['s2']), 1)).toBe(false);
-    expect(changeSlideIndent(s, new Set(['s0', 's1']), -1)).toBe(false);
-    expect(s).toEqual(before);
-    expect(changeSlideIndent(s, new Set(['s0']), 1)).toBe(false);
   });
 
   it('moves a collapsed section with all descendants and drops after the target subtree', () => {
@@ -45,6 +60,13 @@ describe('slide section structure', () => {
     const before = structuredClone(s);
     expect(moveSlideSection(s, 2, 4, true)).toBe(2);
     expect(s).toEqual(before);
+  });
+
+  it('preserves each moved slide indentation even beside a differently indented target', () => {
+    const s = slides(0, 1, 0, 1);
+    const original = structuredClone(s[2]);
+    expect(moveSlideSection(s, 2, 1, true)).toBe(2);
+    expect(s.find((slide) => slide.id === 's2')).toEqual(original);
   });
 
   it('saves and collaborates on section nesting through semantic slide-property operations', () => {

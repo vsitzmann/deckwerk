@@ -85,4 +85,24 @@ describe.skipIf(!electronBinary)('Keynote-style slide sections in the browser', 
     await session.chord('Tab', 'Tab', 9, SHIFT);
     expect(await depths()).toEqual([0, 0, 0, 0, 0]);
   });
+  it('indents a section heading alone and regroups its unchanged children by sequence', { timeout: 120_000 }, async () => {
+    await fixture();
+    await session.clickRail(2);
+    await session.cdp.clickModified('.rail-item[data-index="3"]', SHIFT);
+    await session.key('Tab', 9);
+    expect(await depths()).toEqual([0, 0, 1, 1, 0]);
+    await session.clickRail(1);
+    await session.cdp.rightClick('.rail-item[data-index="1"]');
+    expect(await session.cdp.evaluate<boolean>(`[...document.querySelectorAll('#ctx-menu button')]
+      .find((button) => button.textContent === 'Indent slides').disabled`)).toBe(false);
+    await session.cdp.clickByText('#ctx-menu button', 'Indent slides');
+    expect(await depths()).toEqual([0, 1, 1, 1, 0]);
+    expect(await session.cdp.evaluate<string[]>('[...document.querySelectorAll(".rail-section-parent")].map((row) => row.dataset.index)'))
+      .toEqual(['0']);
+    await session.chord('Tab', 'Tab', 9, SHIFT);
+    expect(await depths()).toEqual([0, 0, 1, 1, 0]);
+    expect(await session.cdp.evaluate<string[]>('[...document.querySelectorAll(".rail-section-parent")].map((row) => row.dataset.index)'))
+      .toEqual(['1']);
+  });
+
 });

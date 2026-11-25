@@ -1357,17 +1357,6 @@ export class SlideRail {
     if (survivor) ids.delete(survivor);
     const first = Math.min(...doomed.map(({ index }) => index), slideIndex);
     this.store.commit((d) => {
-      const outline = slideSections(d.slides);
-      d.slides.forEach((slide, i) => {
-        let depth = outline[i].depth;
-        let parent = outline[i].parent;
-        while (parent !== null) {
-          if (ids.has(d.slides[parent].id)) depth -= 1;
-          parent = outline[parent].parent;
-        }
-        if (depth) slide.indentLevel = depth;
-        else delete slide.indentLevel;
-      });
       d.slides = d.slides.filter((slide) => !ids.has(slide.id));
       if (!survivor) return;
       const kept = { ...blankSlide(), id: survivor };

@@ -62,9 +62,12 @@ DeckWerk is not trying to reproduce every feature of PowerPoint or Keynote. It i
 
 ## Slide sections
 
-Select slides in the left navigator and press **Tab** to nest them beneath the
-preceding slide, or **Shift-Tab** to promote them. The same commands are available
-in the slide's right-click menu. Sections have one level of indentation and can be undone like other edits.
+Select slides in the left navigator and press **Tab** to indent them, or
+**Shift-Tab** to remove their indentation. The same commands are available
+in the slide's right-click menu. Sections have one level of indentation.
+Indent and outdent change only the selected slides, leaving every other slide's
+indentation unchanged. Sections are implied by the resulting sequence. These
+changes can be undone like other edits.
 
 Click the arrow beside a parent slide to collapse or expand its section. With
 the navigator focused, **Left/Right** collapse/expand and **Up/Down** move between
