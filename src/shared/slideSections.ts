@@ -1,6 +1,6 @@
 import type { Slide } from './deck.js';
 
-export const MAX_SLIDE_DEPTH = 8;
+export const MAX_SLIDE_DEPTH = 1;
 
 export interface SlideSection {
   depth: number;

@@ -1128,7 +1128,7 @@ describe('collapsible slide sections', () => {
   function sectionRail() {
     const state = setup();
     state.store.commit((deck) => {
-      for (const [i, depth] of [0, 1, 2, 1, 0].entries()) {
+      for (const [i, depth] of [0, 1, 1, 1, 0].entries()) {
         deck.slides[i] = {
           id: `section-${i}`, name: `Slide ${i + 1}`, indentLevel: depth,
           background: { color: null, image: null }, notes: '', elements: [], timeline: [],
@@ -1141,7 +1141,7 @@ describe('collapsible slide sections', () => {
   const shown = (host: HTMLElement) => [...host.querySelectorAll<HTMLElement>('.rail-item[data-index]')]
     .map((row) => Number(row.dataset.index));
 
-  it('folds nested sections without hiding them from playback or changing the active slide', () => {
+  it('folds sections without hiding them from playback or changing the active slide', () => {
     const { store, host } = sectionRail();
     store.selectSlide(2);
     const before = structuredClone(store.get().deck);
@@ -1194,9 +1194,9 @@ describe('collapsible slide sections', () => {
   it('promotes children when their parent alone is deleted, preserving siblings', () => {
     const { store, rail } = sectionRail();
     rail.deleteSlide();
-    expect(store.get().deck.slides.map((slide) => slide.indentLevel ?? 0)).toEqual([0, 1, 0, 0]);
+    expect(store.get().deck.slides.map((slide) => slide.indentLevel ?? 0)).toEqual([0, 0, 0, 0]);
     store.undo();
-    expect(store.get().deck.slides.map((slide) => slide.indentLevel ?? 0)).toEqual([0, 1, 2, 1, 0]);
+    expect(store.get().deck.slides.map((slide) => slide.indentLevel ?? 0)).toEqual([0, 1, 1, 1, 0]);
   });
 
   it('does not let duplicating a heading steal its original children', () => {

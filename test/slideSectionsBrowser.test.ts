@@ -46,13 +46,14 @@ describe.skipIf(!electronBinary)('Keynote-style slide sections in the browser', 
     await session.key('Tab', 9);
     expect(await depths()).toEqual([0, 1, 1, 0, 0]);
     await session.clickRail(2);
+    // A second Tab cannot create a second nesting level.
     await session.key('Tab', 9);
-    expect(await depths()).toEqual([0, 1, 2, 0, 0]);
+    expect(await depths()).toEqual([0, 1, 1, 0, 0]);
     await session.clickRail(0);
     // Use the actual disclosure hit target, including its pointerdown routing.
     await session.cdp.click('[data-index="0"] .rail-section-toggle');
     expect(await visible()).toEqual([0, 3, 4]);
-    expect(await depths()).toEqual([0, 1, 2, 0, 0]);
+    expect(await depths()).toEqual([0, 1, 1, 0, 0]);
     expect(await session.cdp.evaluate<boolean>('window.store.get().deck.slides.every((s) => !s.skipped)')).toBe(true);
     await session.key('ArrowDown', 40);
     expect(await session.cdp.evaluate<number>('window.store.get().slideIndex')).toBe(3);
@@ -62,7 +63,7 @@ describe.skipIf(!electronBinary)('Keynote-style slide sections in the browser', 
     await session.cdp.call('Page.reload');
     await eventually(async () => session.cdp.evaluate<boolean>('Boolean(window.store && document.querySelector(".rail-item[data-index]"))'),
       'editor did not return after reload', Boolean);
-    await eventually(depths, 'saved outline did not return', (value) => value.join() === '0,1,2,0,0');
+    await eventually(depths, 'saved outline did not return', (value) => value.join() === '0,1,1,0,0');
     expect(await visible()).toEqual([0, 3, 4]);
     await session.cdp.click('[data-index="0"] .rail-section-toggle');
     expect(await visible()).toEqual([0, 1, 2, 3, 4]);

@@ -826,7 +826,7 @@ describe('what a section carries besides its objects', () => {
     const deck = parseDeck({
       version: 1,
       slides: [{
-        id: 's', notes: 'Say <this> & that', skipped: true, indentLevel: 2,
+        id: 's', notes: 'Say <this> & that', skipped: true, indentLevel: 1,
         elements: [
           { id: 'a', type: 'text', x: 0, y: 0, w: 100, h: 50, z: 1, html: 'A' },
           { id: 'b', type: 'text', x: 0, y: 60, w: 100, h: 50, z: 2, html: 'B' },
@@ -839,7 +839,7 @@ describe('what a section carries besides its objects', () => {
     });
     const html = slideToHtml(deck.slides[0], deck.canvas);
     expect(html).toContain('data-skipped="true"');
-    expect(html).toContain('data-indent-level="2"');
+    expect(html).toContain('data-indent-level="1"');
     expect(html).toContain('<aside class="notes">Say &lt;this&gt; &amp; that</aside>');
     const block = /<script type="application\/deckwerk-timeline">([\s\S]*?)<\/script>/.exec(html);
     expect(JSON.parse(block![1])).toEqual(deck.slides[0].timeline);
@@ -850,7 +850,7 @@ describe('what a section carries besides its objects', () => {
   it('compiles a timeline block with the ids its objects were given, the attributes winning', () => {
     const deck = parseDeck({ version: 1, slides: [{ id: 'taken', elements: [{ id: 'a', type: 'text', x: 0, y: 0, w: 10, h: 10, html: 'x' }] }] });
     const [slide] = slidesFromMeasured(deck, [{
-      id: null, name: '', notes: '\n      First line\n        indented\n    ', skipped: true, indentLevel: 2,
+      id: null, name: '', notes: '\n      First line\n        indented\n    ', skipped: true, indentLevel: 1,
       background: { color: null, image: null }, morphFromPrevious: false,
       nodes: [
         node({ elementId: 'a', dataset: { build: 'afterPrev+200' }, html: 'A' }),
@@ -867,7 +867,7 @@ describe('what a section carries besides its objects', () => {
     expect(a).not.toBe('a');
     expect(slide.notes).toBe('First line\n  indented');
     expect(slide.skipped).toBe(true);
-    expect(slide.indentLevel).toBe(2);
+    expect(slide.indentLevel).toBe(1);
     expect(slide.timeline.map((entry) => [entry.action.type, entry.action.target, entry.action.value, entry.trigger.on, entry.trigger.ref]))
       .toEqual([
         // data-build-order="1" puts c's appearance first.

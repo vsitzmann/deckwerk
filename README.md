@@ -64,8 +64,7 @@ DeckWerk is not trying to reproduce every feature of PowerPoint or Keynote. It i
 
 Select slides in the left navigator and press **Tab** to nest them beneath the
 preceding slide, or **Shift-Tab** to promote them. The same commands are available
-in the slide's right-click menu. Nesting supports up to eight levels and can be
-undone like other edits.
+in the slide's right-click menu. Sections have one level of indentation and can be undone like other edits.
 
 Click the arrow beside a parent slide to collapse or expand its section. With
 the navigator focused, **Left/Right** collapse/expand and **Up/Down** move between
