@@ -44,6 +44,7 @@ import {
 } from '../editor/shellWiring.js';
 import { SlideRail } from '../editor/slideRail.js';
 import { EditorStore } from '../editor/store.js';
+import { readRememberedSlide, rememberSlide } from './rememberedSlide.js';
 import { createThemePanel } from '../editor/themePanel.js';
 import { BuildPreview } from '../editor/buildPreview.js';
 import { TimelinePanel } from '../editor/timelinePanel.js';
@@ -235,7 +236,8 @@ if (deckId && wantsMobileShell()) {
   location.replace(shellUrl('mobile'));
   throw new Error('a phone — opening the phone client');
 }
-const initialView = decodeEditorView(new URLSearchParams(location.search).get('view'));
+const initialView = decodeEditorView(new URLSearchParams(location.search).get('view'))
+  ?? readRememberedSlide(deckId);
 let initialViewPending = initialView !== null;
 
 const PRESENT_NEEDS_SERVER = 'Presenting needs the server — waiting to reconnect.';
@@ -912,6 +914,9 @@ function publishPresence(): void {
 let chatDeck = store.get().deck;
 let chatSlideIndex = store.get().slideIndex;
 store.subscribe(() => {
+  if (!initialViewPending && (welcomed || shownOffline)) {
+    rememberSlide(deckId, store.slide?.id);
+  }
   publishPresence();
   presenceBar.refresh();
   // Slide numbers in the chat follow the deck; skip the work on selection churn.
