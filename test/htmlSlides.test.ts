@@ -166,14 +166,24 @@ describe('measured nodes become deck objects', () => {
       start: 1, end: 5, poster: null, sourceBox: null, ...over,
     });
     deck.slides[0].elements.push(
-      clip('fast', { playbackRate: 2 }),
-      clip('cropped', { playbackRate: 0.5, sourceBox: { x: -10, y: 0, w: 520, h: 300 } }),
+      clip('fast', { playbackRate: 2, editingPreviewTime: 4 }),
+      clip('cropped', { playbackRate: 0.5, editingPreviewTime: 0, sourceBox: { x: -10, y: 0, w: 520, h: 300 } }),
       clip('plain'),
     );
     const html = slideToHtml(parseDeck(deck).slides[0], { w: 1920, h: 1080 });
     expect(html).toMatch(/data-element-id="fast"[^>]*data-playback-rate="2"/);
     expect(html).toMatch(/data-element-id="cropped"[^>]*data-playback-rate="0.5"/);
     expect(html).not.toMatch(/data-element-id="plain"[^>]*data-playback-rate/);
+
+    expect(html).toMatch(/data-element-id="fast"[^>]*data-editing-preview-time="4"/);
+    expect(html).toMatch(/data-element-id="cropped"[^>]*data-editing-preview-time="0"/);
+    for (const tag of ['video', 'div']) {
+      const restored = elementFromNode(node({ tag, html: '', attrs: { src: 'assets/clip.mp4' },
+        dataset: { ...(tag === 'div' ? { element: 'video', src: 'assets/clip.mp4' } : {}),
+          editingPreviewTime: '4', trim: '1,5' },
+      }), 'clip', 2);
+      expect(restored).toMatchObject({ editingPreviewTime: 4, start: 1, end: 5 });
+    }
 
     const speedOf = (dataset: Record<string, string>, tag = 'video') => (elementFromNode(node({
       tag, html: '', attrs: { src: 'assets/clip.mp4' }, dataset,

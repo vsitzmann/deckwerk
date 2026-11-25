@@ -5754,3 +5754,7 @@ button.ghost:hover:not(:disabled) { color: var(--text); background: transparent;
 .rail-section-parent.active .rail-section-toggle { color: var(--accent-text, var(--accent)); }
 .rail-section-folded .rail-thumb { box-shadow: 0 3px 0 -1px var(--panel), 0 4px 0 0 var(--line), var(--rail-thumb-lift); }
 #ctx-menu button:disabled { opacity: 0.4; cursor: default; }
+
+/* The editing frame uses the same preview and range chrome as video trim. */
+.video-editing-preview-options .trim-preview { height: 96px; }
+.video-editing-preview-options input[type="range"] { width: 100%; }

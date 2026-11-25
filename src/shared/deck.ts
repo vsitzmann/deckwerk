@@ -285,6 +285,8 @@ const VideoElement = BaseElement.extend({
    * presenter's live speed keys multiply it. Read it through `videoSpeed`.
    */
   playbackRate: z.number().positive().optional(),
+  /** Paused frame in editing mode, in source seconds. Absent follows the trim start. */
+  editingPreviewTime: z.number().finite().min(0).optional(),
   poster: z.string().nullable().default(null),
   /**
    * Videos on a slide that share a sync group play from one clock while

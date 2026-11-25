@@ -822,7 +822,7 @@ export class Inspector {
     return field;
   }
 
-  private trimSection(el: Extract<SlideElement, { type: 'video' }>): HTMLElement {
+  private trimSection(el: Extract<SlideElement, { type: 'video' }>): HTMLElement[] {
     const trim = optionSection('Trim', 'video-trim-options');
     const wrap = trim.content;
     const duration = this.durations.get(el.id) ?? null;
@@ -843,7 +843,7 @@ export class Inspector {
         }
       });
       wrap.appendChild(hint('Reading clip length…'));
-      return trim.section;
+      return [trim.section];
     }
 
     const end = el.end ?? duration;
@@ -862,6 +862,9 @@ export class Inspector {
         // replaced by a longer one.
         e.end = stop >= duration - 0.01 ? null : stop;
       });
+      const frame = el.editingPreviewTime ?? Math.max(0, Math.min(start, stop - 0.05));
+      this.trimPreviewSeek?.(frame);
+      this.onSeekPreview?.(el.id, frame);
     };
 
     // While either handle moves: readout + live frame preview only. The store is
@@ -914,10 +917,11 @@ export class Inspector {
       if (preview.readyState >= HTMLMediaElement.HAVE_METADATA) preview.currentTime = t;
     };
     // Seeking to where the preview already is would still decode a frame.
-    if (preview.dataset.seekTo !== String(el.start)) seekPreview(el.start);
+    const frame = el.editingPreviewTime ?? el.start;
+    if (preview.dataset.seekTo !== String(frame)) seekPreview(frame);
     this.trimPreviewSeek = seekPreview;
 
-    wrap.append(preview, range);
+    wrap.append(range);
     const reset = button('Reset trim', () =>
       this.store.updateSelected((e) => {
         if (e.type !== 'video') return;
@@ -928,7 +932,44 @@ export class Inspector {
     );
     reset.disabled = el.start === 0 && el.end === null;
     wrap.appendChild(reset);
-    return trim.section;
+    const editing = optionSection('Editing preview', 'video-editing-preview-options');
+    const showFrame = (time: number) => {
+      seekPreview(time);
+      this.onSeekPreview?.(el.id, time);
+    };
+    const setFrame = (time: number | undefined) => {
+      this.store.updateSelected((target) => {
+        if (target.type !== 'video') return;
+        if (time === undefined) delete target.editingPreviewTime;
+        else target.editingPreviewTime = clamp(time, 0, duration);
+      }, { label: 'Change editing preview' });
+      showFrame(time === undefined ? el.start : clamp(time, 0, duration));
+    };
+    const scrubber = document.createElement('input');
+    scrubber.type = 'range';
+    scrubber.min = '0';
+    scrubber.max = String(duration);
+    scrubber.step = '0.01';
+    scrubber.value = String(frame);
+    scrubber.setAttribute('aria-label', 'Editing preview frame');
+    const timeField = optionalNumberField('Frame', frame,
+      setFrame, () => setFrame(undefined), 's',
+      { min: 0, max: duration, step: 0.01, maxFractionDigits: 2 });
+    const timeInput = timeField.querySelector('input')!;
+    timeInput.placeholder = 'Trim start';
+    timeField.querySelector('button.icon-button')!.setAttribute('title', 'Use trim start');
+    timeField.querySelector('button.icon-button')!.setAttribute('aria-label', 'Use trim start');
+    scrubber.addEventListener('input', () => {
+      const time = Number(scrubber.value);
+      timeInput.value = time.toFixed(2);
+      showFrame(time);
+    });
+    scrubber.addEventListener('change', () => setFrame(Number(scrubber.value)));
+    const follow = button('Use trim start', () => setFrame(undefined), 'ghost trim-reset');
+    follow.disabled = el.editingPreviewTime === undefined;
+    editing.content.append(preview, scrubber, timeField, follow,
+      hint('Frame shown while editing. Playback uses the trim range.'));
+    return [trim.section, editing.section];
   }
 
   /** Align / distribute / match-size for a multi-selection, one undo entry. */
@@ -2136,7 +2177,7 @@ export class Inspector {
 
         // Trim is about time, like playback, so it sits beside it rather than
         // after the mask and border sections.
-        wrap.appendChild(this.trimSection(el));
+        wrap.append(...this.trimSection(el));
         wrap.appendChild(this.mediaMaskControls(el.id));
         wrap.appendChild(this.mediaBorderControls());
         wrap.appendChild(this.mediaEffectsControls());

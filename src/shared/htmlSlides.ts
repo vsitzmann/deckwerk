@@ -1851,6 +1851,7 @@ function elementFromMeasured(
       ...(node.dataset.syncGroup ? { syncGroup: node.dataset.syncGroup } : {}),
       ...syncLengthFromDataset(node.dataset),
       ...playbackRateFrom(node.dataset.playbackRate),
+      ...editingPreviewFrom(node.dataset.editingPreviewTime),
     };
   }
 
@@ -1887,6 +1888,7 @@ function elementFromMeasured(
       ...(node.dataset.syncGroup ? { syncGroup: node.dataset.syncGroup } : {}),
       ...syncLengthFromDataset(node.dataset),
       ...playbackRateFrom(node.dataset.playbackRate),
+      ...editingPreviewFrom(node.dataset.editingPreviewTime),
     };
   }
 
@@ -2338,7 +2340,8 @@ function elementToHtml(
       const trim = ` data-trim="${element.start},${element.end ?? ''}"`
         + (element.syncGroup ? ` data-sync-group="${escape(element.syncGroup)}"` : '')
         + (element.syncLength ? ` data-sync-length="${element.syncLength}"` : '')
-        + (element.playbackRate !== undefined ? ` data-playback-rate="${element.playbackRate}"` : '');
+        + (element.playbackRate !== undefined ? ` data-playback-rate="${element.playbackRate}"` : '')
+        + (element.editingPreviewTime !== undefined ? ` data-editing-preview-time="${element.editingPreviewTime}"` : '');
       if (element.sourceBox) {
         return `  <div ${attrs} data-element="video"`
           + ` data-src="${escape(element.src)}" data-fit="${element.fit}"${trim}`
@@ -2790,4 +2793,11 @@ function round(value: number): number {
 
 function escape(text: string): string {
   return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+/** An editor-only frame timestamp; never changes the playback trim. */
+function editingPreviewFrom(spec: string | undefined): { editingPreviewTime?: number } {
+  if (spec === undefined || !spec.trim()) return {};
+  const time = Number(spec);
+  return Number.isFinite(time) && time >= 0 ? { editingPreviewTime: time } : {};
 }

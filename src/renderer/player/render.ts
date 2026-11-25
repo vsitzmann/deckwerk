@@ -212,13 +212,13 @@ export function applyMediaFitStyles(
   // media patch (the editor's in-place path calls it unconditionally), so it
   // covers a changed box and in-point as well as a changed fit or crop.
   if (el.type === 'video' && tag.tagName.toLowerCase() === 'video') {
-    tag.dataset.mediaKey = videoPresentationKey(el, videoNetworkSrc(tag as HTMLVideoElement));
+    tag.dataset.mediaKey = videoPresentationKey(el, videoNetworkSrc(tag as HTMLVideoElement), tag.dataset.previewSurface !== 'true');
     tag.dataset.assetSrc = el.src;
     // The poster-frame stamp is part of that same identity: a recovery pass
     // reads it to re-seek an element whose frame was dropped, and a stale
     // in-point here would restore the frame the clip no longer starts at.
     const video = tag as HTMLVideoElement;
-    const posterTime = posterFrameTime(el, video.preload === 'auto');
+    const posterTime = posterFrameTime(el, video.dataset.previewSurface !== 'true');
     if (posterTime === null) delete video.dataset.posterTime;
     else video.dataset.posterTime = String(posterTime);
   }
@@ -1141,6 +1141,7 @@ function renderPendingPlaceholder(src: string): HTMLElement {
 export function videoPresentationKey(
   el: Extract<SlideElement, { type: 'video' }>,
   resolvedSrc: string,
+  live = true,
 ): string {
   const crop = el.sourceBox
     ? `${el.sourceBox.x},${el.sourceBox.y},${el.sourceBox.w},${el.sourceBox.h}`
@@ -1148,7 +1149,7 @@ export function videoPresentationKey(
   // The box size matters even under `width: 100%`: the percentage resolves
   // against the wrapper, so two slots of different sizes composite the same
   // frame at different scales.
-  return [resolvedSrc, el.start, crop, el.fit, el.w, el.h].join('|');
+  return [resolvedSrc, live ? el.start : (el.editingPreviewTime ?? el.start), crop, el.fit, el.w, el.h].join('|');
 }
 
 /** Whether a resolved media URL will be read as cross-origin by the canvas. */
@@ -1162,8 +1163,8 @@ function isCrossOrigin(url: string): boolean {
 }
 
 /**
- * The frame a paused element should show: its in-point, or a hair past zero on
- * a preview surface.
+ * Live surfaces use the playback in-point. Preview surfaces use the chosen
+ * editing frame, defaulting to the in-point, or a hair past zero to decode.
  *
  * A `<video>` paints nothing until a frame is decoded, so a preview that never
  * seeks is a black box; under `preload="metadata"` nothing else will decode
@@ -1175,7 +1176,8 @@ export function posterFrameTime(
   el: Extract<SlideElement, { type: 'video' }>,
   live: boolean,
 ): number | null {
-  if (el.start > 0) return el.start;
+  const time = live ? el.start : (el.editingPreviewTime ?? el.start);
+  if (time > 0) return time;
   return live ? null : 0.03;
 }
 
@@ -1208,7 +1210,8 @@ function renderVideo(
   if (isPendingSrc(el.src)) return renderPendingPlaceholder(el.src);
   const video = document.createElement('video');
   video.playsInline = true;
-  video.dataset.mediaKey = videoPresentationKey(el, opts.resolveSrc(el.src));
+  video.dataset.previewSurface = String(opts.mediaPreload === 'metadata');
+  video.dataset.mediaKey = videoPresentationKey(el, opts.resolveSrc(el.src), opts.mediaPreload !== 'metadata');
   // Which deck file this is: its URL may name content rather than a path.
   video.dataset.assetSrc = el.src;
   // Black only once decoding has failed (player.css): a black surface behind a
@@ -1239,7 +1242,7 @@ function renderVideo(
   const memoryMode = memory?.mode(src, el.src) ?? 'network';
   if (memory && memoryMode !== 'network') {
     video.dataset.networkSrc = src;
-    const still = memory.still(el.src, el.start > 0 ? el.start : 0);
+    const still = memory.still(el.src, el.editingPreviewTime ?? el.start);
     if (still) video.dataset.stillPoster = still;
     const held = memoryMode === 'memory' ? memory.objectUrl(src) : undefined;
     if (held) {

@@ -61,3 +61,11 @@ Each clip's length is its trimmed range. Videos side by side can play in sync to
 ### Download the original
 
 Right-click an image or video and choose **Download original…** to save the file you dropped, exactly as it was: an iPhone photo comes back as its HEIC and a screen recording as its own movie, not the PNG or H.264 copy DeckWerk shows on the slide. Crops, masks and effects are not applied. In the web editor the item is **Download original** and the file goes to the browser's downloads.
+
+### Editing preview
+
+In a video's Props, use **Editing preview** to choose the frame shown while
+editing. Drag the slider or enter a time in seconds from the source video.
+The frame can be outside the playback trim range. **Use trim start** restores
+the default. This setting is saved with the deck and does not change playback,
+looping, or the trim range in presentation mode.

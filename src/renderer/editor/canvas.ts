@@ -1844,7 +1844,7 @@ export class EditorCanvas {
       // Matching keys mean the poster frame already matches too; a looping
       // clip that drifted still gets nudged back, which is invisible because
       // the geometry is identical either way.
-      const posterTime = el.start > 0 ? el.start : 0.03;
+      const posterTime = el.editingPreviewTime ?? (el.start > 0 ? el.start : 0.03);
       if (pooled.dataset.holdFrame !== 'true' && Math.abs(pooled.currentTime - posterTime) > 0.05) {
         pooled.currentTime = posterTime;
       }
@@ -1990,7 +1990,13 @@ export class EditorCanvas {
       }
       if (el.type === 'video') {
         const video = node.querySelector<HTMLVideoElement>('video');
-        if (video) applyVideoPlaybackState(video, el, resolve);
+        if (video) {
+          applyVideoPlaybackState(video, el, resolve);
+          if (before?.type === 'video' &&
+              (before.editingPreviewTime ?? before.start) !== (el.editingPreviewTime ?? el.start)) {
+            this.seekVideo(el.id, el.editingPreviewTime ?? el.start);
+          }
+        }
       }
 
       // A shape's drawing is sized by its own viewBox, so the wrapper's new
