@@ -108,6 +108,34 @@ describe.skipIf(!electronBinary)('Keynote-style slide sections in the browser', 
 });
 
 describe.skipIf(!electronBinary)('slide rail progress and scrollbar', () => {
+  it('places numbers beside the thumbnail bottom with compact gaps at both rail widths', async () => {
+    await fixture();
+    await session.clickRail(1);
+    await session.key('Tab', 9);
+    for (const width of [180, 260]) {
+      await session.cdp.evaluate(`document.documentElement.style.setProperty('--rail-width', '${width}px')`);
+      const geometry = await session.cdp.evaluate<Array<{ bottom: number; gap: number; arrow: number | null; rowGap: number }>>(`(() => {
+        const rows = [...document.querySelectorAll('#rail .rail-item[data-index]')];
+        return rows.map((row, i) => {
+          const thumb = row.querySelector('.rail-thumb').getBoundingClientRect();
+          const num = row.querySelector('.rail-num').getBoundingClientRect();
+          const toggle = row.querySelector('.rail-section-toggle')?.getBoundingClientRect();
+          const next = rows[i + 1]?.querySelector('.rail-thumb').getBoundingClientRect();
+          return { bottom: Math.abs(num.bottom - thumb.bottom), gap: thumb.left - num.right,
+            arrow: toggle ? Math.abs((toggle.top + toggle.bottom - thumb.top - thumb.bottom) / 2) : null,
+            rowGap: next ? next.top - thumb.bottom : 9 };
+        });
+      })()`);
+      for (const row of geometry) {
+        expect(row.bottom).toBeLessThanOrEqual(1);
+        expect(row.gap).toBeCloseTo(4);
+        if (row.arrow !== null) expect(row.arrow).toBeLessThanOrEqual(1);
+        expect(row.rowGap).toBeCloseTo(9);
+      }
+    }
+    await session.cdp.evaluate(`document.documentElement.style.removeProperty('--rail-width')`);
+  });
+
   it('keeps the scrollbar gutter visible when idle and renumbers after hiding a slide', { timeout: 120_000 }, async () => {
     await fixture();
     await session.clickRail(0);

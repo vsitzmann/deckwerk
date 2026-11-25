@@ -2397,12 +2397,14 @@ button.primary:hover:not(:disabled) { background: var(--accent-hover); }
   font: 11.5px var(--mono);
 }
 
-/* Rail: numbered frames, like a buffer list. */
-#rail { background: var(--panel); padding: 8px 0; }
+/* Rail: compact Keynote-style spacing, with numbers at the thumbnail baseline. */
+#rail { background: var(--panel); padding: 8px 0; gap: 1px; }
 
 .rail-item {
-  margin: 0 8px 4px;
-  padding: 4px;
+  grid-template-columns: 14px minmax(0, 1fr);
+  column-gap: 4px;
+  margin: 0 8px;
+  padding: 3px 3px 3px 16px;
   border: 1px solid transparent;
   background: transparent;
 }
@@ -2410,7 +2412,13 @@ button.primary:hover:not(:disabled) { background: var(--accent-hover); }
 .rail-item.selected { background: var(--accent-soft); border-color: var(--accent); }
 .rail-item.active { background: var(--accent-soft); border-color: var(--accent); }
 
-.rail-num { font: 10px var(--mono); color: var(--muted); }
+.rail-num {
+  align-self: end;
+  justify-self: end;
+  font: 10px/1 var(--mono);
+  text-align: right;
+  color: var(--muted);
+}
 .rail-item.selected .rail-num { color: var(--accent-text, var(--accent)); }
 .rail-item.active .rail-num { color: var(--accent-text, var(--accent)); }
 
@@ -5753,7 +5761,7 @@ button.ghost:hover:not(:disabled) { color: var(--text); background: transparent;
 /* Outline indentation organizes the navigator without changing presentation order. */
 #rail .rail-item[data-index] {
   margin-left: calc(8px + var(--slide-depth, 0) * 12px);
-  padding-left: 19px;
+  padding-left: 16px;
 }
 .rail-section-toggle {
   position: absolute;
