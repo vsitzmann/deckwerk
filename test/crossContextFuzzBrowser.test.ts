@@ -156,7 +156,7 @@ function isKnownStaleSlideIdentity(error: string): boolean {
 type OpName =
   | 'click' | 'shift-click' | 'double-click text' | 'double-click image then text'
   | 'type nonce' | 'bold mid-word' | 'escape' | 'click empty' | 'marquee'
-  | 'rail hop' | 'undo' | 'redo' | 'undo round-trip' | 'delete selection'
+  | 'rail hop' | 'slide section round-trip' | 'undo' | 'redo' | 'undo round-trip' | 'delete selection'
   | 'cmd+a' | 'click with stray hover' | 'rail multi-delete' | 'stack key' | 'spelling fix'
   | 'size from sidebar' | 'flip from sidebar' | 'viewport gesture' | 'pen abandoned' | 'pen line undone'
   | 'pencil stroke undone' | 'line bent and undone' | 'build multi-delete';
@@ -435,6 +435,7 @@ function chooseOp(next: () => number, pre: CrossState): OpName {
   add('click empty', 1);
   add('marquee', 1);
   add('rail hop', 2);
+  if (pre.editing === null) add('slide section round-trip', 1);
   add('undo', 2);
   add('redo', 1);
   add('undo round-trip', 1);
@@ -604,6 +605,22 @@ async function performOp(
         { x: layer.left + layer.width * 0.4, y: layer.top + layer.height * 0.6 },
         { x: end.left + end.width / 2, y: end.top + end.height / 2 },
       ]);
+      return 'same';
+    }
+    case 'slide section round-trip': {
+      if (await slideCount() < 2) return 'same';
+      if (await session.cdp.evaluate<boolean>('window.store.get().deck.slides.some((s) => s.indentLevel)')) return 'same';
+      await session.clickRail(1);
+      await session.key('Tab', 9);
+      expect(await session.cdp.evaluate<number>('window.store.get().deck.slides[1].indentLevel')).toBe(1);
+      await session.clickRail(0);
+      await session.key('ArrowLeft', 37);
+      expect(await session.cdp.evaluate<number>('document.querySelectorAll(".rail-item[data-index]").length'))
+        .toBe(await slideCount() - 1);
+      await session.key('ArrowRight', 39);
+      await session.clickRail(1);
+      await session.chord('Tab', 'Tab', 9, 8);
+      expect(await session.cdp.evaluate<number>('window.store.get().deck.slides[1].indentLevel ?? 0')).toBe(0);
       return 'same';
     }
     case 'rail hop': {

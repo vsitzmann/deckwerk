@@ -1117,3 +1117,94 @@ describe('changing layout from the slide context menu', () => {
     expect(store.get().deck.slides.map((slide) => slide.layout)).toEqual(['title', 'title']);
   });
 });
+
+describe('collapsible slide sections', () => {
+  beforeEach(() => {
+    document.body.replaceChildren();
+    try { localStorage.clear(); } catch { /* unavailable in some jsdom runtimes */ }
+  });
+  const key = (host: HTMLElement, key: string, shiftKey = false) =>
+    host.dispatchEvent(new KeyboardEvent('keydown', { key, shiftKey, bubbles: true, cancelable: true }));
+  function sectionRail() {
+    const state = setup();
+    state.store.commit((deck) => {
+      for (const [i, depth] of [0, 1, 2, 1, 0].entries()) {
+        deck.slides[i] = {
+          id: `section-${i}`, name: `Slide ${i + 1}`, indentLevel: depth,
+          background: { color: null, image: null }, notes: '', elements: [], timeline: [],
+        };
+      }
+    });
+    state.store.selectSlide(0);
+    return state;
+  }
+  const shown = (host: HTMLElement) => [...host.querySelectorAll<HTMLElement>('.rail-item[data-index]')]
+    .map((row) => Number(row.dataset.index));
+
+  it('folds nested sections without hiding them from playback or changing the active slide', () => {
+    const { store, host } = sectionRail();
+    store.selectSlide(2);
+    const before = structuredClone(store.get().deck);
+    host.querySelector<HTMLElement>('[data-index="0"] .rail-section-toggle')!.click();
+    expect(shown(host)).toEqual([0, 4]);
+    expect(store.get().slideIndex).toBe(2);
+    expect(store.get().deck).toEqual(before);
+    expect(host.querySelector('[data-index="0"]')?.getAttribute('aria-expanded')).toBe('false');
+    // Edits to a hidden descendant do not reopen a section the author folded.
+    store.commit((deck) => { deck.slides[2].notes = 'Still folded'; });
+    expect(shown(host)).toEqual([0, 4]);
+    // A later explicit selection reveals all ancestors.
+    store.selectSlide(4);
+    store.selectSlide(2);
+    expect(shown(host)).toEqual([0, 1, 2, 3, 4]);
+  });
+
+  it('supports Tab, Shift-Tab and left/right arrows without inserting extra slides', () => {
+    const { store, host } = setup();
+    store.selectSlide(1);
+    key(host, 'Tab');
+    expect(store.get().deck.slides[1].indentLevel).toBe(1);
+    store.selectSlide(0);
+    key(host, 'ArrowLeft');
+    expect(shown(host)).toEqual([0]);
+    key(host, 'ArrowDown');
+    expect(store.get().slideIndex).toBe(0);
+    key(host, 'ArrowRight');
+    expect(shown(host)).toEqual([0, 1]);
+    key(host, 'ArrowRight');
+    expect(store.get().slideIndex).toBe(1);
+    key(host, 'Tab', true);
+    expect(store.get().deck.slides[1].indentLevel).toBeUndefined();
+    expect(store.get().deck.slides).toHaveLength(2);
+    store.undo();
+    expect(store.get().deck.slides[1].indentLevel).toBe(1);
+  });
+
+  it('updates disclosure controls when a previously cached sibling gains children', () => {
+    const { store, host } = setup();
+    const firstRow = host.querySelector('.rail-item');
+    store.selectSlide(1);
+    key(host, 'Tab');
+    expect(host.querySelector('.rail-item')).toBe(firstRow);
+    expect(firstRow?.querySelector('.rail-section-toggle')).not.toBeNull();
+    key(host, 'Tab', true);
+    expect(firstRow?.querySelector('.rail-section-toggle')).toBeNull();
+  });
+
+  it('promotes children when their parent alone is deleted, preserving siblings', () => {
+    const { store, rail } = sectionRail();
+    rail.deleteSlide();
+    expect(store.get().deck.slides.map((slide) => slide.indentLevel ?? 0)).toEqual([0, 1, 0, 0]);
+    store.undo();
+    expect(store.get().deck.slides.map((slide) => slide.indentLevel ?? 0)).toEqual([0, 1, 2, 1, 0]);
+  });
+
+  it('does not let duplicating a heading steal its original children', () => {
+    const { store, rail } = sectionRail();
+    rail.duplicateSlide();
+    expect(store.get().slideIndex).toBe(4);
+    expect(store.get().deck.slides.slice(0, 4).map((slide) => slide.id)).toEqual([
+      'section-0', 'section-1', 'section-2', 'section-3',
+    ]);
+  });
+});

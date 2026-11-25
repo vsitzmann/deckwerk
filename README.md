@@ -60,6 +60,21 @@ DeckWerk starts from a different set of assumptions:
 
 DeckWerk is not trying to reproduce every feature of PowerPoint or Keynote. It is trying to make a particular kind of visual, media-rich presentation easy to create and collaborate on in trusted networks and tailnets such as labs or companies.
 
+## Slide sections
+
+Select slides in the left navigator and press **Tab** to nest them beneath the
+preceding slide, or **Shift-Tab** to promote them. The same commands are available
+in the slide's right-click menu. Nesting supports up to eight levels and can be
+undone like other edits.
+
+Click the arrow beside a parent slide to collapse or expand its section. With
+the navigator focused, **Left/Right** collapse/expand and **Up/Down** move between
+visible slides. Dragging a parent moves its descendants with it. Folding affects
+only the navigator: every unskipped slide still appears when presenting.
+
+Section structure is saved in the deck and shared with collaborators. Each
+person's collapsed sections are remembered locally for that deck.
+
 ## Design principles
 
 ### Cross-platform

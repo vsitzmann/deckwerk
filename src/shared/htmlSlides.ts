@@ -98,6 +98,7 @@ export interface MeasuredSlide {
   notesAbsent?: boolean;
   /** `data-skipped` on the section, when it says either way. */
   skipped?: boolean;
+  indentLevel?: number;
   /** The text of the section's `<script type="application/deckwerk-timeline">`, when it has one. */
   timeline?: string;
   background: { color: string | null; image: string | null };
@@ -1261,7 +1262,7 @@ function parseStateBase(value: string | undefined): StateBase | undefined {
   return match ? { notes: match[1], skipped: match[2] === '1', timeline: match[3] } : undefined;
 }
 
-const SLIDE_PROPS = ['name', 'background', 'layout', 'morphFromPrevious', 'morphDuration'] as const;
+const SLIDE_PROPS = ['name', 'background', 'layout', 'morphFromPrevious', 'morphDuration', 'indentLevel'] as const;
 
 export function slideBase(slide: Slide): SlideBase {
   const elements = new Map(slide.elements.map((element) => [element.id, {
@@ -1657,6 +1658,7 @@ export function slideFromMeasured(
     id: opts.slideId,
     name: measured.name,
     notes: normalizeNotes(measured.notes),
+    ...(measured.indentLevel !== undefined ? { indentLevel: measured.indentLevel } : {}),
     ...(measured.skipped !== undefined ? { skipped: measured.skipped } : {}),
     background: measured.background,
     ...(measured.morphFromPrevious ? { morphFromPrevious: true } : {}),
@@ -2177,6 +2179,7 @@ export function slideToHtml(slide: Slide, canvas: { w: number; h: number }): str
     + ` data-base="${stamp.slide}" data-base-ids="${escape(stamp.ids)}"`
     + (slide.name ? ` data-name="${escape(slide.name)}"` : '')
     + (slide.layout ? ` data-layout="${slide.layout}"` : '')
+    + (slide.indentLevel !== undefined ? ` data-indent-level="${slide.indentLevel}"` : '')
     + (slide.skipped ? ' data-skipped="true"' : '')
     + (slide.morphFromPrevious ? ' data-morph-from-previous="true"' : '')
     + (slide.morphDuration !== undefined ? ` data-morph-duration="${slide.morphDuration}"` : '')

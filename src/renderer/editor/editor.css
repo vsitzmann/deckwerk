@@ -5730,3 +5730,27 @@ button.ghost:hover:not(:disabled) { color: var(--text); background: transparent;
   background-color: var(--panel);
   box-shadow: 0 2px 10px rgb(0 0 0 / 35%);
 }
+
+/* Outline indentation organizes the navigator without changing presentation order. */
+#rail .rail-item[data-index] {
+  margin-left: calc(8px + var(--slide-depth, 0) * 12px);
+  padding-left: 19px;
+}
+.rail-section-toggle {
+  position: absolute;
+  left: 1px;
+  top: calc(50% - 12px);
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 24px;
+  border-radius: var(--radius);
+  color: var(--muted);
+  font: 18px/1 var(--sans, sans-serif);
+  cursor: pointer;
+}
+.rail-section-toggle:hover { color: var(--text); background: var(--panel-2); }
+.rail-section-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.rail-section-parent.active .rail-section-toggle { color: var(--accent-text, var(--accent)); }
+.rail-section-folded .rail-thumb { box-shadow: 0 3px 0 -1px var(--panel), 0 4px 0 0 var(--line), var(--rail-thumb-lift); }
+#ctx-menu button:disabled { opacity: 0.4; cursor: default; }

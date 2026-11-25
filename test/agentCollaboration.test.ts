@@ -205,6 +205,7 @@ for (const kind of BACKENDS) describe.skipIf(!electronBinary)(`an agent working 
 
   it('keeps everything a page cannot say when the agent edits the slide', async () => {
     const workspace = await open(kind);
+    await personEdits(workspace, 'review', (slide) => { slide.indentLevel = 1; });
     const before = await workspace.deck();
     const page = (await exportPage(workspace, 'review,builds'))
       .replace('Review body text', 'Review body text, revised')
@@ -219,6 +220,7 @@ for (const kind of BACKENDS) describe.skipIf(!electronBinary)(`an agent working 
     expect(plainText(review)).toContain('Review body text, revised');
     expect(review.notes).toBe(reviewBefore.notes);
     expect(review.skipped).toBe(true);
+    expect(review.indentLevel).toBe(1);
     expect(review.comments).toEqual(reviewBefore.comments);
     expect(review.elements.find((element) => element.id === 'review-body')?.comments)
       .toEqual(reviewBefore.elements.find((element) => element.id === 'review-body')?.comments);
