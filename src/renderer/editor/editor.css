@@ -1472,6 +1472,13 @@ body.panel-resizing iframe { pointer-events: none; }
    than magnified. A white ring and a soft shadow lift it off any slide,
    photos included; several builds on one object widen it into a pill
    ("1,3"). */
+/* Pointing at a build in the Build panel: its objects stand out, the rest of
+   the slide (and the other badges) step back. */
+.build-highlight { position: absolute; left: 0; top: 0; z-index: 5; overflow: visible; pointer-events: none; }
+.build-highlight-veil { fill: rgb(0 0 0 / 55%); }
+.build-highlight-outline { fill: none; stroke: var(--accent); }
+.build-badge.dimmed { opacity: 0.3; }
+
 .build-badge {
   position: absolute;
   z-index: 6;
@@ -5325,44 +5332,67 @@ button.ghost:hover:not(:disabled) { color: var(--text); background: transparent;
 .build-card-what > .build-term-color { grid-column: 1 / -1; }
 .build-scale-wrap { width: 72px; }
 
-/* Build order: one compact row per build under the click that starts it, so
-   the slide's choreography reads at a glance (timelinePanel.ts). */
-.build-overview { display: flex; flex-direction: column; gap: 2px; max-height: 340px; overflow-y: auto; }
-.build-overview-step {
-  margin: 8px 0 3px;
-  color: var(--muted);
-  font: 9.5px var(--mono);
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
-.build-overview-step:first-child { margin-top: 0; }
-.build-overview-row {
+/* Build order: one single-line row per build, the builds of each click
+   beside one pill with that click's number, so a long slide's whole
+   choreography fits in view (timelinePanel.ts). */
+.build-overview {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
-  grid-template-areas: "num name effect" "num when when";
-  column-gap: 8px;
+  grid-template-columns: auto minmax(0, 1fr);
+  grid-auto-rows: min-content;
+  column-gap: 6px;
   row-gap: 1px;
+  align-content: start;
+  max-height: max(340px, 55vh);
+  overflow-y: auto;
+}
+.build-click-pill {
+  grid-column: 1;
+  min-width: 20px;
+  min-height: 20px;
+  padding: 2px 5px 0;
+  box-sizing: border-box;
+  border-radius: 10px;
+  background: var(--build-mark);
+  color: var(--on-build-mark);
+  font: 600 10.5px/16px system-ui, sans-serif;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+  white-space: nowrap;
+  cursor: default;
+}
+.build-click-pill[data-drop-mode="before"] { box-shadow: 0 0 0 2px var(--accent); }
+.build-click-pill:not(:first-child),
+.build-overview-row[data-click-start]:not(:nth-child(2)) { margin-top: 5px; }
+.build-overview-row {
+  grid-column: 2;
+  display: flex;
+  gap: 6px;
   align-items: center;
-  padding: 5px 6px;
+  min-width: 0;
+  min-height: 20px;
+  padding: 1px 4px;
   border: 1px solid transparent;
-  border-radius: 6px;
+  border-radius: 4px;
   cursor: pointer;
   /* Shift-click picks a range of builds, not a run of their text. */
   user-select: none;
 }
-.build-overview-row:hover { background: rgb(255 255 255 / 5%); }
+.build-overview-row:hover,
+.build-overview-row.linked { background: rgb(255 255 255 / 7%); }
 .build-overview-row.selected { border-color: var(--accent); background: var(--accent-soft); }
 .build-overview-row:focus-visible { outline: 1px solid var(--accent); outline-offset: -1px; }
 .build-overview-row.dragging { opacity: 0.4; }
 .build-overview-row[data-drop-mode="before"] { box-shadow: inset 0 2px 0 var(--accent); }
 .build-overview-row[data-drop-mode="after"] { box-shadow: inset 0 -2px 0 var(--accent); }
 .build-overview-row[data-drop-mode="fuse"] { outline: 2px solid var(--accent); background: var(--accent-soft); }
-.build-overview-row > .build-num { grid-area: num; }
-.build-overview-row > .build-target-name { grid-area: name; overflow: hidden; font-size: 11px; color: var(--text); text-overflow: ellipsis; white-space: nowrap; }
-.build-overview-effect { grid-area: effect; color: var(--text); font: 10.5px var(--mono); white-space: nowrap; }
-.build-overview-when { grid-area: when; color: var(--muted); font: 10px var(--mono); }
+.build-overview-row > .build-target-name { flex: 1 1 auto; min-width: min(6em, 45%); overflow: hidden; font-size: 11px; color: var(--text); text-overflow: ellipsis; white-space: nowrap; }
+/* When the row is short of room the effect gives way long before the name. */
+.build-overview-effect { flex: 0 50 auto; min-width: 0; overflow: hidden; color: var(--muted); font: 10px var(--mono); text-overflow: ellipsis; white-space: nowrap; }
+.build-overview-when { flex: none; margin-left: -3px; color: var(--muted); font: 10px var(--mono); white-space: nowrap; }
+.build-overview-when::before { content: "· "; }
+.build-overview-when:empty { display: none; }
 /* A build that runs on its own (after or with the one before) sits under it. */
-.build-overview-row:not([data-trigger="click"]) { margin-left: 14px; }
+.build-overview-row:not([data-trigger="click"]):not([data-click-start]) { padding-left: 16px; }
 .build-multi-pick { display: flex; flex-direction: column; gap: 6px; }
 .build-multi-pick .insp-hint { margin: 0; }
 

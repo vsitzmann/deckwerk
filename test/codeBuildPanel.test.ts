@@ -85,7 +85,9 @@ describe('code builds in the Build panel', () => {
     expect(host.querySelector<HTMLSelectElement>('select.build-action')!.value).toBe('lines:each');
     // Four lines, the blank one joining the line after it: three steps.
     expect([...host.querySelectorAll('.build-line-list .build-num')].map((chip) => chip.textContent)).toEqual(['1', '2', '3']);
-    expect(host.querySelector('.build-overview-row .build-num')?.textContent).toBe('1–3');
+    // One row, beside one pill spanning the three clicks it takes.
+    expect(host.querySelectorAll('.build-overview-row')).toHaveLength(1);
+    expect(host.querySelector('.build-click-pill')?.textContent).toBe('1–3');
 
     // And back to an ordinary appearance of the block.
     choose(host, 'appear');

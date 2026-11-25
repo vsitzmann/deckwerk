@@ -11,6 +11,7 @@ import {
   expandTimeline,
   groupIntoSteps,
   isParagraphBuild,
+  unitClicks,
 } from '@shared/timeline.js';
 import type { BuildPreview } from './buildPreview.js';
 import { durationField } from './durationField.js';
@@ -62,13 +63,13 @@ const TRIGGER_CHOICES: Array<{
   title: string;
   /** How the build starts, as the card's timing sentence says it. */
   sentence: string;
-  /** The overview row's short form. */
+  /** The overview row's short form; a click needs none, its step heading says it. */
   short: string;
 }> = [
-  { value: 'click', label: 'On click', title: 'Waits for a click', sentence: 'Waits for your click', short: 'on click' },
-  { value: 'afterPrev', label: 'After previous', title: 'Starts when the build before it has finished', sentence: 'Starts when the build before it has finished', short: 'after previous' },
-  { value: 'withPrev', label: 'With previous', title: 'Starts at the same moment as the build before it', sentence: 'Starts together with the build before it', short: 'with previous' },
-  { value: 'mediaEnd', label: 'After video ends', title: 'Starts when the video the build before it plays has ended', sentence: 'Starts when the video before it has played to its end', short: 'after video ends' },
+  { value: 'click', label: 'On click', title: 'Waits for a click', sentence: 'Waits for your click', short: '' },
+  { value: 'afterPrev', label: 'After previous', title: 'Starts when the build before it has finished', sentence: 'Starts when the build before it has finished', short: 'after' },
+  { value: 'withPrev', label: 'With previous', title: 'Starts at the same moment as the build before it', sentence: 'Starts together with the build before it', short: 'with' },
+  { value: 'mediaEnd', label: 'After video ends', title: 'Starts when the video the build before it plays has ended', sentence: 'Starts when the video before it has played to its end', short: 'after video' },
 ];
 
 /** Every effect the menu can offer, under the heading it is grouped by and saying what it does. */
@@ -139,6 +140,8 @@ export class TimelinePanel {
   /** Which of the two buttons started the preview playing now: that one reads Stop. */
   private previewStartedBy: 'selection' | 'slide' | null = null;
   private draggingEntryId: string | null = null;
+  /** Where the pointer is while a build is dragged, for scrolling the list under it. */
+  private dragScroll: { x: number; y: number; frame: number; stop: () => void } | null = null;
   /** The build whose settings show under the overview. */
   private selectedEntryId: string | null = null;
   /**
@@ -155,11 +158,21 @@ export class TimelinePanel {
   /** The row to give focus once the panel is drawn again (after a keyboard delete). */
   private focusAfterRender: string | null = null;
   private stale = false;
+  /** Lights up objects on the slide while their builds are pointed at here. */
+  private highlightObjects: (elementIds: string[] | null) => void;
+  /** Whether this panel is lighting objects up now, so a redraw can let go. */
+  private highlighting = false;
 
-  constructor(host: HTMLElement, store: EditorStore, preview: BuildPreview | null = null) {
+  constructor(
+    host: HTMLElement,
+    store: EditorStore,
+    preview: BuildPreview | null = null,
+    highlightObjects: (elementIds: string[] | null) => void = () => {},
+  ) {
     this.host = host;
     this.store = store;
     this.preview = preview;
+    this.highlightObjects = highlightObjects;
     preview?.onChange(() => this.syncPreviewButtons());
     store.subscribe(() => {
       if (this.host.hidden) {
@@ -195,8 +208,14 @@ export class TimelinePanel {
     this.stale = false;
     this.overviewOrder = [];
     const slide = this.store.slide;
+    // Every render draws a new list; keep it scrolled where it was, so
+    // picking or dropping a build far down does not jump back to the top.
+    const oldList = this.host.querySelector<HTMLElement>('.build-overview');
+    const listScroll = oldList?.dataset.slideId === slide?.id ? oldList?.scrollTop ?? 0 : 0;
     this.host.replaceChildren();
     this.previewButtons = null;
+    // The row being pointed at is gone; the slide must not stay lit for it.
+    if (this.highlighting) this.highlight(null);
     if (!slide) return;
 
     const header = document.createElement('div');
@@ -213,19 +232,21 @@ export class TimelinePanel {
     const elements = panelSection('Elements', 'build-elements-section');
     this.host.appendChild(elements.section);
 
-    // The same numbers appear as badges on the canvas, so a card can be
-    // matched to the object it animates at a glance. A by-paragraph card
-    // spans several numbers — one per paragraph — collected under its id.
+    // Builds are numbered by the click they run on, as the badges on the
+    // canvas are, so a card can be matched to its object and its moment at a
+    // glance. A by-paragraph card spans several units, one per paragraph,
+    // collected under its id.
+    const clicks = unitClicks(slide);
     const numbersBySource = new Map<string, number[]>();
     const numbersByTarget = new Map<string, number[]>();
     expandTimeline(slide).forEach((unit, i) => {
       const list = numbersBySource.get(unit.sourceId) ?? [];
-      list.push(i + 1);
+      list.push(clicks[i]);
       numbersBySource.set(unit.sourceId, list);
       const entry = slide.timeline.find((e) => e.id === unit.sourceId);
       if (entry) {
         const byTarget = numbersByTarget.get(entry.action.target) ?? [];
-        byTarget.push(i + 1);
+        if (!byTarget.includes(clicks[i])) byTarget.push(clicks[i]);
         numbersByTarget.set(entry.action.target, byTarget);
       }
     });
@@ -265,7 +286,7 @@ export class TimelinePanel {
     // The list mirrors the canvas selection: picking an object on the slide
     // lights up its row here, and picking a row selects it on the slide, so
     // "add animation" never requires hunting through the list. Each row
-    // carries the numbers of the steps that animate it, so the answer to
+    // carries the clicks that animate it, so the answer to
     // "is this built yet" is on the row rather than in the cards below.
     const list = document.createElement('div');
     list.className = 'build-element-list';
@@ -281,7 +302,7 @@ export class TimelinePanel {
       // Written as the canvas badge writes them, so the two read alike.
       if (steps) row.dataset.steps = steps.join(',');
       row.title = steps
-        ? `${describeElement(element)} · step ${steps.join(', ')}`
+        ? `${describeElement(element)} · ${steps.length > 1 ? 'clicks' : 'click'} ${steps.join(', ')}`
         : describeElement(element);
       row.addEventListener('click', () => this.store.select([element.id]));
       list.appendChild(row);
@@ -353,15 +374,18 @@ export class TimelinePanel {
     if (multi.length === 0) this.selectedEntryId = chosen?.id ?? null;
     const pickedIds = new Set(multi.length > 0 ? multi : chosen ? [chosen.id] : []);
 
-    // The overview: one compact row per build, under the click that starts
-    // it, so the whole slide's choreography reads at a glance. Steps are
-    // expanded units, but rows are stored entries: a by-paragraph entry is one
-    // row, at the step where its first paragraph fires.
+    // The overview: one single-line row per build, the builds of each click
+    // beside one pill with that click's number, so the whole slide's
+    // choreography reads at a glance. Steps are expanded units, but rows are
+    // stored entries: a by-paragraph entry is one row, at the step where its
+    // first paragraph fires, and its pill spans the clicks it takes.
     const rendered = new Set<string>();
     const steps = groupIntoSteps(slide);
     const overview = document.createElement('div');
     overview.className = 'build-overview';
+    overview.dataset.slideId = slide.id;
     overview.setAttribute('role', 'list');
+    const groups: Array<{ first: number; last: number; rows: HTMLElement[] }> = [];
     steps.forEach((units, stepIndex) => {
       const rows: HTMLElement[] = [];
       for (const unit of units) {
@@ -370,18 +394,31 @@ export class TimelinePanel {
         const entry = slide.timeline.find((e) => e.id === unit.sourceId);
         if (!entry) continue;
         this.overviewOrder.push(entry.id);
-        rows.push(this.orderRow(entry, slide, numbersBySource.get(entry.id) ?? [], pickedIds.has(entry.id)));
+        rows.push(this.orderRow(entry, slide, pickedIds.has(entry.id)));
       }
-      if (rows.length === 0 && stepIndex > 0) return;
-      const label = document.createElement('div');
-      label.className = 'build-overview-step';
-      label.textContent = stepIndex === 0
-        ? (rows.length === 0 ? 'On enter · everything visible' : 'On enter')
-        : `Click ${stepIndex}`;
-      overview.append(label, ...rows);
+      if (rows.length > 0) groups.push({ first: stepIndex, last: stepIndex, rows });
+      else if (groups.length > 0) groups[groups.length - 1].last = stepIndex;
     });
+    for (const { first, last, rows } of groups) {
+      const clicksText = last > first ? `${first}–${last}` : String(first);
+      const pill = document.createElement('span');
+      pill.className = 'build-click-pill';
+      pill.textContent = clicksText;
+      pill.title = first === 0 ? 'Builds as the slide appears' : `Builds on click ${clicksText}`;
+      pill.setAttribute('aria-hidden', 'true');
+      pill.style.gridRow = `span ${rows.length}`;
+      pill.addEventListener('pointerenter', () => this.highlight(rows.map((row) => row.dataset.target!)));
+      pill.addEventListener('pointerleave', () => this.highlight(null));
+      // The pill takes a drop as the gap above its click's first build: a much
+      // bigger target than that row's top edge when moving a build up.
+      this.dropTarget(pill, rows[0].dataset.entryId!, () => 'before');
+      rows[0].dataset.clickStart = '';
+      for (const row of rows) row.setAttribute('aria-label', `${first === 0 ? 'On enter' : `Click ${clicksText}`}: ${row.title}`);
+      overview.append(pill, ...rows);
+    }
     overview.addEventListener('keydown', (event) => this.overviewKey(event, multi));
     stepsSection.appendChild(overview);
+    overview.scrollTop = listScroll;
 
     const detail = panelSection(multi.length > 0 ? 'Selected builds' : 'Selected build', 'build-detail-section').section;
     this.host.appendChild(detail);
@@ -398,24 +435,23 @@ export class TimelinePanel {
   }
 
   /**
-   * One build in the overview: its step number, what it animates, the effect
-   * and how it starts. Clicking picks it (and its object on the slide);
-   * dragging reorders, or drops it in the middle of another row to run with it.
+   * One build in the overview: what it animates, the effect and how it
+   * starts. Pointing at it lights its object up on the slide; clicking picks
+   * it (and its object); dragging reorders, or drops it in the middle of
+   * another row to run with it.
    */
-  private orderRow(entry: TimelineEntry, slide: Slide, numbers: number[], picked: boolean): HTMLElement {
+  private orderRow(entry: TimelineEntry, slide: Slide, picked: boolean): HTMLElement {
     const row = document.createElement('div');
     row.className = 'build-overview-row';
     row.setAttribute('role', 'listitem');
     row.setAttribute('aria-selected', String(picked));
     row.dataset.entryId = entry.id;
+    row.dataset.target = entry.action.target;
     row.dataset.trigger = entry.trigger.on;
     row.classList.toggle('selected', picked);
     row.draggable = true;
     row.tabIndex = 0;
     const targetEl = slide.elements.find((el) => el.id === entry.action.target);
-    const num = document.createElement('span');
-    num.className = 'build-num';
-    num.textContent = numbers.length > 1 ? `${numbers[0]}–${numbers[numbers.length - 1]}` : String(numbers[0] ?? '');
     const name = document.createElement('span');
     name.className = 'build-target-name';
     const linesName = lineBuildName(entry);
@@ -430,9 +466,13 @@ export class TimelinePanel {
     const when = document.createElement('span');
     when.className = 'build-overview-when';
     const trigger = TRIGGER_CHOICES.find((choice) => choice.value === entry.trigger.on);
-    when.textContent = `${trigger?.short ?? entry.trigger.on}${entry.trigger.delay > 0 ? ` +${seconds(entry.trigger.delay)}` : ''}`;
-    row.title = `${linesName ?? (targetEl ? describeElement(targetEl) : 'Missing element')}: ${what.textContent}, ${when.textContent}`;
-    row.append(num, name, what, when);
+    const delay = entry.trigger.delay > 0 ? `+${seconds(entry.trigger.delay)}` : '';
+    when.textContent = [trigger?.short ?? entry.trigger.on, delay].filter(Boolean).join(' ');
+    row.title = `${linesName ?? (targetEl ? describeElement(targetEl) : 'Missing element')}: ${what.textContent}, `
+      + `${(trigger?.label ?? entry.trigger.on).toLowerCase()}${delay ? ` ${delay}` : ''}`;
+    row.append(name, what, when);
+    row.addEventListener('pointerenter', () => this.highlight([entry.action.target]));
+    row.addEventListener('pointerleave', () => this.highlight(null));
     row.addEventListener('click', (event) => this.clickRow(entry, event));
     row.addEventListener('keydown', (event) => {
       if (event.key === 'Enter' || event.key === ' ') {
@@ -446,32 +486,99 @@ export class TimelinePanel {
       row.classList.add('dragging');
       event.dataTransfer?.setData('text/plain', entry.id);
       if (event.dataTransfer) event.dataTransfer.effectAllowed = 'move';
+      this.startDragScroll();
     });
     row.addEventListener('dragend', () => {
       this.draggingEntryId = null;
       row.classList.remove('dragging');
     });
-    row.addEventListener('dragover', (event) => {
-      event.preventDefault();
-      if (event.dataTransfer) event.dataTransfer.dropEffect = 'move';
+    this.dropTarget(row, entry.id, (event) => {
       const bounds = row.getBoundingClientRect();
       const ratio = bounds.height > 0 ? (event.clientY - bounds.top) / bounds.height : 0.5;
-      row.dataset.dropMode = ratio > 0.33 && ratio < 0.67
-        ? 'fuse' : ratio <= 0.33 ? 'before' : 'after';
+      return ratio > 0.33 && ratio < 0.67 ? 'fuse' : ratio <= 0.33 ? 'before' : 'after';
     });
-    row.addEventListener('dragleave', () => delete row.dataset.dropMode);
-    row.addEventListener('drop', (event) => {
+    return row;
+  }
+
+  /**
+   * Lights up the builds of the object pointed at on the slide (null: none),
+   * as pointing at a build here lights up its object there.
+   */
+  highlightBuildsOf(elementId: string | null): void {
+    for (const row of this.host.querySelectorAll<HTMLElement>('.build-overview-row')) {
+      row.classList.toggle('linked', elementId !== null && row.dataset.target === elementId);
+    }
+  }
+
+  private highlight(elementIds: string[] | null): void {
+    this.highlighting = elementIds !== null;
+    this.highlightObjects(elementIds);
+  }
+
+  /**
+   * Lets a dragged build drop on `el`, placed relative to the build `targetId`
+   * as `modeAt` says for the pointer's position; `el` shows that as its
+   * `data-drop-mode` while the build hovers over it.
+   */
+  private dropTarget(el: HTMLElement, targetId: string, modeAt: (event: DragEvent) => BuildDropMode): void {
+    el.addEventListener('dragover', (event) => {
       event.preventDefault();
-      const visualMode = row.dataset.dropMode as BuildDropMode | undefined;
-      delete row.dataset.dropMode;
-      if (!this.draggingEntryId || this.draggingEntryId === entry.id) return;
+      if (event.dataTransfer) event.dataTransfer.dropEffect = 'move';
+      el.dataset.dropMode = modeAt(event);
+    });
+    el.addEventListener('dragleave', () => delete el.dataset.dropMode);
+    el.addEventListener('drop', (event) => {
+      event.preventDefault();
+      const visualMode = el.dataset.dropMode as BuildDropMode | undefined;
+      delete el.dataset.dropMode;
+      const dragged = this.draggingEntryId;
+      if (!dragged || dragged === targetId) return;
       const mode = visualMode ?? 'after';
       this.store.commit((deck) => {
         const timeline = deck.slides[this.store.get().slideIndex].timeline;
-        reorderBuildEntry(timeline, this.draggingEntryId!, entry.id, mode);
+        reorderBuildEntry(timeline, dragged, targetId, mode);
       }, { label: mode === 'fuse' ? 'Group build animations' : 'Reorder build animations' });
     });
-    return row;
+  }
+
+  /**
+   * While a build is dragged, scrolls the build order (and then the panel)
+   * when the pointer nears its top or bottom edge, faster the closer it gets,
+   * so a build can be carried to a click that is out of view. Browsers do not
+   * reliably do this for a list scrolled inside a panel.
+   */
+  private startDragScroll(): void {
+    this.dragScroll?.stop();
+    const track = (event: DragEvent) => {
+      if (!this.dragScroll) return;
+      this.dragScroll.x = event.clientX;
+      this.dragScroll.y = event.clientY;
+    };
+    // The pointer left the window: nothing to follow until it comes back.
+    const leave = (event: DragEvent) => {
+      if (this.dragScroll && event.relatedTarget === null) this.dragScroll.y = Number.NaN;
+    };
+    const stop = () => {
+      if (!this.dragScroll) return;
+      cancelAnimationFrame(this.dragScroll.frame);
+      this.dragScroll = null;
+      document.removeEventListener('dragover', track, true);
+      document.removeEventListener('dragleave', leave, true);
+      document.removeEventListener('drop', stop, true);
+      document.removeEventListener('dragend', stop, true);
+    };
+    const tick = () => {
+      const state = this.dragScroll;
+      if (!state) return;
+      const list = this.host.querySelector<HTMLElement>('.build-overview');
+      if (list && !edgeScroll(list, state.x, state.y)) edgeScroll(this.host, state.x, state.y);
+      state.frame = requestAnimationFrame(tick);
+    };
+    this.dragScroll = { x: Number.NaN, y: Number.NaN, frame: requestAnimationFrame(tick), stop };
+    document.addEventListener('dragover', track, true);
+    document.addEventListener('dragleave', leave, true);
+    document.addEventListener('drop', stop, true);
+    document.addEventListener('dragend', stop, true);
   }
 
   /**
@@ -1045,6 +1152,31 @@ export class TimelinePanel {
 }
 
 export type BuildDropMode = 'before' | 'after' | 'fuse';
+
+/** How close to a scrolled list's edge (px) a dragged build starts scrolling it. */
+const DRAG_SCROLL_EDGE = 36;
+/** The fastest a dragged build scrolls a list, in px per frame. */
+const DRAG_SCROLL_MAX_SPEED = 16;
+
+/**
+ * Scrolls `el` one frame's worth if a pointer at (x, y) is over it and near
+ * its top or bottom edge (or just past it), and says whether it moved.
+ */
+export function edgeScroll(el: HTMLElement, x: number, y: number): boolean {
+  if (!Number.isFinite(x) || !Number.isFinite(y)) return false;
+  const bounds = el.getBoundingClientRect();
+  if (x < bounds.left || x > bounds.right) return false;
+  const edge = Math.min(DRAG_SCROLL_EDGE, bounds.height / 4);
+  if (edge <= 0) return false;
+  let depth = 0;
+  if (y < bounds.top + edge && y > bounds.top - edge) depth = (y - (bounds.top + edge)) / edge;
+  else if (y > bounds.bottom - edge && y < bounds.bottom + edge) depth = (y - (bounds.bottom - edge)) / edge;
+  if (depth === 0) return false;
+  const speed = Math.sign(depth) * Math.ceil(Math.min(Math.abs(depth), 1) * DRAG_SCROLL_MAX_SPEED);
+  const before = el.scrollTop;
+  el.scrollTop = before + speed;
+  return el.scrollTop !== before;
+}
 
 function selectionKey(ids: Iterable<string>): string {
   return [...ids].sort().join('\n');

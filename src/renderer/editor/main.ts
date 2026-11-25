@@ -176,7 +176,12 @@ window.addEventListener('keydown', (event) => {
   if (!event.repeat) toggleRulers();
 }, true);
 const inspector = new Inspector(el('inspector'), store);
-new TimelinePanel(el('timeline'), store, new BuildPreview(canvas, store));
+// Pointing at a build lights up its object on the slide, and pointing at an
+// object lights up its builds.
+const timeline = new TimelinePanel(
+  el('timeline'), store, new BuildPreview(canvas, store), (ids) => canvas.setBuildHighlight(ids),
+);
+canvas.onBuildHover = (id) => timeline.highlightBuildsOf(id);
 // History is the deck's past, not the selection's: it opens from the deck
 // name in the toolbar rather than from a sidebar tab.
 const historyHost = popoverPanelHost('history');

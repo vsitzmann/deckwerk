@@ -2,7 +2,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { emptyDeck } from '../src/shared/deck.js';
 import { EditorStore } from '../src/renderer/editor/store.js';
-import { TimelinePanel } from '../src/renderer/editor/timelinePanel.js';
+import { edgeScroll, TimelinePanel } from '../src/renderer/editor/timelinePanel.js';
 
 describe('Build panel interactions', () => {
   beforeEach(() => document.body.replaceChildren());
@@ -79,12 +79,15 @@ describe('Build panel interactions', () => {
     document.body.appendChild(host);
     new TimelinePanel(host, store);
 
-    // The build order: one row per build, numbered as the canvas badges are.
+    // The build order: one row per build, beside one pill per click,
+    // numbered as the canvas badges are: the second build follows the first,
+    // so both run on click 1.
     const rows = [...host.querySelectorAll<HTMLElement>('.build-overview-row')];
     expect(rows).toHaveLength(2);
     // No element dropdown: the row names its element instead.
     expect(host.querySelector('select.build-target')).toBeNull();
-    expect(rows.map((r) => r.querySelector('.build-num')?.textContent)).toEqual(['1', '2']);
+    expect(rows.map((r) => r.querySelector('.build-num'))).toEqual([null, null]);
+    expect([...host.querySelectorAll('.build-click-pill')].map((pill) => pill.textContent)).toEqual(['1']);
     expect(rows[0].querySelector('.build-target-name')?.textContent).toContain('Alpha');
     expect(rows[1].querySelector('.build-target-name')?.textContent).toContain('Beta');
     // Nothing picked yet: the settings card waits for a build.
@@ -96,7 +99,7 @@ describe('Build panel interactions', () => {
     const cards = [...host.querySelectorAll<HTMLElement>('.timeline-row')];
     expect(cards).toHaveLength(1);
     expect(cards[0].dataset.entryId).toBe('t-2');
-    expect(cards[0].querySelector('.build-card-head .build-num')?.textContent).toBe('2');
+    expect(cards[0].querySelector('.build-card-head .build-num')?.textContent).toBe('1');
     expect(cards[0].querySelector('.build-card-head .build-target-name')?.textContent).toContain('Beta');
     expect(cards[0].querySelector('.build-field select.build-trigger')).toBeTruthy();
     expect(host.querySelector('.build-overview-row[data-entry-id="t-2"]')!.classList.contains('selected')).toBe(true);
@@ -108,10 +111,110 @@ describe('Build panel interactions', () => {
     (host.querySelector('.build-element-row[data-element-id="a"]') as HTMLButtonElement).click();
     expect([...store.get().selection]).toEqual(['a']);
     expect(host.querySelector<HTMLElement>('.timeline-row')!.dataset.entryId).toBe('t-1');
-    // The order groups builds under the click that starts them: the second
-    // follows the first, so both sit under one click.
-    const labels = [...host.querySelectorAll('.build-overview-step')].map((l) => l.textContent);
-    expect(labels).toEqual(['On enter · everything visible', 'Click 1']);
+    // The pill spans both builds of its click.
+    expect(host.querySelector<HTMLElement>('.build-click-pill')!.style.gridRow).toBe('span 2');
+  });
+
+  it('numbers clicks, links rows to their objects both ways, and takes a drop on a click pill', () => {
+    const deck = emptyDeck('Build');
+    for (const id of ['a', 'b', 'c']) {
+      deck.slides[0].elements.push({ id, type: 'text', x: 0, y: 0, w: 100, h: 50, rot: 0, z: 1,
+        opacity: 1, class: [], style: {}, html: id.toUpperCase(), align: 'left', valign: 'top' });
+    }
+    const step = (id: string, target: string, on: 'click' | 'withPrev') =>
+      ({ id, trigger: { on, ref: null, delay: 0 }, action: { type: 'appear' as const, target, value: null } });
+    deck.slides[0].timeline.push(step('t-1', 'a', 'click'), step('t-2', 'b', 'click'), step('t-3', 'c', 'withPrev'));
+    const store = new EditorStore(deck, '/tmp/build');
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const lit: Array<string[] | null> = [];
+    const panel = new TimelinePanel(host, store, null, (ids) => lit.push(ids));
+
+    const pills = () => [...host.querySelectorAll<HTMLElement>('.build-click-pill')];
+    expect(pills().map((pill) => pill.textContent)).toEqual(['1', '2']);
+    // The element list carries the same click numbers.
+    expect(host.querySelector<HTMLElement>('.build-element-row[data-element-id="c"]')!.dataset.steps).toBe('2');
+
+    const row = (id: string) => host.querySelector<HTMLElement>(`.build-overview-row[data-entry-id="${id}"]`)!;
+    row('t-3').dispatchEvent(new Event('pointerenter'));
+    row('t-3').dispatchEvent(new Event('pointerleave'));
+    pills()[1].dispatchEvent(new Event('pointerenter'));
+    expect(lit).toEqual([['c'], null, ['b', 'c']]);
+    // A redraw under the pointer lets the slide go.
+    store.select(['a']);
+    expect(lit.at(-1)).toBeNull();
+
+    panel.highlightBuildsOf('b');
+    expect([...host.querySelectorAll<HTMLElement>('.build-overview-row.linked')].map((r) => r.dataset.entryId))
+      .toEqual(['t-2']);
+    panel.highlightBuildsOf(null);
+    expect(host.querySelector('.build-overview-row.linked')).toBeNull();
+
+    // Dropping the last build on click 1's pill makes it the first.
+    const transfer = { setData() {}, effectAllowed: '', dropEffect: '' };
+    const fire = (target: Element, type: string) => {
+      const event = new MouseEvent(type, { bubbles: true, cancelable: true });
+      Object.defineProperty(event, 'dataTransfer', { value: transfer });
+      target.dispatchEvent(event);
+    };
+    fire(row('t-3'), 'dragstart');
+    fire(pills()[0], 'dragover');
+    expect(pills()[0].dataset.dropMode).toBe('before');
+    fire(pills()[0], 'drop');
+    expect(store.slide?.timeline.map((entry) => entry.id)).toEqual(['t-3', 't-1', 't-2']);
+    expect(pills().map((pill) => pill.textContent)).toEqual(['1', '2', '3']);
+  });
+
+  it('keeps the build order scrolled where it was when a drop redraws it', () => {
+    const deck = emptyDeck('Build');
+    for (const id of ['a', 'b', 'c']) {
+      deck.slides[0].elements.push({ id, type: 'text', x: 0, y: 0, w: 100, h: 50, rot: 0, z: 1,
+        opacity: 1, class: [], style: {}, html: id.toUpperCase(), align: 'left', valign: 'top' });
+    }
+    deck.slides[0].timeline.push(...['a', 'b', 'c'].map((target, i) => (
+      { id: `t-${i + 1}`, trigger: { on: 'click' as const, ref: null, delay: 0 },
+        action: { type: 'appear' as const, target, value: null } })));
+    const store = new EditorStore(deck, '/tmp/build');
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    new TimelinePanel(host, store);
+    host.querySelector<HTMLElement>('.build-overview')!.scrollTop = 40;
+
+    const transfer = { setData() {}, effectAllowed: '', dropEffect: '' };
+    const fire = (target: Element, type: string) => {
+      const event = new MouseEvent(type, { bubbles: true, cancelable: true });
+      Object.defineProperty(event, 'dataTransfer', { value: transfer });
+      target.dispatchEvent(event);
+    };
+    fire(host.querySelector('.build-overview-row[data-entry-id="t-3"]')!, 'dragstart');
+    const first = host.querySelector<HTMLElement>('.build-overview-row[data-entry-id="t-1"]')!;
+    first.dataset.dropMode = 'before';
+    fire(first, 'drop');
+
+    expect(store.slide?.timeline.map((entry) => entry.id)).toEqual(['t-3', 't-1', 't-2']);
+    expect(store.history()[0].label).toBe('Reorder build animations');
+    // The redrawn list stays where it was scrolled.
+    expect(host.querySelector<HTMLElement>('.build-overview')!.scrollTop).toBe(40);
+  });
+
+  it('scrolls a list under a dragged build only near its top or bottom edge', () => {
+    const list = document.createElement('div');
+    list.getBoundingClientRect = () => ({ top: 100, bottom: 400, left: 0, right: 200, height: 300 } as DOMRect);
+    let top = 50;
+    Object.defineProperty(list, 'scrollTop', { get: () => top, set: (v: number) => { top = Math.max(0, Math.min(v, 500)); } });
+
+    expect(edgeScroll(list, 100, 250)).toBe(false);
+    expect(top).toBe(50);
+    // Over the slide beside the list, at the list's bottom: no scroll.
+    expect(edgeScroll(list, 300, 398)).toBe(false);
+    expect(edgeScroll(list, 100, 398)).toBe(true);
+    expect(top).toBeGreaterThan(50);
+    // Just above the list, over its heading, scrolls it up at full speed.
+    const before = top;
+    expect(edgeScroll(list, 100, 95)).toBe(true);
+    expect(top).toBe(before - 16);
+    top = 0;
+    expect(edgeScroll(list, 100, 101)).toBe(false);
   });
 
   it('picks several builds with Shift and Cmd/Ctrl and deletes them together', () => {
