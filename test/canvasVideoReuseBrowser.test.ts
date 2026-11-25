@@ -246,6 +246,20 @@ describe.skipIf(!electronBinary || !ffmpeg)('browsing slides in the rail', () =>
     await openSlide(0);
     await eventually(readVideos, 'returning to the slide lost its editing frame',
       videos => videos.some(v => v.id === 'sq-a-0' && !v.seeking && Math.abs(v.currentTime - 7.5) < 0.05));
+    // This changes only the viewer's preference, including after navigation/reload.
+    const deckBeforePreference = await editor.evaluate('JSON.stringify(window.store.get().deck)');
+    const badgeDisplays = () => editor!.evaluate<string[]>(`[...document.querySelectorAll('#canvas .video-editor-badge')].map((b) => getComputedStyle(b).display)`);
+    expect((await badgeDisplays()).every((display) => display !== 'none')).toBe(true);
+    await editor.click('.brand-button');
+    await editor.clickByText('[role="menuitemcheckbox"]', 'Show video badges');
+    expect(await badgeDisplays()).toEqual(['none', 'none', 'none']);
+    expect(await editor.evaluate('JSON.stringify(window.store.get().deck)')).toBe(deckBeforePreference);
+    await editor.evaluate('location.reload()');
+    await eventually(badgeDisplays, 'hidden video badge preference was lost on reload',
+      displays => displays.length === 3 && displays.every((display) => display === 'none'));
+    await editor.click('.brand-button');
+    await editor.clickByText('[role="menuitemcheckbox"]', 'Show video badges');
+    expect((await badgeDisplays()).every((display) => display !== 'none')).toBe(true);
   }, 240_000);
 });
 

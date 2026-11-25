@@ -1,3 +1,4 @@
+import { applyEditorPreferences } from '../editorPreferences.js';
 import { presentInEditorWindow } from './inWindowPresentation.js';
 import { createPresentationButton } from './presentationButton.js';
 import '../player/player.css';
@@ -82,6 +83,7 @@ import { reconcileOffline } from './remoteSync.js';
 
 applyUiTheme();
 applyUiScale();
+applyEditorPreferences();
 
 /**
  * Editor shell: wires the panels to one store, owns the toolbar, the keyboard

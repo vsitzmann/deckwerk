@@ -1,3 +1,4 @@
+import { videoBadgesMenuOption } from '../editorPreferences.js';
 import { appearanceMenuSection } from '../uiTheme.js';
 import { interfaceSizeMenuSection } from '../uiScale.js';
 import { createToolbarPicker } from './exportPicker.js';
@@ -44,6 +45,7 @@ export function createDeckWerkButton(options: {
     ...ask,
     appearanceMenuSection(),
     interfaceSizeMenuSection(),
+    videoBadgesMenuOption(),
   ], { trigger: button });
 }
 

@@ -159,7 +159,7 @@ type OpName =
   | 'rail hop' | 'slide section round-trip' | 'undo' | 'redo' | 'undo round-trip' | 'delete selection'
   | 'cmd+a' | 'click with stray hover' | 'rail multi-delete' | 'stack key' | 'spelling fix'
   | 'size from sidebar' | 'flip from sidebar' | 'viewport gesture' | 'pen abandoned' | 'pen line undone'
-  | 'present in editor' | 'present in window' | 'present shortcut' | 'pencil stroke undone' | 'line bent and undone' | 'build multi-delete';
+  | 'present in editor' | 'present in window' | 'present shortcut' | 'video badge preference' | 'pencil stroke undone' | 'line bent and undone' | 'build multi-delete';
 
 interface Violation { seed: number; step: number; op: OpName; oracle: string; detail: string }
 
@@ -180,6 +180,7 @@ describe.skipIf(!electronBinary)('cross-context fuzz over three elements and two
     await performOp('present in window', random(902026), await session.state(), () => {});
     await performOp('present in editor', random(902026), await session.state(), () => {});
     await performOp('present shortcut', random(902026), await session.state(), () => {});
+    await performOp('video badge preference', random(902026), await session.state(), () => {});
     expect(await session.problems()).toEqual([]);
   });
 
@@ -425,6 +426,7 @@ function chooseOp(next: () => number, pre: CrossState): OpName {
   add('present in window', 1);
   add('present in editor', 1);
   add('present shortcut', 1);
+  add('video badge preference', 1);
   if (targets.length > 0) {
     add('click', 3);
     add('shift-click', 2);
@@ -480,6 +482,15 @@ async function performOp(
 ): Promise<'same' | 'resync' | string[]> {
   const targets = targetsOn(pre);
   switch (op) {
+    case 'video badge preference': {
+      const before = await session.deckSnapshot();
+      const shown = await session.cdp.evaluate<string>('document.documentElement.dataset.showVideoBadges');
+      await session.cdp.click('.brand-button');
+      await session.cdp.clickByText('[role="menuitemcheckbox"]', 'Show video badges');
+      expect(await session.cdp.evaluate<string>('document.documentElement.dataset.showVideoBadges')).toBe(shown === 'false' ? 'true' : 'false');
+      expect(await session.deckSnapshot()).toBe(before);
+      return 'same';
+    }
     case 'present shortcut':
     case 'present in editor':
     case 'present in window': {

@@ -717,6 +717,8 @@ body.panel-resizing iframe { pointer-events: none; }
 .canvas-host.design-preview-active > .notes-toggle,
 .canvas-host.design-preview-active > .notes-drawer { display: none; }
 
+:root[data-show-video-badges="false"] .video-editor-badge { display: none; }
+
 /* Editor-only media cue. It is injected by EditorCanvas, so it never appears
    in thumbnails, presenter view, projected slides, or web exports. */
 .video-editor-badge {

@@ -1,3 +1,4 @@
+import { applyEditorPreferences } from '../src/renderer/editorPreferences.js';
 import { createPresentationButton, handlePresentationShortcut } from '../src/renderer/editor/presentationButton.js';
 import { JSDOM } from 'jsdom';
 import { readFileSync } from 'node:fs';
@@ -72,6 +73,29 @@ describe('shared editor controls', () => {
     open();
     expect(radios()).toEqual(['System:false', 'Light:true', 'Dark:false', ...sizes]);
     localStorage.removeItem('deckwerk.uiTheme');
+  });
+
+  it('toggles video badges as a personal checkbox and restores the preference', () => {
+    applyEditorPreferences();
+    const brand = createDeckWerkButton();
+    document.body.appendChild(brand);
+    const open = () => brand.querySelector<HTMLButtonElement>('.brand-button')!.click();
+    const checkbox = () => document.querySelector<HTMLButtonElement>('[role="menuitemcheckbox"]')!;
+    open();
+    expect(checkbox().textContent).toBe('Show video badges');
+    expect(checkbox().getAttribute('aria-checked')).toBe('true');
+    checkbox().click();
+    expect(document.documentElement.dataset.showVideoBadges).toBe('false');
+    delete document.documentElement.dataset.showVideoBadges;
+    applyEditorPreferences();
+    expect(document.documentElement.dataset.showVideoBadges).toBe('false');
+    open();
+    expect(checkbox().getAttribute('aria-checked')).toBe('false');
+    checkbox().click();
+    expect(document.documentElement.dataset.showVideoBadges).toBe('true');
+    localStorage.setItem('deckwerk.showVideoBadges', 'false');
+    window.dispatchEvent(new window.StorageEvent('storage', { key: 'deckwerk.showVideoBadges' }));
+    expect(document.documentElement.dataset.showVideoBadges).toBe('false');
   });
 
   it('gives toolbar menus roles and closes after an action', () => {

@@ -1,3 +1,4 @@
+import { applyEditorPreferences } from '../editorPreferences.js';
 import { slideNumberLabel, slideProgressLabel } from '@shared/slideNumbering.js';
 import { createPresentationButton } from '../editor/presentationButton.js';
 import '../player/player.css';
@@ -95,6 +96,7 @@ import { openServerTutorial, tutorialUrl } from './tutorialBar.js';
 
 applyUiTheme();
 applyUiScale();
+applyEditorPreferences();
 
 /**
  * Browser collaboration shell: the same canvas, rail, inspector, theme

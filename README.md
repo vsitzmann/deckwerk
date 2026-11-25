@@ -85,6 +85,10 @@ change its slides' numbers. The navigator's scrollbar stays visible while idle.
 Press **Option+Command+P** on macOS to start the selected presentation mode,
 just like clicking **Present**.
 
+The **DeckWerk** menu includes **Show video badges**, a personal preference saved
+on this browser/device across decks. It defaults to on and can be toggled without
+changing the shared presentation.
+
 ## Design principles
 
 ### Cross-platform
