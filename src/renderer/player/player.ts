@@ -1942,7 +1942,13 @@ export class Player {
     this.trimmed.add(el.id);
 
     const onTime = () => {
-      const end = el.end ?? Number.POSITIVE_INFINITY;
+      // A start-only trim still loops at the file end. An out-point beyond
+      // the file must do so too; native looping is disabled for both cases.
+      const fileEnd = Number.isFinite(video.duration) && video.duration > 0
+        ? video.duration : Number.POSITIVE_INFINITY;
+      const end = el.loop
+        ? Math.min(el.end ?? fileEnd, fileEnd)
+        : el.end ?? Number.POSITIVE_INFINITY;
       if (video.currentTime >= end - 0.03) {
         if (el.loop) {
           video.currentTime = el.start;
@@ -1958,7 +1964,12 @@ export class Player {
     };
 
     video.addEventListener('timeupdate', onTime);
-    this.mediaListeners.push(() => video.removeEventListener('timeupdate', onTime));
+    // A final timeupdate can precede the boundary; ended must restart it too.
+    if (el.loop) video.addEventListener('ended', onTime);
+    this.mediaListeners.push(() => {
+      video.removeEventListener('timeupdate', onTime);
+      video.removeEventListener('ended', onTime);
+    });
   }
 
   /** Watch a video element for its `ended` event, once, for `mediaEnd` triggers. */
