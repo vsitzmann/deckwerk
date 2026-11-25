@@ -9,6 +9,7 @@ import { saveDeck } from '../src/main/deckStore.js';
 import { COLLAB_PROTOCOL_VERSION, ServerMessageSchema, type ClientMessage, type ServerMessage } from '../src/shared/collab.js';
 import { contentKeyOfFile, renditionPath } from '../src/server/streamingRenditions.js';
 import { startCollabServer, type RunningCollabServer } from '../src/server/collabServer.js';
+import { LocalAgentRegistry } from '../src/server/localAgents.js';
 
 const DECK_ID = 'demo';
 
@@ -301,6 +302,7 @@ describe('collab server', () => {
       state: {
         clientId: 'agent-http',
         name: 'Agent',
+        agent: true,
         activeSlideId: 's2',
         selectedSlideIds: ['s2'],
       },
@@ -311,6 +313,33 @@ describe('collab server', () => {
       clientId: 'agent-http',
       activeSlideId: 's2',
     }));
+  });
+
+  it('moves a connected bridge\'s own chip instead of adding a "Your agent" one', async () => {
+    await server.close();
+    server = await startCollabServer({
+      rootDir, port: 0, host: '127.0.0.1', localAgents: new LocalAgentRegistry(),
+    });
+    const observer = await connect('Host');
+    const bridge = new TestClient(server.port, DECK_ID);
+    clients.push(bridge);
+    await bridge.open();
+    bridge.send({ kind: 'hello', version: COLLAB_PROTOCOL_VERSION, name: 'bridge', agentFor: 'participant-1' });
+    const bridgeWelcome = await bridge.nextOfKind('welcome');
+    await observer.client.nextOfKind('presence');
+
+    const rendered = await fetch(
+      `http://127.0.0.1:${server.port}/api/render-slide?deck=${DECK_ID}&slideId=s2`,
+    );
+    expect(rendered.status).toBe(200);
+    const moved = await observer.client.nextOfKind('presence');
+    expect(moved.state).toMatchObject({
+      clientId: bridgeWelcome.clientId, agent: true, activeSlideId: 's2', selectedSlideIds: ['s2'],
+    });
+
+    const latePeer = await connect('Late peer');
+    expect(latePeer.welcome.peers.map((peer) => peer.clientId)).not.toContain('agent-http');
+    expect(latePeer.welcome.peers.map((peer) => peer.name)).not.toContain('Your agent');
   });
 
   it('serves deck assets with Range support, confined to the deck folder', async () => {
