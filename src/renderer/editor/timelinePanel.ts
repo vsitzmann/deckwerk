@@ -140,6 +140,12 @@ export class TimelinePanel {
   /** Which of the two buttons started the preview playing now: that one reads Stop. */
   private previewStartedBy: 'selection' | 'slide' | null = null;
   private draggingEntryId: string | null = null;
+  /** The builds of the click whose pill is being dragged, in build order. */
+  private draggingGroup: string[] | null = null;
+  /** Where a dragged pill would land now: beside or into the click `group`. */
+  private groupDrop: { group: string[]; mode: BuildDropMode } | null = null;
+  /** Each click's builds in the overview, keyed by the click's first build. */
+  private groups = new Map<string, string[]>();
   /** Where the pointer is while a build is dragged, for scrolling the list under it. */
   private dragScroll: { x: number; y: number; frame: number; stop: () => void } | null = null;
   /** The build whose settings show under the overview. */
@@ -386,6 +392,7 @@ export class TimelinePanel {
     overview.dataset.slideId = slide.id;
     overview.setAttribute('role', 'list');
     const groups: Array<{ first: number; last: number; rows: HTMLElement[] }> = [];
+    this.groups.clear();
     steps.forEach((units, stepIndex) => {
       const rows: HTMLElement[] = [];
       for (const unit of units) {
@@ -400,6 +407,8 @@ export class TimelinePanel {
       else if (groups.length > 0) groups[groups.length - 1].last = stepIndex;
     });
     for (const { first, last, rows } of groups) {
+      const ids = rows.map((row) => row.dataset.entryId!);
+      for (const row of rows) row.dataset.group = ids[0];
       const clicksText = last > first ? `${first}–${last}` : String(first);
       const pill = document.createElement('span');
       pill.className = 'build-click-pill';
@@ -410,11 +419,34 @@ export class TimelinePanel {
       pill.addEventListener('pointerenter', () => this.highlight(rows.map((row) => row.dataset.target!)));
       pill.addEventListener('pointerleave', () => this.highlight(null));
       // The pill takes a drop as the gap above its click's first build: a much
-      // bigger target than that row's top edge when moving a build up.
-      this.dropTarget(pill, rows[0].dataset.entryId!, () => 'before');
+      // bigger target than that row's top edge when moving a build up. A
+      // dragged pill lands above or below this click by the pointer's half.
+      pill.dataset.group = ids[0];
+      this.dropTarget(pill, ids[0], (event) => {
+        if (!this.draggingGroup) return 'before';
+        const bounds = pill.getBoundingClientRect();
+        return bounds.height > 0 && event.clientY > bounds.top + bounds.height / 2 ? 'after' : 'before';
+      }, ids);
+      // Dragging the pill moves its whole click, every build beside it.
+      pill.draggable = true;
+      pill.addEventListener('dragstart', (event) => {
+        this.draggingGroup = ids;
+        pill.classList.add('dragging');
+        for (const row of rows) row.classList.add('dragging');
+        event.dataTransfer?.setData('text/plain', ids.join(' '));
+        if (event.dataTransfer) event.dataTransfer.effectAllowed = 'move';
+        this.startDragScroll();
+      });
+      pill.addEventListener('dragend', () => {
+        this.draggingGroup = null;
+        this.showGroupDrop(null);
+        pill.classList.remove('dragging');
+        for (const row of rows) row.classList.remove('dragging');
+      });
       rows[0].dataset.clickStart = '';
       for (const row of rows) row.setAttribute('aria-label', `${first === 0 ? 'On enter' : `Click ${clicksText}`}: ${row.title}`);
       overview.append(pill, ...rows);
+      this.groups.set(ids[0], ids);
     }
     overview.addEventListener('keydown', (event) => this.overviewKey(event, multi));
     stepsSection.appendChild(overview);
@@ -518,17 +550,40 @@ export class TimelinePanel {
   /**
    * Lets a dragged build drop on `el`, placed relative to the build `targetId`
    * as `modeAt` says for the pointer's position; `el` shows that as its
-   * `data-drop-mode` while the build hovers over it.
+   * `data-drop-mode` while the build hovers over it. A dragged pill drops
+   * beside or into the click `el` belongs to instead (its `data-group`).
    */
-  private dropTarget(el: HTMLElement, targetId: string, modeAt: (event: DragEvent) => BuildDropMode): void {
+  private dropTarget(
+    el: HTMLElement,
+    targetId: string,
+    modeAt: (event: DragEvent) => BuildDropMode,
+    group?: string[],
+  ): void {
+    const targetGroup = () => group ?? this.groups.get(el.dataset.group ?? '') ?? [targetId];
     el.addEventListener('dragover', (event) => {
       event.preventDefault();
       if (event.dataTransfer) event.dataTransfer.dropEffect = 'move';
+      if (this.draggingGroup) {
+        const into = targetGroup();
+        if (into[0] === this.draggingGroup[0]) this.showGroupDrop(null);
+        else this.showGroupDrop({ group: into, mode: modeAt(event) });
+        return;
+      }
       el.dataset.dropMode = modeAt(event);
     });
     el.addEventListener('dragleave', () => delete el.dataset.dropMode);
     el.addEventListener('drop', (event) => {
       event.preventDefault();
+      if (this.draggingGroup) {
+        const dragged = this.draggingGroup;
+        const drop = this.groupDrop;
+        this.showGroupDrop(null);
+        if (!drop || drop.group[0] === dragged[0]) return;
+        this.store.commit((deck) => {
+          moveBuildGroup(deck.slides[this.store.get().slideIndex].timeline, dragged, drop.group, drop.mode);
+        }, { label: drop.mode === 'fuse' ? 'Group build animations' : 'Reorder build animations' });
+        return;
+      }
       const visualMode = el.dataset.dropMode as BuildDropMode | undefined;
       delete el.dataset.dropMode;
       const dragged = this.draggingEntryId;
@@ -539,6 +594,22 @@ export class TimelinePanel {
         reorderBuildEntry(timeline, dragged, targetId, mode);
       }, { label: mode === 'fuse' ? 'Group build animations' : 'Reorder build animations' });
     });
+  }
+
+  /**
+   * Marks where a dragged pill would land: a line above the click's first
+   * build or below its last, or an outline round every build of the click it
+   * would join. Null clears it.
+   */
+  private showGroupDrop(drop: { group: string[]; mode: BuildDropMode } | null): void {
+    this.groupDrop = drop;
+    const edge = drop?.mode === 'before' ? drop.group[0] : drop?.group.at(-1);
+    for (const row of this.host.querySelectorAll<HTMLElement>('.build-overview-row')) {
+      const id = row.dataset.entryId!;
+      if (drop?.mode === 'fuse' && drop.group.includes(id)) row.dataset.groupDrop = 'fuse';
+      else if (drop && drop.mode !== 'fuse' && id === edge) row.dataset.groupDrop = drop.mode;
+      else delete row.dataset.groupDrop;
+    }
   }
 
   /**
@@ -1205,4 +1276,41 @@ export function reorderBuildEntry(
     dragged.trigger.on = 'click';
     timeline.splice(targetIndex + (mode === 'after' ? 1 : 0), 0, dragged);
   }
+}
+
+/**
+ * Moves the builds of one click (`draggedIds`, a run of the timeline) as a
+ * block: above or below the click `targetIds`, or into it to run with it.
+ * Landing above what builds as the slide appears makes the moved click build
+ * on entry in its place, and the old one becomes the first click; anywhere
+ * else the moved builds start on a click of their own.
+ */
+export function moveBuildGroup(
+  timeline: TimelineEntry[],
+  draggedIds: string[],
+  targetIds: string[],
+  mode: BuildDropMode,
+): void {
+  const draggedSet = new Set(draggedIds);
+  if (targetIds.length === 0 || targetIds.some((id) => draggedSet.has(id))) return;
+  const dragged = timeline.filter((entry) => draggedSet.has(entry.id));
+  if (dragged.length === 0) return;
+  const rest = timeline.filter((entry) => !draggedSet.has(entry.id));
+  const first = rest.findIndex((entry) => entry.id === targetIds[0]);
+  const last = rest.findIndex((entry) => entry.id === targetIds.at(-1));
+  if (first < 0 || last < 0) return;
+  const lead = dragged[0];
+  if (mode === 'fuse') {
+    lead.trigger.on = 'withPrev';
+    lead.trigger.delay = 0;
+    rest.splice(last + 1, 0, ...dragged);
+  } else if (mode === 'before' && first === 0 && rest[0].trigger.on !== 'click') {
+    lead.trigger = { ...rest[0].trigger };
+    rest[0].trigger = { ...rest[0].trigger, on: 'click', delay: 0 };
+    rest.splice(0, 0, ...dragged);
+  } else {
+    if (lead.trigger.on !== 'click') lead.trigger = { ...lead.trigger, on: 'click', delay: 0 };
+    rest.splice(mode === 'before' ? first : last + 1, 0, ...dragged);
+  }
+  timeline.splice(0, timeline.length, ...rest);
 }
