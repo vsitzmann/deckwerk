@@ -108,6 +108,25 @@ describe.skipIf(!electronBinary)('Keynote-style slide sections in the browser', 
 });
 
 describe.skipIf(!electronBinary)('slide rail progress and scrollbar', () => {
+  it('leaves only the current slide highlighted after clicking and navigating with arrows', async () => {
+    await fixture();
+    await session.clickRail(1);
+    await session.key('ArrowDown', 40);
+    await session.key('ArrowDown', 40);
+    const highlights = await session.cdp.evaluate<{ selected: string[]; active: string[]; strayFocus: string[] }>(`(() => {
+      const rows = [...document.querySelectorAll('#rail .rail-item[data-index]')];
+      return {
+        selected: rows.filter((row) => row.classList.contains('selected')).map((row) => row.dataset.index),
+        active: rows.filter((row) => row.classList.contains('active')).map((row) => row.dataset.index),
+        strayFocus: rows.filter((row) => !row.classList.contains('selected') && row.matches(':focus-visible'))
+          .map((row) => row.dataset.index),
+      };
+    })()`);
+    expect(highlights.selected).toEqual(['3']);
+    expect(highlights.active).toEqual(['3']);
+    expect(highlights.strayFocus).toEqual([]);
+  });
+
   it('places numbers beside the thumbnail bottom with compact gaps at both rail widths', async () => {
     await fixture();
     await session.clickRail(1);

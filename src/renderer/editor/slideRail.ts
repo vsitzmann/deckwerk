@@ -1075,6 +1075,12 @@ export class SlideRail {
   private bindKeys(): void {
     this.host.tabIndex = 0;
     this.host.addEventListener('keydown', (e) => {
+      // A real click's default mousedown focuses the row after pointerdown
+      // focused the rail. Keep arrow navigation on the rail so that row does
+      // not acquire a focus-visible outline after selection has moved away.
+      if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) {
+        this.host.focus({ preventScroll: true });
+      }
       if (this.readOnly && (e.key === 'Enter' || e.key === 'Backspace' || e.key === 'Delete')) return;
       if (!this.readOnly && e.key === 'Tab') {
         e.preventDefault(); e.stopPropagation(); this.indentSlides(e.shiftKey ? -1 : 1); return;
