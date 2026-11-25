@@ -45,6 +45,7 @@ export function createDeckWerkButton(options: {
     ...ask,
     appearanceMenuSection(),
     interfaceSizeMenuSection(),
+    'separator',
     videoBadgesMenuOption(),
   ], { trigger: button });
 }

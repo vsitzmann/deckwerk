@@ -4531,6 +4531,8 @@ select.panel-action-select {
   outline: none;
 }
 
+.shape-menu-separator { margin: 4px 0; border-top: 1px solid var(--line); }
+
 .shape-menu-section {
   margin-top: 4px;
   padding-top: 4px;

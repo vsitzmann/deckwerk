@@ -13,7 +13,7 @@ export interface ToolbarPickerSection {
   options: ToolbarPickerOption[];
 }
 
-export type ToolbarPickerEntry = ToolbarPickerOption | ToolbarPickerSection;
+export type ToolbarPickerEntry = ToolbarPickerOption | ToolbarPickerSection | 'separator';
 
 export interface ToolbarSplitButtonConfig {
   deckOnly?: boolean;
@@ -106,6 +106,13 @@ export function createToolbarPicker(
       parent.appendChild(item);
     };
     for (const entry of entries) {
+      if (entry === 'separator') {
+        const separator = document.createElement('div');
+        separator.className = 'shape-menu-separator';
+        separator.setAttribute('role', 'separator');
+        menu.appendChild(separator);
+        continue;
+      }
       if (!('options' in entry)) {
         appendOption(entry, menu);
         continue;
