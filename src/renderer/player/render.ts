@@ -1,3 +1,4 @@
+import { scheduleTextAutoSize } from './textAutoSize.js';
 import { curvedShadowClasses } from '@shared/shapeShadow.js';
 import { MIRRORED_TEXT_STYLE_PROPERTIES, videoSpeed } from '@shared/deck.js';
 import type { Deck, MediaEffect, Slide, SlideElement } from '@shared/deck.js';
@@ -468,6 +469,8 @@ export function applyTextRenderState(
       }
     }
   }
+
+  if (el.autoSize && !el.table) scheduleTextAutoSize(node, el);
 
   // noWrap implies the fit: with soft wrapping off, shrinking is the only way
   // an overlong line stays inside the box.
