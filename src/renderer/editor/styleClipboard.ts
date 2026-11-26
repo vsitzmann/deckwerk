@@ -108,7 +108,7 @@ export function copyElementStyle(store: EditorStore, report: (message: string) =
 
 export function pasteElementStyle(store: EditorStore, report: (message: string) => void): void {
   const style = readStyle();
-  if (!style) { report('Copy a style first (⌘⇧C).'); return; }
+  if (!style) { report('Copy a style first (⌘⌥C).'); return; }
   const targets = store.selectedElements().filter((element) => isStyled(element) && kind(element) === style.kind);
   if (!targets.length) { report(`Select ${style.kind === 'text' ? 'text boxes' : 'images or videos'} to paste this style.`); return; }
   const ids = new Set(targets.map((element) => element.id));

@@ -69,6 +69,6 @@ describe('object style clipboard', () => {
     window.localStorage.setItem('deckwerk.styleClipboard', '{"kind":"media","style":{"width":"999px"}}');
     pasteElementStyle(store, report);
     expect(store.get().deck).toEqual(before);
-    expect(report).toHaveBeenLastCalledWith('Copy a style first (⌘⇧C).');
+    expect(report).toHaveBeenLastCalledWith('Copy a style first (⌘⌥C).');
   });
 });

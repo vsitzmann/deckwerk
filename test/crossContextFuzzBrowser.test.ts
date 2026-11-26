@@ -487,9 +487,9 @@ async function performOp(
     case 'style round-trip': {
       const before = await session.deckSnapshot();
       await session.click(PARA);
-      await session.chord('C', 'KeyC', 67, MOD | SHIFT);
+      await session.chord('ç', 'KeyC', 67, MOD | 1);
       await session.click(LIST);
-      await session.chord('V', 'KeyV', 86, MOD | SHIFT);
+      await session.chord('√', 'KeyV', 86, MOD | 1);
       if (await session.deckSnapshot() !== before) await session.chord('z', 'KeyZ', 90, MOD);
       expect(await session.deckSnapshot()).toBe(before);
       return 'same';

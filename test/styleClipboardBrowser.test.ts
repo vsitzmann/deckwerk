@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { electronBinary } from './support/browserSession.js';
-import { startCrossSession, type CrossSession, MOD, SHIFT, IMAGE, PARA, FAR } from './support/crossContextSession.js';
+import { startCrossSession, type CrossSession, MOD, IMAGE, PARA, FAR } from './support/crossContextSession.js';
 
 let session: CrossSession;
 let close: (() => Promise<void>) | null = null;
@@ -22,21 +22,21 @@ describe.skipIf(!electronBinary)('copy and paste object style', () => {
       text.html = '<strong>Source style</strong>'; text.style = { 'font-size': '36px', color: '#ff0000' };
     })`);
     await session.click(IMAGE);
-    await session.chord('C', 'KeyC', 67, MOD | SHIFT);
+    await session.chord('ç', 'KeyC', 67, MOD | 1);
     await session.clickRail(1);
     await session.click('style-target');
-    await session.chord('V', 'KeyV', 86, MOD | SHIFT);
+    await session.chord('√', 'KeyV', 86, MOD | 1);
     const target = () => session.cdp.evaluate<Record<string, unknown>>(`window.store.get().deck.slides[1].elements.find(e => e.id === 'style-target')`);
     expect(await target()).toMatchObject({ x: 700, y: 470, w: 220, h: 140, borderWidth: 4, borderRadius: 12, borderColor: '#ff0000' });
     await session.chord('z', 'KeyZ', 90, MOD);
     expect(await target()).toMatchObject({ borderWidth: 1, borderRadius: 0 });
     await session.clickRail(0);
     await session.click(PARA);
-    await session.chord('C', 'KeyC', 67, MOD | SHIFT);
+    await session.chord('ç', 'KeyC', 67, MOD | 1);
     await session.clickRail(1);
     const before = await session.textOf(FAR);
     await session.click(FAR);
-    await session.chord('V', 'KeyV', 86, MOD | SHIFT);
+    await session.chord('√', 'KeyV', 86, MOD | 1);
     expect(await session.textOf(FAR)).toBe(before);
     const text = await session.cdp.evaluate<Record<string, unknown>>(`window.store.get().deck.slides[1].elements.find(e => e.id === '${FAR}')`);
     expect(text).toMatchObject({ style: { 'font-size': '36px', 'font-weight': '700', color: 'rgb(255, 0, 0)' } });

@@ -385,7 +385,7 @@ export function bindEditorKeys(deps: ShellDeps, clipboard: ClipboardActions): vo
     // rather than deleting the element being typed into.
     if (typing || canvas.isEditing()) return;
 
-    if (mod && e.shiftKey && !e.altKey && ['KeyC', 'KeyV'].includes(e.code)) {
+    if (mod && e.altKey && !e.shiftKey && ['KeyC', 'KeyV'].includes(e.code)) {
       e.preventDefault();
       e.stopPropagation();
       if (!e.repeat) {
