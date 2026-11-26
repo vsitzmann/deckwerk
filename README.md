@@ -60,6 +60,42 @@ DeckWerk starts from a different set of assumptions:
 
 DeckWerk is not trying to reproduce every feature of PowerPoint or Keynote. It is trying to make a particular kind of visual, media-rich presentation easy to create and collaborate on in trusted networks and tailnets such as labs or companies.
 
+## Slide sections
+
+Select slides in the left navigator and press **Tab** to indent them, or
+**Shift-Tab** to remove their indentation. The same commands are available
+in the slide's right-click menu. Sections have one level of indentation.
+Indent and outdent change only the selected slides, leaving every other slide's
+indentation unchanged. Sections are implied by the resulting sequence. These
+changes can be undone like other edits.
+
+Click the arrow beside a parent slide to collapse or expand its section. With
+the navigator focused, **Left/Right** collapse/expand and **Up/Down** move between
+visible slides. Dragging a parent moves its descendants with it. Folding affects
+only the navigator: every unskipped slide still appears when presenting.
+
+Section structure is saved in the deck and shared with collaborators. Each
+person's collapsed sections are remembered locally for that deck.
+
+Slide numbers and progress totals count only unskipped slides. Hidden slides show
+“—” in the navigator and remain accessible by id through `slide-agent`; numeric
+CLI references follow the visible-slide numbering. Collapsing a section does not
+change its slides' numbers. The navigator's scrollbar stays visible while idle.
+
+Press **Option+Command+P** on macOS to start the selected presentation mode,
+just like clicking **Present**.
+
+The **DeckWerk** menu includes **Show video badges**, a personal preference saved
+on this browser/device across decks. It defaults to on and can be toggled without
+changing the shared presentation.
+
+Select one text box, image, or video and press **Command+Option+C** to copy its
+style. Select matching objects and press **Command+Option+V** to apply it in one
+undoable change (Ctrl+Alt+C / Ctrl+Alt+V on Windows/Linux). Images and
+videos share styles. Text styles apply to text boxes. The same commands are in
+the object's context menu. Content, geometry, media crops, and playback settings
+stay with the target; style copying uses a separate clipboard.
+
 ## Design principles
 
 ### Cross-platform

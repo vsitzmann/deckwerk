@@ -1,3 +1,4 @@
+import { slideProgress } from '@shared/slideNumbering.js';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { existsSync, readFileSync } from 'node:fs';
@@ -1405,7 +1406,7 @@ function chatTargetFor(deckArg: string | undefined, options: Map<string, string>
 
 interface CommentRow extends Comment {
   /** 1-based, matching what a human sees in the editor's slide rail. */
-  slide: number;
+  slide: number | null;
   slideId: string;
   slideName: string;
   elementId?: string;
@@ -1415,7 +1416,7 @@ interface CommentRow extends Comment {
 function listComments(deck: Deck): CommentRow[] {
   const rows: CommentRow[] = [];
   deck.slides.forEach((slide, index) => {
-    const base = { slide: index + 1, slideId: slide.id, slideName: slide.name };
+    const base = { slide: slideProgress(deck.slides, index).number, slideId: slide.id, slideName: slide.name };
     for (const comment of slide.comments ?? []) rows.push({ ...base, ...comment });
     for (const element of slide.elements) {
       for (const comment of element.comments ?? []) {
@@ -1805,7 +1806,7 @@ function slideIdForRef(deck: Deck, ref: string): string | null {
   // An exact id wins: a deck that came in from elsewhere may carry an id that
   // happens to be all digits, and the id the caller holds is never a guess.
   if (deck.slides.some((slide) => slide.id === ref)) return ref;
-  if (/^\d+$/.test(ref)) return deck.slides[Number(ref) - 1]?.id ?? null;
+  if (/^\d+$/.test(ref)) return deck.slides.filter((slide) => !slide.skipped)[Number(ref) - 1]?.id ?? null;
   return null;
 }
 
@@ -1851,8 +1852,9 @@ function slideIdsForRef(deck: Deck, ref: string): string[] | null {
   }
   const first = Number(range[1]);
   const last = Number(range[2]);
-  if (first < 1 || last < first || last > deck.slides.length) return null;
-  return deck.slides.slice(first - 1, last).map((slide) => slide.id);
+  const visible = deck.slides.filter((slide) => !slide.skipped);
+  if (first < 1 || last < first || last > visible.length) return null;
+  return visible.slice(first - 1, last).map((slide) => slide.id);
 }
 
 /** `--selected` (default), `--slide <id>` (repeatable, or comma-separated) or `--all`. */

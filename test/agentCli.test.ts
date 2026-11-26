@@ -413,6 +413,22 @@ describe('slide-agent CLI', { timeout: 60_000 }, () => {
 
   // On a 500-slide deck "slides 2 to 40" as a comma list is 39 numbers long;
   // `--slide 2-40` was refused as "No such slide: 2-40".
+  it('matches visible rail numbers for slide references and ranges', async () => {
+    const deck = await onDisk();
+    deck.slides.unshift({ ...slideOf('hidden-intro'), skipped: true });
+    deck.slides.splice(2, 0, { ...slideOf('hidden-detail'), skipped: true });
+    await writeDeck(deck);
+    const result = await parsed('inspect', '--elements-only', '--slide', '2');
+    expect(result.code).toBe(EXIT_OK);
+    expect(result.json.slides.map((slide: { id: string }) => slide.id)).toEqual(['slide-2']);
+    const range = await parsed('inspect', '--elements-only', '--slide', '1-2');
+    expect(range.json.slides.map((slide: { id: string }) => slide.id)).toEqual(['slide-1', 'slide-2']);
+    const hidden = await parsed('inspect', '--elements-only', '--slide', 'hidden-intro');
+    expect(hidden.json.slides.map((slide: { id: string }) => slide.id)).toEqual(['hidden-intro']);
+    const context = await parsed('context');
+    expect(context.json.outline.map((slide: { number: number | null }) => slide.number)).toEqual([null, 1, null, 2]);
+  });
+
   it('takes a range of slide numbers, alone or mixed into a list', async () => {
     const deck = await onDisk();
     deck.slides.push(slideOf('slide-3'), slideOf('slide-4'), slideOf('slide-5'));

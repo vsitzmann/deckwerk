@@ -285,6 +285,8 @@ const VideoElement = BaseElement.extend({
    * presenter's live speed keys multiply it. Read it through `videoSpeed`.
    */
   playbackRate: z.number().positive().optional(),
+  /** Paused frame in editing mode, in source seconds. Absent follows the trim start. */
+  editingPreviewTime: z.number().finite().min(0).optional(),
   poster: z.string().nullable().default(null),
   /**
    * Videos on a slide that share a sync group play from one clock while
@@ -615,6 +617,8 @@ export const SlideSchema = z.object({
   morphFromPrevious: z.boolean().optional(),
   /** Duration of the Morph transition from the preceding slide, in milliseconds. */
   morphDuration: z.number().min(100).max(5000).optional(),
+  /** Navigator nesting; has no effect on presentation order or visibility. */
+  indentLevel: z.number().int().min(0).max(1).optional(),
   /** Kept in the deck and editable, but stepped over when presenting. */
   skipped: z.boolean().optional(),
   elements: z.array(ElementSchema).default([]),

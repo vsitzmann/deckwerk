@@ -79,6 +79,7 @@ function square(id: string, x: number): SlideElement {
     src: CLIP, fit: 'contain',
     autoplay: true, loop: true, muted: true, controls: false,
     start: 0, end: null, poster: null, sourceBox: null,
+    ...(id.startsWith('sq-a-') ? { editingPreviewTime: 2 } : {}),
   } as SlideElement;
 }
 
@@ -215,7 +216,7 @@ describe.skipIf(!electronBinary || !ffmpeg)('browsing slides in the rail', () =>
       // Each slot also has to hold *its own* frame: adopting across in-points
       // is the mismatch that forced the seek in the first place.
       for (const video of videos) {
-        const expected = video.id.startsWith('crop-') ? IN_POINT : 0;
+        const expected = video.id.startsWith('crop-') ? IN_POINT : video.id.startsWith('sq-a-') ? 2 : 0;
         expect(video.currentTime, `${video.id} is showing another slot's frame`)
           .toBeCloseTo(expected, 0);
       }
@@ -227,6 +228,39 @@ describe.skipIf(!electronBinary || !ffmpeg)('browsing slides in the rail', () =>
         expect(video.width, `${video.id} is not square`).toBe(video.height);
       }
     }
+
+    // Exercise the property through real keyboard input, then leave and return.
+    await editor.click('#canvas [data-element-id="sq-a-0"]', 'video on canvas');
+    await editor.click('#side-tabs button[data-panel="inspector"]', 'Props tab');
+    const field = '.video-editing-preview-options input[type="number"]';
+    await eventually(() => editor!.evaluate(`!!document.querySelector('${field}')`),
+      'editing preview properties never appeared', Boolean);
+    expect(await editor.evaluate('document.querySelectorAll(".video-editing-preview-options video").length')).toBe(0);
+    await editor.typeInto(field, '7.5', 'Editing preview frame');
+    await eventually(readVideos, 'the chosen editing frame never decoded',
+      videos => videos.some(v => v.id === 'sq-a-0' && !v.seeking && Math.abs(v.currentTime - 7.5) < 0.05));
+    if (process.env.EDITING_PREVIEW_SCREENSHOT) {
+      const shot = await editor.call('Page.captureScreenshot', { format: 'png' }) as { data: string };
+      await writeFile(process.env.EDITING_PREVIEW_SCREENSHOT, Buffer.from(shot.data, 'base64'));
+    }
+    await openSlide(1);
+    await openSlide(0);
+    await eventually(readVideos, 'returning to the slide lost its editing frame',
+      videos => videos.some(v => v.id === 'sq-a-0' && !v.seeking && Math.abs(v.currentTime - 7.5) < 0.05));
+    // This changes only the viewer's preference, including after navigation/reload.
+    const deckBeforePreference = await editor.evaluate('JSON.stringify(window.store.get().deck)');
+    const badgeDisplays = () => editor!.evaluate<string[]>(`[...document.querySelectorAll('#canvas .video-editor-badge')].map((b) => getComputedStyle(b).display)`);
+    expect((await badgeDisplays()).every((display) => display !== 'none')).toBe(true);
+    await editor.click('.brand-button');
+    await editor.clickByText('[role="menuitemcheckbox"]', 'Show video badges');
+    expect(await badgeDisplays()).toEqual(['none', 'none', 'none']);
+    expect(await editor.evaluate('JSON.stringify(window.store.get().deck)')).toBe(deckBeforePreference);
+    await editor.evaluate('location.reload()');
+    await eventually(badgeDisplays, 'hidden video badge preference was lost on reload',
+      displays => displays.length === 3 && displays.every((display) => display === 'none'));
+    await editor.click('.brand-button');
+    await editor.clickByText('[role="menuitemcheckbox"]', 'Show video badges');
+    expect((await badgeDisplays()).every((display) => display !== 'none')).toBe(true);
   }, 240_000);
 });
 

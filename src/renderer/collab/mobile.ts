@@ -1,3 +1,4 @@
+import { slideNumberLabel, slideProgressLabel } from '@shared/slideNumbering.js';
 import '../player/player.css';
 import '../player/type.css';
 import '../appChrome.css';
@@ -238,7 +239,7 @@ function renderComments(threadId?: string): void {
   const slide = deck.slides[slideIndex];
   const open = deck.slides.reduce((sum, candidate) => sum + slideOpenThreads(candidate), 0);
   commentsHead.replaceChildren(
-    scopeButton('slide', `Slide ${slideIndex + 1}`),
+    scopeButton('slide', `Slide ${slideNumberLabel(deck.slides, slideIndex)}`),
     scopeButton('all', open ? `All slides (${open})` : 'All slides'),
   );
   if (commentsScope === 'all') {
@@ -295,7 +296,7 @@ function renderOverview(): void {
     group.className = 'm-overview-slide';
     const heading = document.createElement('h3');
     const title = slideTitle(slide);
-    heading.textContent = `Slide ${index + 1}${title ? ` · ${title}` : ''}`;
+    heading.textContent = `Slide ${slideNumberLabel(deck.slides, index)}${title ? ` · ${title}` : ''}`;
     group.append(heading);
     for (const { thread, where } of shown) {
       const item = document.createElement('button');
@@ -416,7 +417,7 @@ function renderBar(): void {
   const open = deck.slides.reduce((sum, slide) => sum + slideOpenThreads(slide), 0);
   commentsButton.textContent = open ? `Comments ${open}` : 'Comments';
   commentsButton.classList.toggle('has-open', open > 0);
-  position.textContent = deck.slides.length ? `${slideIndex + 1} / ${deck.slides.length}` : '';
+  position.textContent = deck.slides.length ? slideProgressLabel(deck.slides, slideIndex).replace('/', ' / ') : '';
   prevButton.disabled = slideIndex <= 0;
   nextButton.disabled = slideIndex >= deck.slides.length - 1;
 }

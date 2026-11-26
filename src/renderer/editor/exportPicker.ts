@@ -1,8 +1,9 @@
 export interface ToolbarPickerOption {
   label: string;
   action: () => void;
-  /** Makes the entry one of a radio group, ticked while this returns true. */
+  /** Makes a checked entry; radio-group semantics are the default. */
   checked?: () => boolean;
+  checkType?: 'radio' | 'checkbox';
   /** Leaves the entry out of the menu while this returns true (asked each time it opens). */
   hidden?: () => boolean;
 }
@@ -12,7 +13,7 @@ export interface ToolbarPickerSection {
   options: ToolbarPickerOption[];
 }
 
-export type ToolbarPickerEntry = ToolbarPickerOption | ToolbarPickerSection;
+export type ToolbarPickerEntry = ToolbarPickerOption | ToolbarPickerSection | 'separator';
 
 export interface ToolbarSplitButtonConfig {
   deckOnly?: boolean;
@@ -94,7 +95,7 @@ export function createToolbarPicker(
       const item = document.createElement('button');
       item.type = 'button';
       item.className = 'shape-menu-item';
-      item.setAttribute('role', option.checked ? 'menuitemradio' : 'menuitem');
+      item.setAttribute('role', option.checked ? (option.checkType === 'checkbox' ? 'menuitemcheckbox' : 'menuitemradio') : 'menuitem');
       if (option.checked) item.setAttribute('aria-checked', String(option.checked()));
       item.textContent = option.label;
       item.addEventListener('click', () => {
@@ -105,6 +106,13 @@ export function createToolbarPicker(
       parent.appendChild(item);
     };
     for (const entry of entries) {
+      if (entry === 'separator') {
+        const separator = document.createElement('div');
+        separator.className = 'shape-menu-separator';
+        separator.setAttribute('role', 'separator');
+        menu.appendChild(separator);
+        continue;
+      }
       if (!('options' in entry)) {
         appendOption(entry, menu);
         continue;
@@ -182,7 +190,7 @@ export function createToolbarSplitButton(
       const item = document.createElement('button');
       item.type = 'button';
       item.className = 'shape-menu-item';
-      item.setAttribute('role', option.checked ? 'menuitemradio' : 'menuitem');
+      item.setAttribute('role', option.checked ? (option.checkType === 'checkbox' ? 'menuitemcheckbox' : 'menuitemradio') : 'menuitem');
       if (option.checked) item.setAttribute('aria-checked', String(option.checked()));
       item.textContent = option.label;
       item.addEventListener('click', () => {

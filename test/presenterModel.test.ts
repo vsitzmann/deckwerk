@@ -9,7 +9,7 @@ describe('presenter view model', () => {
   it('reports slide and build progress', () => {
     expect(presentationLabel({
       cursor: { slide: 4, step: 1 }, steps: 3, startedAt: 0, slideStartedAt: 1_000,
-    }, 12)).toBe('Slide 5 / 12 · Build 2 / 3');
+    }, Array.from({ length: 12 }, () => ({})))).toBe('Slide 5 / 12 · Build 2 / 3');
   });
 
   it('formats local wall-clock time without seconds', () => {

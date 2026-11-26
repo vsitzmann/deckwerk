@@ -98,6 +98,7 @@ export interface MeasuredSlide {
   notesAbsent?: boolean;
   /** `data-skipped` on the section, when it says either way. */
   skipped?: boolean;
+  indentLevel?: number;
   /** The text of the section's `<script type="application/deckwerk-timeline">`, when it has one. */
   timeline?: string;
   background: { color: string | null; image: string | null };
@@ -613,7 +614,7 @@ export function insertionAnchor(deck: Deck, ref: string): string | null | undefi
   if (deck.slides.some((slide) => slide.id === ref)) return ref;
   if (!/^\d+$/.test(ref)) return undefined;
   const number = Number(ref);
-  return number === 0 ? null : deck.slides[number - 1]?.id;
+  return number === 0 ? null : deck.slides.filter((slide) => !slide.skipped)[number - 1]?.id;
 }
 
 /**
@@ -1261,7 +1262,7 @@ function parseStateBase(value: string | undefined): StateBase | undefined {
   return match ? { notes: match[1], skipped: match[2] === '1', timeline: match[3] } : undefined;
 }
 
-const SLIDE_PROPS = ['name', 'background', 'layout', 'morphFromPrevious', 'morphDuration'] as const;
+const SLIDE_PROPS = ['name', 'background', 'layout', 'morphFromPrevious', 'morphDuration', 'indentLevel'] as const;
 
 export function slideBase(slide: Slide): SlideBase {
   const elements = new Map(slide.elements.map((element) => [element.id, {
@@ -1657,6 +1658,7 @@ export function slideFromMeasured(
     id: opts.slideId,
     name: measured.name,
     notes: normalizeNotes(measured.notes),
+    ...(measured.indentLevel !== undefined ? { indentLevel: measured.indentLevel } : {}),
     ...(measured.skipped !== undefined ? { skipped: measured.skipped } : {}),
     background: measured.background,
     ...(measured.morphFromPrevious ? { morphFromPrevious: true } : {}),
@@ -1849,6 +1851,7 @@ function elementFromMeasured(
       ...(node.dataset.syncGroup ? { syncGroup: node.dataset.syncGroup } : {}),
       ...syncLengthFromDataset(node.dataset),
       ...playbackRateFrom(node.dataset.playbackRate),
+      ...editingPreviewFrom(node.dataset.editingPreviewTime),
     };
   }
 
@@ -1885,6 +1888,7 @@ function elementFromMeasured(
       ...(node.dataset.syncGroup ? { syncGroup: node.dataset.syncGroup } : {}),
       ...syncLengthFromDataset(node.dataset),
       ...playbackRateFrom(node.dataset.playbackRate),
+      ...editingPreviewFrom(node.dataset.editingPreviewTime),
     };
   }
 
@@ -2177,6 +2181,7 @@ export function slideToHtml(slide: Slide, canvas: { w: number; h: number }): str
     + ` data-base="${stamp.slide}" data-base-ids="${escape(stamp.ids)}"`
     + (slide.name ? ` data-name="${escape(slide.name)}"` : '')
     + (slide.layout ? ` data-layout="${slide.layout}"` : '')
+    + (slide.indentLevel !== undefined ? ` data-indent-level="${slide.indentLevel}"` : '')
     + (slide.skipped ? ' data-skipped="true"' : '')
     + (slide.morphFromPrevious ? ' data-morph-from-previous="true"' : '')
     + (slide.morphDuration !== undefined ? ` data-morph-duration="${slide.morphDuration}"` : '')
@@ -2335,7 +2340,8 @@ function elementToHtml(
       const trim = ` data-trim="${element.start},${element.end ?? ''}"`
         + (element.syncGroup ? ` data-sync-group="${escape(element.syncGroup)}"` : '')
         + (element.syncLength ? ` data-sync-length="${element.syncLength}"` : '')
-        + (element.playbackRate !== undefined ? ` data-playback-rate="${element.playbackRate}"` : '');
+        + (element.playbackRate !== undefined ? ` data-playback-rate="${element.playbackRate}"` : '')
+        + (element.editingPreviewTime !== undefined ? ` data-editing-preview-time="${element.editingPreviewTime}"` : '');
       if (element.sourceBox) {
         return `  <div ${attrs} data-element="video"`
           + ` data-src="${escape(element.src)}" data-fit="${element.fit}"${trim}`
@@ -2787,4 +2793,11 @@ function round(value: number): number {
 
 function escape(text: string): string {
   return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+/** An editor-only frame timestamp; never changes the playback trim. */
+function editingPreviewFrom(spec: string | undefined): { editingPreviewTime?: number } {
+  if (spec === undefined || !spec.trim()) return {};
+  const time = Number(spec);
+  return Number.isFinite(time) && time >= 0 ? { editingPreviewTime: time } : {};
 }

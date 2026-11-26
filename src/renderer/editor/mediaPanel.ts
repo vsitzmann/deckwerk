@@ -1,3 +1,4 @@
+import { slideNumberLabel } from '@shared/slideNumbering.js';
 import './mediaPanel.css';
 import type { Deck, SlideElement } from '@shared/deck.js';
 import { makeId } from '@shared/geometry.js';
@@ -340,10 +341,10 @@ export class MediaPanel {
       const link = document.createElement('button');
       link.type = 'button';
       link.className = 'media-slide-link';
-      link.textContent = String(index + 1);
+      link.textContent = slideNumberLabel(this.store.get().deck.slides, index);
       link.dataset.slideIndex = String(index);
       const uses = item.usages.filter((usage) => usage.slideIndex === index).length;
-      link.title = `Go to slide ${index + 1} and select ${uses === 1 ? 'it' : `all ${uses}`}`;
+      link.title = `Go to slide ${slideNumberLabel(this.store.get().deck.slides, index)} and select ${uses === 1 ? 'it' : `all ${uses}`}`;
       link.classList.toggle('is-current', index === currentSlide);
       link.addEventListener('click', () => this.reveal(item, index));
       slides.appendChild(link);
@@ -355,8 +356,8 @@ export class MediaPanel {
     add.type = 'button';
     add.className = 'ghost media-add';
     add.textContent = '+';
-    add.title = `Add to slide ${currentSlide + 1}`;
-    add.setAttribute('aria-label', `Add ${item.name} to slide ${currentSlide + 1}`);
+    add.title = `Add to slide ${slideNumberLabel(this.store.get().deck.slides, currentSlide)}`;
+    add.setAttribute('aria-label', `Add ${item.name} to slide ${slideNumberLabel(this.store.get().deck.slides, currentSlide)}`);
     add.addEventListener('click', () => void this.addToCurrentSlide(item));
     row.appendChild(add);
 
@@ -547,7 +548,7 @@ export class MediaPanel {
     }, { label: `Add ${item.name}` });
     if (this.store.get().slideIndex !== slideIndex) this.store.selectSlide(slideIndex);
     this.store.select([id]);
-    this.options.setStatusMessage(`Added ${item.name} to slide ${slideIndex + 1}`);
+    this.options.setStatusMessage(`Added ${item.name} to slide ${slideNumberLabel(deck.slides, slideIndex)}`);
     return id;
   }
 

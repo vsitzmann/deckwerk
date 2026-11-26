@@ -41,9 +41,9 @@ export interface ChatPanelOptions {
   /** Everyone else in the deck right now. */
   peers: () => ChatParticipant[];
   /** The slide on screen, for attaching a reference to it. */
-  currentSlide: () => { id: string; number: number } | null;
-  /** 1-based number of a slide, or null if the deck no longer has it. */
-  slideNumber: (slideId: string) => number | null;
+  currentSlide: () => { id: string; number: number | string } | null;
+  /** Visible slide number (or “—” for hidden), or null if the slide was removed. */
+  slideNumber: (slideId: string) => number | string | null;
   /** The slide holding a comment, when a message points at one. */
   slideOfComment: (commentId: string) => string | null;
   /** Go to a comment and open its thread. */

@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { electronBinary, wait } from './support/browserSession.js';
+import { Cdp, electronBinary, eventually, findTarget, wait } from './support/browserSession.js';
 import {
   FAR,
   IMAGE,
@@ -156,10 +156,10 @@ function isKnownStaleSlideIdentity(error: string): boolean {
 type OpName =
   | 'click' | 'shift-click' | 'double-click text' | 'double-click image then text'
   | 'type nonce' | 'bold mid-word' | 'escape' | 'click empty' | 'marquee'
-  | 'rail hop' | 'undo' | 'redo' | 'undo round-trip' | 'delete selection'
+  | 'rail hop' | 'slide section round-trip' | 'undo' | 'redo' | 'undo round-trip' | 'delete selection'
   | 'cmd+a' | 'click with stray hover' | 'rail multi-delete' | 'stack key' | 'spelling fix'
   | 'size from sidebar' | 'flip from sidebar' | 'viewport gesture' | 'pen abandoned' | 'pen line undone'
-  | 'pencil stroke undone' | 'line bent and undone' | 'build multi-delete';
+  | 'present in editor' | 'present in window' | 'present shortcut' | 'video badge preference' | 'style round-trip' | 'pencil stroke undone' | 'line bent and undone' | 'build multi-delete';
 
 interface Violation { seed: number; step: number; op: OpName; oracle: string; detail: string }
 
@@ -175,6 +175,16 @@ interface OracleStats {
 }
 
 describe.skipIf(!electronBinary)('cross-context fuzz over three elements and two slides', () => {
+  it('opens and closes windowed playback between editing operations', async () => {
+    await session.reset();
+    await performOp('present in window', random(902026), await session.state(), () => {});
+    await performOp('present in editor', random(902026), await session.state(), () => {});
+    await performOp('present shortcut', random(902026), await session.state(), () => {});
+    await performOp('video badge preference', random(902026), await session.state(), () => {});
+    await performOp('style round-trip', random(902026), await session.state(), () => {});
+    expect(await session.problems()).toEqual([]);
+  });
+
   it(`survives ${SEEDS} seeded walks of ${STEPS} cross-context steps`, {
     timeout: 30 * 60_000,
   }, async () => {
@@ -414,6 +424,11 @@ function chooseOp(next: () => number, pre: CrossState): OpName {
   const add = (op: OpName, weight: number) => {
     for (let i = 0; i < weight; i++) ops.push(op);
   };
+  add('present in window', 1);
+  add('present in editor', 1);
+  add('present shortcut', 1);
+  if (pre.elements.includes(PARA) && pre.elements.includes(LIST)) add('style round-trip', 1);
+  add('video badge preference', 1);
   if (targets.length > 0) {
     add('click', 3);
     add('shift-click', 2);
@@ -435,6 +450,7 @@ function chooseOp(next: () => number, pre: CrossState): OpName {
   add('click empty', 1);
   add('marquee', 1);
   add('rail hop', 2);
+  if (pre.editing === null) add('slide section round-trip', 1);
   add('undo', 2);
   add('redo', 1);
   add('undo round-trip', 1);
@@ -468,6 +484,70 @@ async function performOp(
 ): Promise<'same' | 'resync' | string[]> {
   const targets = targetsOn(pre);
   switch (op) {
+    case 'style round-trip': {
+      const before = await session.deckSnapshot();
+      await session.click(PARA);
+      await session.chord('ç', 'KeyC', 67, MOD | 1);
+      await session.click(LIST);
+      await session.chord('√', 'KeyV', 86, MOD | 1);
+      if (await session.deckSnapshot() !== before) await session.chord('z', 'KeyZ', 90, MOD);
+      expect(await session.deckSnapshot()).toBe(before);
+      return 'same';
+    }
+    case 'video badge preference': {
+      const before = await session.deckSnapshot();
+      const shown = await session.cdp.evaluate<string>('document.documentElement.dataset.showVideoBadges');
+      await session.cdp.click('.brand-button');
+      await session.cdp.clickByText('[role="menuitemcheckbox"]', 'Show video badges');
+      expect(await session.cdp.evaluate<string>('document.documentElement.dataset.showVideoBadges')).toBe(shown === 'false' ? 'true' : 'false');
+      expect(await session.deckSnapshot()).toBe(before);
+      return 'same';
+    }
+    case 'present shortcut':
+    case 'present in editor':
+    case 'present in window': {
+      const before = await session.deckSnapshot();
+      // The hidden Electron harness exercises floating-window fallback.
+      if (op !== 'present in editor') await session.cdp.evaluate(`Object.defineProperty(window, 'documentPictureInPicture', { value: undefined, configurable: true }); true`);
+      await session.cdp.click('[aria-label="Presentation options"]');
+      await session.cdp.clickByText('button', op === 'present in editor' ? 'In Editor' : 'In Window');
+      if (op === 'present shortcut') {
+        await session.cdp.call('Input.dispatchKeyEvent', { type: 'keyDown', key: 'π', code: 'KeyP', windowsVirtualKeyCode: 80, modifiers: 5 });
+        await session.cdp.call('Input.dispatchKeyEvent', { type: 'keyUp', key: 'π', code: 'KeyP', windowsVirtualKeyCode: 80, modifiers: 5 });
+      } else await session.cdp.clickByText('button', 'Present', 'Present');
+      const inEditor = op === 'present in editor';
+      let playback = session.cdp;
+      if (!inEditor) {
+        const target = await findTarget(session.debugPort, t => t.title === 'DeckWerk — Presenting', () => '');
+        playback = await Cdp.connect(target.webSocketDebuggerUrl!);
+      }
+      try {
+        await eventually(
+          async () => playback.evaluate(`!!document.querySelector('iframe[src*="present.html"]')?.contentDocument?.querySelector('#stage .slide')`),
+          'The presentation did not paint in its playback surface', Boolean,
+        );
+        expect(await session.cdp.evaluate('document.fullscreenElement === null')).toBe(true);
+        if (op === 'present in editor') {
+          const visible = await session.cdp.evaluate<number[]>(`[...document.querySelectorAll('.rail-item[data-index]:not(.skipped)')].map(row => Number(row.dataset.index))`);
+          if (visible.length) {
+            const index = pick(next, visible);
+            const wanted = await session.cdp.evaluate<string>(`window.store.get().deck.slides[${index}].id`);
+            await session.clickRail(index);
+            await eventually(() => session.cdp.evaluate<string>(`document.querySelector('iframe[data-editor-presentation]')?.contentDocument?.querySelector('#stage .slide')?.dataset.slideId`),
+              'rail navigation did not reach the playing slide', id => id === wanted);
+          }
+        }
+        await playback.call('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', windowsVirtualKeyCode: 27 }).catch((error: Error) => {
+          if (!error.message.includes('connection closed')) throw error;
+        });
+        await eventually(async () => session.cdp.evaluate(`!document.querySelector('iframe[src*="present.html"]')`),
+          'Escape did not return to the editor', Boolean);
+      } finally {
+        if (playback !== session.cdp) playback.close();
+      }
+      expect(await session.deckSnapshot()).toBe(before);
+      return 'same';
+    }
     case 'click':
       await session.click(pick(next, targets));
       return 'same';
@@ -604,6 +684,22 @@ async function performOp(
         { x: layer.left + layer.width * 0.4, y: layer.top + layer.height * 0.6 },
         { x: end.left + end.width / 2, y: end.top + end.height / 2 },
       ]);
+      return 'same';
+    }
+    case 'slide section round-trip': {
+      if (await slideCount() < 2) return 'same';
+      if (await session.cdp.evaluate<boolean>('window.store.get().deck.slides.some((s) => s.indentLevel)')) return 'same';
+      await session.clickRail(1);
+      await session.key('Tab', 9);
+      expect(await session.cdp.evaluate<number>('window.store.get().deck.slides[1].indentLevel')).toBe(1);
+      await session.clickRail(0);
+      await session.key('ArrowLeft', 37);
+      expect(await session.cdp.evaluate<number>('document.querySelectorAll(".rail-item[data-index]").length'))
+        .toBe(await slideCount() - 1);
+      await session.key('ArrowRight', 39);
+      await session.clickRail(1);
+      await session.chord('Tab', 'Tab', 9, 8);
+      expect(await session.cdp.evaluate<number>('window.store.get().deck.slides[1].indentLevel ?? 0')).toBe(0);
       return 'same';
     }
     case 'rail hop': {

@@ -7,7 +7,67 @@ import { emptyDeck } from '../src/shared/deck.js';
 import { STOCK_STYLESHEET_STYLE, THEMES, fullThemeSelection, themeStyleOf } from '../src/shared/themes.js';
 
 describe('theme panel', () => {
-  beforeEach(() => document.body.replaceChildren());
+  beforeEach(() => { document.body.replaceChildren();
+    const values = new Map<string, string>();
+    Object.defineProperty(window, 'localStorage', { configurable: true, value: {
+      getItem: (key: string) => values.get(key) ?? null,
+      setItem: (key: string, value: string) => values.set(key, value),
+    } }); });
+
+  it('filters built-ins, persists the preference, and never changes the deck during a seeded browsing walk', () => {
+    const deck = emptyDeck('Custom themes');
+    deck.customThemes = [{ ...structuredClone(THEMES[0]), id: 'theia', name: 'Theia' }];
+    const store = new EditorStore(deck, '/tmp/theme-filter');
+    const save = vi.fn();
+    const make = () => createThemePanel({
+      store, cssEditor: { getValue: () => '', setValue: vi.fn() } as unknown as CssEditor,
+      save, saveThemeCss: vi.fn(), setStatusMessage: vi.fn(),
+    });
+    const original = structuredClone(store.get().deck);
+    let panel = make();
+    document.body.replaceChildren(panel.element);
+    let shown = true;
+    let seed = 4271;
+    // New view interaction in the theme-panel fuzz alphabet: toggle, reopen,
+    // and refresh the deck in arbitrary order, without authoring any changes.
+    for (let step = 0; step < 40; step++) {
+      seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
+      switch (seed % 3) {
+        case 0: {
+          const input = panel.element.querySelector<HTMLInputElement>('[data-group="built-in-themes"]')!;
+          input.click();
+          shown = !shown;
+          break;
+        }
+        case 1: panel = make(); document.body.replaceChildren(panel.element); break;
+        case 2: panel.noteDeckOpened(store.get().deck); break;
+      }
+      const cards = [...panel.element.querySelectorAll<HTMLElement>('.theme-chooser .theme-card')];
+      expect(cards.some((card) => card.dataset.themeId === 'theia')).toBe(true);
+      expect(cards.length).toBe(shown ? THEMES.length + 1 : 1);
+      expect(panel.element.querySelector<HTMLInputElement>('[data-group="built-in-themes"]')!.checked).toBe(shown);
+      expect(store.get().deck).toEqual(original);
+    }
+    expect(save).not.toHaveBeenCalled();
+  });
+
+  it('can hide every built-in without replacing the active built-in theme', () => {
+    window.localStorage.setItem('deckwerk.show-built-in-themes', '0');
+    const deck = emptyDeck('No custom themes');
+    deck.themePreset = THEMES[0].id;
+    deck.themeSelection = fullThemeSelection(THEMES[0].id);
+    const store = new EditorStore(deck, '/tmp/theme-filter-empty');
+    const panel = createThemePanel({
+      store, cssEditor: { getValue: () => '', setValue: vi.fn() } as unknown as CssEditor,
+      save: vi.fn(), saveThemeCss: vi.fn(), setStatusMessage: vi.fn(),
+    });
+    document.body.appendChild(panel.element);
+    expect(panel.element.querySelectorAll('.theme-chooser .theme-card')).toHaveLength(0);
+    expect(panel.currentTheme()?.id).toBe(THEMES[0].id);
+    expect(panel.element.querySelector('.theme-active-host .theme-card')).not.toBeNull();
+    panel.element.querySelector<HTMLInputElement>('[data-group="built-in-themes"]')!.click();
+    expect(panel.element.querySelectorAll('.theme-chooser .theme-card')).toHaveLength(THEMES.length);
+  });
 
   it('keeps the theme first, its Apply second, then layouts and their Apply', () => {
     const store = new EditorStore(emptyDeck('Theme panel'), '/tmp/theme-panel');
@@ -521,7 +581,12 @@ describe('the theme editor’s type scale', () => {
 });
 
 describe('Apply-theme dry runs', () => {
-  beforeEach(() => document.body.replaceChildren());
+  beforeEach(() => { document.body.replaceChildren();
+    const values = new Map<string, string>();
+    Object.defineProperty(window, 'localStorage', { configurable: true, value: {
+      getItem: (key: string) => values.get(key) ?? null,
+      setItem: (key: string, value: string) => values.set(key, value),
+    } }); });
 
   it('reruns the Apply-theme dry run only when the deck or what it reads changes, and only on screen', () => {
     const deck = emptyDeck('Dry runs');

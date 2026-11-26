@@ -2122,6 +2122,9 @@ export function measureSlides(doc: Document): MeasuredSlide[] {
         // the deck's: only then does a layout slide keep it.
         ownBackground: Boolean(root.style.background || root.style.backgroundColor || root.style.backgroundImage),
       } : {}),
+      ...(root.dataset.indentLevel !== undefined
+        ? { indentLevel: Number(root.dataset.indentLevel) }
+        : {}),
       ...(root.dataset.morphDuration !== undefined
         ? { morphDuration: Number(root.dataset.morphDuration) }
         : {}),

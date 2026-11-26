@@ -1,3 +1,5 @@
+import { slideNumberLabel } from '@shared/slideNumbering.js';
+import { slideSections, canChangeSlideIndent, changeSlideIndent, moveSlideSection, type SlideSection } from '@shared/slideSections.js';
 import { openContextMenu } from './contextMenuPlacement.js';
 import { makeId } from '@shared/geometry.js';
 import { recoverPreviewFrames } from '../player/previewFrameRecovery.js';
@@ -27,6 +29,7 @@ interface MenuItem {
   action?: () => void;
   /** A non-interactive section label rather than a command. */
   heading?: boolean;
+  disabled?: boolean;
   /** Present for a radio-style row; true draws its tick. */
   checked?: boolean;
 }
@@ -35,7 +38,13 @@ interface MenuItem {
  * 1-based slide numbers as a reader says them: runs collapse to ranges, so
  * [3, 4, 5, 8] reads "3–5, 8".
  */
-export function slideNumbersLabel(indices: readonly number[]): string {
+export function slideNumbersLabel(indices: readonly number[], slides?: readonly { skipped?: boolean }[]): string {
+  if (slides) {
+    const visible = indices.filter((index) => !slides[index]?.skipped)
+      .map((index) => Number(slideNumberLabel(slides, index)) - 1);
+    const hidden = indices.length - visible.length;
+    return [visible.length ? slideNumbersLabel(visible) : '', hidden ? `${hidden} hidden` : ''].filter(Boolean).join(', ');
+  }
   const sorted = [...new Set(indices)].sort((a, b) => a - b);
   const parts: string[] = [];
   for (let at = 0; at < sorted.length;) {
@@ -168,6 +177,98 @@ export class SlideRail {
    * that survives re-renders but not a reload.
    */
   private expandedRuns = new Set<string>();
+  private collapsedSections = new Set<string>();
+  private loadedFoldKey: string | null = null;
+  private sections: SlideSection[] = [];
+  private foldedActiveSlideId: string | null = null;
+  private lastActiveSlideId: string | null = null;
+
+  private get foldStorageKey(): string {
+    return `deckwerk:slide-sections:${this.store.get().dir ?? this.store.get().deck.title}`;
+  }
+
+  private loadFolds(): void {
+    const key = this.foldStorageKey;
+    if (key === this.loadedFoldKey) return;
+    this.loadedFoldKey = key;
+    this.collapsedSections.clear();
+    this.foldedActiveSlideId = null;
+    try {
+      const saved: unknown = JSON.parse(localStorage.getItem(key) ?? '[]');
+      if (Array.isArray(saved)) this.collapsedSections = new Set(saved.filter((id): id is string => typeof id === 'string'));
+    } catch { /* Storage may be unavailable. */ }
+  }
+
+  private saveFolds(): void {
+    try { localStorage.setItem(this.foldStorageKey, JSON.stringify([...this.collapsedSections])); } catch { /* Storage may be unavailable. */ }
+  }
+
+  private sectionHidden(index: number): boolean {
+    let parent = this.sections[index]?.parent ?? null;
+    const slides = this.store.get().deck.slides;
+    while (parent !== null) {
+      if (this.collapsedSections.has(slides[parent].id)) return true;
+      parent = this.sections[parent].parent;
+    }
+    return false;
+  }
+
+  private toggleSection(index: number): void {
+    const { deck, slideIndex } = this.store.get();
+    const section = this.sections[index];
+    if (!section || section.end <= index + 1) return;
+    const id = deck.slides[index].id;
+    if (this.collapsedSections.has(id)) this.collapsedSections.delete(id);
+    else {
+      this.collapsedSections.add(id);
+      if (slideIndex > index && slideIndex < section.end) this.foldedActiveSlideId = deck.slides[slideIndex].id;
+    }
+    this.saveFolds();
+    this.render();
+    this.host.focus({ preventScroll: true });
+  }
+
+  /** Organize the selected slides beneath the preceding slide, or promote them. */
+  indentSlides(delta: 1 | -1): void {
+    const { deck, slideSelection } = this.store.get();
+    if (!canChangeSlideIndent(deck.slides, slideSelection, delta)) return;
+    this.store.commit((draft) => { changeSlideIndent(draft.slides, slideSelection, delta); },
+      { label: delta === 1 ? 'Indent slides' : 'Outdent slides' });
+    this.host.focus({ preventScroll: true });
+  }
+
+  private syncSectionState(row: HTMLElement, index: number): void {
+    const { deck } = this.store.get();
+    const section = this.sections[index];
+    row.style.setProperty('--slide-depth', String(section?.depth ?? 0));
+    const hasChildren = Boolean(section && section.end > index + 1);
+    row.classList.toggle('rail-section-parent', hasChildren);
+    row.classList.toggle('rail-section-folded', hasChildren && this.collapsedSections.has(deck.slides[index].id));
+    let toggle = row.querySelector<HTMLElement>(':scope > .rail-section-toggle');
+    if (!hasChildren) { toggle?.remove(); row.removeAttribute('aria-expanded'); return; }
+    if (!toggle) {
+      toggle = document.createElement('span');
+      toggle.className = 'rail-section-toggle';
+      toggle.innerHTML = '<svg viewBox="0 0 10 10" aria-hidden="true">'
+        + '<path d="M3.5 2 6.5 5 3.5 8" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>'
+        + '</svg>';
+      toggle.setAttribute('role', 'button');
+      toggle.tabIndex = 0;
+      toggle.addEventListener('pointerdown', (event) => { event.stopPropagation(); event.preventDefault(); });
+      toggle.addEventListener('click', (event) => { event.stopPropagation(); this.toggleSection(index); });
+      toggle.addEventListener('keydown', (event) => {
+        if (event.key !== 'Enter' && event.key !== ' ') return;
+        event.stopPropagation(); event.preventDefault(); this.toggleSection(index);
+      });
+      row.append(toggle);
+    }
+    const expanded = !this.collapsedSections.has(deck.slides[index].id);
+    const label = `${expanded ? 'Collapse' : 'Expand'} section (${section.end - index - 1} slides)`;
+    row.setAttribute('aria-expanded', String(expanded));
+    toggle.setAttribute('aria-expanded', String(expanded));
+    toggle.setAttribute('aria-label', label);
+    toggle.title = label;
+  }
   /**
    * The active hidden slide whose run the user explicitly collapsed.
    *
@@ -182,8 +283,8 @@ export class SlideRail {
    * the rail rows. Unset outside collab sessions.
    */
   presenceForSlide?: (slideId: string) => RailPresence[];
-  /** Runs for an explicit thumbnail pick, including the already-active slide. */
-  onSlideActivate?: (slideIndex: number) => void;
+  /** Explicit thumbnail pick, including the active slide; true means the caller takes focus. */
+  onSlideActivate?: (slideIndex: number) => boolean | void;
   /** The shell's status bar: what a slide command just did. */
   onStatus?: (message: string) => void;
   /** A keyboard deletion waiting on its confirmation dialog. */
@@ -255,6 +356,7 @@ export class SlideRail {
   private onStoreChange(): void {
     const { deck, slideIndex, slideSelection } = this.store.get();
     const activeSlide = deck.slides[slideIndex];
+    if (activeSlide?.id !== this.lastActiveSlideId) this.foldedActiveSlideId = null;
     if (
       this.collapsedActiveSlideId !== null
       && (activeSlide?.id !== this.collapsedActiveSlideId || !activeSlide.skipped)
@@ -294,7 +396,7 @@ export class SlideRail {
       const previous = before[index];
       const slide = deck.slides[index];
       if (previous === slide) continue;
-      if (previous.id !== slide.id || slide.skipped || previous.skipped) return false;
+      if (previous.id !== slide.id || slide.skipped || previous.skipped || previous.indentLevel !== slide.indentLevel) return false;
       const cached = this.rowCache.get(previous);
       if (!cached || cached.index !== index || cached.row.parentElement !== this.host) return false;
       if (sameSlideDrawing(previous, slide)) {
@@ -387,7 +489,18 @@ export class SlideRail {
   }
 
   render(): void {
+    this.loadFolds();
     const { deck, slideIndex, slideSelection } = this.store.get();
+    this.sections = slideSections(deck.slides);
+    const activeId = deck.slides[slideIndex]?.id ?? null;
+    if (activeId !== this.foldedActiveSlideId) {
+      let parent = this.sections[slideIndex]?.parent ?? null;
+      while (parent !== null) {
+        this.collapsedSections.delete(deck.slides[parent].id);
+        parent = this.sections[parent].parent;
+      }
+    }
+    this.lastActiveSlideId = activeId;
     this.renderedSlides = deck.slides;
     this.highlightedSlideIndex = slideIndex;
     this.highlightedSelection = new Set(slideSelection);
@@ -415,13 +528,16 @@ export class SlideRail {
     // unless expanded. A run holding the active slide normally stays expanded;
     // an explicit bracket click may hide that row while preserving the editor.
     for (let i = 0; i < deck.slides.length; ) {
-      if (!deck.slides[i].skipped) {
+      if (this.sectionHidden(i)) { i = this.sections[i].end; continue; }
+      if (!deck.slides[i].skipped || this.sections[i].end > i + 1) {
         children.push(this.buildItem(deck, i, slideIndex, slideSelection));
         i += 1;
         continue;
       }
       let end = i;
-      while (end + 1 < deck.slides.length && deck.slides[end + 1].skipped) end += 1;
+      while (end + 1 < deck.slides.length && deck.slides[end + 1].skipped
+        && !this.sectionHidden(end + 1) && this.sections[end + 1].depth === this.sections[i].depth
+        && this.sections[end + 1].end === end + 2) end += 1;
       if (end === i) {
         children.push(this.buildItem(deck, i, slideIndex, slideSelection));
         i += 1;
@@ -530,11 +646,11 @@ export class SlideRail {
       .some((slide) => slideSelection.has(slide.id));
     row.className = `rail-item rail-collapsed${selected ? ' selected' : ''}`;
     row.setAttribute('aria-selected', String(selected));
-    row.title = `Show hidden slides ${start + 1}–${end + 1}`;
+    row.title = `Show ${end - start + 1} hidden slides`;
 
     const num = document.createElement('span');
     num.className = 'rail-num';
-    num.textContent = `${start + 1}…${end + 1}`;
+    num.textContent = '—';
 
     const stack = document.createElement('div');
     stack.className = 'rail-stack';
@@ -586,7 +702,7 @@ export class SlideRail {
     wrap.className = 'rail-run';
     const bracket = document.createElement('button');
     bracket.className = 'rail-run-bracket';
-    bracket.title = `Collapse hidden slides ${start + 1}–${end + 1}`;
+    bracket.title = `Collapse ${end - start + 1} hidden slides`;
     bracket.setAttribute('aria-label', bracket.title);
     bracket.addEventListener('click', () => {
       this.expandedRuns.delete(runKey);
@@ -783,9 +899,11 @@ export class SlideRail {
       // store decides per render, and re-arm the visibility observer the
       // rebuild disconnected.
       const item = cached.row;
+      item.querySelector<HTMLElement>('.rail-num')!.textContent = slideNumberLabel(deck.slides, i);
       this.rowBySlideId.set(slide.id, item);
       this.syncRowState(item, i === slideIndex, slideSelection.has(slide.id));
       this.syncCommentState(item, slide);
+      this.syncSectionState(item, i);
       const thumb = item.querySelector<HTMLElement>(':scope > .rail-thumb');
       if (thumb) {
         this.pendingThumbs.set(thumb, { deck, slide });
@@ -807,7 +925,7 @@ export class SlideRail {
 
       const num = document.createElement('span');
       num.className = 'rail-num';
-      num.textContent = String(i + 1);
+      num.textContent = slideNumberLabel(deck.slides, i);
 
       const thumb = this.deferredThumb(deck, slide, i === slideIndex);
       item.append(num, thumb);
@@ -834,6 +952,7 @@ export class SlideRail {
         item.appendChild(badge);
       }
       this.syncCommentState(item, slide);
+      this.syncSectionState(item, i);
       // Selection runs on pointerdown, not click: the row is draggable for
       // reorder, and Chromium starts a native drag on a few pixels of drift,
       // which suppresses the click entirely — every real (slightly wobbly)
@@ -853,12 +972,11 @@ export class SlideRail {
         // hidden or duplicated in one go.
         if (event.metaKey || event.ctrlKey) this.store.toggleSlideSelection(i);
         else this.store.selectSlide(i, event.shiftKey);
-        this.onSlideActivate?.(i);
-        // Picking slides makes the rail the active surface, so Backspace is a
-        // slide command from here on. Without this the keystroke reaches the
-        // window handler, which only knows about canvas objects, and selecting
-        // slides then pressing Backspace appears to do nothing at all.
-        this.host.focus({ preventScroll: true });
+        // An embedded presentation owns focus after a jump. Cancel the
+        // pointer's default focus too, so it cannot take focus back afterwards.
+        if (this.onSlideActivate?.(i)) event.preventDefault();
+        // Otherwise the rail owns keyboard slide navigation and deletion.
+        else this.host.focus({ preventScroll: true });
       });
       if (!this.readOnly) item.addEventListener('contextmenu', (event) => this.onContextMenu(event, i));
       this.rowCache.set(slide, { row: item, index: i });
@@ -896,6 +1014,10 @@ export class SlideRail {
       { label: 'Add slide below', action: () => this.addSlide() },
       { label: 'Duplicate', action: () => this.duplicateSlide() },
       'separator',
+      { label: 'Indent slides', disabled: !canChangeSlideIndent(deck.slides, this.store.get().slideSelection, 1), action: () => this.indentSlides(1) },
+      { label: 'Outdent slides', disabled: !canChangeSlideIndent(deck.slides, this.store.get().slideSelection, -1), action: () => this.indentSlides(-1) },
+      ...(this.sections[index].end > index + 1 ? [{ label: this.collapsedSections.has(slide.id) ? 'Expand section' : 'Collapse section', action: () => this.toggleSection(index) }] : []),
+      'separator',
       { label: 'Layout', heading: true },
       ...LAYOUT_LABELS.map(([layout, label]): MenuItem => ({
         label,
@@ -927,6 +1049,7 @@ export class SlideRail {
       }
       const row = document.createElement('button');
       row.textContent = item.label;
+      row.disabled = item.disabled === true;
       if (item.checked !== undefined) {
         row.classList.add('ctx-check');
         row.setAttribute('role', 'menuitemradio');
@@ -951,7 +1074,29 @@ export class SlideRail {
   private bindKeys(): void {
     this.host.tabIndex = 0;
     this.host.addEventListener('keydown', (e) => {
+      // A real click's default mousedown focuses the row after pointerdown
+      // focused the rail. Keep arrow navigation on the rail so that row does
+      // not acquire a focus-visible outline after selection has moved away.
+      if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) {
+        this.host.focus({ preventScroll: true });
+      }
       if (this.readOnly && (e.key === 'Enter' || e.key === 'Backspace' || e.key === 'Delete')) return;
+      if (!this.readOnly && e.key === 'Tab') {
+        e.preventDefault(); e.stopPropagation(); this.indentSlides(e.shiftKey ? -1 : 1); return;
+      }
+      if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+        e.preventDefault(); e.stopPropagation();
+        const { slideIndex } = this.store.get();
+        const section = this.sections[slideIndex];
+        if (!section) return;
+        if (section.end > slideIndex + 1) {
+          const folded = this.collapsedSections.has(this.store.get().deck.slides[slideIndex].id);
+          if ((e.key === 'ArrowLeft' && !folded) || (e.key === 'ArrowRight' && folded)) this.toggleSection(slideIndex);
+          else if (e.key === 'ArrowRight') this.store.selectSlide(slideIndex + 1);
+          else if (section.parent !== null) this.store.selectSlide(section.parent);
+        } else if (e.key === 'ArrowLeft' && section.parent !== null) this.store.selectSlide(section.parent);
+        return;
+      }
       if (e.key === 'Enter') {
         // Suppress the focused button's synthetic click: Return inserts once.
         e.preventDefault();
@@ -977,7 +1122,7 @@ export class SlideRail {
       // to select a hidden slide.
       const step = e.key === 'ArrowDown' ? 1 : -1;
       let next = slideIndex + step;
-      while (next >= 0 && next < deck.slides.length && deck.slides[next].skipped) next += step;
+      while (next >= 0 && next < deck.slides.length && (deck.slides[next].skipped || this.sectionHidden(next))) next += step;
       if (next < 0 || next >= deck.slides.length) return;
       this.store.selectSlide(next);
     });
@@ -992,7 +1137,7 @@ export class SlideRail {
     this.clearDragImage();
     const chip = document.createElement('div');
     chip.className = 'rail-drag-image';
-    chip.textContent = `Slide ${index + 1}`;
+    chip.textContent = `Slide ${slideNumberLabel(this.store.get().deck.slides, index)}`;
     document.body.appendChild(chip);
     this.dragImage = chip;
     return chip;
@@ -1062,17 +1207,12 @@ export class SlideRail {
 
       const r = item.getBoundingClientRect();
       const after = e.clientY >= r.top + r.height / 2;
-      let to = after ? index + 1 : index;
-      // Removing the dragged slide first shifts every later index down by one.
-      if (from < to) to -= 1;
+      let to = from;
 
       this.dragFrom = null;
-      if (to === from) return;
-
       this.store.commit((deck) => {
-        const [moved] = deck.slides.splice(from, 1);
-        deck.slides.splice(to, 0, moved);
-      });
+        to = moveSlideSection(deck.slides, from, index, after);
+      }, { label: 'Move slide section' });
       this.store.selectSlide(to);
     });
   }
@@ -1127,9 +1267,14 @@ export class SlideRail {
   }
 
   addSlide(): void {
-    const at = this.store.get().slideIndex + 1;
+    const { deck: current, slideIndex } = this.store.get();
+    const section = slideSections(current.slides)[slideIndex];
+    const folded = this.collapsedSections.has(current.slides[slideIndex].id);
+    const at = folded ? section.end : slideIndex + 1;
     this.store.commit((deck) => {
       const slide = blankSlide();
+      const depth = section.depth + (!folded && section.end > slideIndex + 1 ? 1 : 0);
+      if (depth) slide.indentLevel = depth;
       deck.slides.splice(at, 0, slide);
       applySlideLayout(slide, 'standard', deck.layoutMasters);
       // Layout gives the slide its geometry; the deck's theme gives it its
@@ -1140,7 +1285,8 @@ export class SlideRail {
   }
 
   duplicateSlide(): void {
-    const { slideIndex } = this.store.get();
+    const { slideIndex, deck: currentDeck } = this.store.get();
+    const at = slideSections(currentDeck.slides)[slideIndex].end;
     this.store.commit((deck) => {
       const source = deck.slides[slideIndex];
       if (!source) return;
@@ -1170,9 +1316,9 @@ export class SlideRail {
           entry.trigger.ref = remap.get(entry.trigger.ref) ?? entry.trigger.ref;
         }
       }
-      deck.slides.splice(slideIndex + 1, 0, copy);
-    });
-    this.store.selectSlide(slideIndex + 1);
+      deck.slides.splice(at, 0, copy);
+    }, { label: 'Duplicate slide' });
+    this.store.selectSlide(at);
   }
 
   /**
@@ -1234,7 +1380,7 @@ export class SlideRail {
       applyDeckThemeToNewSlide(d, 0);
     }, { label: doomed.length === 1 ? 'Delete slide' : `Delete ${doomed.length} slides` });
     this.store.selectSlide(wholeDeck ? 0 : Math.max(0, first - 1));
-    const numbers = slideNumbersLabel(doomed.map(({ index }) => index));
+    const numbers = slideNumbersLabel(doomed.map(({ index }) => index), deck.slides);
     const one = doomed.length === 1;
     this.onStatus?.(`${options.verb ?? 'Deleted'} slide${one ? '' : 's'} ${numbers}. `
       + `Undo (${undoShortcutLabel()}) restores ${one ? 'it' : 'them'}.`);
@@ -1261,7 +1407,7 @@ export class SlideRail {
     }
     const ids = new Set(doomed.map(({ slide }) => slide.id));
     const count = doomed.length;
-    const numbers = slideNumbersLabel(doomed.map(({ index }) => index));
+    const numbers = slideNumbersLabel(doomed.map(({ index }) => index), deck.slides);
     this.confirmingDelete = true;
     try {
       const confirmed = await showConfirmDialog({

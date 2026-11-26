@@ -1,3 +1,4 @@
+import { slideProgress } from '@shared/slideNumbering.js';
 import type { PresentationState } from '@shared/ipc.js';
 
 export function formatElapsed(now: number, startedAt: number): string {
@@ -9,6 +10,7 @@ export function formatWallClock(date: Date, locale?: string): string {
   return date.toLocaleTimeString(locale, { hour: 'numeric', minute: '2-digit' });
 }
 
-export function presentationLabel(state: PresentationState, slideCount: number): string {
-  return `Slide ${state.cursor.slide + 1} / ${slideCount} · Build ${state.cursor.step + 1} / ${state.steps}`;
+export function presentationLabel(state: PresentationState, slides: readonly { skipped?: boolean }[]): string {
+  const { number, total } = slideProgress(slides, state.cursor.slide);
+  return `Slide ${number ?? '—'} / ${total} · Build ${state.cursor.step + 1} / ${state.steps}`;
 }

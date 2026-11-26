@@ -1,3 +1,5 @@
+import { copyElementStyle, pasteElementStyle } from './styleClipboard.js';
+import { handlePresentationShortcut } from './presentationButton.js';
 import type { Comment, SlideElement } from '@shared/deck.js';
 import { openThreadCount } from '@shared/comments.js';
 import { commentHighlightsShown, setCommentHighlightsShown } from './comments.js';
@@ -263,6 +265,14 @@ export function hasNativeCopySelection(selection = window.getSelection()): boole
 
 export function bindEditorKeys(deps: ShellDeps, clipboard: ClipboardActions): void {
   const { store, canvas, rail, save } = deps;
+  // Save belongs to the app even while a text editor, field or modal owns
+  // focus. Capture it before those surfaces can stop keyboard propagation.
+  window.addEventListener('keydown', (event) => {
+    if (!(event.metaKey || event.ctrlKey) || event.key.toLowerCase() !== 's') return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (!event.repeat) void save();
+  }, true);
   // The contenteditable text surface stops keyboard events before they reach
   // the window. Give it the same shell-aware undo path used below (including
   // collaboration's selective undo implementation).
@@ -342,6 +352,7 @@ export function bindEditorKeys(deps: ShellDeps, clipboard: ClipboardActions): vo
     // Modal workflows own their keyboard input; a second Cmd+V must not start
     // another paste behind the theme-choice dialog.
     if (document.querySelector('[aria-modal="true"]')) return;
+    if (handlePresentationShortcut(e)) return;
     // Cmd/Ctrl +, - and 0 zoom the canvas wherever focus is: no field gives
     // them a meaning of its own, and left alone they would zoom the whole
     // interface (the browser's page zoom, the desktop menu's zoom roles).
@@ -382,15 +393,19 @@ export function bindEditorKeys(deps: ShellDeps, clipboard: ClipboardActions): vo
     // rather than deleting the element being typed into.
     if (typing || canvas.isEditing()) return;
 
+    if (mod && e.altKey && !e.shiftKey && ['KeyC', 'KeyV'].includes(e.code)) {
+      e.preventDefault();
+      e.stopPropagation();
+      if (!e.repeat) {
+        if (e.code === 'KeyC') copyElementStyle(store, deps.setStatusMessage);
+        else pasteElementStyle(store, deps.setStatusMessage);
+      }
+      return;
+    }
     if (mod && e.key.toLowerCase() === 'z') {
       e.preventDefault();
       if (e.shiftKey) (deps.redo ?? (() => store.redo()))();
       else (deps.undo ?? (() => store.undo()))();
-      return;
-    }
-    if (mod && e.key.toLowerCase() === 's') {
-      e.preventDefault();
-      void save();
       return;
     }
     if (mod && e.key.toLowerCase() === 'd') {
@@ -531,6 +546,8 @@ export function makeContextActions(
       items.push(
         { label: 'Cut', action: () => void cutSelectionToClipboard(store) },
         { label: 'Copy', action: () => void copySelectionToClipboard(store) },
+        { label: 'Copy style', action: () => copyElementStyle(store, deps.setStatusMessage) },
+        { label: 'Paste style', action: () => pasteElementStyle(store, deps.setStatusMessage) },
       );
     }
     items.push({ label: 'Paste', action: () => void clipboard.pasteClipboard() });

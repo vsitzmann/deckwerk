@@ -219,6 +219,7 @@ const ERROR_TRAP = `(() => {
 
 export interface CrossSession {
   cdp: Cdp;
+  debugPort: number;
   reset(): Promise<void>;
   click(elementId: string): Promise<void>;
   shiftClick(elementId: string): Promise<void>;
@@ -305,7 +306,7 @@ export async function startCrossSession(deckId: string, name: string): Promise<{
   ), 'the cross-context fixture never loaded');
   await cdp.evaluate(ERROR_TRAP);
 
-  const session = buildSession(cdp, deck.slides);
+  const session = buildSession(cdp, deck.slides, browser.debugPort);
   return {
     session,
     close: async () => {
@@ -320,9 +321,9 @@ export async function startCrossSession(deckId: string, name: string): Promise<{
   };
 }
 
-function buildSession(cdp: Cdp, startingSlides: unknown[]): CrossSession {
+function buildSession(cdp: Cdp, startingSlides: unknown[], debugPort: number): CrossSession {
   const session: CrossSession = {
-    cdp,
+    cdp, debugPort,
     async reset() {
       for (let attempt = 0; attempt < 3; attempt++) {
         const editing = await cdp.evaluate<string | null>(

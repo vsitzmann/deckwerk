@@ -45,7 +45,7 @@ describe('present URLs', () => {
 
 describe('starting a browser presentation', () => {
   let opened: Array<{ url: string; name: string }>;
-  let audienceWindows: Array<{ closed: boolean; close: () => void }>;
+  let audienceWindows: Array<{ closed: boolean; close: () => void; document: Document }>;
   let popupsAllowed: boolean;
   let statuses: string[];
 
@@ -58,7 +58,10 @@ describe('starting a browser presentation', () => {
     vi.stubGlobal('open', (url: string, name: string) => {
       opened.push({ url, name });
       if (!popupsAllowed) return null;
-      const handle = { closed: false, close: () => { handle.closed = true; } };
+      const handle = Object.assign(new EventTarget(), {
+        closed: false, document: document.implementation.createHTMLDocument('Popup'),
+        close: () => { handle.closed = true; },
+      });
       audienceWindows.push(handle);
       return handle as unknown as Window;
     });
@@ -80,6 +83,44 @@ describe('starting a browser presentation', () => {
   function setFullscreenElement(element: Element | null): void {
     Object.defineProperty(document, 'fullscreenElement', { configurable: true, get: () => element });
   }
+
+  it('opens In Window as floating playback without taking over the editor', async () => {
+    const screens = vi.fn();
+    vi.stubGlobal('getScreenDetails', screens);
+    await startPresenting('talk', 2, seed, { mode: 'windowed', endSlideIndex: 4 });
+    expect(opened).toHaveLength(1);
+    const frame = audienceWindows[0].document.querySelector('iframe')!;
+    expect(query(frame.src).get('mode')).toBe('windowed');
+    expect(query(frame.src).get('slide')).toBe('3');
+    expect(query(frame.src).get('endSlide')).toBe('5');
+    expect(overlayFrame()).toBeNull();
+    expect(HTMLElement.prototype.requestFullscreen).not.toHaveBeenCalled();
+    expect(screens).not.toHaveBeenCalled();
+    await startPresenting('talk', 0, seed);
+    expect(audienceWindows[0].closed).toBe(true);
+  });
+
+  it('uses a picture-in-picture window when supported', async () => {
+    const floating = Object.assign(new EventTarget(), {
+      closed: false, document: document.implementation.createHTMLDocument('PiP'),
+      close: vi.fn(),
+    });
+    const requestWindow = vi.fn(async () => floating);
+    vi.stubGlobal('documentPictureInPicture', { requestWindow });
+    await startPresenting('talk', 0, seed, { mode: 'windowed' });
+    expect(requestWindow).toHaveBeenCalledWith(expect.objectContaining({ disallowReturnToOpener: true }));
+    expect(floating.document.querySelector('iframe')?.src).toContain('present.html');
+    expect(opened).toEqual([]);
+    floating.dispatchEvent(new Event('pagehide'));
+    expect(floating.close).toHaveBeenCalled();
+  });
+
+  it('reports blocked floating playback without covering the editor', async () => {
+    popupsAllowed = false;
+    await startPresenting('talk', 0, seed, { mode: 'windowed', onStatus: message => statuses.push(message) });
+    expect(overlayFrame()).toBeNull();
+    expect(statuses.join()).toContain('allow pop-ups');
+  });
 
   it('mounts the audience in a fullscreened overlay by default', () => {
     startPresenting('talk', 3, seed);
@@ -358,7 +399,10 @@ describe('presenting with a second screen attached', () => {
     vi.stubGlobal('open', (url: string, name: string, features = '') => {
       opened.push({ url, name, features });
       if (!popupsAllowed) return null;
-      const handle = { closed: false, close: () => { handle.closed = true; } };
+      const handle = Object.assign(new EventTarget(), {
+        closed: false, document: document.implementation.createHTMLDocument('Popup'),
+        close: () => { handle.closed = true; },
+      });
       popups.push(handle);
       return handle as unknown as Window;
     });

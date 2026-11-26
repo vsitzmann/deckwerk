@@ -1,9 +1,10 @@
 // @vitest-environment jsdom
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { emptyDeck } from '../src/shared/deck.js';
+import { emptyDeck, parseDeck } from '../src/shared/deck.js';
 import { EditorCanvas } from '../src/renderer/editor/canvas.js';
 import { Inspector } from '../src/renderer/editor/inspector.js';
 import { EditorStore } from '../src/renderer/editor/store.js';
+import { renderElement, posterFrameTime, videoPresentationKey } from '../src/renderer/player/render.js';
 
 /**
  * End-to-end tests for the video editing surface: trim, crop (mask), resize
@@ -178,12 +179,13 @@ describe('compact video inspector', () => {
       .toEqual([
         'Playback',
         'Trim',
+        'Editing preview',
         'Mask',
         'Border',
         'Effects',
       ]);
     expect(sections[0].textContent).toContain('Play preview');
-    expect(sections[2].textContent).toContain('Keep aspect ratio');
+    expect(sections[3].textContent).toContain('Keep aspect ratio');
     expect(inspectorHost.querySelectorAll('.z-order-row > button')).toHaveLength(4);
     expect(inspectorHost.textContent).not.toContain('Crop with the handles');
   });
@@ -300,18 +302,13 @@ describe('trim range slider in the sidebar', () => {
     expect(video.currentTime).toBeCloseTo(3.5, 5);
   });
 
-  it('shows a self-contained preview player in the sidebar', async () => {
-    // Canvas state must not be able to break the preview, so the sidebar has
-    // its own video element that seeks with the handles.
-    const { inspectorHost, store } = setup();
+  it('previews trim frames on the canvas without a duplicate sidebar video', async () => {
+    const { inspectorHost, canvasHost, store } = setup();
     const [start] = await slidersOf(inspectorHost, store);
-
-    const preview = inspectorHost.querySelector<HTMLVideoElement>('.trim-preview');
-    expect(preview, 'sidebar preview video missing').not.toBeNull();
-
+    expect(inspectorHost.querySelector('video')).toBeNull();
     start.value = '2.5';
     start.dispatchEvent(new Event('input', { bubbles: true }));
-    expect(preview!.currentTime).toBeCloseTo(2.5, 5);
+    expect(videoEl(canvasHost).currentTime).toBeCloseTo(2.5, 5);
   });
 
   it('survives an autosave firing mid-drag', async () => {
@@ -319,9 +316,9 @@ describe('trim range slider in the sidebar', () => {
     // edit. The inspector used to re-render on every emit, silently replacing
     // the slider and preview mid-drag — sliders "moved" but nothing happened,
     // because the elements under the pointer were corpses.
-    const { inspectorHost, store } = setup();
+    const { inspectorHost, canvasHost, store } = setup();
     const [start] = await slidersOf(inspectorHost, store);
-    const preview = inspectorHost.querySelector<HTMLVideoElement>('.trim-preview')!;
+    const preview = videoEl(canvasHost);
 
     start.value = '1.0';
     start.dispatchEvent(new Event('input', { bubbles: true }));
@@ -496,5 +493,85 @@ describe('deck:// range parsing', () => {
     expect(parseRange('bytes=-0', 100)).toBeNull();
     expect(parseRange(null, 100)).toBeNull();
     expect(parseRange('items=0-1', 100)).toBeNull();
+  });
+});
+
+
+describe('editing preview frame', () => {
+  it('scrubs outside the trim, saves on release, and restores through undo and reload', async () => {
+    const { store, canvasHost, inspectorHost } = setup();
+    store.select(['video-1']);
+    store.updateSelected((e) => { if (e.type === 'video') { e.start = 1; e.end = 3; } });
+    await tick();
+    expect(inspectorHost.querySelector('video')).toBeNull();
+    const range = inspectorHost.querySelector<HTMLInputElement>('[aria-label="Editing preview frame"]')!;
+    const original = videoEl(canvasHost);
+    range.value = '5';
+    range.dispatchEvent(new Event('input', { bubbles: true }));
+    expect(original.currentTime).toBe(5);
+    expect(store.slide!.elements[0]).not.toHaveProperty('editingPreviewTime');
+    store.markClean();
+    expect(inspectorHost.querySelector('[aria-label="Editing preview frame"]')).toBe(range);
+    range.dispatchEvent(new Event('change', { bubbles: true }));
+    expect(store.slide!.elements[0]).toMatchObject({ editingPreviewTime: 5, start: 1, end: 3 });
+    expect(videoEl(canvasHost)).toBe(original);
+    expect(store.history()[0].label).toBe('Change editing preview');
+    const saved = parseDeck(JSON.parse(JSON.stringify(store.get().deck)));
+    const el = saved.slides[0].elements[0];
+    if (el.type !== 'video') throw new Error('expected video');
+    const preview = renderElement(el, { resolveSrc: s => s, mediaPreload: 'metadata' }).querySelector('video')!;
+    preview.dispatchEvent(new Event('loadedmetadata'));
+    expect(preview.currentTime).toBe(5);
+    // A live presentation only sees the trim in-point, even for its initial paused frame.
+    const live = renderElement(el, { resolveSrc: s => s }).querySelector('video')!;
+    live.dispatchEvent(new Event('loadedmetadata'));
+    expect(live.currentTime).toBe(1);
+    expect(posterFrameTime({ ...el, start: 0 }, true)).toBeNull();
+    expect(videoPresentationKey(el, el.src)).toBe(videoPresentationKey({ ...el, editingPreviewTime: 2 }, el.src));
+    expect(videoPresentationKey(el, el.src, false)).not.toBe(videoPresentationKey({ ...el, editingPreviewTime: 2 }, el.src, false));
+    store.undo();
+    expect(store.slide!.elements[0]).not.toHaveProperty('editingPreviewTime');
+    expect(videoEl(canvasHost).currentTime).toBe(1);
+    store.redo();
+    expect(videoEl(canvasHost).currentTime).toBe(5);
+    const reset = [...inspectorHost.querySelectorAll('button')].find(b => b.textContent === 'Use trim start')!;
+    reset.click();
+    expect(store.slide!.elements[0]).not.toHaveProperty('editingPreviewTime');
+    expect(videoEl(canvasHost).currentTime).toBe(1);
+  });
+
+  it('fuzzes timestamp edits, trim changes, reset and undo without changing playback', async () => {
+    const { store, inspectorHost } = setup();
+    store.select(['video-1']);
+    await tick();
+    let seed = 913;
+    const next = () => { seed = (seed * 16807) % 2147483647; return seed / 2147483647; };
+    for (let i = 0; i < 40; i++) {
+      const before = structuredClone(store.slide!.elements[0]);
+      if (before.type !== 'video') throw new Error('expected video');
+      const op = Math.floor(next() * 4);
+      if (op === 0) {
+        store.updateSelected(e => { if (e.type === 'video') e.start = next(); });
+      } else if (op === 1) {
+        const reset = [...inspectorHost.querySelectorAll('button')].find(b => b.textContent === 'Use trim start')!;
+        reset.click();
+      } else {
+        const input = inspectorHost.querySelector<HTMLInputElement>('.video-editing-preview-options input[type="number"]')!;
+        input.value = String(next() * 10 - 2);
+        input.dispatchEvent(new Event('change', { bubbles: true }));
+      }
+      const after = store.slide!.elements[0];
+      if (after.type !== 'video') throw new Error('expected video');
+      expect(after.end).toBe(before.end);
+      expect(after.autoplay).toBe(before.autoplay);
+      expect(after.loop).toBe(before.loop);
+      if (op !== 0) expect(after.start).toBe(before.start);
+      expect(posterFrameTime(after, true)).toBe(after.start > 0 ? after.start : null);
+      if (after.editingPreviewTime !== undefined) {
+        expect(after.editingPreviewTime).toBeGreaterThanOrEqual(0);
+        expect(after.editingPreviewTime).toBeLessThanOrEqual(6);
+      }
+      if (i % 5 === 0 && store.canUndo()) { store.undo(); store.redo(); }
+    }
   });
 });

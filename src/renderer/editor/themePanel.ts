@@ -72,12 +72,13 @@ function chosenPresetId(deck: Deck): string | null {
  * the same test: a deck theme naming a typeface this laptop lacks is as
  * unusable here as a shipped one.
  */
-function availableThemes(deck: Deck, currentPresetId: string | null): ThemePreset[] {
+function availableThemes(deck: Deck, currentPresetId: string | null, showBuiltIns = true): ThemePreset[] {
   const pool = deckThemes(deck);
   const currentBase = baseThemeId(currentPresetId, pool);
   return pool.filter((theme) =>
-    theme.id === currentBase
-    || (stackAvailable(theme.fonts.title.family) && stackAvailable(theme.fonts.body.family)));
+    (showBuiltIns || deck.customThemes.some((custom) => custom.id === theme.id))
+    && (theme.id === currentBase
+      || (stackAvailable(theme.fonts.title.family) && stackAvailable(theme.fonts.body.family))));
 }
 
 /**
@@ -125,6 +126,9 @@ export interface ThemePanel {
 
 export function createThemePanel(deps: ThemePanelDeps): ThemePanel {
   const { store, cssEditor, save, setStatusMessage } = deps;
+  const builtInsKey = 'deckwerk.show-built-in-themes';
+  let showBuiltIns = true;
+  try { showBuiltIns = window.localStorage.getItem(builtInsKey) !== '0'; } catch { /* Storage is optional. */ }
 
   const themeAdoption: ThemeAdoption = {
     scope: 'slides',
@@ -544,7 +548,7 @@ export function createThemePanel(deps: ThemePanelDeps): ThemePanel {
    */
   function buildGallery(deck: Deck): ThemeGallery {
     const preset = chosenPresetId(deck);
-    const themes = availableThemes(deck, preset);
+    const themes = availableThemes(deck, preset, showBuiltIns);
     offeredThemeIds = themes.map((theme) => theme.id).join('\n');
     return createThemeGallery(themes, preset, (theme, source) => {
       selectedThemeId = theme.id;
@@ -562,7 +566,7 @@ export function createThemePanel(deps: ThemePanelDeps): ThemePanel {
     wrap.className = 'theme-browser';
 
     themeGallery = buildGallery(store.get().deck);
-    selectedThemeId = themeGallery.selectedId();
+    selectedThemeId = chosenPresetId(store.get().deck) ?? themeGallery.selectedId();
 
     const intro = document.createElement('div');
     intro.className = 'theme-browser-intro';
@@ -584,7 +588,19 @@ export function createThemePanel(deps: ThemePanelDeps): ThemePanel {
     chooserTitle.textContent = 'Choose a theme';
     const chooserClose = barButton('Close', () => endPreview());
     chooserHeader.append(chooserTitle, chooserClose);
-    chooser.append(chooserHeader, themeGallery.element);
+    const builtIns = optionBox('Show built-in themes', showBuiltIns);
+    builtIns.input.dataset.group = 'built-in-themes';
+    builtIns.input.addEventListener('change', () => {
+      showBuiltIns = builtIns.input.checked;
+      try { window.localStorage.setItem(builtInsKey, showBuiltIns ? '1' : '0'); } catch { /* Storage is optional. */ }
+      const deck = store.get().deck;
+      const stale = themeGallery!.element;
+      themeGallery = buildGallery(deck);
+      themeGallery.setInstalled(deck.themePreset);
+      themeGallery.setPrevious(previousThemeUsed(deck, chosenPresetId(deck)));
+      stale.replaceWith(themeGallery.element);
+    });
+    chooser.append(chooserHeader, builtIns.label, themeGallery.element);
 
     const modeRow = document.createElement('div');
     modeRow.className = 'theme-default-row';
@@ -917,7 +933,7 @@ export function createThemePanel(deps: ThemePanelDeps): ThemePanel {
       if (draft) cancelDraft();
       // A deck with presets of its own (or a different current theme, which
       // can unhide a card) gets a gallery listing them.
-      const offered = availableThemes(deck, chosenPresetId(deck)).map((theme) => theme.id).join('\n');
+      const offered = availableThemes(deck, chosenPresetId(deck), showBuiltIns).map((theme) => theme.id).join('\n');
       if (themeGallery && offered !== offeredThemeIds) {
         const stale = themeGallery.element;
         themeGallery = buildGallery(deck);

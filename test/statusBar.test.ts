@@ -21,6 +21,18 @@ describe('status bar', () => {
     expect(statusBarText(store.get())).toBe('example-deck  ·  slide 1/1');
   });
 
+  it('excludes hidden slides from progress and updates after showing them', () => {
+    const deck = emptyDeck();
+    deck.slides.unshift({ ...structuredClone(deck.slides[0]), id: 'hidden', skipped: true });
+    const store = new EditorStore(deck, '/tmp/example-deck');
+    store.selectSlide(1);
+    expect(statusBarText(store.get())).toContain('slide 1/1');
+    store.commit((draft) => { draft.slides[0].skipped = false; });
+    expect(statusBarText(store.get())).toContain('slide 2/2');
+    store.commit((draft) => { draft.slides[1].skipped = true; });
+    expect(statusBarText(store.get())).toContain('slide —/1');
+  });
+
   it('leaves Ctrl+C to the browser when status text is selected', () => {
     document.body.innerHTML = '<footer data-native-copy>Export failed: example</footer>';
     const status = document.querySelector('footer')!;

@@ -1,3 +1,5 @@
+import { applyEditorPreferences } from '../src/renderer/editorPreferences.js';
+import { createPresentationButton, handlePresentationShortcut } from '../src/renderer/editor/presentationButton.js';
 import { JSDOM } from 'jsdom';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -71,6 +73,29 @@ describe('shared editor controls', () => {
     open();
     expect(radios()).toEqual(['System:false', 'Light:true', 'Dark:false', ...sizes]);
     localStorage.removeItem('deckwerk.uiTheme');
+  });
+
+  it('toggles video badges as a personal checkbox and restores the preference', () => {
+    applyEditorPreferences();
+    const brand = createDeckWerkButton();
+    document.body.appendChild(brand);
+    const open = () => brand.querySelector<HTMLButtonElement>('.brand-button')!.click();
+    const checkbox = () => document.querySelector<HTMLButtonElement>('[role="menuitemcheckbox"]')!;
+    open();
+    expect(checkbox().textContent).toBe('Show video badges');
+    expect(checkbox().getAttribute('aria-checked')).toBe('true');
+    checkbox().click();
+    expect(document.documentElement.dataset.showVideoBadges).toBe('false');
+    delete document.documentElement.dataset.showVideoBadges;
+    applyEditorPreferences();
+    expect(document.documentElement.dataset.showVideoBadges).toBe('false');
+    open();
+    expect(checkbox().getAttribute('aria-checked')).toBe('false');
+    checkbox().click();
+    expect(document.documentElement.dataset.showVideoBadges).toBe('true');
+    localStorage.setItem('deckwerk.showVideoBadges', 'false');
+    window.dispatchEvent(new window.StorageEvent('storage', { key: 'deckwerk.showVideoBadges' }));
+    expect(document.documentElement.dataset.showVideoBadges).toBe('false');
   });
 
   it('gives toolbar menus roles and closes after an action', () => {
@@ -151,11 +176,64 @@ describe('shared editor controls', () => {
     expect(actions).toEqual(['present', 'speaker']);
 
     const editor = readFileSync(join(process.cwd(), 'src/renderer/editor/main.ts'), 'utf8');
-    expect(editor).toContain("label: 'Present in Speaker View'");
+    expect(editor).toContain('createPresentationButton');
     expect(editor).not.toContain('presenterPreflight');
 
     const styles = readFileSync(join(process.cwd(), 'src/renderer/editor/editor.css'), 'utf8');
     expect(styles).toMatch(/\.shape-menu\.toolbar-split-popover\s*\{[\s\S]*?right:\s*-12px;[\s\S]*?left:\s*auto;/);
+  });
+
+  it('selects exactly one presentation mode without starting, then plays that mode', () => {
+    const launches: unknown[] = [];
+    const present = createPresentationButton((speaker, mode) => launches.push({ speaker, mode }));
+    document.body.appendChild(present);
+    const main = present.querySelector<HTMLButtonElement>('.toolbar-split-main')!;
+    const trigger = present.querySelector<HTMLButtonElement>('.toolbar-split-menu')!;
+    const items = () => [...present.querySelectorAll<HTMLButtonElement>('[role="menuitemradio"]')];
+    trigger.click();
+    expect(items().filter((item) => item.getAttribute('aria-checked') === 'true').map((item) => item.textContent)).toEqual(['Fullscreen']);
+    trigger.click();
+    for (const [label, speaker, mode] of [
+      ['In Window', false, 'windowed'],
+      ['In Editor', false, 'editor'],
+      ['Speaker View', true, 'fullscreen'],
+      ['Fullscreen', false, 'fullscreen'],
+    ] as const) {
+      trigger.click();
+      items().find((item) => item.textContent === label)!.click();
+      expect(launches).toHaveLength(0);
+      trigger.click();
+      expect(items().filter((item) => item.getAttribute('aria-checked') === 'true').map((item) => item.textContent)).toEqual([label]);
+      trigger.click();
+      main.click();
+      expect(launches).toEqual([{ speaker, mode }]);
+      launches.length = 0;
+    }
+  });
+
+  it('starts the selected mode with Option+Cmd+P, including macOS’s π key value', () => {
+    const launches: string[] = [];
+    const control = createPresentationButton((speaker, mode) => launches.push(speaker ? 'speaker' : mode));
+    document.body.replaceChildren(control);
+    const key = (extra: KeyboardEventInit = {}) => new window.KeyboardEvent('keydown', {
+      key: 'π', code: 'KeyP', metaKey: true, altKey: true, cancelable: true, ...extra,
+    });
+    for (const [label, expected] of [['Fullscreen', 'fullscreen'], ['In Window', 'windowed'], ['In Editor', 'editor'], ['Speaker View', 'speaker']]) {
+      control.querySelector<HTMLButtonElement>('.toolbar-split-menu')!.click();
+      [...control.querySelectorAll<HTMLButtonElement>('[role="menuitemradio"]')].find((item) => item.textContent === label)!.click();
+      const event = key();
+      expect(handlePresentationShortcut(event)).toBe(true);
+      expect(event.defaultPrevented).toBe(true);
+      expect(launches.pop()).toBe(expected);
+    }
+    expect(handlePresentationShortcut(key({ repeat: true }))).toBe(true);
+    expect(launches).toEqual([]);
+    for (const extra of [{ altKey: false }, { metaKey: false }, { shiftKey: true }, { ctrlKey: true }, { code: 'KeyO' }]) {
+      expect(handlePresentationShortcut(key(extra))).toBe(false);
+    }
+    control.querySelector<HTMLButtonElement>('.toolbar-split-main')!.disabled = true;
+    expect(handlePresentationShortcut(key())).toBe(false);
+    expect(launches).toEqual([]);
   });
 
   it('progressively compacts the toolbar before controls can overlap', () => {

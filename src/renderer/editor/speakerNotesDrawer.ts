@@ -1,3 +1,4 @@
+import { slideNumberLabel } from '@shared/slideNumbering.js';
 import { makePanelResizable } from './panelResize.js';
 import type { EditorStore } from './store.js';
 
@@ -235,7 +236,7 @@ export class SpeakerNotesDrawer {
     this.renderToggle();
     if (!this.open) return;
     this.title.textContent = slide
-      ? `Notes · Slide ${state.slideIndex + 1}${slide.name ? ` · ${slide.name}` : ''}`
+      ? `Notes · Slide ${slideNumberLabel(state.deck.slides, state.slideIndex)}${slide.name ? ` · ${slide.name}` : ''}`
       : 'Notes';
     this.textarea.disabled = !slide;
     const text = slide?.notes ?? '';

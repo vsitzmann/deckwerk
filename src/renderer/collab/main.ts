@@ -1,3 +1,7 @@
+import { jumpToEditorPresentation } from '../editor/editorPresentationNavigation.js';
+import { applyEditorPreferences } from '../editorPreferences.js';
+import { slideNumberLabel, slideProgressLabel } from '@shared/slideNumbering.js';
+import { createPresentationButton } from '../editor/presentationButton.js';
 import '../player/player.css';
 import '../appChrome.css';
 import '../editor/editor.css';
@@ -44,6 +48,7 @@ import {
 } from '../editor/shellWiring.js';
 import { SlideRail } from '../editor/slideRail.js';
 import { EditorStore } from '../editor/store.js';
+import { readRememberedSlide, rememberSlide } from './rememberedSlide.js';
 import { createThemePanel } from '../editor/themePanel.js';
 import { BuildPreview } from '../editor/buildPreview.js';
 import { TimelinePanel } from '../editor/timelinePanel.js';
@@ -92,6 +97,7 @@ import { openServerTutorial, tutorialUrl } from './tutorialBar.js';
 
 applyUiTheme();
 applyUiScale();
+applyEditorPreferences();
 
 /**
  * Browser collaboration shell: the same canvas, rail, inspector, theme
@@ -235,7 +241,8 @@ if (deckId && wantsMobileShell()) {
   location.replace(shellUrl('mobile'));
   throw new Error('a phone — opening the phone client');
 }
-const initialView = decodeEditorView(new URLSearchParams(location.search).get('view'));
+const initialView = decodeEditorView(new URLSearchParams(location.search).get('view'))
+  ?? readRememberedSlide(deckId);
 let initialViewPending = initialView !== null;
 
 const PRESENT_NEEDS_SERVER = 'Presenting needs the server — waiting to reconnect.';
@@ -516,7 +523,7 @@ const slideIndexOf = (slideId: string): number => store.get().deck.slides.findIn
 const presenceBar = new PresenceBar(
   (slideId) => {
     const index = slideIndexOf(slideId);
-    return index >= 0 ? `slide ${index + 1}` : null;
+    return index >= 0 ? `slide ${slideNumberLabel(store.get().deck.slides, index)}` : null;
   },
   (peer) => {
     const index = peer.activeSlideId ? slideIndexOf(peer.activeSlideId) : -1;
@@ -536,11 +543,11 @@ const chatPanel = new ChatPanel(el('chat'), {
   currentSlide: () => {
     const { deck, slideIndex } = store.get();
     const slide = deck.slides[slideIndex];
-    return slide ? { id: slide.id, number: slideIndex + 1 } : null;
+    return slide ? { id: slide.id, number: slideNumberLabel(deck.slides, slideIndex) } : null;
   },
   slideNumber: (slideId) => {
     const index = slideIndexOf(slideId);
-    return index >= 0 ? index + 1 : null;
+    return index >= 0 ? slideNumberLabel(store.get().deck.slides, index) : null;
   },
   slideOfComment: (commentId) => findComment(store.get().deck, commentId)?.target.slideId ?? null,
   openComment: (commentId) => openCommentById(commentId),
@@ -634,9 +641,10 @@ const themePanel = createThemePanel({
   onPreviewSlide: (slide, label) => designWorkspace.previewSlideOnCanvas(slide, label),
   onPreviewThemeDraft: (theme) => designWorkspace.previewThemeDraft(theme),
 });
-rail.onSlideActivate = () => {
+rail.onSlideActivate = (index) => {
   themePanel.dismiss();
   designWorkspace.hide();
+  return jumpToEditorPresentation(index);
 };
 document.addEventListener('keydown', (event) => {
   if (event.key !== 'Escape') return;
@@ -912,6 +920,9 @@ function publishPresence(): void {
 let chatDeck = store.get().deck;
 let chatSlideIndex = store.get().slideIndex;
 store.subscribe(() => {
+  if (!initialViewPending && (welcomed || shownOffline)) {
+    rememberSlide(deckId, store.slide?.id);
+  }
   publishPresence();
   presenceBar.refresh();
   // Slide numbers in the chat follow the deck; skip the work on selection churn.
@@ -991,7 +1002,7 @@ async function exportPdf(): Promise<void> {
  * exactly as the desktop app does: a selection of two or more slides starts at
  * the first and ends the show after the last.
  */
-function startPresentation(speakerView = false): void {
+function startPresentation(speakerView = false, mode: 'fullscreen' | 'windowed' | 'editor' = 'fullscreen'): void {
   // present.html and its bundle are served by the collab server; with the
   // server gone the iframe loads them from the offline copy (sw.ts), and the
   // deck's files from there too. Without a complete copy it would show a
@@ -1014,6 +1025,8 @@ function startPresentation(speakerView = false): void {
     {
       endSlideIndex: range?.end,
       speakerView,
+      mode,
+      playbackHost: mode === 'editor' ? canvas : undefined,
       onStatus: setStatusMessage,
       // Leave the show where it was, not where it started.
       onEnd: (slideId) => {
@@ -1369,12 +1382,7 @@ function buildToolbar(): void {
     divider(),
     secondaryActions,
     ...(compactSecondary ? [compactSecondary] : []),
-    createToolbarSplitButton(
-      'Present',
-      () => startPresentation(),
-      [{ label: 'Present in Speaker View', action: () => startPresentation(true) }],
-      { variant: 'primary', menuLabel: 'Presentation options' },
-    ),
+    createPresentationButton((speakerView, mode) => startPresentation(speakerView, mode)),
   );
 
   bar.append(left, mid, right);
@@ -1438,7 +1446,7 @@ function renderStatus(): void {
   const bits = [
     connectionState,
     deck.title,
-    `slide ${slideIndex + 1}/${deck.slides.length}`,
+    `slide ${slideProgressLabel(deck.slides, slideIndex)}`,
   ];
   if (slideSelection.size > 1) bits.push(`${slideSelection.size} slides selected`);
   if (selection.size > 0) bits.push(`${selection.size} selected`);

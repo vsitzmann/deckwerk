@@ -1,3 +1,7 @@
+import { jumpToEditorPresentation } from './editorPresentationNavigation.js';
+import { applyEditorPreferences } from '../editorPreferences.js';
+import { presentInEditorWindow } from './inWindowPresentation.js';
+import { createPresentationButton } from './presentationButton.js';
 import '../player/player.css';
 import '../appChrome.css';
 import './editor.css';
@@ -80,6 +84,7 @@ import { reconcileOffline } from './remoteSync.js';
 
 applyUiTheme();
 applyUiScale();
+applyEditorPreferences();
 
 /**
  * Editor shell: wires the panels to one store, owns the toolbar, the keyboard
@@ -669,12 +674,7 @@ function buildToolbar(): void {
   right.append(
     secondaryActions,
     compactSecondary,
-    createToolbarSplitButton(
-      'Present',
-      () => void startPresentation(),
-      [{ label: 'Present in Speaker View', action: () => void startPresentation(true) }],
-      { variant: 'primary', menuLabel: 'Presentation options' },
-    ),
+    createPresentationButton((speakerView, mode) => void startPresentation(speakerView, mode)),
   );
 
   bar.append(left, mid, right);
@@ -682,7 +682,7 @@ function buildToolbar(): void {
   installResponsiveToolbar(bar);
 }
 
-async function startPresentation(speakerView = false): Promise<void> {
+async function startPresentation(speakerView = false, mode: 'fullscreen' | 'windowed' | 'editor' = 'fullscreen'): Promise<void> {
   await runOperation('Preparing presentation…', async (operation) => {
     // Presentation reads the main process's in-memory session. When the deck
     // is dirty, mirror that state directly rather than making window creation
@@ -703,9 +703,15 @@ async function startPresentation(speakerView = false): Promise<void> {
       if (agentSessionReady || store.get().dirty) await syncMainSessionSnapshot();
       const { deck, slideIndex, slideSelection } = store.get();
       const range = rangeForSlideSelection(deck.slides, slideSelection);
+      if (mode === 'editor') {
+        presentInEditorWindow(range?.start ?? slideIndex, range?.end, (shown) => store.selectSlide(shown),
+          mode === 'editor' ? canvas : undefined);
+        return;
+      }
       operation.update('Opening presentation windows');
       await window.api.present(range?.start ?? slideIndex, {
         speakerView,
+        mode,
         endSlideIndex: range?.end,
       });
     } finally {
@@ -1449,9 +1455,10 @@ const themePanel = createThemePanel({
   onPreviewSlide: (slide, label) => designWorkspace.previewSlideOnCanvas(slide, label),
   onPreviewThemeDraft: (theme) => designWorkspace.previewThemeDraft(theme),
 });
-rail.onSlideActivate = () => {
+rail.onSlideActivate = (index) => {
   themePanel.dismiss();
   designWorkspace.hide();
+  return jumpToEditorPresentation(index);
 };
 document.addEventListener('keydown', (event) => {
   if (event.key !== 'Escape') return;
