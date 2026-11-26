@@ -75,8 +75,11 @@ describe.skipIf(!electronBinary)('leaving a browser presentation', () => {
   let server: RunningCollabServer | null = null;
   let browser: RunningBrowser | null = null;
   let editor: Cdp | null = null;
+  let floating: Cdp | null = null;
 
   afterEach(async () => {
+    floating?.close();
+    floating = null;
     editor?.close();
     editor = null;
     await stopBrowser(browser?.process ?? null);
@@ -113,13 +116,22 @@ describe.skipIf(!electronBinary)('leaving a browser presentation', () => {
     );
     expect(await editor.evaluate<string | null>(ACTIVE_RAIL_SLIDE)).toBe('s1');
 
+    // Hidden Electron cannot create an OS picture-in-picture surface. Exercise
+    // the regular floating-window fallback with real browser input here.
+    if (mode === 'windowed') await editor.evaluate(`Object.defineProperty(window, 'documentPictureInPicture', { value: undefined, configurable: true }); true`);
     if (mode !== 'fullscreen') {
       await editor.click('[aria-label="Presentation options"]');
       await editor.clickByText('button', mode === 'editor' ? 'In Editor' : 'In Window');
       await editor.call('Input.dispatchKeyEvent', { type: 'keyDown', key: 'π', code: 'KeyP', windowsVirtualKeyCode: 80, modifiers: 5 });
       await editor.call('Input.dispatchKeyEvent', { type: 'keyUp', key: 'π', code: 'KeyP', windowsVirtualKeyCode: 80, modifiers: 5 });
     } else await editor.clickByText('button', 'Present', 'Present');
-    const playback = editor;
+    let playback = editor;
+    if (mode === 'windowed') {
+      const target = await findTarget(browser.debugPort, t => t.title === 'DeckWerk — Presenting', browser.log);
+      floating = await Cdp.connect(target.webSocketDebuggerUrl!);
+      playback = floating;
+      expect(await editor.evaluate(`!document.querySelector('iframe[src*="present.html"]')`)).toBe(true);
+    }
     const stage = `document.querySelector('iframe[src*="present.html"]')?.contentDocument?.getElementById('stage')`;
     await eventually(
       async () => playback.evaluate<string[]>(shownProbe(stage)),
@@ -139,7 +151,7 @@ describe.skipIf(!electronBinary)('leaving a browser presentation', () => {
     if (mode !== 'fullscreen') {
       expect(await playback.evaluate('document.fullscreenElement === null')).toBe(true);
       const targets = await playback.call('Target.getTargets');
-      expect(targets.targetInfos.filter((t: { type: string; url: string }) => t.type === 'page' && t.url.includes('present.html'))).toHaveLength(0);
+      if (mode === 'editor') expect(targets.targetInfos.filter((t: { type: string; url: string }) => t.type === 'page' && t.url.includes('present.html'))).toHaveLength(0);
       // A first click advances immediately rather than being spent on fullscreen.
       await playback.click('iframe[src*="present.html"]');
     } else await playback.key('ArrowRight', ARROW_RIGHT);
@@ -181,7 +193,11 @@ describe.skipIf(!electronBinary)('leaving a browser presentation', () => {
       }
       expect(await playback.evaluate('document.fullscreenElement === null && !document.getElementById("fullscreen-hint")')).toBe(true);
       if (mode === 'editor') await playback.click('#side-tabs button');
-      await playback.key('Escape', ESCAPE);
+      if (mode === 'windowed') {
+        await playback.call('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', windowsVirtualKeyCode: ESCAPE }).catch((error: Error) => {
+          if (!error.message.includes('connection closed')) throw error;
+        });
+      } else await playback.key('Escape', ESCAPE);
     } else await editor.key('Escape', ESCAPE);
     await eventually(
       async () => editor!.evaluate<boolean>(`!document.querySelector('iframe[src*="present.html"]')`),
@@ -223,7 +239,7 @@ describe.skipIf(!electronBinary || process.platform === 'win32')('leaving a desk
     await materializeDesktopApp(appDir, 'deckwerk-present-exit-test');
     await writeDeck(deckDir);
 
-    const app = await launchDesktopApp(appDir, [deckDir], { profileDir, cwd: appDir });
+    const app = await launchDesktopApp(appDir, [deckDir, ...(mode === 'windowed' ? ['--inspect=0'] : [])], { profileDir, cwd: appDir });
     appProcess = app.process;
     const editorTarget = await findTarget(app.debugPort, isEditorTarget, app.log, 30_000);
     editor = await Cdp.connect(editorTarget.webSocketDebuggerUrl!);
@@ -243,17 +259,17 @@ describe.skipIf(!electronBinary || process.platform === 'win32')('leaving a desk
       await editor.clickByText('button', mode === 'editor' ? 'In Editor' : 'In Window');
       await editor.clickByText('button', 'Present', 'Present');
     } else await editor.clickByText('button', 'Present', 'Present');
-    if (mode !== 'fullscreen') audience = editor;
+    if (mode === 'editor') audience = editor;
     else {
       const audienceTarget = await findTarget(app.debugPort,
         (candidate) => candidate.url.includes('/present/index.html'), app.log);
       audience = await Cdp.connect(audienceTarget.webSocketDebuggerUrl!);
     }
-    if (mode !== 'fullscreen') {
+    if (mode === 'editor') {
       const targets = await editor.call('Target.getTargets');
       expect(targets.targetInfos.filter((t: { type: string; url: string }) => t.type === 'page' && t.url.includes('/present/index.html'))).toHaveLength(0);
     }
-    const root = mode !== 'fullscreen'
+    const root = mode === 'editor'
       ? `document.querySelector('.in-window-presentation')?.contentDocument?.getElementById('root')`
       : `document.getElementById('root')`;
     await eventually(
@@ -262,6 +278,22 @@ describe.skipIf(!electronBinary || process.platform === 'win32')('leaving a desk
       (ids) => ids.length === 1 && ids[0] === 't1',
     );
 
+    if (mode === 'windowed') {
+      expect(await audience.evaluate(`location.search.includes('floating=1') && !!document.querySelector('.floating-window-drag')`)).toBe(true);
+      const response = await fetch(`http://127.0.0.1:${app.inspectorPort}/json/list`);
+      const [target] = await response.json() as Array<{ webSocketDebuggerUrl: string }>;
+      const main = await Cdp.connect(target.webSocketDebuggerUrl);
+      try {
+        const result = await main.call('Runtime.evaluate', {
+          expression: `require('electron').BrowserWindow.getAllWindows().filter(w => w.webContents.getURL().includes('/present/index.html')).map(w => ({floating:w.isAlwaysOnTop(), fullscreen:w.isFullScreen(), bounds:w.getBounds()}))`,
+          includeCommandLineAPI: true, returnByValue: true,
+        });
+        expect(result.result.value).toHaveLength(1);
+        expect(result.result.value[0]).toMatchObject({ floating: true, fullscreen: false });
+        const { width, height } = result.result.value[0].bounds;
+        expect(width / height).toBeCloseTo(16 / 9, 1);
+      } finally { main.close(); }
+    }
     if (mode === 'editor') {
       expect(await editor.evaluate<boolean>(`(() => {
         const frame = document.querySelector('.in-window-presentation')?.getBoundingClientRect();

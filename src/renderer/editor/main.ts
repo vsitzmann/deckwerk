@@ -703,7 +703,7 @@ async function startPresentation(speakerView = false, mode: 'fullscreen' | 'wind
       if (agentSessionReady || store.get().dirty) await syncMainSessionSnapshot();
       const { deck, slideIndex, slideSelection } = store.get();
       const range = rangeForSlideSelection(deck.slides, slideSelection);
-      if (mode === 'windowed' || mode === 'editor') {
+      if (mode === 'editor') {
         presentInEditorWindow(range?.start ?? slideIndex, range?.end, (shown) => store.selectSlide(shown),
           mode === 'editor' ? canvas : undefined);
         return;
@@ -711,6 +711,7 @@ async function startPresentation(speakerView = false, mode: 'fullscreen' | 'wind
       operation.update('Opening presentation windows');
       await window.api.present(range?.start ?? slideIndex, {
         speakerView,
+        mode,
         endSlideIndex: range?.end,
       });
     } finally {

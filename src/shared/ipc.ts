@@ -277,6 +277,7 @@ export interface DisplayInfo {
 }
 
 export interface PresentOptions {
+  mode?: 'fullscreen' | 'windowed';
   audienceDisplayId?: number;
   presenterDisplayId?: number;
   /** Open Speaker View even when audience and presenter resolve to one display. */

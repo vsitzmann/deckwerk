@@ -60,6 +60,7 @@ export interface PresentOptions {
 }
 
 let overlay: HTMLIFrameElement | null = null;
+let floatingWindow: Window | null = null;
 let endPlayback: (() => void) | null = null;
 /** Whether the current overlay has been fullscreen: only then does leaving fullscreen end it. */
 let overlayFullscreen = false;
@@ -99,8 +100,14 @@ function teardown(): void {
   if (companionWindow && !companionWindow.closed) companionWindow.close();
   companionWindow = null;
   clearTimeout(helloTimer);
+  const floating = floatingWindow;
+  floatingWindow = null;
+  floating?.removeEventListener('message', onMessage);
+  floating?.removeEventListener('pagehide', teardown);
+  window.removeEventListener('pagehide', teardown);
   overlay?.remove();
   overlay = null;
+  if (floating && !floating.closed) floating.close();
   endPlayback?.();
   endPlayback = null;
   window.removeEventListener('keydown', onEditorKey, true);
@@ -241,7 +248,11 @@ export async function startPresenting(
 ): Promise<void> {
   teardown();
   const start = ++starts;
-  if (options.mode === 'windowed' || options.mode === 'editor') {
+  if (options.mode === 'windowed') {
+    await presentInFloatingWindow(deckId, slideIndex, seed, options, start);
+    return;
+  }
+  if (options.mode === 'editor') {
     mountOverlay(deckId, slideIndex, seed, options, 'audience');
     return;
   }
@@ -279,6 +290,42 @@ export async function startPresenting(
     return;
   }
   await presentOnTwoScreens(deckId, slideIndex, seed, options, decision.audience, decision.speaker);
+}
+
+/** Chrome's floating document surface has no address bar and stays above other windows. */
+async function presentInFloatingWindow(
+  deckId: string,
+  slideIndex: number,
+  seed: (() => PresentSeed) | undefined,
+  options: PresentOptions,
+  start: number,
+): Promise<void> {
+  const canvas = seed?.().deck.canvas ?? { w: 16, h: 9 };
+  const width = Math.round(Math.min(960, screen.availWidth * 0.65, screen.availHeight * 0.65 * canvas.w / canvas.h));
+  const height = Math.round(width * canvas.h / canvas.w);
+  const pip = (window as Window & {
+    documentPictureInPicture?: { requestWindow(options: { width: number; height: number; disallowReturnToOpener: boolean }): Promise<Window> };
+  }).documentPictureInPicture;
+  let floating: Window | null = null;
+  if (pip) {
+    try { floating = await pip.requestWindow({ width, height, disallowReturnToOpener: true }); }
+    catch { /* A regular popup is the fallback on browsers that cannot open PiP here. */ }
+  }
+  if (!floating) floating = window.open('about:blank', `deckwerk-floating-${deckId}`,
+    `popup,resizable=yes,width=${width},height=${height}`);
+  if (!floating) {
+    options.onStatus?.('In Window needs a floating window — allow pop-ups for this site and try again.');
+    return;
+  }
+  if (start !== starts) { floating.close(); return; }
+  floatingWindow = floating;
+  floating.document.title = 'DeckWerk — Presenting';
+  floating.document.documentElement.style.cssText = 'height:100%;background:#000';
+  floating.document.body.style.cssText = 'margin:0;height:100%;overflow:hidden;background:#000';
+  floating.addEventListener('message', onMessage);
+  floating.addEventListener('pagehide', teardown);
+  window.addEventListener('pagehide', teardown);
+  mountOverlay(deckId, slideIndex, seed, options, 'audience', floating);
 }
 
 /**
@@ -367,16 +414,17 @@ function mountOverlay(
   seed: (() => PresentSeed) | undefined,
   options: PresentOptions,
   role: 'audience' | 'speaker',
+  hostWindow?: Window,
 ): HTMLIFrameElement {
   seedProvider = seed ?? null;
   onEnd = options.onEnd ?? null;
   const frame = document.createElement('iframe');
-  frame.src = presentUrl(deckId, slideIndex, {
+  frame.src = new URL(presentUrl(deckId, slideIndex, {
     endSlideIndex: options.endSlideIndex,
     role: role === 'speaker' ? 'speaker' : undefined,
     embed: true,
     mode: options.mode === 'windowed' ? 'windowed' : undefined,
-  });
+  }), location.href).href;
   frame.allow = 'fullscreen';
   const playback = options.mode === 'editor' ? options.playbackHost?.beginPlayback(() => {}) : undefined;
   if (playback) {
@@ -386,7 +434,7 @@ function mountOverlay(
   }
   frame.style.cssText = `position:${playback ? 'absolute' : 'fixed'};inset:0;width:100%;height:100%;border:0;`
     + 'background:#000;z-index:9999;';
-  (playback?.surface ?? document.body).appendChild(frame);
+  (hostWindow?.document.body ?? playback?.surface ?? document.body).appendChild(frame);
   overlay = frame;
   overlayFullscreen = false;
   window.addEventListener('message', onMessage);

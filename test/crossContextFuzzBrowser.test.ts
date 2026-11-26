@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { electronBinary, eventually, wait } from './support/browserSession.js';
+import { Cdp, electronBinary, eventually, findTarget, wait } from './support/browserSession.js';
 import {
   FAR,
   IMAGE,
@@ -507,30 +507,44 @@ async function performOp(
     case 'present in editor':
     case 'present in window': {
       const before = await session.deckSnapshot();
+      // The hidden Electron harness exercises floating-window fallback.
+      if (op !== 'present in editor') await session.cdp.evaluate(`Object.defineProperty(window, 'documentPictureInPicture', { value: undefined, configurable: true }); true`);
       await session.cdp.click('[aria-label="Presentation options"]');
       await session.cdp.clickByText('button', op === 'present in editor' ? 'In Editor' : 'In Window');
       if (op === 'present shortcut') {
         await session.cdp.call('Input.dispatchKeyEvent', { type: 'keyDown', key: 'π', code: 'KeyP', windowsVirtualKeyCode: 80, modifiers: 5 });
         await session.cdp.call('Input.dispatchKeyEvent', { type: 'keyUp', key: 'π', code: 'KeyP', windowsVirtualKeyCode: 80, modifiers: 5 });
       } else await session.cdp.clickByText('button', 'Present', 'Present');
-      await eventually(
-        async () => session.cdp.evaluate(`!!document.querySelector('iframe[src*="present.html"]')?.contentDocument?.querySelector('#stage .slide')`),
-        'In Window did not paint in the existing window', Boolean,
-      );
-      expect(await session.cdp.evaluate('document.fullscreenElement === null')).toBe(true);
-      if (op === 'present in editor') {
-        const visible = await session.cdp.evaluate<number[]>(`[...document.querySelectorAll('.rail-item[data-index]:not(.skipped)')].map(row => Number(row.dataset.index))`);
-        if (visible.length) {
-          const index = pick(next, visible);
-          const wanted = await session.cdp.evaluate<string>(`window.store.get().deck.slides[${index}].id`);
-          await session.clickRail(index);
-          await eventually(() => session.cdp.evaluate<string>(`document.querySelector('iframe[data-editor-presentation]')?.contentDocument?.querySelector('#stage .slide')?.dataset.slideId`),
-            'rail navigation did not reach the playing slide', id => id === wanted);
-        }
+      const inEditor = op === 'present in editor';
+      let playback = session.cdp;
+      if (!inEditor) {
+        const target = await findTarget(session.debugPort, t => t.title === 'DeckWerk — Presenting', () => '');
+        playback = await Cdp.connect(target.webSocketDebuggerUrl!);
       }
-      await session.key('Escape', 27);
-      await eventually(async () => session.cdp.evaluate(`!document.querySelector('iframe[src*="present.html"]')`),
-        'Escape did not return to the editor', Boolean);
+      try {
+        await eventually(
+          async () => playback.evaluate(`!!document.querySelector('iframe[src*="present.html"]')?.contentDocument?.querySelector('#stage .slide')`),
+          'The presentation did not paint in its playback surface', Boolean,
+        );
+        expect(await session.cdp.evaluate('document.fullscreenElement === null')).toBe(true);
+        if (op === 'present in editor') {
+          const visible = await session.cdp.evaluate<number[]>(`[...document.querySelectorAll('.rail-item[data-index]:not(.skipped)')].map(row => Number(row.dataset.index))`);
+          if (visible.length) {
+            const index = pick(next, visible);
+            const wanted = await session.cdp.evaluate<string>(`window.store.get().deck.slides[${index}].id`);
+            await session.clickRail(index);
+            await eventually(() => session.cdp.evaluate<string>(`document.querySelector('iframe[data-editor-presentation]')?.contentDocument?.querySelector('#stage .slide')?.dataset.slideId`),
+              'rail navigation did not reach the playing slide', id => id === wanted);
+          }
+        }
+        await playback.call('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', windowsVirtualKeyCode: 27 }).catch((error: Error) => {
+          if (!error.message.includes('connection closed')) throw error;
+        });
+        await eventually(async () => session.cdp.evaluate(`!document.querySelector('iframe[src*="present.html"]')`),
+          'Escape did not return to the editor', Boolean);
+      } finally {
+        if (playback !== session.cdp) playback.close();
+      }
       expect(await session.deckSnapshot()).toBe(before);
       return 'same';
     }

@@ -1292,9 +1292,10 @@ function registerHandlers(): void {
       (state.presenter ?? state.present).focus();
       return;
     }
+    const windowed = options.mode === 'windowed';
     const audienceDisplay = chooseDisplayById(
       displays,
-      options.audienceDisplayId,
+      windowed ? screen.getDisplayMatching(state.editor.getBounds()).id : options.audienceDisplayId,
       chooseAudienceDisplay(displays, primary),
     );
     const presenterDisplay = chooseDisplayById(
@@ -1302,7 +1303,7 @@ function registerHandlers(): void {
       options.presenterDisplayId,
       primary,
     );
-    const openSpeakerView = shouldOpenSpeakerView(
+    const openSpeakerView = !windowed && shouldOpenSpeakerView(
       audienceDisplay,
       presenterDisplay,
       options.speakerView,
@@ -1323,6 +1324,7 @@ function registerHandlers(): void {
       audienceDisplay.id,
       options.endSlideIndex,
       showAudienceWindow,
+      windowed ? state.session?.deck.canvas : undefined,
     );
     state.present = audience;
     attachWindow(state, audience);

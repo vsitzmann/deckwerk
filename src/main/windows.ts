@@ -211,9 +211,14 @@ export function createPresentWindow(
   displayId?: number,
   endSlideIndex?: number,
   visible = true,
+  floatingCanvas?: { w: number; h: number },
 ): BrowserWindow {
   const { displays, primary } = presentationScreens();
   const target = chooseDisplayById(displays, displayId, chooseAudienceDisplay(displays, primary));
+  const floating = floatingCanvas !== undefined;
+  const ratio = floatingCanvas ? floatingCanvas.w / floatingCanvas.h : 16 / 9;
+  const width = Math.round(Math.min(1100, target.workArea.width * 0.7, target.workArea.height * 0.7 * ratio));
+  const height = Math.round(width / ratio);
 
   const win = new BrowserWindow({
     x: target.bounds.x,
@@ -221,7 +226,14 @@ export function createPresentWindow(
     width: target.bounds.width,
     height: target.bounds.height,
     backgroundColor: '#000000',
-    fullscreen: visible,
+    ...(floating ? {
+      x: target.workArea.x + Math.round((target.workArea.width - width) / 2),
+      y: target.workArea.y + Math.round((target.workArea.height - height) / 2),
+      width, height,
+    } : {}),
+    frame: !floating,
+    alwaysOnTop: floating,
+    fullscreen: visible && !floating,
     autoHideMenuBar: true,
     show: false,
     webPreferences: {
@@ -240,8 +252,9 @@ export function createPresentWindow(
     },
   });
   openWebLinksExternally(win);
-  if (visible) win.once('ready-to-show', () => showFullscreenWindow(win));
-  loadAudiencePage(win, { slide: cursorSlide, endSlide: endSlideIndex });
+  if (floating) win.setAspectRatio(ratio);
+  if (visible) win.once('ready-to-show', () => floating ? showWindow(win) : showFullscreenWindow(win));
+  loadAudiencePage(win, { slide: cursorSlide, endSlide: endSlideIndex, floating });
   return win;
 }
 
@@ -251,6 +264,7 @@ export function createPresentWindow(
  * (Switch displays) back at its exact build step with its timers intact.
  */
 export interface AudiencePageStart {
+  floating?: boolean;
   slide: number;
   endSlide?: number;
   resume?: {
@@ -264,6 +278,7 @@ export interface AudiencePageStart {
 
 export function audiencePageQuery(start: AudiencePageStart): string {
   const query = new URLSearchParams({ slide: String(start.slide) });
+  if (start.floating) query.set('floating', '1');
   if (start.endSlide !== undefined) query.set('endSlide', String(start.endSlide));
   if (start.resume) {
     query.set('resumeSlide', String(start.resume.slide));

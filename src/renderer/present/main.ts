@@ -21,6 +21,12 @@ import { rewriteCssAssetUrls } from '../player/render.js';
  */
 
 const embedded = new URLSearchParams(location.search).get('embed') === '1' && window.parent !== window;
+if (new URLSearchParams(location.search).get('floating') === '1') {
+  const drag = document.createElement('div');
+  drag.className = 'floating-window-drag';
+  drag.title = 'Drag to move · Escape to close';
+  document.body.appendChild(drag);
+}
 const api = window.api ?? (window.parent as Window & { api: typeof window.api }).api;
 function exitPresentation(): void {
   if (embedded) window.parent.postMessage({ type: 'present-exit' }, location.origin);
