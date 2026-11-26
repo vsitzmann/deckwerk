@@ -1,3 +1,4 @@
+import { bindEditorPresentationNavigation } from '../editor/editorPresentationNavigation.js';
 import '../player/player.css';
 import '../player/type.css';
 import '../appChrome.css';
@@ -119,7 +120,7 @@ const startSlide = slideIdParam ? 0 : Math.max(0, Number(slideParam) - 1);
  * spilling into the rest of the deck.
  */
 const endParam = params.get('endSlide');
-const range: PresentationRange | null = endParam !== null && Number.isFinite(Number(endParam))
+let range: PresentationRange | null = endParam !== null && Number.isFinite(Number(endParam))
   ? { start: startSlide, end: Math.max(startSlide, Number(endParam) - 1) }
   : null;
 const agentViewer = params.get('agent') === '1';
@@ -666,6 +667,13 @@ if (!agentViewer && matchMedia('(pointer: coarse)').matches) {
   });
   document.body.append(end);
 }
+
+bindEditorPresentationNavigation((index) => {
+  if (!player) return;
+  // An explicit jump outside a selected-slide range resumes the full deck.
+  if (range && (index < range.start || index > range.end)) range = null;
+  player.goToSlide(index, { play: true });
+});
 
 /* --- transports ------------------------------------------------------------ */
 

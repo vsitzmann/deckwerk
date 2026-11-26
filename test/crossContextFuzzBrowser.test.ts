@@ -518,6 +518,16 @@ async function performOp(
         'In Window did not paint in the existing window', Boolean,
       );
       expect(await session.cdp.evaluate('document.fullscreenElement === null')).toBe(true);
+      if (op === 'present in editor') {
+        const visible = await session.cdp.evaluate<number[]>(`[...document.querySelectorAll('.rail-item[data-index]:not(.skipped)')].map(row => Number(row.dataset.index))`);
+        if (visible.length) {
+          const index = pick(next, visible);
+          const wanted = await session.cdp.evaluate<string>(`window.store.get().deck.slides[${index}].id`);
+          await session.clickRail(index);
+          await eventually(() => session.cdp.evaluate<string>(`document.querySelector('iframe[data-editor-presentation]')?.contentDocument?.querySelector('#stage .slide')?.dataset.slideId`),
+            'rail navigation did not reach the playing slide', id => id === wanted);
+        }
+      }
       await session.key('Escape', 27);
       await eventually(async () => session.cdp.evaluate(`!document.querySelector('iframe[src*="present.html"]')`),
         'Escape did not return to the editor', Boolean);

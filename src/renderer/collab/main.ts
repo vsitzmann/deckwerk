@@ -1,3 +1,4 @@
+import { jumpToEditorPresentation } from '../editor/editorPresentationNavigation.js';
 import { applyEditorPreferences } from '../editorPreferences.js';
 import { slideNumberLabel, slideProgressLabel } from '@shared/slideNumbering.js';
 import { createPresentationButton } from '../editor/presentationButton.js';
@@ -640,9 +641,10 @@ const themePanel = createThemePanel({
   onPreviewSlide: (slide, label) => designWorkspace.previewSlideOnCanvas(slide, label),
   onPreviewThemeDraft: (theme) => designWorkspace.previewThemeDraft(theme),
 });
-rail.onSlideActivate = () => {
+rail.onSlideActivate = (index) => {
   themePanel.dismiss();
   designWorkspace.hide();
+  return jumpToEditorPresentation(index);
 };
 document.addEventListener('keydown', (event) => {
   if (event.key !== 'Escape') return;

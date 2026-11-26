@@ -1,3 +1,4 @@
+import { bindEditorPresentationNavigation } from '../editor/editorPresentationNavigation.js';
 import '../player/player.css';
 import type { DeckSession } from '@shared/ipc.js';
 import type { PresentationCommand } from '@shared/ipc.js';
@@ -201,6 +202,13 @@ const unbindCommands = api.onPresentCommand((command: PresentationCommand) => {
   }
   else if (command.type === 'toggleBlank') toggleBlank();
   else if (command.type === 'videoRate') player.changeVideoRate(command.change);
+});
+
+bindEditorPresentationNavigation((index) => {
+  if (!player) return;
+  // An explicit jump outside a selected-slide range resumes the full deck.
+  if (range && (index < range.start || index > range.end)) range = null;
+  player.goToSlide(index, { play: true });
 });
 
 // Live updates while presenting (editing on a second screen mid-rehearsal).

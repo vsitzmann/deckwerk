@@ -283,8 +283,8 @@ export class SlideRail {
    * the rail rows. Unset outside collab sessions.
    */
   presenceForSlide?: (slideId: string) => RailPresence[];
-  /** Runs for an explicit thumbnail pick, including the already-active slide. */
-  onSlideActivate?: (slideIndex: number) => void;
+  /** Explicit thumbnail pick, including the active slide; true means the caller takes focus. */
+  onSlideActivate?: (slideIndex: number) => boolean | void;
   /** The shell's status bar: what a slide command just did. */
   onStatus?: (message: string) => void;
   /** A keyboard deletion waiting on its confirmation dialog. */
@@ -972,12 +972,11 @@ export class SlideRail {
         // hidden or duplicated in one go.
         if (event.metaKey || event.ctrlKey) this.store.toggleSlideSelection(i);
         else this.store.selectSlide(i, event.shiftKey);
-        this.onSlideActivate?.(i);
-        // Picking slides makes the rail the active surface, so Backspace is a
-        // slide command from here on. Without this the keystroke reaches the
-        // window handler, which only knows about canvas objects, and selecting
-        // slides then pressing Backspace appears to do nothing at all.
-        this.host.focus({ preventScroll: true });
+        // An embedded presentation owns focus after a jump. Cancel the
+        // pointer's default focus too, so it cannot take focus back afterwards.
+        if (this.onSlideActivate?.(i)) event.preventDefault();
+        // Otherwise the rail owns keyboard slide navigation and deletion.
+        else this.host.focus({ preventScroll: true });
       });
       if (!this.readOnly) item.addEventListener('contextmenu', (event) => this.onContextMenu(event, i));
       this.rowCache.set(slide, { row: item, index: i });

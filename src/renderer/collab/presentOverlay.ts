@@ -380,6 +380,7 @@ function mountOverlay(
   frame.allow = 'fullscreen';
   const playback = options.mode === 'editor' ? options.playbackHost?.beginPlayback(() => {}) : undefined;
   if (playback) {
+    frame.dataset.editorPresentation = 'true';
     endPlayback = playback.end;
     window.addEventListener('keydown', onEditorKey, true);
   }

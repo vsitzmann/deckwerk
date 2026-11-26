@@ -17,6 +17,7 @@ export function presentInEditorWindow(
   if (endSlideIndex !== undefined) url.searchParams.set('endSlide', String(endSlideIndex));
   frame.src = url.href;
   const playback = playbackHost?.beginPlayback(() => {});
+  if (playback) frame.dataset.editorPresentation = 'true';
   frame.style.cssText = `position:${playback ? 'absolute' : 'fixed'};inset:0;width:100%;height:100%;border:0;background:#000;z-index:9999`;
   const end = (): void => {
     window.removeEventListener('message', onMessage);

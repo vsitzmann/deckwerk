@@ -1,3 +1,4 @@
+import { jumpToEditorPresentation } from './editorPresentationNavigation.js';
 import { applyEditorPreferences } from '../editorPreferences.js';
 import { presentInEditorWindow } from './inWindowPresentation.js';
 import { createPresentationButton } from './presentationButton.js';
@@ -1453,9 +1454,10 @@ const themePanel = createThemePanel({
   onPreviewSlide: (slide, label) => designWorkspace.previewSlideOnCanvas(slide, label),
   onPreviewThemeDraft: (theme) => designWorkspace.previewThemeDraft(theme),
 });
-rail.onSlideActivate = () => {
+rail.onSlideActivate = (index) => {
   themePanel.dismiss();
   designWorkspace.hide();
+  return jumpToEditorPresentation(index);
 };
 document.addEventListener('keydown', (event) => {
   if (event.key !== 'Escape') return;

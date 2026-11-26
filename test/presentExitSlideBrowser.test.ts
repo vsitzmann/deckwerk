@@ -155,6 +155,19 @@ describe.skipIf(!electronBinary)('leaving a browser presentation', () => {
       (ids) => ids.length === 1 && ids[0] === 't3',
     );
 
+    if (mode === 'editor') {
+      // BUG: the rail used to change only the editor hidden under playback.
+      await editor.click('.rail-item[data-index="0"]', 'first slide while presenting');
+      await eventually(() => playback.evaluate<string[]>(shownProbe(stage)),
+        'rail click did not jump the running presentation', ids => ids.join() === 't1');
+      await playback.key('ArrowRight', ARROW_RIGHT);
+      await eventually(() => playback.evaluate<string[]>(shownProbe(stage)),
+        'keyboard did not continue playback after a rail jump', ids => ids.join() === 't2');
+      await editor.click('.rail-item[data-index="2"]', 'third slide while presenting');
+      await eventually(() => playback.evaluate<string[]>(shownProbe(stage)),
+        'second rail jump did not reach the requested slide', ids => ids.join() === 't3');
+    }
+
     if (mode !== 'fullscreen') {
       // Resizing a window must keep the complete slide inside the viewport.
       for (const [width, height] of [[900, 700], [1100, 500]]) {
@@ -271,7 +284,18 @@ describe.skipIf(!electronBinary || process.platform === 'win32')('leaving a desk
       (ids) => ids.length === 1 && ids[0] === 't3',
     );
 
-    if (mode === 'editor') await editor.click('#side-tabs button');
+    if (mode === 'editor') {
+      await editor.click('.rail-item[data-index="0"]', 'first slide while presenting');
+      await eventually(() => audience!.evaluate<string[]>(shownProbe(root)),
+        'desktop rail click did not jump the presentation', ids => ids.join() === 't1');
+      await audience.key('ArrowRight', ARROW_RIGHT);
+      await eventually(() => audience!.evaluate<string[]>(shownProbe(root)),
+        'desktop playback lost keyboard focus after the jump', ids => ids.join() === 't2');
+      await editor.click('.rail-item[data-index="2"]', 'third slide while presenting');
+      await eventually(() => audience!.evaluate<string[]>(shownProbe(root)),
+        'desktop second rail jump failed', ids => ids.join() === 't3');
+      await editor.click('#side-tabs button');
+    }
 
     // Escape closes the audience window on key-down, so a key-up has no window
     // left to reach: send the press alone, and let the connection close under it.
