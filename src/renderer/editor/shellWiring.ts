@@ -265,6 +265,14 @@ export function hasNativeCopySelection(selection = window.getSelection()): boole
 
 export function bindEditorKeys(deps: ShellDeps, clipboard: ClipboardActions): void {
   const { store, canvas, rail, save } = deps;
+  // Save belongs to the app even while a text editor, field or modal owns
+  // focus. Capture it before those surfaces can stop keyboard propagation.
+  window.addEventListener('keydown', (event) => {
+    if (!(event.metaKey || event.ctrlKey) || event.key.toLowerCase() !== 's') return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (!event.repeat) void save();
+  }, true);
   // The contenteditable text surface stops keyboard events before they reach
   // the window. Give it the same shell-aware undo path used below (including
   // collaboration's selective undo implementation).
@@ -398,11 +406,6 @@ export function bindEditorKeys(deps: ShellDeps, clipboard: ClipboardActions): vo
       e.preventDefault();
       if (e.shiftKey) (deps.redo ?? (() => store.redo()))();
       else (deps.undo ?? (() => store.undo()))();
-      return;
-    }
-    if (mod && e.key.toLowerCase() === 's') {
-      e.preventDefault();
-      void save();
       return;
     }
     if (mod && e.key.toLowerCase() === 'd') {
