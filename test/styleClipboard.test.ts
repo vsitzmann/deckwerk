@@ -20,6 +20,43 @@ beforeEach(() => {
 });
 
 describe('object style clipboard', () => {
+  it('survives seeded shape appearance paste/undo walks without changing paths or unrelated objects', () => {
+    let seed = 64127;
+    for (let step = 0; step < 32; step++) {
+      seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
+      const dashed = Boolean(seed & 1);
+      const width = 1 + seed % 30;
+      const source = element('source', 'shape', {
+        shape: dashed ? 'arrow' : 'rect', stroke: '#c8372d', strokeWidth: width,
+        strokeDash: dashed ? 'dotted' : undefined, fill: dashed ? null : '#ffffff',
+        radius: 8, opacity: 0.6, style: { filter: 'drop-shadow(0px 0px 4px black)' },
+      });
+      const target = element('target', 'shape', {
+        shape: 'path', x: 500, y: 600, path: 'M0 0 Q40 90 100 0', pathSize: { w: 100, h: 90 },
+        control: { x: 540, y: 690 }, stroke: '#0000ff', strokeWidth: 2, startCap: 'dot',
+        strokeDash: 'dashed', arrowSize: 100, fillGradient: { to: '#ff0000' },
+      });
+      const store = storeOf([source, target, element('text', 'text')]);
+      const before = structuredClone(store.get().deck);
+      store.select(['source']); copyElementStyle(store, report);
+      store.select(['target', 'text']); pasteElementStyle(store, report);
+      expect(store.slide!.elements[1]).toMatchObject({
+        shape: 'path', x: 500, y: 600, w: 300, h: 150, rot: 5,
+        path: 'M0 0 Q40 90 100 0', pathSize: { w: 100, h: 90 }, control: { x: 540, y: 690 },
+        stroke: '#c8372d', strokeWidth: width, opacity: 0.6, arrowEnd: dashed,
+      });
+      const pasted = store.slide!.elements[1];
+      if (pasted.type !== 'shape') throw new Error('Expected shape');
+      expect(pasted.strokeDash).toBe(dashed ? 'dotted' : undefined);
+      expect(pasted.startCap).toBeUndefined();
+      expect(pasted.fillGradient).toBeUndefined();
+      expect(pasted.arrowSize).toBeUndefined();
+      expect(store.slide!.elements[2]).toEqual(before.slides[0].elements[2]);
+      store.undo();
+      expect(store.get().deck).toEqual(before);
+    }
+  });
+
   it('copies image style to videos without changing content, geometry, crop or playback; undoes together', () => {
     const store = storeOf([
       element('source', 'image', { opacity: 0.6, style: { 'box-shadow': '0 4px 6px black', width: '900px' }, borderColor: '#123456', borderWidth: 3, borderRadius: 12, effects: [{ type: 'grayscale', amount: 0.5 }] }),

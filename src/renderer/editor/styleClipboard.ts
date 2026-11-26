@@ -1,12 +1,13 @@
 import { z } from 'zod';
-import { MediaEffectSchema, type SlideElement } from '@shared/deck.js';
+import { MediaEffectSchema, STROKE_DASHES, STROKE_STYLES, type SlideElement } from '@shared/deck.js';
+import { capOf } from '@shared/lineFamily.js';
 import type { EditorStore } from './store.js';
 import { setWholeTextStyle, setWholeTextColor, setWholeTextFormat, setWholeTextLineHeight, wholeTextFormatState } from './textFormatting.js';
 
 const KEY = 'deckwerk.styleClipboard';
 const StyleSchema = z.object({
   version: z.literal(1),
-  kind: z.enum(['text', 'media']),
+  kind: z.enum(['text', 'media', 'shape']),
   class: z.array(z.string()),
   style: z.record(z.string()),
   opacity: z.number().min(0).max(1),
@@ -15,6 +16,20 @@ const StyleSchema = z.object({
     borderColor: z.string().nullable().optional(),
     borderWidth: z.number().min(0).optional(),
     borderRadius: z.number().min(0).optional(),
+  }).optional(),
+  shape: z.object({
+    fill: z.string().nullable(),
+    fillGradient: z.object({ to: z.string(), angle: z.number(), kind: z.enum(['linear', 'radial']) }).nullable().optional(),
+    stroke: z.string().nullable(),
+    strokeWidth: z.number().min(0),
+    radius: z.number().min(0),
+    strokeStyle: z.enum(STROKE_STYLES).optional(),
+    strokeDash: z.enum(STROKE_DASHES).optional(),
+    arrowStart: z.boolean(),
+    arrowEnd: z.boolean(),
+    arrowSize: z.number().positive().optional(),
+    startCap: z.enum(['dot', 'bar']).optional(),
+    endCap: z.enum(['dot', 'bar']).optional(),
   }).optional(),
   text: z.object({
     align: z.enum(['left', 'center', 'right', 'justify']),
@@ -27,12 +42,12 @@ const StyleSchema = z.object({
   }).optional(),
 });
 type Style = z.infer<typeof StyleSchema>;
-type StyledElement = Extract<SlideElement, { type: 'text' | 'image' | 'video' }>;
+type StyledElement = Extract<SlideElement, { type: 'text' | 'image' | 'video' | 'shape' }>;
 let fallback: Style | null = null;
 
 const isStyled = (element: SlideElement): element is StyledElement =>
-  element.type === 'text' || element.type === 'image' || element.type === 'video';
-const kind = (element: StyledElement): Style['kind'] => element.type === 'text' ? 'text' : 'media';
+  element.type === 'text' || element.type === 'image' || element.type === 'video' || element.type === 'shape';
+const kind = (element: StyledElement): Style['kind'] => element.type === 'shape' ? 'shape' : element.type === 'text' ? 'text' : 'media';
 const fontProperties = ['font-family', 'font-size', 'font-weight', 'font-style'] as const;
 
 function isGeometry(property: string): boolean {
@@ -61,13 +76,13 @@ export function copyElementStyle(store: EditorStore, report: (message: string) =
   const selected = store.selectedElements();
   const source = selected[0];
   if (selected.length !== 1 || !source || !isStyled(source)) {
-    report('Select one text box, image, or video to copy its style.');
+    report('Select one text box, image, video, or shape to copy its style.');
     return;
   }
   const node = elementNode(source);
   const style: Style = {
     version: 1, kind: kind(source), class: [...source.class], style: visualStyle(source.style),
-    opacity: source.opacity, effects: structuredClone(source.effects),
+    opacity: source.opacity, effects: source.type === 'shape' ? undefined : structuredClone(source.effects),
   };
   if (node) {
     const computed = getComputedStyle(node);
@@ -98,6 +113,14 @@ export function copyElementStyle(store: EditorStore, report: (message: string) =
       contentStyle: structuredClone(source.contentStyle), typography,
       underline: wholeTextFormatState(source, 'underline'), strikethrough: wholeTextFormatState(source, 'strikethrough'),
     };
+  } else if (source.type === 'shape') {
+    style.shape = {
+      fill: source.fill, fillGradient: structuredClone(source.fillGradient),
+      stroke: source.stroke, strokeWidth: source.strokeWidth, radius: source.radius,
+      strokeStyle: source.strokeStyle, strokeDash: source.strokeDash,
+      arrowStart: capOf(source, 'start') === 'arrow', arrowEnd: capOf(source, 'end') === 'arrow', arrowSize: source.arrowSize,
+      startCap: source.startCap, endCap: source.endCap,
+    };
   } else {
     style.media = { borderColor: source.borderColor, borderWidth: source.borderWidth, borderRadius: source.borderRadius };
   }
@@ -110,7 +133,7 @@ export function pasteElementStyle(store: EditorStore, report: (message: string) 
   const style = readStyle();
   if (!style) { report('Copy a style first (⌘⌥C).'); return; }
   const targets = store.selectedElements().filter((element) => isStyled(element) && kind(element) === style.kind);
-  if (!targets.length) { report(`Select ${style.kind === 'text' ? 'text boxes' : 'images or videos'} to paste this style.`); return; }
+  if (!targets.length) { report(`Select ${style.kind === 'text' ? 'text boxes' : style.kind === 'shape' ? 'shapes' : 'images or videos'} to paste this style.`); return; }
   const ids = new Set(targets.map((element) => element.id));
   store.updateSelected((element) => {
     if (!ids.has(element.id) || !isStyled(element)) return;
@@ -119,7 +142,7 @@ export function pasteElementStyle(store: EditorStore, report: (message: string) 
     const geometryStyle = Object.fromEntries(Object.entries(element.style).filter(([key]) => isGeometry(key)));
     element.style = { ...visualStyle(style.style), ...geometryStyle };
     element.opacity = style.opacity;
-    element.effects = structuredClone(style.effects);
+    if (element.type !== 'shape') element.effects = structuredClone(style.effects);
     if (element.type === 'text' && style.text) {
       const text = style.text;
       element.overrides = [];
@@ -136,7 +159,16 @@ export function pasteElementStyle(store: EditorStore, report: (message: string) 
         if (text.typography[property]) element.style[property] = text.typography[property];
       }
       element.contentStyle = structuredClone(text.contentStyle);
-    } else if (element.type !== 'text' && style.media) {
+    } else if (element.type === 'shape' && style.shape) {
+      // Legacy arrows imply an end cap through their kind; normalize that
+      // alias so a pasted plain line can actually remove the arrowhead.
+      if (element.shape === 'arrow') element.shape = 'line';
+      Object.assign(element, structuredClone(style.shape));
+      // JSON omits undefined fields: clear optional styling left on the target.
+      for (const property of ['fillGradient', 'strokeStyle', 'strokeDash', 'arrowSize', 'startCap', 'endCap'] as const) {
+        if (style.shape[property] === undefined) delete element[property];
+      }
+    } else if ((element.type === 'image' || element.type === 'video') && style.media) {
       element.borderColor = style.media.borderColor;
       element.borderWidth = style.media.borderWidth;
       element.borderRadius = style.media.borderRadius;
