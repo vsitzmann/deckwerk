@@ -302,18 +302,13 @@ describe('trim range slider in the sidebar', () => {
     expect(video.currentTime).toBeCloseTo(3.5, 5);
   });
 
-  it('shows a self-contained preview player in the sidebar', async () => {
-    // Canvas state must not be able to break the preview, so the sidebar has
-    // its own video element that seeks with the handles.
-    const { inspectorHost, store } = setup();
+  it('previews trim frames on the canvas without a duplicate sidebar video', async () => {
+    const { inspectorHost, canvasHost, store } = setup();
     const [start] = await slidersOf(inspectorHost, store);
-
-    const preview = inspectorHost.querySelector<HTMLVideoElement>('.trim-preview');
-    expect(preview, 'sidebar preview video missing').not.toBeNull();
-
+    expect(inspectorHost.querySelector('video')).toBeNull();
     start.value = '2.5';
     start.dispatchEvent(new Event('input', { bubbles: true }));
-    expect(preview!.currentTime).toBeCloseTo(2.5, 5);
+    expect(videoEl(canvasHost).currentTime).toBeCloseTo(2.5, 5);
   });
 
   it('survives an autosave firing mid-drag', async () => {
@@ -321,9 +316,9 @@ describe('trim range slider in the sidebar', () => {
     // edit. The inspector used to re-render on every emit, silently replacing
     // the slider and preview mid-drag — sliders "moved" but nothing happened,
     // because the elements under the pointer were corpses.
-    const { inspectorHost, store } = setup();
+    const { inspectorHost, canvasHost, store } = setup();
     const [start] = await slidersOf(inspectorHost, store);
-    const preview = inspectorHost.querySelector<HTMLVideoElement>('.trim-preview')!;
+    const preview = videoEl(canvasHost);
 
     start.value = '1.0';
     start.dispatchEvent(new Event('input', { bubbles: true }));
@@ -508,6 +503,7 @@ describe('editing preview frame', () => {
     store.select(['video-1']);
     store.updateSelected((e) => { if (e.type === 'video') { e.start = 1; e.end = 3; } });
     await tick();
+    expect(inspectorHost.querySelector('video')).toBeNull();
     const range = inspectorHost.querySelector<HTMLInputElement>('[aria-label="Editing preview frame"]')!;
     const original = videoEl(canvasHost);
     range.value = '5';

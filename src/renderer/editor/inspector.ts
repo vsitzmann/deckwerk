@@ -86,7 +86,6 @@ import {
   type ShapeShadow,
 } from '@shared/shapeShadow.js';
 import { mediaNaturalSize } from './mediaNatural.js';
-import { releaseDecodedVideo } from '../player/decodedVideoPool.js';
 import { LINE_SPACING_MAX, LINE_SPACING_MIN, lineSpacingValue } from '@shared/lineHeight.js';
 import { angleDial, setDialAngle } from './angleDial.js';
 import {
@@ -253,15 +252,6 @@ export class Inspector {
   onSeekPreview?: (elementId: string, time: number) => void;
   /** Clip length from the canvas video element, when ffprobe cannot say. */
   videoDuration?: (elementId: string) => number | null;
-  /** Seeks the sidebar trim preview; rebuilt with the panel. */
-  private trimPreviewSeek: ((t: number) => void) | null = null;
-  /**
-   * The sidebar trim preview's `<video>`, kept across panel rebuilds while the
-   * panel still shows the same clip. A fresh element per rebuild had to load
-   * the file and seek to the in-point again, and the abandoned ones kept
-   * loading until they were collected; see `trimSection`.
-   */
-  private trimPreview: { elementId: string; url: string; video: HTMLVideoElement } | null = null;
   /** The X/Y/W/H/angle readouts, refreshed in place during a canvas gesture. */
   private geometryInputs = new Map<'x' | 'y' | 'w' | 'h' | 'rot', HTMLInputElement>();
   /** The rotation dial beside the angle readout, refreshed with it. */
@@ -418,13 +408,6 @@ export class Inspector {
     const scrolled = shown === this.lastRenderShown ? scrolledAncestors(this.host) : [];
     this.lastRenderShown = shown;
     this.renderPanel();
-    // A rebuild that no longer shows the kept trim preview (another selection,
-    // another clip) lets it go, so it stops holding the file and its decoder.
-    if (this.trimPreview && !this.host.contains(this.trimPreview.video)) {
-      releaseDecodedVideo(this.trimPreview.video);
-      this.trimPreview = null;
-      this.trimPreviewSeek = null;
-    }
     for (const [node, top] of scrolled) node.scrollTop = top;
     this.restoreFocusedControl(focused);
   }
@@ -863,7 +846,6 @@ export class Inspector {
         e.end = stop >= duration - 0.01 ? null : stop;
       });
       const frame = el.editingPreviewTime ?? Math.max(0, Math.min(start, stop - 0.05));
-      this.trimPreviewSeek?.(frame);
       this.onSeekPreview?.(el.id, frame);
     };
 
@@ -877,49 +859,12 @@ export class Inspector {
       duration,
       (_edge, v, start, stop) => {
         setReadout(start, stop);
-        this.trimPreviewSeek?.(v);
         this.onSeekPreview?.(el.id, v);
       },
       commit,
     );
 
-    // The frame under the handle, previewed right here in the sidebar. The
-    // canvas is also seeked, but this element is self-contained and cannot be
-    // affected by canvas state — the preview always shows something.
-    //
-    // The element survives panel rebuilds while it shows the same clip: a
-    // rebuild for any other reason (a toggle, a collaborator's edit) used to
-    // create a fresh one, which fetched the file and decoded the in-point
-    // again. render() releases it once a rebuild stops showing it.
-    const url = window.api.assetUrl(el.src);
-    const kept = this.trimPreview;
-    let preview: HTMLVideoElement;
-    if (kept && kept.elementId === el.id && kept.url === url) {
-      preview = kept.video;
-    } else {
-      if (kept) releaseDecodedVideo(kept.video);
-      const created = document.createElement('video');
-      created.className = 'trim-preview';
-      created.muted = true;
-      created.preload = 'auto';
-      // The latest requested time wins, however many rebuilds asked for one
-      // before the metadata arrived.
-      created.addEventListener('loadedmetadata', () => {
-        const time = Number(created.dataset.seekTo);
-        if (Number.isFinite(time)) created.currentTime = time;
-      });
-      created.src = url;
-      preview = created;
-      this.trimPreview = { elementId: el.id, url, video: preview };
-    }
-    const seekPreview = (t: number) => {
-      preview.dataset.seekTo = String(t);
-      if (preview.readyState >= HTMLMediaElement.HAVE_METADATA) preview.currentTime = t;
-    };
-    // Seeking to where the preview already is would still decode a frame.
     const frame = el.editingPreviewTime ?? el.start;
-    if (preview.dataset.seekTo !== String(frame)) seekPreview(frame);
-    this.trimPreviewSeek = seekPreview;
 
     wrap.append(range);
     const reset = button('Reset trim', () =>
@@ -934,7 +879,6 @@ export class Inspector {
     wrap.appendChild(reset);
     const editing = optionSection('Editing preview', 'video-editing-preview-options');
     const showFrame = (time: number) => {
-      seekPreview(time);
       this.onSeekPreview?.(el.id, time);
     };
     const setFrame = (time: number | undefined) => {
@@ -967,7 +911,7 @@ export class Inspector {
     scrubber.addEventListener('change', () => setFrame(Number(scrubber.value)));
     const follow = button('Use trim start', () => setFrame(undefined), 'ghost trim-reset');
     follow.disabled = el.editingPreviewTime === undefined;
-    editing.content.append(preview, scrubber, timeField, follow,
+    editing.content.append(scrubber, timeField, follow,
       hint('Frame shown while editing. Playback uses the trim range.'));
     return [trim.section, editing.section];
   }

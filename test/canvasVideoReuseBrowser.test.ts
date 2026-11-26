@@ -235,6 +235,7 @@ describe.skipIf(!electronBinary || !ffmpeg)('browsing slides in the rail', () =>
     const field = '.video-editing-preview-options input[type="number"]';
     await eventually(() => editor!.evaluate(`!!document.querySelector('${field}')`),
       'editing preview properties never appeared', Boolean);
+    expect(await editor.evaluate('document.querySelectorAll(".video-editing-preview-options video").length')).toBe(0);
     await editor.typeInto(field, '7.5', 'Editing preview frame');
     await eventually(readVideos, 'the chosen editing frame never decoded',
       videos => videos.some(v => v.id === 'sq-a-0' && !v.seeking && Math.abs(v.currentTime - 7.5) < 0.05));

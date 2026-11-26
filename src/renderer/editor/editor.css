@@ -2141,10 +2141,6 @@ input[type="range"] { accent-color: var(--accent); padding: 0; background: trans
 }
 .video-checkbox-grid .field-check,
 .media-sizing-options .field-check { margin-bottom: 0; }
-.video-trim-options .trim-preview {
-  height: 108px;
-  object-fit: cover;
-}
 .video-trim-options > .insp-hint { margin: 2px 0; }
 .video-trim-options > .panel-action { margin: 6px 0 0; }
 .media-effect-row {
@@ -2840,15 +2836,6 @@ input[type="range"] { accent-color: var(--accent); border: 0; background: transp
 }
 .color-picker-clear-theme { color: var(--accent-text, var(--accent)); }
 
-
-/* Sidebar trim preview: the frame under the handle. */
-.trim-preview {
-  display: block;
-  width: 100%;
-  border: 1px solid var(--line);
-  margin-bottom: 8px;
-  background: #000;
-}
 
 /* One trim track with independently draggable in/out thumbs. */
 .trim-range-slider {
@@ -5239,7 +5226,6 @@ select.panel-action-select {
 }
 select.panel-action-select:hover:not(:disabled) { color: var(--text); border-color: var(--line); }
 
-.video-trim-options .trim-preview { height: 96px; }
 .video-trim-options .trim-reset { display: block; margin: 2px 0 0 auto; }
 
 /* Quiet, text-only actions: "Reset trim", "+ Add effect", "by paragraph". */
@@ -5792,6 +5778,4 @@ button.ghost:hover:not(:disabled) { color: var(--text); background: transparent;
 .rail-section-folded .rail-thumb { box-shadow: 0 3px 0 -1px var(--panel), 0 4px 0 0 var(--line), var(--rail-thumb-lift); }
 #ctx-menu button:disabled { opacity: 0.4; cursor: default; }
 
-/* The editing frame uses the same preview and range chrome as video trim. */
-.video-editing-preview-options .trim-preview { height: 96px; }
 .video-editing-preview-options input[type="range"] { width: 100%; }
