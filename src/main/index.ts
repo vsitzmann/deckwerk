@@ -1467,7 +1467,7 @@ function registerHandlers(): void {
     const dir = deckFolderPath(target.filePath);
     await exportDeck(s.dir, s.deck, dir, (message, ratio) => {
       reportOperation(event, operationId, message, ratio);
-    }, { quality: request.quality ?? 'original', dropSkipped: true });
+    }, { quality: request.quality ?? 'original', dropSkipped: true, speakerView: request.speakerView });
     await writeExportThumbnail(s.dir, s.deck, dir, (message) => {
       reportOperation(event, operationId, message, null);
     });

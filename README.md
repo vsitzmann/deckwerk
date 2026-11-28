@@ -169,6 +169,18 @@ A talk does not need to be uploaded to a service before it can be edited, presen
 
 DeckWerk can also export a presentation for playback in a web browser, providing a portable fallback when presenting from another machine.
 
+For two-screen presentations, enable **Offline Speaker View** in the desktop
+web export dialog or pass `--speaker-view` to `npm run export`. Copy the whole
+export folder to the presenting device and open `index.html` in a browser.
+Move the pointer near the slide’s bottom-right corner to reveal **⋯**, then
+choose **Open Speaker View**. On a touchscreen, tap the button’s corner.
+The controls hide when idle. You can also press **S** to open Speaker View.
+Put the audience window on the extended display
+and keep the notes, previews, and controls on the built-in screen. Both windows
+run locally without DeckWerk or a server. Allow pop-ups if the browser asks.
+The exported deck data includes speaker notes, so only share it with people
+who may read them.
+
 ## Project status
 
 DeckWerk is in *alpha, under active development*. I already use it to author and deliver real presentations, but its interfaces and file format may continue to evolve.

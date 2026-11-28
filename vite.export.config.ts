@@ -4,6 +4,12 @@ import { build, defineConfig, type Plugin } from 'vite';
 import { EXPORT_PLAYER_INPUTS, SOURCE_STAMP } from './src/main/exportPlayer.js';
 import { sourceHash } from './src/main/sharedBuild.js';
 
+const exportAliases = [
+  // Classic scripts opened from file:// load code-highlight.js themselves.
+  { find: /^\.\/codeAssets\.js$/, replacement: resolve(__dirname, 'src/renderer/export/codeAssetsStandalone.ts') },
+  { find: '@shared', replacement: resolve(__dirname, 'src/shared') },
+];
+
 /**
  * `code-highlight.js`, built beside player.js as a second classic script:
  * every grammar and colour scheme a code block can use. An IIFE cannot split
@@ -43,6 +49,37 @@ function codeHighlightBundle(): Plugin {
   };
 }
 
+/** Keep Speaker View out of the default player and its slide styles. */
+function speakerViewBundle(): Plugin {
+  let outDir = '';
+  return {
+    name: 'deckwerk-export-speaker-view',
+    apply: 'build',
+    configResolved(config) {
+      outDir = resolve(config.root, config.build.outDir);
+    },
+    async closeBundle() {
+      await build({
+        configFile: false,
+        logLevel: 'warn',
+        resolve: { alias: exportAliases },
+        build: {
+          outDir,
+          emptyOutDir: false,
+          lib: {
+            entry: resolve(__dirname, 'src/renderer/export/speaker.ts'),
+            name: 'DeckWerkExportSpeaker',
+            formats: ['iife'],
+            fileName: () => 'speaker.js',
+          },
+          // The presentation's player.css already supplies the math styles.
+          rollupOptions: { output: { assetFileNames: 'speaker.[ext]' } },
+        },
+      });
+    },
+  };
+}
+
 /**
  * Stamp the build with the hash of the sources it is built from, taken as
  * the build starts. Code running from a checkout uses a player only when its
@@ -61,7 +98,7 @@ function sourceStamp(): Plugin {
     buildStart() {
       hash = sourceHash(__dirname, EXPORT_PLAYER_INPUTS);
     },
-    // After the code-highlight bundle: the stamp says the folder is complete.
+    // After the companion bundles: the stamp says the folder is complete.
     closeBundle: {
       // closeBundle hooks run in parallel unless told to wait their turn.
       sequential: true,
@@ -83,14 +120,9 @@ function sourceStamp(): Plugin {
  */
 export default defineConfig({
   resolve: {
-    alias: [
-      // The app's per-grammar dynamic imports cannot work in a classic script
-      // opened from file://; the export loads code-highlight.js instead.
-      { find: /^\.\/codeAssets\.js$/, replacement: resolve(__dirname, 'src/renderer/export/codeAssetsStandalone.ts') },
-      { find: '@shared', replacement: resolve(__dirname, 'src/shared') },
-    ],
+    alias: exportAliases,
   },
-  plugins: [codeHighlightBundle(), sourceStamp()],
+  plugins: [codeHighlightBundle(), speakerViewBundle(), sourceStamp()],
   build: {
     outDir: 'out/export',
     emptyOutDir: true,
