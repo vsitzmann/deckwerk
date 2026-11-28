@@ -724,7 +724,7 @@ async function exportWeb(): Promise<void> {
       await cssEditor.flush();
       await save();
       operation.update('Waiting for an export folder');
-      return window.api.exportBundle({ quality: choice.quality }, operation.id);
+      return window.api.exportBundle(choice, operation.id);
     });
     if (dir) setStatusMessage(`Exported to ${dir}`);
   } catch (err) {

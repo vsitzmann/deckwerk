@@ -37,6 +37,8 @@ export function webExportUnavailableReason(): string | null {
 
 export interface WebExportOptions {
   quality?: WebExportQuality;
+  /** Include the optional two-window Speaker View in a portable export. */
+  speakerView?: boolean;
   /**
    * Leave skipped slides out of the export altogether, media included. The
    * player already walks past them; a web export has no reason to ship them.
@@ -150,6 +152,10 @@ export async function exportDeck(
 
   report('Copying player.js');
   await copyFileStreamed(playerJs, join(outDir, 'player.js'));
+  if (options.speakerView) {
+    report('Copying speaker.js');
+    await copyFileStreamed(join(bundleDir, 'speaker.js'), join(outDir, 'speaker.js'));
+  }
   doneWeight += fixedWeight;
 
   // Code blocks highlight from a second script holding every grammar; a deck
@@ -228,7 +234,7 @@ export async function exportDeck(
   const rewritten = renamed.size > 0 || trimmed.size > 0
     ? rewriteAssetReferences(exported, renamed, trimmed)
     : exported;
-  await writeFileNamed(join(outDir, 'index.html'), indexHtml(rewritten), 'utf8');
+  await writeFileNamed(join(outDir, 'index.html'), indexHtml(rewritten, options.speakerView === true), 'utf8');
   await writeFileNamed(
     join(outDir, 'export.json'),
     JSON.stringify({
@@ -595,7 +601,7 @@ export function rewriteAssetReferences(
  * The generated page. The deck is inlined as JSON so the export works off
  * `file://`, where fetching a sibling .json is blocked by CORS.
  */
-function indexHtml(deck: Deck): string {
+function indexHtml(deck: Deck, speakerView: boolean): string {
   // `</script>` inside the JSON would close the tag early; escaping the slash is
   // the standard defence and stays valid JSON.
   const json = JSON.stringify(deck).replace(/</g, '\\u003c');
@@ -616,7 +622,7 @@ function indexHtml(deck: Deck): string {
   <body>
     <div id="root"></div>
     <script>window.__DECK__ = ${json};</script>
-    <script src="./player.js"></script>
+    ${speakerView ? '<script src="./speaker.js"></script>\n    ' : ''}<script src="./player.js"></script>
   </body>
 </html>
 `;

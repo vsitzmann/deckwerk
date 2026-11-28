@@ -298,6 +298,7 @@ export type WebExportQuality = 'original' | 'balanced' | 'compact';
 
 export interface WebExportRequest {
   quality?: WebExportQuality;
+  speakerView?: boolean;
 }
 
 export interface PdfExportRequest {

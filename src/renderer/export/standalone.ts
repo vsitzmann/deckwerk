@@ -18,6 +18,7 @@ import { eventOnInteractiveWeb, slideLinkFromEvent } from '../player/links.js';
 declare global {
   interface Window {
     __DECK__?: unknown;
+    DeckWerkExportSpeaker?: typeof import('./speaker.js');
     /** Test/diagnostic handle for rendering an exact slide build state. */
     __SLIDE_PLAYER__?: Player;
   }
@@ -43,15 +44,22 @@ function boot(): void {
   }
   const { deck, dropped } = parsed;
   for (const what of dropped) console.warn(`Left out what this player cannot read: ${what}`);
+  const speakerBundle = window.DeckWerkExportSpeaker;
+  if (speakerBundle?.mountExportSpeakerWindow(root, deck)) return;
+  const speaker = speakerBundle?.exportSpeakerControls(root, deck.canvas);
   const player = new Player({
     deck,
     container: root,
     // Assets sit next to index.html, so their deck-relative paths already work.
     resolveSrc: (src) => src,
+    onCursor: speaker?.onCursor,
   });
   window.__SLIDE_PLAYER__ = player;
 
-  bindPresentKeys(window, player);
+  bindPresentKeys(window, player, speaker ? {
+    onBlank: () => speaker.onBlank(player.toggleBlank()),
+  } : undefined);
+  speaker?.mount(player);
 
   // Deep-linking for humans and agents alike: index.html#7 opens slide 7.
   // With this, "render slide N" is one headless-chromium screenshot away —
@@ -66,7 +74,8 @@ function boot(): void {
   jumpToHash();
 
   window.addEventListener('mousedown', (e) => {
-    if (slideLinkFromEvent(e) || eventOnInteractiveWeb(e)) return;
+    if ((e.target instanceof Element && e.target.closest('[data-export-controls]'))
+      || slideLinkFromEvent(e) || eventOnInteractiveWeb(e)) return;
     if (e.button === 0) player.next();
     else if (e.button === 2) player.prev();
   });

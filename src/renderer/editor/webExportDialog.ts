@@ -2,6 +2,7 @@ import type { WebExportQuality } from '@shared/ipc.js';
 
 export interface WebExportChoice {
   quality: WebExportQuality;
+  speakerView: boolean;
 }
 
 const QUALITIES: Array<{ value: WebExportQuality; label: string; detail: string }> = [
@@ -64,6 +65,14 @@ export function showWebExportDialog(): Promise<WebExportChoice | null> {
     describe();
     select.addEventListener('change', describe);
 
+    const speakerOption = document.createElement('label');
+    speakerOption.className = 'field-check';
+    const speakerView = document.createElement('input');
+    speakerView.type = 'checkbox';
+    const speakerLabel = document.createElement('span');
+    speakerLabel.textContent = 'Enable offline Speaker View (shows speaker notes)';
+    speakerOption.append(speakerView, speakerLabel);
+
     const actions = document.createElement('div');
     actions.className = 'workflow-actions';
     const cancel = document.createElement('button');
@@ -90,7 +99,7 @@ export function showWebExportDialog(): Promise<WebExportChoice | null> {
       } catch {
         // Storage can be unavailable; the choice simply is not remembered.
       }
-      finish({ quality });
+      finish({ quality, speakerView: speakerView.checked });
     });
     overlay.addEventListener('pointerdown', (event) => {
       if (event.target === overlay) finish(null);
@@ -100,7 +109,7 @@ export function showWebExportDialog(): Promise<WebExportChoice | null> {
       if (event.key === 'Enter' && event.target === select) submit.click();
     });
 
-    dialog.append(title, field, detail, actions);
+    dialog.append(title, field, detail, speakerOption, actions);
     overlay.appendChild(dialog);
     document.body.appendChild(overlay);
     select.focus();
